@@ -2304,6 +2304,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // --- Time functions ---
     reg!("microtime", fn_microtime, 1, 0, "as_float");
     reg_typed!(
+        "gettimeofday",
+        fn_gettimeofday,
+        1,
+        0,
+        ["as_float"],
+        [ParamTypeHint::Bool],
+        ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Float])
+    );
+    let gettimeofday = eg
+        .find_function("gettimeofday")
+        .expect("gettimeofday was just registered");
+    eg.register_internal_function_reflection_metadata(
+        gettimeofday,
+        vec![Some(Value::bool(false))],
+        "standard",
+    );
+    reg_typed!(
         "hrtime",
         fn_hrtime,
         1,

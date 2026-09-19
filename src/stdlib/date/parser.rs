@@ -45,6 +45,23 @@ pub(super) struct ParsedFields {
 fn month_number(value: &str) -> Option<i64> {
     let value = value.trim_matches(|character: char| !character.is_ascii_alphabetic());
     let lower = value.to_ascii_lowercase();
+    if let Some(month) = match lower.as_str() {
+        "i" => Some(1),
+        "ii" => Some(2),
+        "iii" => Some(3),
+        "iv" => Some(4),
+        "v" => Some(5),
+        "vi" => Some(6),
+        "vii" => Some(7),
+        "viii" => Some(8),
+        "ix" => Some(9),
+        "x" => Some(10),
+        "xi" => Some(11),
+        "xii" => Some(12),
+        _ => None,
+    } {
+        return Some(month);
+    }
     match lower.get(..lower.len().min(3))? {
         "jan" => Some(1),
         "feb" => Some(2),
@@ -106,6 +123,21 @@ fn civil_state(
 }
 
 fn parse_clock(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
+    let normalized;
+    let original_len = value.len();
+    let mut dotted_suffix_extra = 0;
+    let lower = value.to_ascii_lowercase();
+    let value = if lower.ends_with("a.m.") {
+        normalized = format!("{}am", &value[..value.len() - 4]);
+        dotted_suffix_extra = 2;
+        normalized.as_str()
+    } else if lower.ends_with("p.m.") {
+        normalized = format!("{}pm", &value[..value.len() - 4]);
+        dotted_suffix_extra = 2;
+        normalized.as_str()
+    } else {
+        value
+    };
     let bytes = value.as_bytes();
     let Some(colon) = bytes.iter().position(|byte| *byte == b':') else {
         let digits = bytes
@@ -118,10 +150,22 @@ fn parse_clock(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
         let hour = value.get(..digits)?.parse::<i64>().ok()?;
         let suffix = value.get(digits..digits + 2)?;
         if suffix.eq_ignore_ascii_case("am") {
-            return Some((if hour == 12 { 0 } else { hour }, 0, 0, 0, digits + 2));
+            return Some((
+                if hour == 12 { 0 } else { hour },
+                0,
+                0,
+                0,
+                (digits + 2 + dotted_suffix_extra).min(original_len),
+            ));
         }
         if suffix.eq_ignore_ascii_case("pm") {
-            return Some((if hour == 12 { 12 } else { hour + 12 }, 0, 0, 0, digits + 2));
+            return Some((
+                if hour == 12 { 12 } else { hour + 12 },
+                0,
+                0,
+                0,
+                (digits + 2 + dotted_suffix_extra).min(original_len),
+            ));
         }
         return None;
     };
@@ -168,9 +212,21 @@ fn parse_clock(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
         .is_some_and(|suffix| suffix.eq_ignore_ascii_case("am"))
     {
         if hour == 12 {
-            return Some((0, minute, second, microsecond, end + 2));
+            return Some((
+                0,
+                minute,
+                second,
+                microsecond,
+                (end + 2 + dotted_suffix_extra).min(original_len),
+            ));
         }
-        return Some((hour, minute, second, microsecond, end + 2));
+        return Some((
+            hour,
+            minute,
+            second,
+            microsecond,
+            (end + 2 + dotted_suffix_extra).min(original_len),
+        ));
     }
     if value
         .get(end..end.saturating_add(2))
@@ -181,7 +237,7 @@ fn parse_clock(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
             minute,
             second,
             microsecond,
-            end + 2,
+            (end + 2 + dotted_suffix_extra).min(original_len),
         ));
     }
     Some((hour, minute, second, microsecond, suffix_start))
@@ -209,28 +265,59 @@ fn split_timezone(
 }
 
 fn parse_datetime_timezone(value: &str) -> Option<timezone::TimezoneDescription> {
-    timezone::parse_timezone(value).or_else(|| {
-        let bytes = value.as_bytes();
-        if let [sign @ (b'+' | b'-'), hour_1, hour_2, b':', minute] = bytes
-            && [hour_1, hour_2, minute]
-                .iter()
-                .all(|byte| byte.is_ascii_digit())
-        {
-            return timezone::parse_timezone(&format!(
-                "{}{}{}:0{}",
-                char::from(*sign),
-                char::from(*hour_1),
-                char::from(*hour_2),
-                char::from(*minute)
-            ));
-        }
-        None
-    })
+    timezone::parse_timezone(value)
+        .or_else(|| value.strip_prefix("GMT").and_then(timezone::parse_timezone))
+        .or_else(|| {
+            let bytes = value.as_bytes();
+            if let [sign @ (b'+' | b'-'), hour_1, hour_2] = bytes
+                && [hour_1, hour_2].iter().all(|byte| byte.is_ascii_digit())
+            {
+                return timezone::parse_timezone(&format!(
+                    "{}{}{}:00",
+                    char::from(*sign),
+                    char::from(*hour_1),
+                    char::from(*hour_2)
+                ));
+            }
+            if let [sign @ (b'+' | b'-'), hour, b':', minute] = bytes
+                && [hour, minute].iter().all(|byte| byte.is_ascii_digit())
+            {
+                return timezone::parse_timezone(&format!(
+                    "{}0{}:0{}",
+                    char::from(*sign),
+                    char::from(*hour),
+                    char::from(*minute)
+                ));
+            }
+            if let [sign @ (b'+' | b'-'), hour_1, hour_2, b':', minute] = bytes
+                && [hour_1, hour_2, minute]
+                    .iter()
+                    .all(|byte| byte.is_ascii_digit())
+            {
+                return timezone::parse_timezone(&format!(
+                    "{}{}{}:0{}",
+                    char::from(*sign),
+                    char::from(*hour_1),
+                    char::from(*hour_2),
+                    char::from(*minute)
+                ));
+            }
+            None
+        })
 }
 
 fn parse_clock_flexible(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
     parse_clock(value).or_else(|| {
         let digits = value.bytes().take_while(u8::is_ascii_digit).count();
+        if digits == 4 && digits == value.len() {
+            return Some((
+                value[..2].parse().ok()?,
+                value[2..].parse().ok()?,
+                0,
+                0,
+                digits,
+            ));
+        }
         if !(1..=2).contains(&digits) || digits != value.len() {
             return None;
         }
@@ -238,11 +325,114 @@ fn parse_clock_flexible(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
     })
 }
 
+fn expanded_named_tokens(input: &str) -> String {
+    let chars = input.chars().collect::<Vec<_>>();
+    let mut output = String::with_capacity(input.len() + 8);
+    for (index, character) in chars.iter().copied().enumerate() {
+        let previous = index
+            .checked_sub(1)
+            .and_then(|index| chars.get(index))
+            .copied();
+        let next = chars.get(index + 1).copied();
+        let is_compact_timezone_offset = matches!(character, '+' | '-')
+            && previous.is_some_and(char::is_whitespace)
+            && chars
+                .get(index + 1..index + 5)
+                .is_some_and(|digits| digits.iter().all(char::is_ascii_digit))
+            && chars
+                .get(index + 5)
+                .is_none_or(|character| character.is_whitespace());
+        let boundary = previous.is_some_and(|previous| {
+            (previous.is_ascii_alphabetic() && character.is_ascii_digit())
+                || (previous.is_ascii_digit()
+                    && character.is_ascii_alphabetic()
+                    && !matches!(
+                        chars[index..]
+                            .iter()
+                            .take(2)
+                            .collect::<String>()
+                            .to_ascii_lowercase()
+                            .as_str(),
+                        "am" | "pm"
+                    ))
+                || (!is_compact_timezone_offset
+                    && (character == '+' || (character == '-' && !previous.is_ascii_digit()))
+                    && !matches!(previous, 'e' | 'E')
+                    && next.is_some_and(|next| next.is_ascii_digit()))
+        });
+        if boundary && !output.chars().last().is_some_and(char::is_whitespace) {
+            output.push(' ');
+        }
+        output.push(character);
+        if !is_compact_timezone_offset
+            && (character == '+'
+                || (character == '-'
+                    && !previous.is_some_and(|previous| previous.is_ascii_digit())))
+            && next.is_some_and(|next| next.is_ascii_digit())
+            && !output.ends_with("  ")
+        {
+            output.push(' ');
+        }
+    }
+    output
+}
+
 fn parse_numeric_absolute(
     input: &str,
     fallback: timezone::TimezoneDescription,
 ) -> Option<datetime::DateTimeState> {
     let (input, selected_timezone) = split_timezone(input, fallback);
+    if input.len() >= 7
+        && input
+            .as_bytes()
+            .get(4)
+            .is_some_and(|byte| matches!(byte, b'W' | b'w'))
+        && input[..4].bytes().all(|byte| byte.is_ascii_digit())
+    {
+        let year = input[..4].parse::<i64>().ok()?;
+        let week = input[5..7].parse::<i64>().ok()?;
+        let weekday = input
+            .get(7..)
+            .map(|suffix| suffix.trim_start_matches(|character| matches!(character, '-' | ' ')))
+            .filter(|suffix| !suffix.is_empty())
+            .and_then(|suffix| suffix[..1].parse::<i64>().ok())
+            .unwrap_or(1);
+        let january_fourth = super::normalized_timestamp(year, 1, 4, 0, 0, 0);
+        let january_fourth_weekday = super::super::unix_to_parts(january_fourth).6;
+        let monday =
+            january_fourth.saturating_sub((january_fourth_weekday + 6).rem_euclid(7) * 86_400);
+        let timestamp = monday
+            .saturating_add(((week - 1).saturating_mul(7) + weekday - 1).saturating_mul(86_400));
+        let (year, month, day, ..) = super::super::unix_to_parts(timestamp);
+        return Some(civil_state(year, month, day, 0, 0, 0, 0, selected_timezone));
+    }
+    if input.len() >= 9
+        && input
+            .get(8..9)
+            .is_some_and(|value| value.eq_ignore_ascii_case("t"))
+        && input[..8].bytes().all(|byte| byte.is_ascii_digit())
+    {
+        let clock_text = input[9..].trim_end_matches(['Z', 'z']);
+        if clock_text.len() == 6 && clock_text.bytes().all(|byte| byte.is_ascii_digit()) {
+            return Some(civil_state(
+                input[..4].parse().ok()?,
+                input[4..6].parse().ok()?,
+                input[6..8].parse().ok()?,
+                clock_text[..2].parse().ok()?,
+                clock_text[2..4].parse().ok()?,
+                clock_text[4..6].parse().ok()?,
+                0,
+                if input.ends_with('Z') || input.ends_with('z') {
+                    timezone::TimezoneDescription {
+                        kind: 2,
+                        name: "Z".to_string(),
+                    }
+                } else {
+                    selected_timezone
+                },
+            ));
+        }
+    }
     let split = input
         .char_indices()
         .find(|(_, character)| character.is_ascii_whitespace() || *character == 'T')
@@ -277,6 +467,15 @@ fn parse_numeric_absolute(
             [year, month, day] if year.len() >= 4 => {
                 (year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)
             }
+            [month, day, year] if separator == '/' && year.len() >= 2 => (
+                if year.len() == 2 {
+                    normalize_two_digit_year(year.parse().ok()?)
+                } else {
+                    year.parse().ok()?
+                },
+                month.parse().ok()?,
+                day.parse().ok()?,
+            ),
             [day, month, year] if year.len() >= 4 => {
                 (year.parse().ok()?, month.parse().ok()?, day.parse().ok()?)
             }
@@ -310,8 +509,12 @@ fn parse_named_absolute(
     base: &datetime::DateTimeState,
 ) -> Option<datetime::DateTimeState> {
     let (input, selected_timezone) = split_timezone(input, fallback);
+    // timelib accepts a redundant zone abbreviation after an explicit offset
+    // (for example `+0000 GMT`). Peel both suffixes before parsing the civil
+    // portion, with the explicit offset taking precedence.
+    let (input, selected_timezone) = split_timezone(input, selected_timezone);
     let input = input.trim().trim_end_matches(',');
-    let expanded = input.replace('-', " ");
+    let expanded = expanded_named_tokens(&input.replace('-', " "));
     let parts = expanded.split_whitespace().collect::<Vec<_>>();
     let (base_year, base_month, base_day, base_hour, base_minute, base_second) =
         datetime::local_parts(base);
@@ -387,7 +590,23 @@ fn parse_named_absolute(
             continue;
         }
         match cleaned.to_ascii_lowercase().as_str() {
-            "of" | "day" => {}
+            "of" | "day" | "st" | "nd" | "rd" | "th" => {}
+            "am" | "pm" => {
+                let Some((hour, minute, second, microsecond)) = clock else {
+                    unrecognized = true;
+                    continue;
+                };
+                clock = Some((
+                    match cleaned.to_ascii_lowercase().as_str() {
+                        "am" if hour == 12 => 0,
+                        "pm" if hour < 12 => hour + 12,
+                        _ => hour,
+                    },
+                    minute,
+                    second,
+                    microsecond,
+                ));
+            }
             "first" => {
                 first_day = true;
                 if let Some(weekday) = parts.get(index + 1).and_then(|value| weekday_number(value))
@@ -424,10 +643,18 @@ fn parse_named_absolute(
         .iter()
         .filter(|(index, _, _)| *index > month_index)
         .collect::<Vec<_>>();
-    let mut day = before.map(|(_, _, value)| *value).unwrap_or(base_day);
+    let before_is_year = before.is_some_and(|(_, width, _)| *width >= 3);
+    let mut day = before
+        .filter(|_| !before_is_year)
+        .map(|(_, _, value)| *value)
+        .unwrap_or(base_day);
     let mut year = base_year;
+    if let Some((_, _, value)) = before.filter(|_| before_is_year) {
+        year = *value;
+        day = 1;
+    }
     if let Some((_, width, value)) = after.first().copied() {
-        if before.is_some() {
+        if before.is_some() && !before_is_year {
             year = if *width <= 2 {
                 normalize_two_digit_year(*value)
             } else {
@@ -514,8 +741,21 @@ fn unit_name(value: &str) -> &str {
     }
 }
 
+fn parse_relative_number(value: &str) -> Option<i64> {
+    parse_number(value).or_else(|| {
+        value
+            .split_once('.')
+            .and_then(|(_, fractional)| fractional.parse::<i64>().ok())
+    })
+}
+
 pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
-    let normalized = input.replace(',', " ");
+    let sign_normalized = input
+        .replace("--", "+")
+        .replace("++", "+")
+        .replace("+-", "-")
+        .replace("-+", "-");
+    let normalized = expanded_named_tokens(&sign_normalized.replace(',', " "));
     let tokens = normalized.split_whitespace().collect::<Vec<_>>();
     if tokens.is_empty() {
         return None;
@@ -673,7 +913,10 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
 
         if token == "+" || token == "-" {
             let sign = if token == "-" { -1 } else { 1 };
-            let Some(number) = tokens.get(index + 1).and_then(|value| parse_number(value)) else {
+            let Some(number) = tokens
+                .get(index + 1)
+                .and_then(|value| parse_relative_number(value))
+            else {
                 return None;
             };
             let Some(unit) = tokens
@@ -705,11 +948,7 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
             continue;
         }
 
-        let Some(mut amount) = parse_number(token).or_else(|| {
-            token
-                .split_once('.')
-                .and_then(|(_, fractional)| fractional.parse::<i64>().ok())
-        }) else {
+        let Some(mut amount) = parse_relative_number(token) else {
             return None;
         };
         let Some(unit) = tokens
@@ -825,13 +1064,40 @@ fn extract_clock_expression(input: &str) -> (String, Option<ParsedClock>) {
     }
     let mut remainder = Vec::with_capacity(tokens.len());
     let mut clock = None;
-    for token in tokens {
+    for (index, token) in tokens.iter().copied().enumerate() {
         let cleaned = token.trim_matches(',');
+        let followed_by_relative_unit = tokens.get(index + 1).is_some_and(|value| {
+            matches!(
+                unit_name(value).to_ascii_lowercase().as_str(),
+                "year"
+                    | "month"
+                    | "fortnight"
+                    | "week"
+                    | "day"
+                    | "weekday"
+                    | "hour"
+                    | "hr"
+                    | "h"
+                    | "minute"
+                    | "min"
+                    | "second"
+                    | "sec"
+                    | "s"
+                    | "millisecond"
+                    | "msec"
+                    | "ms"
+                    | "microsecond"
+                    | "usec"
+                    | "µs"
+                    | "µsec"
+            )
+        });
         if cleaned.eq_ignore_ascii_case("midnight") {
             clock = Some((0, 0, 0, 0));
         } else if cleaned.eq_ignore_ascii_case("noon") {
             clock = Some((12, 0, 0, 0));
-        } else if let Some(parsed) = parse_clock(cleaned)
+        } else if !followed_by_relative_unit
+            && let Some(parsed) = parse_clock(cleaned)
             && parsed.4 == cleaned.len()
         {
             clock = Some((parsed.0, parsed.1, parsed.2, parsed.3));
@@ -875,9 +1141,40 @@ pub(super) fn parse_datetime(
     base: Option<&datetime::DateTimeState>,
     eg: &ExecutorGlobals,
 ) -> Result<ParsedDateTime, DateParseDiagnostics> {
+    let comment_stripped;
+    let input = if input.trim_end().ends_with(')')
+        && let Some(open) = input.rfind(" (")
+        && timezone::parse_timezone(input[open + 2..input.trim_end().len() - 1].trim()).is_some()
+    {
+        comment_stripped = input[..open].trim_end().to_string();
+        comment_stripped.as_str()
+    } else {
+        input
+    };
     let has_explicit_base = base.is_some();
     let fallback = supplied_timezone.unwrap_or_else(|| timezone::default_description(eg));
-    if let Some(state) = datetime::parse_absolute(input, Some(fallback.clone()), eg) {
+    // The low-level absolute parser intentionally accepts a valid prefix.
+    // Do not let that prefix consume an otherwise valid relative suffix (or
+    // relative-only keyword such as `noon`) before the timelib-style grammar
+    // below gets a chance to apply it.
+    let relative_probe = expanded_named_tokens(input);
+    let has_relative_expression = matches!(
+        input.trim().to_ascii_lowercase().as_str(),
+        "noon" | "midnight"
+    ) || parse_relative(&relative_probe).is_some()
+        || relative_probe
+            .char_indices()
+            .filter_map(|(index, character)| character.is_ascii_whitespace().then_some(index))
+            .any(|index| {
+                let suffix = relative_probe[index..].trim();
+                parse_relative(suffix).is_some() || {
+                    let (relative_source, _) = extract_clock_expression(suffix);
+                    parse_relative(&relative_source).is_some()
+                }
+            });
+    if !has_relative_expression
+        && let Some(state) = datetime::parse_absolute(input, Some(fallback.clone()), eg)
+    {
         let fields = infer_fields(input);
         let mut diagnostics = DateParseDiagnostics::default();
         if fields.year && fields.month && fields.day {
@@ -934,7 +1231,8 @@ pub(super) fn parse_datetime(
         default_named_base.microsecond = 0;
         &default_named_base
     };
-    if let Some(state) = parse_numeric_absolute(input, fallback.clone()) {
+    if !has_relative_expression && let Some(state) = parse_numeric_absolute(input, fallback.clone())
+    {
         return Ok(ParsedDateTime {
             state,
             diagnostics: DateParseDiagnostics::default(),
@@ -942,7 +1240,9 @@ pub(super) fn parse_datetime(
             fields: infer_fields(input),
         });
     }
-    if let Some(state) = parse_named_absolute(input, fallback, named_base) {
+    if !has_relative_expression
+        && let Some(state) = parse_named_absolute(input, fallback, named_base)
+    {
         return Ok(ParsedDateTime {
             state,
             diagnostics: DateParseDiagnostics::default(),
@@ -950,21 +1250,54 @@ pub(super) fn parse_datetime(
             fields: infer_fields(input),
         });
     }
-    let split_positions = input
+    let sign_normalized_expression = input
+        .replace("--", "+")
+        .replace("++", "+")
+        .replace("+-", "-")
+        .replace("-+", "-");
+    let expanded_expression = expanded_named_tokens(&sign_normalized_expression);
+    let expression = expanded_expression.as_str();
+    let split_positions = expression
         .char_indices()
         .filter_map(|(index, character)| character.is_ascii_whitespace().then_some(index))
         .collect::<Vec<_>>();
     for split in split_positions.into_iter().rev() {
-        let prefix = input[..split].trim();
-        let suffix = input[split..].trim();
-        let (relative_source, clock) = extract_clock_expression(suffix);
-        let Some(relative) = parse_relative(&relative_source) else {
+        let prefix = expression[..split].trim();
+        let suffix = expression[split..].trim();
+        // A sign separated from its relative amount belongs to the suffix.
+        // Letting the named-date parser consume a dangling sign turns a
+        // negative adjustment into the corresponding positive one.
+        if prefix.ends_with(['+', '-']) {
             continue;
-        };
+        }
+        let (relative_source, clock) = extract_clock_expression(suffix);
         let prefix_state = datetime::parse_absolute(prefix, Some(base.timezone.clone()), eg)
             .or_else(|| parse_numeric_absolute(prefix, base.timezone.clone()))
             .or_else(|| parse_named_absolute(prefix, base.timezone.clone(), named_base));
         let Some(prefix_state) = prefix_state else {
+            continue;
+        };
+        if relative_source.is_empty()
+            && let Some((hour, minute, second, microsecond)) = clock
+        {
+            let (year, month, day, _, _, _) = datetime::local_parts(&prefix_state);
+            return Ok(ParsedDateTime {
+                state: civil_state(
+                    year,
+                    month,
+                    day,
+                    hour,
+                    minute,
+                    second,
+                    microsecond,
+                    prefix_state.timezone,
+                ),
+                diagnostics: DateParseDiagnostics::default(),
+                relative: None,
+                fields: infer_fields(input),
+            });
+        }
+        let Some(relative) = parse_relative(&relative_source) else {
             continue;
         };
         let state = apply_relative_expression(prefix_state, &relative, suffix, clock);
@@ -972,10 +1305,29 @@ pub(super) fn parse_datetime(
             state,
             diagnostics: DateParseDiagnostics::default(),
             relative: Some(relative),
-            fields: ParsedFields::default(),
+            fields: infer_fields(prefix),
         });
     }
-    let (relative_source, clock) = extract_clock_expression(input);
+    let (relative_source, clock) = extract_clock_expression(expression);
+    if !relative_source.is_empty()
+        && let Some((hour, minute, second, microsecond)) = clock
+        && let Some(mut state) =
+            datetime::parse_absolute(&relative_source, Some(base.timezone.clone()), eg)
+                .or_else(|| parse_numeric_absolute(&relative_source, base.timezone.clone()))
+                .or_else(|| {
+                    parse_named_absolute(&relative_source, base.timezone.clone(), named_base)
+                })
+    {
+        let (year, month, day, _, _, _) = datetime::local_parts(&state);
+        datetime::set_local(&mut state, year, month, day, hour, minute, second);
+        state.microsecond = microsecond;
+        return Ok(ParsedDateTime {
+            state,
+            diagnostics: DateParseDiagnostics::default(),
+            relative: None,
+            fields: infer_fields(input),
+        });
+    }
     if let Some(relative) = parse_relative(&relative_source) {
         let state = apply_relative_expression(base.clone(), &relative, input, clock);
         return Ok(ParsedDateTime {
@@ -1055,7 +1407,14 @@ fn infer_fields(input: &str) -> ParsedFields {
         .any(|part| month_number(part).is_some());
     let has_date = iso_date || compact_date || named_date;
     let clock_position = trimmed.find(':');
-    let has_clock = clock_position.is_some();
+    let has_clock = (bytes.len() == 14 && bytes.iter().all(u8::is_ascii_digit))
+        || clock_position.is_some()
+        || trimmed
+            .split_whitespace()
+            .any(|part| parse_clock(part).is_some_and(|parsed| parsed.4 == part.len()))
+        || trimmed
+            .split_whitespace()
+            .any(|part| matches!(part.to_ascii_lowercase().as_str(), "noon" | "midnight"));
     let fraction = clock_position.is_some_and(|position| {
         trimmed[position..].find('.').is_some_and(|offset| {
             trimmed[position + offset + 1..].starts_with(|c: char| c.is_ascii_digit())
@@ -1063,6 +1422,7 @@ fn infer_fields(input: &str) -> ParsedFields {
     });
     let timezone = trimmed.starts_with('@')
         || trimmed.ends_with('Z')
+        || timezone::parse_timezone(trimmed).is_some()
         || trimmed
             .split_whitespace()
             .last()
@@ -1123,6 +1483,9 @@ pub(super) fn parse_from_format(
     let mut timezone = fallback;
     let mut reset = false;
     let mut reset_unparsed = false;
+    let mut allow_trailing = false;
+    let mut unix_timestamp = None;
+    let mut parsed_year = false;
     let mut input_position = 0;
     let mut escaped = false;
     let mut diagnostics = DateParseDiagnostics::default();
@@ -1157,6 +1520,16 @@ pub(super) fn parse_from_format(
                 second = 0;
                 microsecond = 0;
                 reset = true;
+                fields = ParsedFields {
+                    year: true,
+                    month: true,
+                    day: true,
+                    hour: true,
+                    minute: true,
+                    second: true,
+                    fraction: true,
+                    timezone: false,
+                };
             }
             '|' => reset_unparsed = true,
             '#' => {
@@ -1173,21 +1546,17 @@ pub(super) fn parse_from_format(
             '*' => {
                 while input_position < input.len() {
                     let byte = input.as_bytes()[input_position];
-                    if byte.is_ascii_whitespace() || matches!(byte, b'+' | b'-') {
+                    if byte.is_ascii_digit() {
                         break;
                     }
                     input_position += 1;
                 }
             }
             '+' => {
-                if input_position < input.len() {
-                    diagnostics
-                        .warnings
-                        .push((input_position, "Trailing data".to_string()));
-                    input_position = input.len();
-                }
+                allow_trailing = true;
             }
             ' ' => {
+                let start = input_position;
                 while input
                     .as_bytes()
                     .get(input_position)
@@ -1195,19 +1564,28 @@ pub(super) fn parse_from_format(
                 {
                     input_position += 1;
                 }
+                if input_position == start {
+                    diagnostics.errors.push((
+                        input_position,
+                        "Not enough data available to satisfy format".to_string(),
+                    ));
+                }
             }
             'Y' => {
                 fields.year = true;
+                parsed_year = true;
                 year = read_digits(input, &mut input_position, 4, 4).unwrap_or(year)
             }
             'y' => {
                 fields.year = true;
+                parsed_year = true;
                 year = normalize_two_digit_year(
                     read_digits(input, &mut input_position, 2, 2).unwrap_or(year),
                 )
             }
             'X' | 'x' => {
                 fields.year = true;
+                parsed_year = true;
                 let sign = match input.as_bytes().get(input_position) {
                     Some(b'+') => {
                         input_position += 1;
@@ -1292,6 +1670,62 @@ pub(super) fn parse_from_format(
                 }
                 month = month_number(&input[start..input_position]).unwrap_or(month);
             }
+            'D' | 'l' => {
+                let start = input_position;
+                while input
+                    .as_bytes()
+                    .get(input_position)
+                    .is_some_and(u8::is_ascii_alphabetic)
+                {
+                    input_position += 1;
+                }
+                if input_position == start {
+                    diagnostics
+                        .errors
+                        .push((start, "A textual day could not be found".to_string()));
+                }
+            }
+            'S' => {
+                let suffix = input
+                    .get(input_position..input_position.saturating_add(2))
+                    .unwrap_or("");
+                if matches!(
+                    suffix.to_ascii_lowercase().as_str(),
+                    "st" | "nd" | "rd" | "th"
+                ) {
+                    input_position += 2;
+                } else {
+                    diagnostics.errors.push((
+                        input_position,
+                        "The separation symbol could not be found".to_string(),
+                    ));
+                }
+            }
+            'z' => {
+                let start = input_position;
+                let ordinal = read_digits(input, &mut input_position, 1, 3);
+                if !parsed_year {
+                    diagnostics.errors.push((
+                        start,
+                        "A 'day of year' can only come after a year has been found".to_string(),
+                    ));
+                    continue;
+                }
+                let Some(ordinal) = ordinal else {
+                    diagnostics
+                        .errors
+                        .push((start, "A number could not be found".to_string()));
+                    continue;
+                };
+                let timestamp = super::normalized_timestamp(year, 1, ordinal + 1, 0, 0, 0);
+                let (parsed_year, parsed_month, parsed_day, ..) =
+                    super::super::unix_to_parts(timestamp);
+                year = parsed_year;
+                month = parsed_month;
+                day = parsed_day;
+                fields.month = true;
+                fields.day = true;
+            }
             'a' | 'A' => {
                 let suffix = input
                     .get(input_position..input_position.saturating_add(2))
@@ -1321,26 +1755,18 @@ pub(super) fn parse_from_format(
                     input_position += 1;
                 }
                 if let Ok(timestamp) = input[start..input_position].parse::<i64>() {
-                    let result = datetime::DateTimeState {
-                        timestamp,
-                        microsecond: 0,
-                        timezone,
-                        initialized: true,
+                    unix_timestamp = Some(timestamp);
+                    timezone = timezone::TimezoneDescription {
+                        kind: 1,
+                        name: "+00:00".to_string(),
                     };
-                    return Ok(ParsedDateTime {
-                        state: result,
-                        diagnostics,
-                        relative: None,
-                        fields: ParsedFields {
-                            year: true,
-                            month: true,
-                            day: true,
-                            hour: true,
-                            minute: true,
-                            second: true,
-                            ..ParsedFields::default()
-                        },
-                    });
+                    parsed_year = true;
+                    fields.year = true;
+                    fields.month = true;
+                    fields.day = true;
+                    fields.hour = true;
+                    fields.minute = true;
+                    fields.second = true;
                 }
             }
             'O' | 'P' | 'p' | 'T' | 'e' => {
@@ -1357,7 +1783,7 @@ pub(super) fn parse_from_format(
                 } else {
                     zone
                 };
-                if let Some(parsed) = timezone::parse_timezone(zone) {
+                if let Some(parsed) = parse_datetime_timezone(zone) {
                     timezone = parsed;
                 } else {
                     diagnostics.errors.push((
@@ -1379,10 +1805,16 @@ pub(super) fn parse_from_format(
             }
         }
     }
-    if input_position < input.len() && !format.contains('+') {
-        diagnostics
-            .errors
-            .push((input_position, "Trailing data".to_string()));
+    if input_position < input.len() {
+        if allow_trailing {
+            diagnostics
+                .warnings
+                .push((input_position, "Trailing data".to_string()));
+        } else {
+            diagnostics
+                .errors
+                .push((input_position, "Trailing data".to_string()));
+        }
     }
     if reset_unparsed && !reset {
         // PHP's `|` resets every field not explicitly parsed.  The common
@@ -1392,9 +1824,19 @@ pub(super) fn parse_from_format(
         minute = 0;
         second = 0;
         microsecond = 0;
+        fields = ParsedFields {
+            year: true,
+            month: true,
+            day: true,
+            hour: true,
+            minute: true,
+            second: true,
+            fraction: true,
+            timezone: fields.timezone,
+        };
     }
-    if diagnostics.errors.is_empty() {
-        if !(1..=12).contains(&month)
+    if diagnostics.errors.is_empty()
+        && (!(1..=12).contains(&month)
             || day < 1
             || day
                 > super::super::days_in_month(
@@ -1403,13 +1845,21 @@ pub(super) fn parse_from_format(
                 )
             || !(0..=23).contains(&hour)
             || !(0..=59).contains(&minute)
-            || !(0..=60).contains(&second)
-        {
-            diagnostics
-                .warnings
-                .push((input_position, "The parsed date was invalid".to_string()));
+            || !(0..=60).contains(&second))
+    {
+        diagnostics
+            .warnings
+            .push((input_position, "The parsed date was invalid".to_string()));
+    }
+    let state = if let Some(timestamp) = unix_timestamp {
+        datetime::DateTimeState {
+            timestamp,
+            microsecond,
+            timezone,
+            initialized: true,
         }
-        let state = civil_state(
+    } else {
+        civil_state(
             year,
             month,
             day,
@@ -1418,16 +1868,14 @@ pub(super) fn parse_from_format(
             second,
             microsecond,
             timezone,
-        );
-        Ok(ParsedDateTime {
-            state,
-            diagnostics,
-            relative: None,
-            fields,
-        })
-    } else {
-        Err(diagnostics)
-    }
+        )
+    };
+    Ok(ParsedDateTime {
+        state,
+        diagnostics,
+        relative: None,
+        fields,
+    })
 }
 
 pub(super) fn diagnostics_value(diagnostics: &DateParseDiagnostics) -> Value {
@@ -1484,5 +1932,30 @@ mod tests {
         assert_eq!(month_number("September"), Some(9));
         assert_eq!(normalize_two_digit_year(69), 2069);
         assert_eq!(normalize_two_digit_year(70), 1970);
+    }
+
+    #[test]
+    fn explicit_bases_survive_clock_and_relative_suffix_parsing() {
+        let eg = ExecutorGlobals::new();
+        let base = datetime::DateTimeState {
+            timestamp: super::super::normalized_timestamp(2016, 10, 3, 12, 47, 18),
+            microsecond: 81_921,
+            timezone: timezone::TimezoneDescription {
+                kind: 2,
+                name: "Z".to_string(),
+            },
+            initialized: true,
+        };
+        let noon = parse_datetime("noon", None, Some(&base), &eg).unwrap();
+        assert_eq!(datetime::local_parts(&noon.state), (2016, 10, 3, 12, 0, 0));
+        assert_eq!(noon.state.microsecond, 0);
+
+        let adjusted =
+            parse_datetime("2006-05-08 13:06:44 -0400 +30 days", None, Some(&base), &eg).unwrap();
+        assert_eq!(
+            datetime::local_parts(&adjusted.state),
+            (2006, 6, 7, 13, 6, 44)
+        );
+        assert_eq!(adjusted.state.timestamp, 1_149_700_004);
     }
 }

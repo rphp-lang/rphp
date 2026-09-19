@@ -202,3 +202,58 @@ foreach (['2006-12-12 10:00:00.5 Europe/Prague', '+1 week 2 days', 'bad'] as $in
         )
     );
 }
+
+#[test]
+fn parser_keeps_relative_signs_offsets_and_clock_reset_rules() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('UTC');
+echo date('r', strtotime('Mon, 08 May 2006 13:06:44 -0400 +30 days')), "\n";
+$base = new DateTimeImmutable('2016-10-03 12:47:18.081921 UTC');
+foreach (['noon', '10 weekday', '-3 months'] as $modifier) {
+    echo $base->modify($modifier)->format('Y-m-d H:i:s.u'), "\n";
+}
+foreach (['28 Feb 2008 12:00:00 +1460000 days', '28 Feb 2008 12:00:00 -1460000 days'] as $input) {
+    echo (new DateTimeImmutable($input))->format('Y-m-d H:i:s'), "\n";
+}
+"#,
+        ),
+        concat!(
+            "Wed, 07 Jun 2006 17:06:44 +0000\n",
+            "2016-10-03 12:00:00.000000\n",
+            "2016-10-17 12:47:18.081921\n",
+            "2016-07-03 12:47:18.081921\n",
+            "6005-07-03 12:00:00\n",
+            "-1990-10-25 12:00:00\n",
+        )
+    );
+}
+
+#[test]
+fn format_parser_supports_unix_fractions_day_of_year_and_trailing_warnings() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('UTC');
+$date = DateTimeImmutable::createFromFormat('U.u', '1696617500.123456');
+echo $date->format('Y-m-d H:i:s.u e P'), "\n";
+var_export(date_parse_from_format('!Y-z H:i:s +', '2024-59 06:07:08 trailing'));
+echo "\n";
+"#,
+        ),
+        concat!(
+            "2023-10-06 18:38:20.123456 +00:00 +00:00\n",
+            "array (\n",
+            "  'year' => 2024,\n  'month' => 2,\n  'day' => 29,\n",
+            "  'hour' => 6,\n  'minute' => 7,\n  'second' => 8,\n",
+            "  'fraction' => 0.0,\n",
+            "  'warning_count' => 1,\n",
+            "  'warnings' => \n  array (\n    17 => 'Trailing data',\n  ),\n",
+            "  'error_count' => 0,\n",
+            "  'errors' => \n  array (\n  ),\n",
+            "  'is_localtime' => false,\n",
+            ")\n",
+        )
+    );
+}

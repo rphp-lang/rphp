@@ -4178,7 +4178,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         1,
         ["format"],
         [ParamTypeHint::String],
-        ParamTypeHint::None,
+        ParamTypeHint::String,
         [None]
     );
     reg_date_method!(
@@ -4189,7 +4189,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         0,
         [],
         [],
-        ParamTypeHint::None,
+        timezone_or_false(),
         []
     );
     reg_date_method!(
@@ -4200,7 +4200,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         0,
         [],
         [],
-        ParamTypeHint::None,
+        ParamTypeHint::Int,
         []
     );
     reg_date_method!(
@@ -4211,7 +4211,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         0,
         [],
         [],
-        ParamTypeHint::None,
+        ParamTypeHint::Int,
         []
     );
     reg_date_method!(
@@ -4236,7 +4236,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             ParamTypeHint::ClassName("DateTimeInterface".to_string()),
             ParamTypeHint::Bool
         ],
-        ParamTypeHint::None,
+        ParamTypeHint::ClassName("DateInterval".to_string()),
         [None, Some(Value::bool(false))]
     );
     reg_date_method!(
@@ -4247,7 +4247,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         0,
         [],
         [],
-        ParamTypeHint::None,
+        ParamTypeHint::Void,
         []
     );
     reg_date_method!(
@@ -4492,7 +4492,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["format"],
             [ParamTypeHint::String],
-            ParamTypeHint::None,
+            ParamTypeHint::String,
             [None]
         );
         reg_date_method!(
@@ -4503,7 +4503,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::None,
+            ParamTypeHint::Int,
             []
         );
         reg_date_method!(
@@ -4525,7 +4525,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::None,
+            ParamTypeHint::Int,
             []
         );
         reg_date_method!(
@@ -4536,7 +4536,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::None,
+            timezone_or_false(),
             []
         );
         reg_date_method!(
@@ -4585,7 +4585,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["array"],
             [ParamTypeHint::Array],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
         reg_date_method!(
@@ -4596,7 +4596,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["timestamp"],
             [ParamTypeHint::Int],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
         reg_date_method!(
@@ -4607,7 +4607,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["timezone"],
             [ParamTypeHint::ClassName("DateTimeZone".to_string())],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
         reg_date_method!(
@@ -4618,7 +4618,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             3,
             ["year", "month", "day"],
             [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None, None, None]
         );
         reg_date_method!(
@@ -4634,7 +4634,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 ParamTypeHint::Int,
                 ParamTypeHint::Int
             ],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None, None, Some(Value::long(0)), Some(Value::long(0))]
         );
         reg_date_method!(
@@ -4656,7 +4656,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             2,
             ["year", "week", "dayOfWeek"],
             [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None, None, Some(Value::long(1))]
         );
         reg_date_method!(
@@ -4667,7 +4667,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["modifier"],
             [ParamTypeHint::String],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
         reg_date_method!(
@@ -4678,7 +4678,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["interval"],
             [ParamTypeHint::ClassName("DateInterval".to_string())],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
         reg_date_method!(
@@ -4689,7 +4689,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["interval"],
             [ParamTypeHint::ClassName("DateInterval".to_string())],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
         reg_date_method!(
@@ -4703,7 +4703,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 ParamTypeHint::ClassName("DateTimeInterface".to_string()),
                 ParamTypeHint::Bool
             ],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName("DateInterval".to_string()),
             [None, Some(Value::bool(false))]
         );
         let format_handler = if class_name == "DateTime" {
@@ -4725,7 +4725,10 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                     "DateTimeZone".to_string(),
                 )))
             ],
-            ParamTypeHint::None,
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("static".to_string()),
+                ParamTypeHint::ClassName("false".to_string())
+            ]),
             [None, None, Some(Value::null())]
         );
         reg_date_static_method!(
@@ -4736,7 +4739,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::None,
+            array_or_false(),
             []
         );
         let interface_handler = if class_name == "DateTime" {
@@ -4752,7 +4755,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["object"],
             [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
-            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::ClassName("static".to_string()),
             [None]
         );
         if class_name == "DateTime" {
@@ -4764,7 +4767,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 1,
                 ["object"],
                 [ParamTypeHint::ClassName("DateTimeImmutable".to_string())],
-                ParamTypeHint::None,
+                ParamTypeHint::ClassName("DateTime".to_string()),
                 [None]
             );
         } else {
@@ -4776,7 +4779,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 1,
                 ["object"],
                 [ParamTypeHint::ClassName("DateTime".to_string())],
-                ParamTypeHint::None,
+                ParamTypeHint::ClassName("DateTimeImmutable".to_string()),
                 [None]
             );
         }
@@ -4796,7 +4799,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 ParamTypeHint::Int,
                 ParamTypeHint::Float
             ])],
-            ParamTypeHint::None,
+            ParamTypeHint::ClassName("static".to_string()),
             [None]
         );
     }

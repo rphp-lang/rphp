@@ -13492,7 +13492,10 @@ fn fn_get_object_vars(
         return Ok(());
     };
 
-    if let Some(projection) = datetime_debug_projection(target, eg) {
+    if (eg.class_is_a(object.class_name.as_ref(), "DateInterval")
+        || eg.class_is_a(object.class_name.as_ref(), "DatePeriod"))
+        && let Some(projection) = datetime_debug_projection(target, eg)
+    {
         drop(object);
         ret!(rv, projection);
     }
@@ -27339,6 +27342,31 @@ fn fn_microtime(
     }
 }
 
+/// gettimeofday(bool $as_float = false): array|float
+fn fn_gettimeofday(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    let as_float = arg_opt!(ed, 0).is_some_and(Value::is_truthy);
+    let duration = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    if as_float {
+        ret!(rv, Value::double(duration.as_secs_f64()));
+    }
+    let seconds = i64::try_from(duration.as_secs()).unwrap_or(i64::MAX);
+    let (offset, is_dst) = date::current_timezone_state(_eg, seconds);
+    let mut result = PhpArray::new();
+    result.set_str("sec", Value::long(seconds));
+    result.set_str("usec", Value::long(i64::from(duration.subsec_micros())));
+    result.set_str("minuteswest", Value::long(-offset / 60));
+    result.set_str("dsttime", Value::long(i64::from(is_dst)));
+    ret!(rv, Value::array(result));
+}
+
 /// hrtime(bool $as_number = false): array|int|float|false
 /// Returns high-resolution monotonic time.
 /// hrtime(true) → int nanoseconds
@@ -30338,20 +30366,12 @@ fn days_in_month(year: i64, month: i64) -> i64 {
 
 /// Convert Unix timestamp to (year, month, day, hour, min, sec, weekday, yearday)
 fn unix_to_parts(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
-    let sec = ((ts % 60) + 60) % 60;
-    let total_min = if ts < 0 { (ts - 59) / 60 } else { ts / 60 };
-    let min = ((total_min % 60) + 60) % 60;
-    let total_hours = if total_min < 0 {
-        (total_min - 59) / 60
-    } else {
-        total_min / 60
-    };
-    let hour = ((total_hours % 24) + 24) % 24;
-    let mut days = if total_hours < 0 {
-        (total_hours - 23) / 24
-    } else {
-        total_hours / 24
-    };
+    let sec = ts.rem_euclid(60);
+    let total_min = ts.div_euclid(60);
+    let min = total_min.rem_euclid(60);
+    let total_hours = total_min.div_euclid(60);
+    let hour = total_hours.rem_euclid(24);
+    let mut days = total_hours.div_euclid(24);
 
     // weekday: 1970-01-01 was Thursday (4)
     let wday = ((days % 7 + 4) % 7 + 7) % 7;

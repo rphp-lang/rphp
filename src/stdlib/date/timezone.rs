@@ -157,35 +157,57 @@ fn parse_coordinate(value: &str, degree_digits: usize) -> Option<f64> {
 
 fn fixed_offset(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
-    let (sign, digits): (u8, Vec<u8>) = match bytes {
+    let (sign, hour, minute, second): (u8, u16, u16, u16) = match bytes {
         [sign @ (b'+' | b'-'), h, b':', m1, m2]
             if [h, m1, m2].iter().all(|byte| byte.is_ascii_digit()) =>
         {
-            (*sign, vec![b'0', *h, *m1, *m2])
+            (
+                *sign,
+                u16::from(*h - b'0'),
+                u16::from(*m1 - b'0') * 10 + u16::from(*m2 - b'0'),
+                0,
+            )
         }
         [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2]
             if [h1, h2, m1, m2].iter().all(|byte| byte.is_ascii_digit()) =>
         {
-            (*sign, vec![*h1, *h2, *m1, *m2])
+            (
+                *sign,
+                u16::from(*h1 - b'0') * 10 + u16::from(*h2 - b'0'),
+                u16::from(*m1 - b'0') * 10 + u16::from(*m2 - b'0'),
+                0,
+            )
+        }
+        [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2, b':', s1, s2]
+            if [h1, h2, m1, m2, s1, s2]
+                .iter()
+                .all(|byte| byte.is_ascii_digit()) =>
+        {
+            (
+                *sign,
+                u16::from(*h1 - b'0') * 10 + u16::from(*h2 - b'0'),
+                u16::from(*m1 - b'0') * 10 + u16::from(*m2 - b'0'),
+                u16::from(*s1 - b'0') * 10 + u16::from(*s2 - b'0'),
+            )
         }
         [sign @ (b'+' | b'-'), h1, h2, m1, m2]
             if [h1, h2, m1, m2].iter().all(|byte| byte.is_ascii_digit()) =>
         {
-            (*sign, vec![*h1, *h2, *m1, *m2])
+            (
+                *sign,
+                u16::from(*h1 - b'0') * 10 + u16::from(*h2 - b'0'),
+                u16::from(*m1 - b'0') * 10 + u16::from(*m2 - b'0'),
+                0,
+            )
         }
         _ => return None,
     };
-    let hour = u16::from(digits[0] - b'0') * 10 + u16::from(digits[1] - b'0');
-    let minute = u16::from(digits[2] - b'0') * 10 + u16::from(digits[3] - b'0');
-    (hour <= 99 && minute <= 59).then(|| {
-        format!(
-            "{}{}{}:{}{}",
-            char::from(sign),
-            char::from(digits[0]),
-            char::from(digits[1]),
-            char::from(digits[2]),
-            char::from(digits[3])
-        )
+    (hour <= 99 && minute <= 59 && second <= 59).then(|| {
+        if second == 0 {
+            format!("{}{:02}:{minute:02}", char::from(sign), hour)
+        } else {
+            format!("{}{:02}:{minute:02}:{second:02}", char::from(sign), hour)
+        }
     })
 }
 
@@ -300,7 +322,7 @@ pub(super) fn parse_timezone(value: &str) -> Option<TimezoneDescription> {
     if !value.contains('/') && abbreviations().contains_key(&value.to_ascii_lowercase()) {
         return Some(TimezoneDescription {
             kind: 2,
-            name: value.to_string(),
+            name: value.to_ascii_uppercase(),
         });
     }
     tzdb::contains(value).then(|| TimezoneDescription {
@@ -433,7 +455,11 @@ fn fixed_offset_seconds(value: &str) -> Option<i64> {
     };
     let hour = normalized.get(1..3)?.parse::<i64>().ok()?;
     let minute = normalized.get(4..6)?.parse::<i64>().ok()?;
-    Some(sign * (hour * 3_600 + minute * 60))
+    let second = normalized
+        .get(7..9)
+        .and_then(|value| value.parse::<i64>().ok())
+        .unwrap_or(0);
+    Some(sign * (hour * 3_600 + minute * 60 + second))
 }
 
 pub(super) fn default_description(eg: &ExecutorGlobals) -> TimezoneDescription {

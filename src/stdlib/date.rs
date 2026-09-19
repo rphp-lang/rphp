@@ -111,8 +111,12 @@ pub(super) fn restore_custom_properties(
     super::serialization::populate_object_properties(eg, receiver, &class_name, &properties).is_ok()
 }
 
-pub(crate) fn datetime_comparison(left: &Value, right: &Value) -> Option<i32> {
-    datetime_state_comparison(left, right)
+pub(crate) fn datetime_comparison(
+    left: &Value,
+    right: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Option<i32> {
+    datetime_state_comparison(left, right, eg)
 }
 
 pub(crate) fn date_interval_virtual_property(value: &Value, name: &str) -> Option<Value> {
@@ -176,6 +180,12 @@ pub(super) fn current_timestamp() -> i64 {
         Ok(duration) => i64::try_from(duration.as_secs()).unwrap_or(i64::MAX),
         Err(error) => -i64::try_from(error.duration().as_secs()).unwrap_or(i64::MAX),
     }
+}
+
+pub(crate) fn current_timezone_state(eg: &ExecutorGlobals, timestamp: i64) -> (i64, bool) {
+    let description = timezone::default_description(eg);
+    let (_, offset, is_dst) = timezone::description_state(&description, timestamp);
+    (offset, is_dst)
 }
 
 pub(super) fn optional_timestamp(

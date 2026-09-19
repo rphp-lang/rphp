@@ -330,18 +330,27 @@ pub(crate) fn debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Va
     })
 }
 
-pub(crate) fn comparison(left: &Value, right: &Value) -> Option<i32> {
-    let left = left
-        .as_object()?
-        .native_object_state::<DateTimeState>()?
-        .clone();
-    let right = right
-        .as_object()?
-        .native_object_state::<DateTimeState>()?
-        .clone();
-    if !left.initialized || !right.initialized {
+pub(crate) fn comparison(left: &Value, right: &Value, eg: &mut ExecutorGlobals) -> Option<i32> {
+    let left_object = left.as_object()?;
+    let right_object = right.as_object()?;
+    if !eg.class_is_a(&left_object.class_name, "DateTimeInterface")
+        || !eg.class_is_a(&right_object.class_name, "DateTimeInterface")
+    {
         return None;
     }
+    let left = left_object.native_object_state::<DateTimeState>().cloned();
+    let right = right_object.native_object_state::<DateTimeState>().cloned();
+    if !left.as_ref().is_some_and(|state| state.initialized)
+        || !right.as_ref().is_some_and(|state| state.initialized)
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "DateObjectError",
+            "Trying to compare an incomplete DateTime or DateTimeImmutable object",
+        ));
+        return Some(1);
+    }
+    let left = left.expect("initialized DateTime state was checked");
+    let right = right.expect("initialized DateTime state was checked");
     Some(
         match (left.timestamp, left.microsecond).cmp(&(right.timestamp, right.microsecond)) {
             std::cmp::Ordering::Less => -1,
@@ -1086,6 +1095,10 @@ fn create_from_format(
 ) -> Option<Value> {
     match super::parser::parse_from_format(format, input, supplied_timezone, eg) {
         Ok(parsed) => {
+            if !parsed.diagnostics.errors.is_empty() {
+                eg.set_date_parse_diagnostics(parsed.diagnostics);
+                return None;
+            }
             eg.set_date_parse_diagnostics(parsed.diagnostics);
             allocate(eg, class_name, parsed.state)
         }
@@ -1501,7 +1514,21 @@ pub(crate) fn fn_strtotime(
         initialized: true,
     };
     let result = match super::parser::parse_datetime(input.as_ref(), None, Some(&base), eg) {
-        Ok(parsed) => {
+        Ok(mut parsed) => {
+            let relative_changes_clock = parsed.relative.as_ref().is_some_and(|relative| {
+                relative.hours != 0
+                    || relative.minutes != 0
+                    || relative.seconds != 0
+                    || relative.microseconds != 0
+            });
+            if (parsed.fields.year || parsed.fields.month || parsed.fields.day)
+                && !parsed.fields.hour
+                && !relative_changes_clock
+            {
+                let (year, month, day, _, _, _) = local_parts(&parsed.state);
+                set_local(&mut parsed.state, year, month, day, 0, 0, 0);
+                parsed.state.microsecond = 0;
+            }
             eg.set_date_parse_diagnostics(parsed.diagnostics);
             Value::long(parsed.state.timestamp)
         }
