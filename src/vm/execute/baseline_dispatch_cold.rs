@@ -5397,6 +5397,29 @@ fn tracked_scope_global_cv(
 }
 
 #[inline]
+fn publish_materialized_scope_global_reference(
+    eg: &mut ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    cv: u16,
+    binding: &Value,
+) {
+    let variables = if !op_array.main_scope_vars.is_empty() {
+        &op_array.main_scope_vars
+    } else {
+        &op_array.global_vars
+    };
+    let Some((_, name)) = variables.iter().find(|(candidate, _)| *candidate == cv as u32) else {
+        return;
+    };
+    globals_set(
+        &mut eg.globals,
+        name,
+        binding.clone_owned_reference_alias(),
+    );
+    eg.mark_global_dirty(name.clone());
+}
+
+#[inline]
 fn tracked_global_binding_is_active(
     eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,

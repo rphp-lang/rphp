@@ -832,12 +832,16 @@ pub(crate) fn check_type_hint(
     check_type_hint_in_scopes(val, hint, eg, strict, callee_class, callee_class)
 }
 
-#[inline(always)]
-fn exact_call_argument_matches(
+/// Exact call admission has one extra scope beyond ordinary class type
+/// matching: callable visibility is evaluated from the caller, while
+/// `self`/`parent`/`static` remain relative to the callee declaration.
+#[inline]
+fn exact_call_argument_matches_in_scopes(
     value: &Value,
     hint: &crate::vm::function::ParamTypeHint,
     eg: &ExecutorGlobals,
     callee_class: Option<&str>,
+    callable_caller_class: Option<&str>,
 ) -> bool {
     use crate::vm::function::ParamTypeHint;
     match hint {
@@ -847,6 +851,39 @@ fn exact_call_argument_matches(
         ParamTypeHint::String => value.value_type() == ValueType::String,
         ParamTypeHint::Bool => matches!(value.value_type(), ValueType::True | ValueType::False),
         ParamTypeHint::Array => value.value_type() == ValueType::Array,
+        ParamTypeHint::Callable => {
+            crate::stdlib::resolve_callback_with_cache(value, eg, callable_caller_class, None)
+                .is_some()
+        }
+        ParamTypeHint::Nullable(inner) => {
+            value.value_type() == ValueType::Null
+                || (!matches!(inner.as_ref(), ParamTypeHint::None)
+                    && exact_call_argument_matches_in_scopes(
+                        value,
+                        inner,
+                        eg,
+                        callee_class,
+                        callable_caller_class,
+                    ))
+        }
+        ParamTypeHint::Union(parts) => parts.iter().any(|part| {
+            exact_call_argument_matches_in_scopes(
+                value,
+                part,
+                eg,
+                callee_class,
+                callable_caller_class,
+            )
+        }),
+        ParamTypeHint::Intersection(parts) => parts.iter().all(|part| {
+            exact_call_argument_matches_in_scopes(
+                value,
+                part,
+                eg,
+                callee_class,
+                callable_caller_class,
+            )
+        }),
         _ => check_type_hint_in_scopes(value, hint, eg, true, callee_class, callee_class),
     }
 }
@@ -1764,10 +1801,27 @@ pub(crate) fn prepare_call_argument(
     strict: bool,
     callee_class: Option<&str>,
 ) -> Result<CallArgumentPreparation, VmError> {
+    prepare_call_argument_in_scopes(value, hint, eg, strict, callee_class, callee_class)
+}
+
+fn prepare_call_argument_in_scopes(
+    value: &Value,
+    hint: &ParamTypeHint,
+    eg: &mut ExecutorGlobals,
+    strict: bool,
+    callee_class: Option<&str>,
+    callable_caller_class: Option<&str>,
+) -> Result<CallArgumentPreparation, VmError> {
     // Test exact members first even for weak callers. In particular, an int
     // remains an int for `int|float`; widening is considered only when no
     // member already matches the runtime value.
-    if exact_call_argument_matches(value.dereferenced(), hint, eg, callee_class) {
+    if exact_call_argument_matches_in_scopes(
+        value.dereferenced(),
+        hint,
+        eg,
+        callee_class,
+        callable_caller_class,
+    ) {
         return Ok(CallArgumentPreparation::Exact);
     }
     if strict {
@@ -1792,11 +1846,25 @@ pub(crate) fn prepare_call_argument(
             if value.value_type() != ValueType::Null
                 && !matches!(inner.as_ref(), ParamTypeHint::None) =>
         {
-            return prepare_call_argument(value, inner, eg, false, callee_class);
+            return prepare_call_argument_in_scopes(
+                value,
+                inner,
+                eg,
+                false,
+                callee_class,
+                callable_caller_class,
+            );
         }
         ParamTypeHint::Union(parts) => {
             for part in parts {
-                match prepare_call_argument(value, part, eg, false, callee_class)? {
+                match prepare_call_argument_in_scopes(
+                    value,
+                    part,
+                    eg,
+                    false,
+                    callee_class,
+                    callable_caller_class,
+                )? {
                     CallArgumentPreparation::Exact => {
                         return Ok(CallArgumentPreparation::Exact);
                     }
@@ -3762,7 +3830,11 @@ fn argument_type_error(
     call_instruction: &Instruction,
     explicit_closure_invoke: bool,
 ) -> Value {
-    let name = displayed_frame_function_name(eg, call);
+    let ordinary_name = displayed_frame_function_name(eg, call);
+    let name = ordinary_name
+        .rsplit_once("::")
+        .filter(|(class, _)| class.starts_with("class@anonymous"))
+        .map_or(ordinary_name.clone(), |(class, _)| class.to_string());
     let parameter = common
         .sig
         .param_names
@@ -3780,7 +3852,13 @@ fn argument_type_error(
     let mut message = format!(
         "{name}(): Argument #{}{parameter} must be of type {}, {} given",
         argument_index + 1,
-        hint.diagnostic_display_name(),
+        resolved_type_diagnostic_name(
+            hint,
+            eg,
+            eg.declaring_class_of(function),
+            eg.class_by_id(late_static_call_class_id(eg, call))
+                .map(|class| class.name.as_str()),
+        ),
         declared_type_error_value_name(value)
     );
     if common.fn_type == FunctionType::User
@@ -3804,6 +3882,53 @@ fn argument_type_error(
         message.push_str(&format!(", called in {file} on line {line}"));
     }
     make_error_value("TypeError", &message)
+}
+
+#[cold]
+pub(crate) fn resolved_type_diagnostic_name(
+    hint: &ParamTypeHint,
+    eg: &ExecutorGlobals,
+    lexical_class: Option<&str>,
+    called_class: Option<&str>,
+) -> String {
+    fn resolve(
+        hint: &mut ParamTypeHint,
+        eg: &ExecutorGlobals,
+        lexical_class: Option<&str>,
+        called_class: Option<&str>,
+    ) {
+        match hint {
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
+                if let Some(class) = lexical_class {
+                    *name = displayed_class_name(eg, class);
+                }
+            }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
+                if let Some(parent) = lexical_class
+                    .and_then(|class| eg.find_class(class))
+                    .and_then(|class| class.parent.as_deref())
+                {
+                    *name = displayed_class_name(eg, parent);
+                }
+            }
+            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
+                if let Some(class) = called_class.or(lexical_class) {
+                    *name = displayed_class_name(eg, class);
+                }
+            }
+            ParamTypeHint::Nullable(inner) => resolve(inner, eg, lexical_class, called_class),
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+                for part in parts {
+                    resolve(part, eg, lexical_class, called_class);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let mut resolved = hint.clone();
+    resolve(&mut resolved, eg, lexical_class, called_class);
+    resolved.diagnostic_display_name()
 }
 
 fn declared_type_error_value_name(value: &Value) -> String {
@@ -4083,6 +4208,8 @@ fn execute_full_call<'a>(
         }
     };
     let callee_class_ref = callee_class.as_deref();
+    let callable_caller_class = get_caller_class(frame, eg);
+    let callable_caller_class_ref = callable_caller_class.as_deref();
 
     if !handler_validates_types && !func_common.sig.param_type_hints.is_empty() {
         let mut type_error = None;
@@ -4148,16 +4275,23 @@ fn execute_full_call<'a>(
                         }
                     }
                 }
-                if exact_call_argument_matches(value, hint, eg, callee_class_ref) {
+                if exact_call_argument_matches_in_scopes(
+                    value,
+                    hint,
+                    eg,
+                    callee_class_ref,
+                    callable_caller_class_ref,
+                ) {
                     continue;
                 }
                 let value = value.clone();
-                match prepare_call_argument(
+                match prepare_call_argument_in_scopes(
                     &value,
                     hint,
                     eg,
                     op_array.strict_types,
                     callee_class_ref,
+                    callable_caller_class_ref,
                 )? {
                     CallArgumentPreparation::Exact => continue,
                     CallArgumentPreparation::Coerced(prepared, diagnostic) => {
@@ -4320,6 +4454,40 @@ fn execute_full_call<'a>(
             opline,
             exact_arity_diagnostics,
         );
+        if func_common.fn_type == FunctionType::User {
+            // SAFETY: the checked user discriminant identifies the enclosing
+            // UserFunction, and the pending call remains live until cleanup.
+            let callee = unsafe {
+                &(*(func_common as *const FunctionCommon as *const UserFunction)).op_array
+            };
+            if let Some(declaration_line) = callee.declaration_line()
+                && !callee.source_file.is_empty()
+            {
+                let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
+                    .as_deref()
+                    .is_some_and(crate::stdlib::ini_boolean);
+                // SAFETY: `call` is still linked to its live caller and all
+                // initialized argument slots remain valid for this snapshot.
+                let trace = unsafe {
+                    crate::stdlib::collect_debug_backtrace(
+                        call,
+                        if ignore_arguments { 2 } else { 0 },
+                        0,
+                        eg,
+                        true,
+                    )
+                };
+                attach_argument_type_error_origin(
+                    &error,
+                    callee.source_file.clone(),
+                    declaration_line,
+                    trace,
+                    op_array,
+                    opline,
+                    eg,
+                );
+            }
+        }
         // SAFETY: `call` is the live pending frame owned by `frame`; every
         // initialized send slot must be released before the frame is popped.
         unsafe { cleanup_frame_slots(call) };
@@ -4431,12 +4599,13 @@ fn execute_full_call<'a>(
                 if let Some(hint) = variadic_hint {
                     if !matches!(hint, ParamTypeHint::None) {
                         let original = val.dereferenced().clone();
-                        match prepare_call_argument(
+                        match prepare_call_argument_in_scopes(
                             &original,
                             hint,
                             eg,
                             op_array.strict_types,
                             callee_class_ref,
+                            callable_caller_class_ref,
                         )? {
                             CallArgumentPreparation::Exact => {}
                             CallArgumentPreparation::Coerced(prepared, diagnostic) => {
@@ -4650,8 +4819,17 @@ fn execute_full_call<'a>(
                         &op_array.global_vars
                     };
                     for (cv_idx, var_name) in vars_to_sync {
-                        let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                        let val = unsafe { (*cv_ptr).clone() };
+                        // SAFETY: compiler-produced scope metadata names a CV
+                        // in this live caller frame. Inspect the raw wrapper so
+                        // the global keeps reference identity across the call.
+                        let val = unsafe {
+                            let cv_ptr = (*frame).cv_mut(*cv_idx) as *mut Value;
+                            if (*cv_ptr).is_owned_reference() {
+                                (*cv_ptr).clone_owned_reference_alias()
+                            } else {
+                                (*cv_ptr).clone()
+                            }
+                        };
                         globals_set(&mut eg.globals, var_name, val);
                     }
                 }

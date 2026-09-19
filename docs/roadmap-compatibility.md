@@ -36,25 +36,32 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `declaration-object-introspection` checkpoint over `f092a6b2` reduces
-supported failure debt from **204 to 193**, exact **+11/-0**. The 8,258-case
-supported ledger is **7,592/193/194/276 with three XFAIL**. The 7,174-case
-stable core is **6,594/188/182/210**; Zend/lang reaches
-**5,124/180/115/180**, while strings/array preserves its exact 1,470-pass set
+The `type-declaration-call-contracts` checkpoint over `5b70cb78` reduces
+supported failure debt from **193 to 175**, exact **+18/-0**. The 8,258-case
+supported ledger is **7,610/175/194/276 with three XFAIL**. The 7,174-case
+stable core is **6,612/170/182/210**; Zend/lang reaches
+**5,142/162/115/180**, while strings/array preserves its exact 1,470-pass set
 at **1,470/8/67/30**.
 
-The shared compiler/runtime slice aligns duplicate-parameter validation,
-class and trait constructor promotion, promoted references, `$this` reference
-materialization, ancestor-first object projection, numeric dynamic keys and
-Reflection default/inheritance/prototype diagnostics. Five Cargo
-configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
-formatting, tooling and unsafe gates are green.
+The shared compiler/runtime slice aligns caller-scope callable validation,
+resolved relative-type diagnostics, declaration-origin arity failures,
+main-scope global-reference identity, typed reference increment, ArrayIterator
+typed/readonly references and by-reference `void` declaration deprecations.
+Five Cargo configurations/all-targets, exact no-loss families,
+Composer/Symfony S0--S3, formatting, tooling and unsafe gates are green.
 
-Continue the shared-cause supported-failure sweep from **193 to zero**. Keep
+Continue the shared-cause supported-failure sweep from **175 to zero**. Keep
 the complete Date/DateTime surface out of this stream. Select another 10--30
-case non-Date cluster from the current 180 Zend/lang failures, preserve the
-exact 5,124 and 1,470 parent pass sets, and keep aggregate performance
+case non-Date cluster from the current 162 Zend/lang failures, preserve the
+exact 5,142 and 1,470 parent pass sets, and keep aggregate performance
 optimization deferred by user direction.
+
+### Preceding declaration-object checkpoint
+
+The `declaration-object-introspection` checkpoint over `f092a6b2` reduced
+supported failure debt from **204 to 193**, exact **+11/-0**. It aligned
+duplicate-parameter validation, promotion/reference semantics, object
+projection order and Reflection declaration metadata.
 
 ### Preceding undefined-silent-read checkpoint
 

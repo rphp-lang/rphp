@@ -1825,7 +1825,13 @@ echo count($parameters), ':', $parameters[0]->getName(), ':', $parameters[1]->is
 echo (int) $parameters[0]->hasType(), (int) $functionParameters[0]->hasType();
 "#,
     );
-    assert_eq!(out, "3:1:100:3:011:10|2:1:1010:void:2:required:1:10");
+    assert_eq!(
+        out,
+        concat!(
+            "\nDeprecated: ReflectedCountParent::counted(): Returning by reference from a void function is deprecated in  on line 4\n",
+            "3:1:100:3:011:10|2:1:1010:void:2:required:1:10",
+        )
+    );
 }
 
 #[test]

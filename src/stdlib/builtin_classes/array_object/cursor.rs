@@ -168,7 +168,7 @@ fn existing_array_entry(
 /// Object backing and any overridden protocol retain stepwise dispatch.
 pub(crate) fn consume_array(
     receiver: &Value,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
     project: Option<bool>,
 ) -> Option<(usize, Option<PhpArray>)> {
     let Backing::Array(owner, key) = backing(receiver, eg)? else {
@@ -198,6 +198,7 @@ struct ObjectEntry {
     name: String,
     value: Value,
     public: bool,
+    slot: Option<usize>,
 }
 
 fn object_entries(object: &PhpObject, eg: &ExecutorGlobals) -> Vec<ObjectEntry> {
@@ -222,6 +223,7 @@ fn object_entries(object: &PhpObject, eg: &ExecutorGlobals) -> Vec<ObjectEntry> 
                 .to_string(),
             value: value.clone_for_php_storage(),
             public: definition.visibility == Visibility::Public,
+            slot: Some(slot),
         });
     }
     object.for_each_dynamic_property(|name, value| {
@@ -229,6 +231,7 @@ fn object_entries(object: &PhpObject, eg: &ExecutorGlobals) -> Vec<ObjectEntry> 
             name: name.to_string(),
             value: value.clone_for_php_storage(),
             public: !name.starts_with('\0'),
+            slot: None,
         });
     });
     entries
@@ -316,7 +319,7 @@ fn entry_slow(
     movement: Move,
     by_reference: bool,
     projection: Projection,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Option<(Value, Value)> {
     let cursor = {
         let mut object = receiver.as_object_mut()?;
@@ -444,12 +447,50 @@ fn entry_slow(
         let value = if !projection.value() {
             Value::null()
         } else if by_reference {
+            let definition = row
+                .slot
+                .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+                .cloned();
+            if let Some(definition) = definition.as_ref()
+                && definition.is_readonly
+            {
+                eg.exception = Some(make_error_value(
+                    "Error",
+                    &format!(
+                        "Cannot acquire reference to readonly property {}::${}",
+                        definition.declaring_class, definition.name
+                    ),
+                ));
+                return None;
+            }
             let slot = property_slot(&object, &ArrayKey::String(row.name.clone()), eg);
+            let owner = match &slot {
+                PropertySlot::Declared(slot) => {
+                    Some(object.instance_property_reference_owner(*slot))
+                }
+                PropertySlot::Dynamic(_) => None,
+            };
+            let called_class = object.class_name.to_string();
             let value = object_slot(&mut object, &slot)?;
             if !value.is_owned_reference() {
                 *value = Value::owned_reference(value.dereferenced().clone());
             }
-            value.clone_owned_reference_alias()
+            let binding = value.clone_owned_reference_alias();
+            if let (Some(owner), Some(definition)) = (owner, definition)
+                && definition.is_typed()
+            {
+                binding.add_reference_property_constraint(
+                    crate::value::ReferencePropertyConstraint {
+                        owner,
+                        declaring_class: definition.declaring_class,
+                        property: definition.name,
+                        type_scope: definition.type_scope,
+                        called_class,
+                        type_hint: definition.type_hint,
+                    },
+                );
+            }
+            binding
         } else if row.value.is_undef() {
             Value::null()
         } else {

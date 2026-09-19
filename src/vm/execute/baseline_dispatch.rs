@@ -4,37 +4,23 @@
 fn return_type_diagnostic_name(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
+    function: *const FunctionCommon,
     hint: &ParamTypeHint,
 ) -> String {
-    let Some(class_name) = eg
-        .class_by_id(late_static_call_class_id(eg, frame))
-        .map(|class| class.name.clone())
-    else {
-        return hint.diagnostic_display_name();
-    };
-    fn resolve_static(hint: &mut ParamTypeHint, class_name: &str) {
-        match hint {
-            ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
-                *name = class_name.to_string();
-            }
-            ParamTypeHint::Nullable(inner) => resolve_static(inner, class_name),
-            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
-                for part in parts {
-                    resolve_static(part, class_name);
-                }
-            }
-            _ => {}
-        }
-    }
-    let mut resolved = hint.clone();
-    resolve_static(&mut resolved, &class_name);
-    resolved.diagnostic_display_name()
+    resolved_type_diagnostic_name(
+        hint,
+        eg,
+        eg.declaring_class_of(function),
+        eg.class_by_id(late_static_call_class_id(eg, frame))
+            .map(|class| class.name.as_str()),
+    )
 }
 
 #[cold]
 fn return_type_error_value(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
+    function: *const FunctionCommon,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
     hint: &ParamTypeHint,
@@ -45,7 +31,7 @@ fn return_type_error_value(
         "TypeError",
         &format!(
             "{function_name}(): Return value must be of type {}, {outcome}",
-            return_type_diagnostic_name(eg, frame, hint)
+            return_type_diagnostic_name(eg, frame, function, hint)
         ),
     );
     let instruction_index = op_array
@@ -2874,6 +2860,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                         };
+                        // Main-scope CVs and the global symbol table are one
+                        // PHP variable. A rebinding operation such as unset()
+                        // must retire the old symbol-table alias before the CV
+                        // drops its reference wrapper; otherwise that hidden
+                        // alias extends resource/object lifetime to shutdown.
+                        let rebound_main_global = (rebind_destination
+                            && (*frame).prev_execute_data.is_null()
+                            && opline.op1_type == OpType::Cv)
+                            .then(|| {
+                                op_array
+                                    .main_scope_vars
+                                    .iter()
+                                    .find(|(cv, _)| *cv == u32::from(opline.op1))
+                                    .map(|(_, name)| name.as_str())
+                            })
+                            .flatten();
+                        if let Some(name) = rebound_main_global {
+                            eg.globals.remove(name);
+                            eg.dirty_globals.remove(name);
+                        }
                         // A primitive CV owns no PHP release work or global
                         // heap mirror. Keep the ordinary unused-result write
                         // out of the destructor-plan path. A reference target
@@ -2987,6 +2993,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             } else {
                                 slot_set(dest, cloned);
                             }
+                        }
+                        if let Some(name) = rebound_main_global
+                            && !(&*dest).is_undef()
+                        {
+                            globals_set(&mut eg.globals, name, clone_scope_binding(&*dest));
                         }
                         if let Some(global_name) = mirrored_global_name {
                             globals_set(&mut eg.globals, global_name, (&*dest).clone());
@@ -5752,6 +5763,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                     };
                     let argument = materialize_reference_alias(frame, caller_value);
+                    if opline.op1_type == OpType::Cv && argument.is_owned_reference() {
+                        publish_materialized_scope_global_reference(
+                            eg,
+                            op_array,
+                            opline.op1,
+                            &argument,
+                        );
+                    }
                     let call = (*frame).call;
                     debug_assert!(!call.is_null());
                     callback_arg_init(call, opline.op2 as usize, argument);
@@ -5814,6 +5833,14 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let raw_ptr = base.add(source_cv as usize);
                         materialize_reference_alias(frame, raw_ptr)
                     };
+                    if !yield_snapshot && argument.is_owned_reference() {
+                        publish_materialized_scope_global_reference(
+                            eg,
+                            op_array,
+                            opline.op1,
+                            &argument,
+                        );
+                    }
                     // SAFETY: this is the same uninitialized pending argument
                     // CV; the send already carries its absolute frame index.
                     unsafe { callback_arg_init(call, opline.op2 as usize, argument) };
@@ -6400,8 +6427,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 &op_array.global_vars
                             };
                             for (cv_idx, var_name) in vars_to_sync {
-                                let cv_ptr = unsafe { (*frame).get_op_mut(*cv_idx, OpType::Cv) };
-                                let val = unsafe { (*cv_ptr).clone() };
+                                // SAFETY: compiler-produced scope metadata
+                                // names a CV in this live caller frame. Inspect
+                                // the raw wrapper to preserve reference identity.
+                                let val = unsafe {
+                                    let cv_ptr = (*frame).cv_mut(*cv_idx) as *mut Value;
+                                    if (*cv_ptr).is_owned_reference() {
+                                        (*cv_ptr).clone_owned_reference_alias()
+                                    } else {
+                                        (*cv_ptr).clone()
+                                    }
+                                };
                                 globals_set(&mut eg.globals, var_name, val);
                             }
                         }
@@ -6496,7 +6532,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let old_slot = &*source_ptr;
                     let value_only = opline.op2_type == OpType::Unused
                         && matches!(opline.op1_type, OpType::Tmp | OpType::Var);
-                    let value_only_reference = value_only && old_slot.is_reference();
+                    let value_only_reference_slot =
+                        (value_only && old_slot.is_reference()).then_some(old_slot);
+                    let value_only_reference = value_only_reference_slot.is_some();
                     debug_assert!(
                         value_only
                             || opline.op2_type == OpType::Cv
@@ -6544,10 +6582,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         &old,
                         PropertyIncDecOverflow::Increment
                     );
-                    if value_only_reference
-                        && old_slot.is_owned_reference()
+                    if let Some(reference) = value_only_reference_slot
+                        && reference.is_owned_reference()
                         && let Some(message) = reference_incdec_overflow_message(
-                            old_slot,
+                            reference,
                             &old,
                             eg,
                             PropertyIncDecOverflow::Increment,
@@ -6570,8 +6608,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     let new_val = if let Some(writeback_cv) = writeback_cv {
                         prepare_reference_write!(writeback_cv, new_val)
-                    } else if value_only_reference && old_slot.is_owned_reference() {
-                        let constraints = old_slot.reference_property_constraints();
+                    } else if let Some(reference) = value_only_reference_slot
+                        && reference.is_owned_reference()
+                    {
+                        let constraints = reference.reference_property_constraints();
                         prepare_constrained_write!(constraints, new_val)
                     } else {
                         new_val
@@ -6610,7 +6650,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let old_slot = &*source_ptr;
                     let value_only = opline.op2_type == OpType::Unused
                         && matches!(opline.op1_type, OpType::Tmp | OpType::Var);
-                    let value_only_reference = value_only && old_slot.is_reference();
+                    let value_only_reference_slot =
+                        (value_only && old_slot.is_reference()).then_some(old_slot);
+                    let value_only_reference = value_only_reference_slot.is_some();
                     debug_assert!(
                         value_only
                             || opline.op2_type == OpType::Cv
@@ -6658,10 +6700,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         &old,
                         PropertyIncDecOverflow::Decrement
                     );
-                    if value_only_reference
-                        && old_slot.is_owned_reference()
+                    if let Some(reference) = value_only_reference_slot
+                        && reference.is_owned_reference()
                         && let Some(message) = reference_incdec_overflow_message(
-                            old_slot,
+                            reference,
                             &old,
                             eg,
                             PropertyIncDecOverflow::Decrement,
@@ -6684,8 +6726,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     let new_val = if let Some(writeback_cv) = writeback_cv {
                         prepare_reference_write!(writeback_cv, new_val)
-                    } else if value_only_reference && old_slot.is_owned_reference() {
-                        let constraints = old_slot.reference_property_constraints();
+                    } else if let Some(reference) = value_only_reference_slot
+                        && reference.is_owned_reference()
+                    {
+                        let constraints = reference.reference_property_constraints();
                         prepare_constrained_write!(constraints, new_val)
                     } else {
                         new_val
@@ -10525,6 +10569,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let err = return_type_error_value(
                             eg,
                             frame,
+                            func_common_ret as *const FunctionCommon,
                             op_array,
                             opline,
                             ret_hint,
@@ -10590,6 +10635,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                                 let err = return_type_error_value(
                                                     eg,
                                                     frame,
+                                                    func_common_ret as *const FunctionCommon,
                                                     op_array,
                                                     opline,
                                                     ret_hint,
@@ -10615,6 +10661,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     let err = return_type_error_value(
                                         eg,
                                         frame,
+                                        func_common_ret as *const FunctionCommon,
                                         op_array,
                                         opline,
                                         ret_hint,
@@ -10817,6 +10864,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 let err = return_type_error_value(
                                     eg,
                                     frame,
+                                    func_common as *const FunctionCommon,
                                     op_array,
                                     opline,
                                     hint,
@@ -10871,6 +10919,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                                     let err = return_type_error_value(
                                                         eg,
                                                         frame,
+                                                        func_common as *const FunctionCommon,
                                                         op_array,
                                                         opline,
                                                         hint,
@@ -10900,6 +10949,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         let err = return_type_error_value(
                                             eg,
                                             frame,
+                                            func_common as *const FunctionCommon,
                                             op_array,
                                             opline,
                                             hint,

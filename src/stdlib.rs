@@ -17812,7 +17812,21 @@ pub(crate) unsafe fn collect_debug_backtrace(
         } else {
             entry.set_str("function", Value::string(name));
         }
-        if include_arguments && synthetic_frame.is_none() {
+        if include_arguments
+            && !caller.is_null()
+            && matches!(
+                synthetic_frame,
+                Some("include" | "include_once" | "require" | "require_once")
+            )
+        {
+            let mut arguments = PhpArray::with_packed_capacity(1);
+            if let Some(user) = user
+                && !user.op_array.source_file.is_empty()
+            {
+                arguments.push(Value::shared_string(user.op_array.source_file.clone()));
+            }
+            entry.set_str("args", Value::array(arguments));
+        } else if include_arguments && synthetic_frame.is_none() {
             let count = (*frame).num_args;
             let mut arguments = PhpArray::with_packed_capacity(count as usize);
             for index in 0..count {

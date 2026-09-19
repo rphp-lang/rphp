@@ -7,6 +7,36 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `type-declaration-call-contracts` checkpoint over `5b70cb78` adds **18
+exact PHP 8.5 passes without loss**, reducing measured supported failures from
+**193 to 175**. Callable arguments now resolve class scope at the caller while
+relative declared types retain callee scope; argument-count and return-type
+diagnostics publish declaration origins and resolved public class names.
+Reference materialization preserves main-scope `$GLOBALS` identity, typed
+property increment constraints and ArrayIterator typed/readonly boundaries.
+By-reference `void` declarations emit PHP's declaration-time deprecation, and
+synthetic include traces retain the correct successful-call arguments.
+
+The 8,258-case supported ledger is **7,610 pass / 175 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,612 pass / 170
+fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
+**5,142/162/115/180**, exact **+18/-0**; strings/array remains byte-identical at
+**1,470/8/67/30**. Five Cargo configurations and all-targets, exact no-loss,
+Composer/Symfony S0--S3, formatting, runner tooling and the unsafe ratchet
+pass; the production unsafe-block inventory decreased to 1,624. Performance
+remains deferred to the aggregate correctness-sweep boundary.
+
+SHA-256 evidence: candidate
+`8924db239f921cec65b56661d1647fe8925683496d88dac1d3ddc895cc360cac`;
+Zend/lang manifest/pass set
+`8ef9d9da4659e1bedfdc9f9919207062470320fb73b0cc6e5f08e47fc4571897` /
+`ae8163380b8c20ad6db363b7bd11dc2ac6e78eb800771b7652a6b3850347a680`;
+strings/array manifest/pass set
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding declaration-object checkpoint
+
 The `declaration-object-introspection` checkpoint over `f092a6b2` adds **11
 exact PHP 8.5 passes without loss**, reducing measured supported failures from
 **204 to 193**. Duplicate parameters now fail during compilation; constructor

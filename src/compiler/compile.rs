@@ -8336,6 +8336,32 @@ impl Compiler {
             .unwrap_or_else(|| self.current_function_name.clone())
     }
 
+    fn record_reference_void_deprecation(
+        &self,
+        returns_by_ref: bool,
+        return_type: &Option<crate::parser::TypeHint>,
+        line: usize,
+    ) {
+        if !returns_by_ref
+            || !return_type
+                .as_ref()
+                .is_some_and(|hint| matches!(hint, crate::parser::TypeHint::Void))
+        {
+            return;
+        }
+        self.compile_deprecations
+            .borrow_mut()
+            .push(CompileDeprecation {
+                message: format!(
+                    "{}(): Returning by reference from a void function is deprecated",
+                    self.declaration_diagnostic_name()
+                ),
+                file: self.source_file.clone(),
+                line,
+                warning: false,
+            });
+    }
+
     fn generator_return_type_accepts(hint: &ParamTypeHint) -> bool {
         match hint {
             ParamTypeHint::None | ParamTypeHint::Mixed => true,
@@ -12434,6 +12460,11 @@ impl Compiler {
                     self.deferred_error = Some(error);
                 }
                 cp.return_type_hint = self.convert_type_hint(return_type);
+                func_compiler.record_reference_void_deprecation(
+                    *returns_by_ref,
+                    return_type,
+                    *line,
+                );
                 if let Err(error) = self.validate_attribute_target(attributes, "function", *line) {
                     self.deferred_error = Some(error);
                 }

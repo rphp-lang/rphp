@@ -483,7 +483,7 @@ fn reference_incdec_overflow_message(
     Some(format!(
         "Cannot {} a reference held by property {}::${} of type {} past its {} value",
         overflow.action(),
-        property_diagnostic_class_name(&constraint.declaring_class),
+        displayed_class_name(eg, &constraint.declaring_class),
         constraint.property,
         constraint.type_hint.property_declaration_display_name(),
         overflow.boundary(),
