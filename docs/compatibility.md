@@ -7,6 +7,38 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `core-property-receiver-contracts` checkpoint over `279a6d43` adds **5
+exact PHP 8.5 passes without loss**, reducing measured supported failures from
+**251 to 246**. Scalar property-read diagnostics now preserve `true` and
+`false`; visible static declarations accessed through an object emit the
+canonical notice without touching static storage; and direct assignment keeps
+PHP's observable order when a notice handler throws. The handler sees the old
+object, the instance write completes, and later reference validation or a
+displaced-value destructor can replace and chain the pending throwable.
+
+The 8,258-case supported ledger is now **7,539 pass / 246 fail / 194 skip /
+276 unsupported / three XFAIL**. The stable 7,174-case core advances to
+**6,541 pass / 241 fail / 182 skip / 210 unsupported**, with no timeout or
+crash. Zend/lang is **5,071/233/115/180**, exact **+5/-0**; strings/array stays
+byte-identical at **1,470/8/67/30**. Five Cargo configurations, all-target
+compilation, Composer/Symfony S0--S3, formatting, runner self-tests and the
+unsafe ratchet pass. Cumulative performance tuning remains deferred to the
+aggregate correctness-sweep boundary.
+
+SHA-256 evidence: candidate
+`749e6f27e0e50edc90543970142515a059384719659cfb8ddc88fdd9b04a450c`;
+focused manifest/pass set
+`05a3e1582aad3742e95e083c255fd898d75c045cb6280ba91e5fb77192398539` /
+`f5c9bd61c1e4804ad426b678a30a64ed34119e49e52ffbd835e0c4f930eeb2ff`;
+Zend/lang manifest/pass set
+`fad3028f2dab95fe64855739ed4a4b47254a2f0185df8fe51f1ec002c5628ad9` /
+`6d28613fc62ad86f16bc738d874f136a2ca150cd3b5c7804582797c0013ee159`;
+strings/array manifest/pass set
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding PCRE public-boundaries checkpoint
+
 The `pcre-public-boundaries` checkpoint over `49aa752a` adds **16 PHP 8.5
 ext/pcre passes without loss**, reducing measured supported failures from
 **267 to 251**. On an identical 165-case upstream runner packet, parent and

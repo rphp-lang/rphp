@@ -1841,6 +1841,45 @@ fn property_write_receiver_type(value: &Value) -> &'static str {
     }
 }
 
+/// A static declaration remains visible to an instance property access even
+/// though it has no object storage. Parent-private declarations are visible
+/// only from their owning scope; a child declaration with the same spelling
+/// must not hide that scope's own private member.
+#[cold]
+#[inline(never)]
+fn visible_static_property_on_instance(
+    eg: &ExecutorGlobals,
+    receiver_class: &str,
+    name: &str,
+    caller_class: Option<&str>,
+) -> bool {
+    let Some(class) = eg.find_class(receiver_class) else {
+        return false;
+    };
+    if let Some(caller) = caller_class
+        && eg.class_is_a(receiver_class, caller)
+        && class.static_properties.iter().any(|property| {
+            property.name == name
+                && property.visibility == Visibility::Private
+                && property.declaring_class.eq_ignore_ascii_case(caller)
+        })
+    {
+        return true;
+    }
+    class.static_properties.iter().any(|property| {
+        property.name == name
+            && (property.visibility != Visibility::Private
+                || property
+                    .declaring_class
+                    .eq_ignore_ascii_case(receiver_class))
+            && eg.check_visibility(
+                caller_class,
+                &property.declaring_class,
+                property.visibility,
+            )
+    })
+}
+
 #[inline]
 fn property_fetch_write_capability_error(
     eg: &ExecutorGlobals,
@@ -2064,7 +2103,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             opline,
             &format!(
                 "Attempt to read property \"{name}\" on {}",
-                obj_val.type_name()
+                property_write_receiver_type(obj_val)
             ),
             opline._pad & FETCH_OBJ_ERROR_SUPPRESS != 0,
         )?;
@@ -2303,6 +2342,27 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         }
         let magic_receiver = obj_val;
         let obj_val = initialized_target.as_ref().unwrap_or(obj_val);
+        if !declared_property
+            && opline._pad & FETCH_OBJ_SILENT == 0
+            && !magic_get_can_handle
+            && visible_static_property_on_instance(
+                eg,
+                &class_name,
+                &name,
+                caller_class.as_deref(),
+            )
+        {
+            report_php_notice(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!("Accessing static property {class_name}::${name} as non static"),
+            )?;
+            if let Some(result) = take_magic_exception(eg, frame)? {
+                return Ok(result);
+            }
+        }
         let obj = obj_val
             .as_object()
             .expect("lazy initialization must preserve an object receiver");
@@ -4646,6 +4706,87 @@ fn op_assign_obj_prop<'a>(
     result
 }
 
+/// Finish the direct instance-storage write that PHP performs after a static
+/// property access notice handler throws.  The handler observes the old
+/// object state; reference validation and displaced-value destruction may
+/// then replace its pending throwable before control reaches the catch site.
+#[cold]
+#[inline(never)]
+fn finish_plain_object_static_notice_assignment<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    receiver: &Value,
+    key: &str,
+    mut assigned: Value,
+    force_dynamic: bool,
+    property_accessible: bool,
+    constraints: &[crate::value::ReferencePropertyConstraint],
+    pending: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    assigned = match prepare_reference_assignment_scalar(
+        assigned,
+        constraints,
+        eg,
+        op_array.strict_types,
+    ) {
+        Ok(value) => value,
+        Err(message) => {
+            let replacement = make_error_value("TypeError", &message);
+            append_replaced_exception(&replacement, &pending, eg);
+            return Ok(match throw_in_frame(eg, frame, replacement)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+            });
+        }
+    };
+    let property_exists = receiver.as_object().is_some_and(|object| {
+        if force_dynamic {
+            object.get_dynamic_property_with_position(key).is_some()
+        } else {
+            property_accessible && object.contains_property(key)
+        }
+    });
+    let assignment_result =
+        (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0).then(|| assigned.clone());
+    let destructor = if property_exists {
+        commit_existing_object_property(eg, receiver, key, assigned, force_dynamic)
+    } else {
+        if let Some(mut object) = receiver.as_object_mut() {
+            if force_dynamic {
+                object.set_dynamic_property(key, assigned);
+            } else {
+                object.set_property(key, assigned);
+            }
+        }
+        None
+    };
+    if let Some(value) = assignment_result.as_ref() {
+        publish_property_assignment_result(frame, opline, value);
+    }
+    eg.mark_initializing_lazy_property_written(receiver, key);
+    let released = run_prepared_value_destructor(eg, destructor);
+    if let Some(replacement) = &eg.exception {
+        append_replaced_exception(replacement, &pending, eg);
+    } else {
+        eg.exception = Some(pending);
+    }
+    released?;
+    let exception = eg
+        .exception
+        .take()
+        .expect("static-property notice must retain a pending exception");
+    Ok(match throw_in_frame(eg, frame, exception)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+    })
+}
+
 fn op_assign_obj_prop_inner<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -5173,12 +5314,78 @@ fn op_assign_obj_prop_inner<'a>(
             .class_table
             .get(php_obj.class_name.as_ref())
             .is_some_and(|class_def| class_def.is_readonly);
-        let prop_exists = if force_dynamic {
+        let mut prop_exists = if force_dynamic {
             php_obj.get_dynamic_property_with_position(&key).is_some()
         } else {
             property_accessible && php_obj.contains_property(&key)
         };
         drop(php_obj);
+        if declared_slot.is_none()
+            && (prop_exists || !magic_set_can_handle)
+            && visible_static_property_on_instance(
+                eg,
+                &object_class_name,
+                &name,
+                caller_class.as_deref(),
+            )
+        {
+            report_php_notice(
+                eg,
+                frame,
+                op_array,
+                opline,
+                &format!(
+                    "Accessing static property {object_display_class_name}::${name} as non static"
+                ),
+            )?;
+            if let Some(pending) = eg.exception.take() {
+                // PHP completes a plain instance-storage assignment after a
+                // throwing handler observes this notice.  The handler must
+                // still see the pre-write object, and its throwable remains
+                // pending until reference validation and displaced-value
+                // destruction finish.  Compound/magic/hook writeback has a
+                // different partial-mutation contract and stays on its
+                // canonical path.
+                if opline._pad & ASSIGN_OBJ_MODIFY == 0
+                    && !has_set_hook
+                    && (prop_exists || !magic_set_can_handle)
+                    && !internal_class_forbids_dynamic_properties(&object_class_name)
+                {
+                    return finish_plain_object_static_notice_assignment(
+                        eg,
+                        frame,
+                        op_array,
+                        opline,
+                        obj,
+                        &key,
+                        assigned,
+                        force_dynamic,
+                        property_accessible,
+                        &property_constraints,
+                        pending,
+                    );
+                } else {
+                    eg.exception = Some(pending);
+                }
+                let exception = eg
+                    .exception
+                    .take()
+                    .expect("static-property notice must retain a pending exception");
+                return Ok(match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        ColdResult::NewFrame(new_frame, new_op_array)
+                    }
+                    ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+                });
+            }
+            prop_exists = obj.as_object().is_some_and(|object| {
+                if force_dynamic {
+                    object.get_dynamic_property_with_position(&key).is_some()
+                } else {
+                    property_accessible && object.contains_property(&key)
+                }
+            });
+        }
         if has_set_hook
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
             && !property_guard_active(eg, magic_receiver, &name, PROPERTY_GUARD_HOOK_SET)

@@ -36,6 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `core-property-receiver-contracts` checkpoint over `279a6d43` reduces the
+supported failure debt from **251 to 246**, exact **+5/-0**. The 8,258-case
+supported ledger is **7,539/246/194/276 with three XFAIL**. The 7,174-case
+stable core reaches **6,541/241/182/210**; Zend/lang is
+**5,071/233/115/180**, while strings/array remains byte-identical at
+**1,470/8/67/30**.
+
+One shared VM boundary now preserves scalar receiver spelling, resolves
+visible static declarations during object access and matches PHP's ordering
+when a static-access notice handler throws during direct assignment. The
+handler observes the old state, the instance write completes, and subsequent
+reference validation or destruction may replace and chain the pending
+throwable. Magic, hook, compound and inherited-instance-slot paths retain
+their distinct contracts.
+
+Five Cargo configurations/all-targets, exact no-loss families,
+Composer/Symfony S0--S3, formatting, runner self-tests and unsafe policy are
+green. Continue the shared-cause supported-failure sweep from **246 to zero**;
+select a 10--30-case cluster where possible and preserve the exact 5,071 and
+1,470 parent pass sets. Performance optimization remains deferred to the
+aggregate sweep boundary by user direction.
+
+### Preceding PCRE public-boundaries checkpoint
+
 The `pcre-public-boundaries` checkpoint over `49aa752a` reduces the measured
 supported failure debt from **267 to 251**, with **16 new ext/pcre passes and no
 lost pass**. The identical 165-case upstream runner packet moves from 89/51 to

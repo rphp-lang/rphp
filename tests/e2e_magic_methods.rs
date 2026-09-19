@@ -393,7 +393,7 @@ set_error_handler(function($code, $message) { echo "handled:$code:$message\n"; r
 var_dump($int->handled);
 "#
         ),
-        "\nWarning: Attempt to read property \"missing\" on null in <main> on line 6\nNULL\n\nWarning: Attempt to read property \"missing\" on bool in <main> on line 7\nNULL\n\nWarning: Attempt to read property \"1\" on int in <main> on line 8\nNULL\n\nWarning: Attempt to read property \"missing\" on string in <main> on line 9\nNULL\nbool(false)\nNULL\nNULL\nhandled:2:Attempt to read property \"handled\" on int\nNULL\n"
+        "\nWarning: Attempt to read property \"missing\" on null in <main> on line 6\nNULL\n\nWarning: Attempt to read property \"missing\" on true in <main> on line 7\nNULL\n\nWarning: Attempt to read property \"1\" on int in <main> on line 8\nNULL\n\nWarning: Attempt to read property \"missing\" on string in <main> on line 9\nNULL\nbool(false)\nNULL\nNULL\nhandled:2:Attempt to read property \"handled\" on int\nNULL\n"
     );
 }
 
