@@ -22641,6 +22641,48 @@ fn pcre_clear_matches_argument(ed: *mut ExecuteData, argument: u32) {
     arg_mut!(ed, argument, Value::array(PhpArray::new()));
 }
 
+/// PHP checks these semantic domains only after a pattern has compiled. The
+/// minimum signed offset is rejected before flags, without touching matches;
+/// invalid flags instead clear a supplied matches output.
+#[inline]
+fn pcre_match_numeric_arguments_valid(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    flags: i64,
+    raw_offset: i64,
+    has_matches: bool,
+) -> bool {
+    if raw_offset == i64::MIN {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "{function}(): Argument #5 ($offset) must be greater than {}",
+                i64::MIN
+            ),
+        ));
+        return false;
+    }
+    let order_flags = flags & 3;
+    let valid_flags = flags & !0x303 == 0
+        && if function == "preg_match_all" {
+            order_flags != 3
+        } else {
+            order_flags == 0
+        };
+    if !valid_flags {
+        if has_matches {
+            pcre_clear_matches_argument(ed, 2);
+        }
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!("{function}(): Argument #4 ($flags) must be a PREG_* constant"),
+        ));
+        return false;
+    }
+    true
+}
+
 #[cold]
 fn pcre_empty_match_all_projection(regex: &crate::regex::Regex, set_order: bool) -> PhpArray {
     if set_order {
@@ -22780,6 +22822,9 @@ fn fn_preg_match(
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_match", &pattern_str)? else {
         ret!(rv, Value::bool(false));
     };
+    if !pcre_match_numeric_arguments_valid(ed, eg, "preg_match", flags, raw_offset, has_matches) {
+        return Ok(());
+    }
     if re.is_unicode() {
         return pcre_match_unicode(
             ed,
@@ -32059,6 +32104,10 @@ fn fn_preg_match_all(
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_match_all", &pattern_str)? else {
         ret!(rv, Value::bool(false));
     };
+    if !pcre_match_numeric_arguments_valid(ed, eg, "preg_match_all", flags, raw_offset, has_matches)
+    {
+        return Ok(());
+    }
 
     let subject_len = subject.len() as i64;
     if raw_offset > subject_len {
