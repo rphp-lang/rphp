@@ -215,6 +215,7 @@ macro_rules! ret {
 mod array_assoc_sets;
 mod array_traversal;
 mod builtin_classes;
+mod date;
 mod directory;
 mod fiber;
 mod filesystem;
@@ -30036,41 +30037,66 @@ mod base_convert_tests {
 // ============================================================================
 
 /// date($format, $timestamp = time()): string
-fn fn_date(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let fmt = arg_str!(ed, 0);
-    let ts = match arg_opt!(ed, 1) {
-        Some(v) if !v.is_undef() => v.to_long_val(),
-        _ => SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+fn fn_date(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let supplied_format = arg!(ed, 0).dereferenced();
+    let format = if supplied_format.value_type() == ValueType::String {
+        Cow::Borrowed(supplied_format.as_str().unwrap_or(""))
+    } else {
+        let Some(format) = typed_internal_string_argument(ed, eg, "date", 0, "format")? else {
+            return Ok(());
+        };
+        Cow::Owned(format)
     };
-    ret!(rv, Value::string(format_php_date(&fmt, ts, "UTC")));
+    let Some(timestamp) = date::optional_timestamp(ed, eg, "date", 1)? else {
+        return Ok(());
+    };
+    let (timezone_id, timezone_abbreviation, offset) = date::timezone_spec(eg, timestamp);
+    ret!(
+        rv,
+        Value::string(format_php_date(
+            &format,
+            timestamp,
+            timezone_id,
+            timezone_abbreviation,
+            offset,
+        ))
+    );
 }
 
 /// gmdate($format, $timestamp = time()): string
 fn fn_gmdate(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    use std::time::{SystemTime, UNIX_EPOCH};
-    let fmt = arg_str!(ed, 0);
-    let ts = match arg_opt!(ed, 1) {
-        Some(v) if !v.is_undef() => v.to_long_val(),
-        _ => SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_secs() as i64,
+    let supplied_format = arg!(ed, 0).dereferenced();
+    let format = if supplied_format.value_type() == ValueType::String {
+        Cow::Borrowed(supplied_format.as_str().unwrap_or(""))
+    } else {
+        let Some(format) = typed_internal_string_argument(ed, eg, "gmdate", 0, "format")? else {
+            return Ok(());
+        };
+        Cow::Owned(format)
     };
-    ret!(rv, Value::string(format_php_date(&fmt, ts, "GMT")));
+    let Some(timestamp) = date::optional_timestamp(ed, eg, "gmdate", 1)? else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        Value::string(format_php_date(&format, timestamp, "UTC", "GMT", 0,))
+    );
 }
 
 /// Format a Unix timestamp according to PHP date() format characters
-fn format_php_date(fmt: &str, ts: i64, timezone_abbreviation: &str) -> String {
+fn format_php_date(
+    fmt: &str,
+    ts: i64,
+    timezone_id: &str,
+    timezone_abbreviation: &str,
+    offset: i64,
+) -> String {
     // Break timestamp into components using manual calculation (no chrono dependency)
-    let (year, month, day, hour, min, sec, wday, yday) = unix_to_parts(ts);
+    let (year, month, day, hour, min, sec, wday, yday) = unix_to_parts(ts.saturating_add(offset));
     let mut out = String::new();
     let mut escape = false;
     for c in fmt.chars() {
@@ -30089,6 +30115,7 @@ fn format_php_date(fmt: &str, ts: i64, timezone_abbreviation: &str) -> String {
             'n' => out.push_str(&format!("{}", month)),
             'd' => out.push_str(&format!("{:02}", day)),
             'j' => out.push_str(&format!("{}", day)),
+            'S' => out.push_str(date::ordinal_suffix(day)),
             'H' => out.push_str(&format!("{:02}", hour)),
             'G' => out.push_str(&format!("{}", hour)),
             'i' => out.push_str(&format!("{:02}", min)),
@@ -30119,6 +30146,20 @@ fn format_php_date(fmt: &str, ts: i64, timezone_abbreviation: &str) -> String {
             'w' => out.push_str(&format!("{}", wday)),
             'z' => out.push_str(&format!("{}", yday)),
             'U' => out.push_str(&format!("{}", ts)),
+            'B' => out.push_str(&format!("{:03}", date::internet_beats(ts))),
+            'W' => out.push_str(&format!(
+                "{:02}",
+                date::iso_week_and_year(year, month, day, wday, yday).1
+            )),
+            'o' => out.push_str(&format!(
+                "{:04}",
+                date::iso_week_and_year(year, month, day, wday, yday).0
+            )),
+            'I' => out.push('0'),
+            'Z' => out.push_str(&offset.to_string()),
+            'O' => out.push_str(&date::format_timezone_offset(offset, false)),
+            'P' => out.push_str(&date::format_timezone_offset(offset, true)),
+            'e' => out.push_str(timezone_id),
             'T' => out.push_str(timezone_abbreviation),
             'D' => out.push_str(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wday as usize]),
             'l' => out.push_str(
@@ -30160,6 +30201,19 @@ fn format_php_date(fmt: &str, ts: i64, timezone_abbreviation: &str) -> String {
                 out.push_str(&format!("{}", days));
             }
             'L' => out.push_str(if is_leap_year(year) { "1" } else { "0" }),
+            'c' => out.push_str(&format!(
+                "{year:04}-{month:02}-{day:02}T{hour:02}:{min:02}:{sec:02}{}",
+                date::format_timezone_offset(offset, true)
+            )),
+            'r' => out.push_str(&format!(
+                "{}, {day:02} {} {year:04} {hour:02}:{min:02}:{sec:02} {}",
+                ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wday as usize],
+                [
+                    "", "Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct",
+                    "Nov", "Dec"
+                ][month as usize],
+                date::format_timezone_offset(offset, false)
+            )),
             _ => out.push(c),
         }
     }
@@ -30245,27 +30299,41 @@ fn unix_to_parts(ts: i64) -> (i64, i64, i64, i64, i64, i64, i64, i64) {
 fn fn_mktime(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let hour = arg_long!(ed, 0);
-    let min = arg_opt!(ed, 1).map(|v| v.to_long_val()).unwrap_or(0);
-    let sec = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(0);
-    let month = arg_opt!(ed, 3).map(|v| v.to_long_val()).unwrap_or(1);
-    let day = arg_opt!(ed, 4).map(|v| v.to_long_val()).unwrap_or(1);
-    let year = arg_opt!(ed, 5).map(|v| v.to_long_val()).unwrap_or(1970);
-
-    ret!(
-        rv,
-        Value::long(parts_to_unix(year, month, day, hour, min, sec))
-    );
+    date::fn_mktime_impl(ed, rv, eg)
 }
 
 fn parts_to_unix(year: i64, month: i64, day: i64, hour: i64, min: i64, sec: i64) -> i64 {
-    // Days from 1970-01-01 to the given date
-    let m = if month > 2 { month } else { month + 12 };
-    let y = if month > 2 { year } else { year - 1 };
-    let days = 365 * y + y / 4 - y / 100 + y / 400 + (153 * (m - 3) + 2) / 5 + day - 719469;
-    days * 86400 + hour * 3600 + min * 60 + sec
+    if (1..=10_000_000).contains(&year)
+        && (1..=12).contains(&month)
+        && [day, hour, min, sec]
+            .into_iter()
+            .all(|part| part.unsigned_abs() <= 1_000_000_000)
+    {
+        let adjusted_month = if month > 2 { month } else { month + 12 };
+        let adjusted_year = if month > 2 { year } else { year - 1 };
+        let days = 365 * adjusted_year + adjusted_year / 4 - adjusted_year / 100
+            + adjusted_year / 400
+            + (153 * (adjusted_month - 3) + 2) / 5
+            + day
+            - 719_469;
+        return days * 86_400 + hour * 3_600 + min * 60 + sec;
+    }
+    // Days from 1970-01-01 to the given civil date. Euclidean eras keep the
+    // proleptic Gregorian result correct for year zero and negative years.
+    let mut year = i128::from(year);
+    let month = i128::from(month);
+    year -= i128::from(month <= 2);
+    let era = year.div_euclid(400);
+    let year_of_era = year - era * 400;
+    let adjusted_month = if month > 2 { month - 3 } else { month + 9 };
+    let day_of_year = (153 * adjusted_month + 2) / 5 + i128::from(day) - 1;
+    let day_of_era = year_of_era * 365 + year_of_era / 4 - year_of_era / 100 + day_of_year;
+    let days = era * 146_097 + day_of_era - 719_468;
+    let timestamp =
+        days * 86_400 + i128::from(hour) * 3_600 + i128::from(min) * 60 + i128::from(sec);
+    i64::try_from(timestamp).unwrap_or(if timestamp < 0 { i64::MIN } else { i64::MAX })
 }
 
 // ============================================================================
@@ -31112,6 +31180,11 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, value.clone());
             }
+            "date.timezone" if date::is_supported_timezone(value) => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, value.clone());
+            }
             _ => {}
         }
     }
@@ -31260,6 +31333,7 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         "zend.exception_string_param_max_len" => "15".to_string(),
         "fiber.stack_size" => "2097152".to_string(),
         "arg_separator.output" => "&".to_string(),
+        "date.timezone" => "UTC".to_string(),
         "default_charset" => "UTF-8".to_string(),
         "internal_encoding"
         | "input_encoding"
@@ -31302,6 +31376,19 @@ fn fn_ini_set(
         ret!(rv, Value::bool(false));
     };
     if option == "allow_url_fopen" {
+        ret!(rv, Value::bool(false));
+    }
+
+    if option == "date.timezone" && !date::is_supported_timezone(&value) {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "ini_set(): Invalid date.timezone value '{value}', using '{previous}' instead"
+            ),
+        )?;
         ret!(rv, Value::bool(false));
     }
 
