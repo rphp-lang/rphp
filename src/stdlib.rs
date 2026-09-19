@@ -13404,7 +13404,10 @@ fn fn_get_mangled_object_vars(
     if let Some(members) = builtin_classes::fixed_array::member_projection(&target, eg) {
         ret!(rv, Value::array(members));
     }
-    ret!(rv, crate::vm::execute::cast_object_to_array(&target, eg));
+    ret!(
+        rv,
+        crate::vm::execute::mangled_object_properties_to_array(&target, eg)
+    );
 }
 
 fn invalid_class_methods_argument(eg: &mut ExecutorGlobals, value: &Value) {
@@ -13758,7 +13761,11 @@ fn fn_property_exists(
             "TypeError",
             &format!(
                 "property_exists(): Argument #1 ($object_or_class) must be of type object|string, {} given",
-                target.type_name()
+                match target.value_type() {
+                    ValueType::True => "true",
+                    ValueType::False => "false",
+                    _ => target.type_name(),
+                }
             ),
         ));
         return Ok(());
@@ -20661,7 +20668,11 @@ fn var_export_value_at(
             };
             for (key, value) in properties.iter() {
                 let key = match key {
-                    ArrayKey::Int(key) => PhpOutputBytes::from_text(key.to_string()),
+                    // Numeric dynamic object-property names normalize to int
+                    // only in the intermediate `(array)` projection. Object
+                    // export reconstructs property syntax, where PHP keeps
+                    // those names quoted as strings.
+                    ArrayKey::Int(key) => var_export_string(key.to_string().as_bytes()),
                     ArrayKey::String(key) => {
                         var_export_string(var_export_object_property_name(&key).as_bytes())
                     }

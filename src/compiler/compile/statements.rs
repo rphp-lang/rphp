@@ -280,6 +280,70 @@ impl Compiler {
         Ok(())
     }
 
+    /// Constructor promotion is part of the method body even when the
+    /// constructor originates in a trait. Emit the same assignment and retain
+    /// the declaration metadata for both class-like forms.
+    fn emit_promoted_property_assignments(
+        &self,
+        class_name: &str,
+        method: &crate::parser::ClassMethod,
+        func_compiler: &mut Compiler,
+        promoted_props: &mut Vec<ClassProperty>,
+    ) -> Result<(), String> {
+        if !method.name.eq_ignore_ascii_case("__construct") {
+            return Ok(());
+        }
+        for param in &method.params {
+            let Some(promoted) = &param.promoted_property else {
+                continue;
+            };
+            if let Some(set_visibility) = promoted.set_visibility {
+                let rank = |visibility| match visibility {
+                    Visibility::Private => 0,
+                    Visibility::Protected => 1,
+                    Visibility::Public => 2,
+                };
+                if rank(promoted.visibility) < rank(set_visibility) {
+                    return Err(self.goto_error(
+                        &format!(
+                            "Visibility of property {class_name}::${} must not be weaker than set visibility",
+                            param.name
+                        ),
+                        param.line,
+                    ));
+                }
+                if param.type_hint.is_none() {
+                    return Err(self.goto_error(
+                        &format!(
+                            "Property with asymmetric visibility {class_name}::${} must have type",
+                            param.name
+                        ),
+                        param.line,
+                    ));
+                }
+            }
+            promoted_props.push(promoted.clone());
+            let param_cv = func_compiler.resolve_cv(&param.name);
+            let prop_name = func_compiler.add_literal(Value::string(param.name.clone()));
+            let mut assign = Instruction::new(if param.is_ref {
+                OpCode::BindObjPropRef
+            } else {
+                OpCode::AssignObjProp
+            });
+            assign.op1_type = OpType::Cv;
+            assign.op1 = 0;
+            assign.op2_type = OpType::Const;
+            assign.op2 = prop_name;
+            assign.result_type = OpType::Cv;
+            assign.result = param_cv;
+            if param.is_ref {
+                assign._pad |= OBJ_PROP_REFERENCE_BIND;
+            }
+            func_compiler.instructions.push(assign);
+        }
+        Ok(())
+    }
+
     pub(super) fn compile_list_assignment_source(
         &mut self,
         source: &Expr,
@@ -5751,52 +5815,12 @@ impl Compiler {
                         method.line,
                     )?;
 
-                    // Constructor property promotion: generate $this->param = $param assignments
-                    if method.name == "__construct" {
-                        for param in &method.params {
-                            if let Some(promoted) = &param.promoted_property {
-                                if let Some(set_visibility) = promoted.set_visibility {
-                                    let rank = |visibility| match visibility {
-                                        Visibility::Private => 0,
-                                        Visibility::Protected => 1,
-                                        Visibility::Public => 2,
-                                    };
-                                    if rank(promoted.visibility) < rank(set_visibility) {
-                                        return Err(self.goto_error(
-                                            &format!(
-                                                "Visibility of property {}::${} must not be weaker than set visibility",
-                                                name, param.name
-                                            ),
-                                            param.line,
-                                        ));
-                                    }
-                                    if param.type_hint.is_none() {
-                                        return Err(self.goto_error(
-                                            &format!(
-                                                "Property with asymmetric visibility {}::${} must have type",
-                                                name, param.name
-                                            ),
-                                            param.line,
-                                        ));
-                                    }
-                                }
-                                promoted_props.push(promoted.clone());
-                                // Generate: $this->paramName = $paramName;
-                                let this_cv = 0u16; // $this is always CV 0
-                                let param_cv = func_compiler.resolve_cv(&param.name);
-                                let prop_name_idx =
-                                    func_compiler.add_literal(Value::string(param.name.clone()));
-                                let mut assign = Instruction::new(OpCode::AssignObjProp);
-                                assign.op1_type = OpType::Cv;
-                                assign.op1 = this_cv;
-                                assign.op2_type = OpType::Const;
-                                assign.op2 = prop_name_idx;
-                                assign.result_type = OpType::Cv;
-                                assign.result = param_cv;
-                                func_compiler.instructions.push(assign);
-                            }
-                        }
-                    }
+                    self.emit_promoted_property_assignments(
+                        &resolved_class,
+                        method,
+                        &mut func_compiler,
+                        &mut promoted_props,
+                    )?;
 
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
@@ -6887,6 +6911,7 @@ impl Compiler {
                 // Compile trait — very similar to class, but flagged as is_trait=true.
                 // Trait methods get compiled exactly like class methods.
                 let mut compiled_methods = Vec::new();
+                let mut promoted_props = Vec::new();
                 for method in methods {
                     if method.name.starts_with('$')
                         && method.is_abstract
@@ -6957,6 +6982,12 @@ impl Compiler {
                         func_compiler.contains_yield,
                         &cp.return_type_hint,
                         method.line,
+                    )?;
+                    self.emit_promoted_property_assignments(
+                        &resolved_trait,
+                        method,
+                        &mut func_compiler,
+                        &mut promoted_props,
                     )?;
                     for s in &method.body {
                         func_compiler.compile_stmt(s)?;
@@ -7065,6 +7096,7 @@ impl Compiler {
 
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
                 let mut compiled_static_props: Vec<PropertyDefinition> = Vec::new();
+                let mut readonly_props: Vec<String> = Vec::new();
                 let mut deferred_instance_defaults = Vec::new();
                 let mut rebound_trait_defaults = Vec::new();
                 let mut trait_property_constants = self.known_constants.clone();
@@ -7335,6 +7367,77 @@ impl Compiler {
                     }
                 }
 
+                for promoted in &promoted_props {
+                    if promoted.is_readonly && promoted.type_hint.is_none() {
+                        return Err(self.goto_error(
+                            &format!(
+                                "Readonly property {}::${} must have type",
+                                name, promoted.name
+                            ),
+                            promoted.line,
+                        ));
+                    }
+                    if promoted.is_readonly
+                        && (promoted.has_get_hook || promoted.has_set_hook)
+                    {
+                        return Err(self.goto_error(
+                            "Hooked properties cannot be readonly",
+                            promoted.line,
+                        ));
+                    }
+                    let type_hint = self.resolve_declared_property_type_hint(
+                        self.convert_type_hint(&promoted.type_hint),
+                        &resolved_trait,
+                        None,
+                    );
+                    let mut definition = PropertyDefinition::declared_with_set_visibility(
+                        promoted.name.clone(),
+                        None,
+                        promoted.visibility,
+                        promoted.set_visibility,
+                        resolved_trait.clone(),
+                        type_hint,
+                        promoted.is_readonly,
+                        type_hint_requires_reified_check(&promoted.type_hint),
+                    )
+                    .with_source_location(&self.source_file, promoted.line)
+                    .with_reflection_order(promoted.line);
+                    definition.attributes = self.compile_attributes_in_scope(
+                        &promoted.attributes,
+                        8,
+                        Some(&resolved_trait),
+                        None,
+                    );
+                    definition.set_final(promoted.is_final);
+                    definition.set_has_default(false);
+                    definition.has_get_hook = promoted.has_get_hook;
+                    definition.get_hook_is_backed = promoted.has_get_hook
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &promoted.name,
+                            "get",
+                        );
+                    definition.has_set_hook = promoted.has_set_hook;
+                    definition.set_hook_is_backed = promoted.has_set_hook
+                        && compiled_hook_uses_backing_property(
+                            &compiled_methods,
+                            &promoted.name,
+                            "set",
+                        );
+                    if definition.is_virtual_hook_property() {
+                        self.validate_virtual_hook_set_visibility(
+                            &resolved_trait,
+                            promoted,
+                            &definition,
+                            methods,
+                        )?;
+                    }
+                    compiled_props.push(definition);
+                    if promoted.is_readonly {
+                        readonly_props.push(promoted.name.clone());
+                    }
+                }
+
                 let compiled_constants =
                     self.compile_class_constants(&resolved_trait, None, constants)?;
                 let resolved_uses = uses
@@ -7395,7 +7498,7 @@ impl Compiler {
                     constants: compiled_constants,
                     property_layout: std::rc::Rc::new(ObjectLayout::empty()),
                     property_defaults: std::rc::Rc::from([]),
-                    readonly_props: vec![],
+                    readonly_props,
                     methods: compiled_methods,
                     abstract_methods: methods
                         .iter()

@@ -36,27 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `undefined-silent-read-contexts` checkpoint over `49fe3590` reduces
-supported failure debt from **214 to 204**, exact **+10/-0**. The 8,258-case
-supported ledger is **7,581/204/194/276 with three XFAIL**. The 7,174-case
-stable core is **6,583/199/182/210**; Zend/lang reaches
-**5,113/191/115/180**, while strings/array preserves its exact 1,470-pass set
+The `declaration-object-introspection` checkpoint over `f092a6b2` reduces
+supported failure debt from **204 to 193**, exact **+11/-0**. The 8,258-case
+supported ledger is **7,592/193/194/276 with three XFAIL**. The 7,174-case
+stable core is **6,594/188/182/210**; Zend/lang reaches
+**5,124/180/115/180**, while strings/array preserves its exact 1,470-pass set
 at **1,470/8/67/30**.
 
-The shared compiler/VM boundary now distinguishes silent ordinary
-assignment/unset/isset receiver materialization from warning compound writes,
-including `$GLOBALS`, unavailable `$this` and deferred dimension reads.
-Static-local rebinding, object lifetime during unset and bootstrap stream IDs
-also match PHP's observable state. Five Cargo configurations/all-targets,
-exact no-loss families, Composer/Symfony S0--S3, formatting, tooling and unsafe
-gates are green. The multi-minute deep-JSON stress case remains ignored with a
-TODO for an opt-in stress lane and is not compatibility evidence.
+The shared compiler/runtime slice aligns duplicate-parameter validation,
+class and trait constructor promotion, promoted references, `$this` reference
+materialization, ancestor-first object projection, numeric dynamic keys and
+Reflection default/inheritance/prototype diagnostics. Five Cargo
+configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
+formatting, tooling and unsafe gates are green.
 
-Continue the shared-cause supported-failure sweep from **204 to zero**. Keep
+Continue the shared-cause supported-failure sweep from **193 to zero**. Keep
 the complete Date/DateTime surface out of this stream. Select another 10--30
-case non-Date cluster from the current 191 Zend/lang failures, preserve the
-exact 5,113 and 1,470 parent pass sets, and keep aggregate performance
+case non-Date cluster from the current 180 Zend/lang failures, preserve the
+exact 5,124 and 1,470 parent pass sets, and keep aggregate performance
 optimization deferred by user direction.
+
+### Preceding undefined-silent-read checkpoint
+
+The `undefined-silent-read-contexts` checkpoint over `49fe3590` reduced
+supported failure debt from **214 to 204**, exact **+10/-0**. It separated
+silent ordinary assignment/unset/isset receiver materialization from warning
+compound writes and aligned `$GLOBALS`, unavailable `$this`, deferred
+dimension reads, static-local rebinding, unset lifetime and bootstrap stream
+resource IDs.
 
 ### Preceding lvalue reference checkpoint
 

@@ -8078,6 +8078,7 @@ impl Compiler {
         let mut ref_args = 0u64;
         let mut type_hints = Vec::new();
         let mut param_names = Vec::new();
+        let mut declared_param_names = std::collections::HashSet::new();
         for (i, param) in params.iter().enumerate() {
             self.validate_attribute_target(&param.attributes, "parameter", param.line)?;
             self.validate_deprecated_target(&param.attributes, "parameter")?;
@@ -8088,6 +8089,12 @@ impl Compiler {
             )?;
             if param.name == "this" {
                 return Err(self.goto_error("Cannot use $this as parameter", param.line));
+            }
+            if !declared_param_names.insert(param.name.as_str()) {
+                return Err(self.goto_error(
+                    &format!("Redefinition of parameter ${}", param.name),
+                    param.line,
+                ));
             }
             func_compiler.validate_declared_type_hint(&param.type_hint, param.line)?;
             match param.type_hint.as_ref() {
@@ -11723,7 +11730,16 @@ impl Compiler {
                     // corresponding value. Keep both operands live until the
                     // single AddArrayElement commit point.
                     let compiled_key = elem.key.as_ref().map(|key| self.compile_expr(key));
-                    let (val_op, val_type) = if elem.by_reference {
+                    // `$this` names an object handle, but PHP deliberately
+                    // does not expose it as a bindable reference container.
+                    // `&$this` inside an array literal therefore stores the
+                    // object by value and does not publish reference identity.
+                    let stores_reference = elem.by_reference
+                        && !matches!(
+                            &elem.value,
+                            Expr::Variable { name, .. } if name == "this"
+                        );
+                    let (val_op, val_type) = if stores_reference {
                         match self.compile_array_element_reference_source(&elem.value) {
                             Ok(source) => (source, OpType::Cv),
                             Err(error) => {
@@ -11743,11 +11759,11 @@ impl Compiler {
                     if elem.unpack && self.compiling_constant_expression {
                         add._pad |= ARRAY_UNPACK_CONSTANT_EXPRESSION;
                     }
-                    if elem.by_reference {
+                    if stores_reference {
                         add._pad |= ARRAY_ELEMENT_REFERENCE;
                     }
                     if !elem.unpack
-                        && !elem.by_reference
+                        && !stores_reference
                         && matches!(val_type, OpType::Tmp | OpType::Var)
                     {
                         add._pad |= ARRAY_ELEMENT_MOVE_SOURCE;

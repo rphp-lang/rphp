@@ -7,6 +7,37 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `declaration-object-introspection` checkpoint over `f092a6b2` adds **11
+exact PHP 8.5 passes without loss**, reducing measured supported failures from
+**204 to 193**. Duplicate parameters now fail during compilation; constructor
+promotion is shared by classes and traits and preserves reference identity;
+`$this` keeps its non-bindable array-literal semantics. Declared object
+iteration/projection follows ancestor-first PHP order, numeric dynamic names
+normalize correctly, and ArrayObject keeps its public projection boundary.
+Reflection now reports default expressions, inheritance and interface
+prototype provenance consistently, while `property_exists()` preserves scalar
+type spelling.
+
+The 8,258-case supported ledger is **7,592 pass / 193 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,594 pass / 188
+fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
+**5,124/180/115/180**, exact **+11/-0**; strings/array preserves the exact
+1,470-pass set at **1,470/8/67/30**. Default, no-default, erased, reified,
+all-features and all-targets Cargo gates, Composer/Symfony S0--S3, formatting,
+runner tooling and the unsafe ratchet pass. Performance remains deferred to
+the aggregate correctness-sweep boundary.
+
+SHA-256 evidence: candidate
+`28daf42b06f345c19f1896a312f2fe55f713ecf90648b04a76018bdd8e12a6cf`;
+Zend/lang manifest/pass set
+`c81e4fc3905cbd704efbbae1b2121706d3063dbf7e21f80b6263e585b36effac` /
+`2a08c0e7358b2990fa8215ab4dd777c85f3ef6a98a3271686c95bda343eff4c7`;
+strings/array manifest/pass set
+`ec635dab8cdf5cff3d049029e6cd3e4f6496853811b559888972203449d3697c` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding undefined-silent-read checkpoint
+
 The `undefined-silent-read-contexts` checkpoint over `49fe3590` adds **10
 exact PHP 8.5 passes without loss**, reducing measured supported failures from
 **214 to 204**. Silent receiver materialization is now limited to ordinary

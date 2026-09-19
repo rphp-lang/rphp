@@ -8091,6 +8091,8 @@ impl ExecutorGlobals {
 
         // Property order is now final. Build one shared storage-key → slot
         // layout for every object instance of this class.
+        let property_iteration_slots =
+            self.instance_property_slots_in_iteration_order_for_class(&class_def);
         let property_keys = class_def
             .properties
             .iter()
@@ -8105,10 +8107,17 @@ impl ExecutorGlobals {
         if let Some(storage) = std::rc::Rc::get_mut(&mut class_def.property_layout) {
             // A fresh declaration's placeholder is normally unshared. Reuse
             // its allocation; compiled/shared layouts retain copy-on-write.
-            storage.rebuild(class_name.as_str(), property_keys);
+            storage.rebuild_with_iteration_order(
+                class_name.as_str(),
+                property_keys,
+                property_iteration_slots,
+            );
         } else {
-            class_def.property_layout =
-                std::rc::Rc::new(ObjectLayout::new(class_name.as_str(), property_keys));
+            class_def.property_layout = std::rc::Rc::new(ObjectLayout::new_with_iteration_order(
+                class_name.as_str(),
+                property_keys,
+                property_iteration_slots,
+            ));
         }
         // Most internal declarations have no PHP property slots. An existing
         // empty immutable template is already exact and needs no replacement.
@@ -8578,10 +8587,19 @@ impl ExecutorGlobals {
         let Some(class) = self.class_by_id(class_id) else {
             return Vec::new();
         };
+        self.instance_property_slots_in_iteration_order_for_class(class)
+    }
+
+    fn instance_property_slots_in_iteration_order_for_class(&self, class: &ClassDef) -> Vec<usize> {
         let mut lineage = Vec::new();
         let mut current = Some(class.name.as_str());
         while let Some(class_name) = current {
-            let Some(definition) = self.find_class(class_name) else {
+            let definition = if class_name.eq_ignore_ascii_case(&class.name) {
+                Some(class)
+            } else {
+                self.find_class(class_name)
+            };
+            let Some(definition) = definition else {
                 break;
             };
             lineage.push(definition.name.as_str());
@@ -8594,7 +8612,12 @@ impl ExecutorGlobals {
             let property = &class.properties[*slot];
             if property.visibility != Visibility::Private {
                 for (rank, owner) in lineage.iter().enumerate() {
-                    let inherited_bucket = self.find_class(owner).and_then(|definition| {
+                    let definition = if owner.eq_ignore_ascii_case(&class.name) {
+                        Some(class)
+                    } else {
+                        self.find_class(owner)
+                    };
+                    let inherited_bucket = definition.and_then(|definition| {
                         definition.properties.iter().position(|candidate| {
                             candidate.visibility != Visibility::Private
                                 && candidate.name == property.name
@@ -8612,7 +8635,13 @@ impl ExecutorGlobals {
                 .unwrap_or(lineage.len());
             let position = lineage
                 .get(rank)
-                .and_then(|owner| self.find_class(owner))
+                .and_then(|owner| {
+                    if owner.eq_ignore_ascii_case(&class.name) {
+                        Some(class)
+                    } else {
+                        self.find_class(owner)
+                    }
+                })
                 .and_then(|definition| {
                     definition.properties.iter().position(|candidate| {
                         candidate.name == property.name

@@ -288,6 +288,7 @@ pub struct ObjectLayout {
     class_name: Option<Rc<str>>,
     keys: Vec<String>,
     slots: HashMap<String, usize>,
+    iteration_slots: Vec<usize>,
 }
 
 impl ObjectLayout {
@@ -298,9 +299,21 @@ impl ObjectLayout {
         }
         Self {
             class_name: Some(class_name.into()),
+            iteration_slots: (0..keys.len()).collect(),
             keys,
             slots,
         }
+    }
+
+    pub(crate) fn new_with_iteration_order(
+        class_name: impl Into<Rc<str>>,
+        keys: Vec<String>,
+        iteration_slots: Vec<usize>,
+    ) -> Self {
+        let mut layout = Self::new(class_name, keys);
+        debug_assert_eq!(layout.keys.len(), iteration_slots.len());
+        layout.iteration_slots = iteration_slots;
+        layout
     }
 
     pub fn empty() -> Self {
@@ -308,6 +321,7 @@ impl ObjectLayout {
             class_name: None,
             keys: Vec::new(),
             slots: HashMap::new(),
+            iteration_slots: Vec::new(),
         }
     }
 
@@ -322,6 +336,19 @@ impl ObjectLayout {
         }
         self.class_name = Some(class_name.into());
         self.keys = keys;
+        self.iteration_slots = (0..self.keys.len()).collect();
+    }
+
+    #[cold]
+    pub(crate) fn rebuild_with_iteration_order(
+        &mut self,
+        class_name: impl Into<Rc<str>>,
+        keys: Vec<String>,
+        iteration_slots: Vec<usize>,
+    ) {
+        self.rebuild(class_name, keys);
+        debug_assert_eq!(self.keys.len(), iteration_slots.len());
+        self.iteration_slots = iteration_slots;
     }
 
     #[inline]
@@ -344,6 +371,11 @@ impl ObjectLayout {
     #[inline]
     pub fn len(&self) -> usize {
         self.keys.len()
+    }
+
+    #[inline]
+    pub(crate) fn iteration_slots(&self) -> &[usize] {
+        &self.iteration_slots
     }
 }
 
@@ -2164,7 +2196,10 @@ impl PhpObject {
     }
 
     pub fn for_each_property(&self, mut visitor: impl FnMut(&str, &Value)) {
-        for (slot, value) in self.property_values.iter().enumerate() {
+        for &slot in self.property_layout.iteration_slots() {
+            let Some(value) = self.property_values.get(slot) else {
+                continue;
+            };
             if let Some(key) = self.property_layout.key(slot) {
                 visitor(key, value);
             }

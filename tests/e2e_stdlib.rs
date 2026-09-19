@@ -1976,7 +1976,7 @@ foreach ([[], 1, 3.5, true, null] as $invalid) {
             "property_exists(): Argument #1 ($object_or_class) must be of type object|string, array given\n",
             "property_exists(): Argument #1 ($object_or_class) must be of type object|string, int given\n",
             "property_exists(): Argument #1 ($object_or_class) must be of type object|string, float given\n",
-            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, bool given\n",
+            "property_exists(): Argument #1 ($object_or_class) must be of type object|string, true given\n",
             "property_exists(): Argument #1 ($object_or_class) must be of type object|string, null given\n",
         )
     );

@@ -4425,10 +4425,22 @@ fn parameter_to_string(
         .map(|pointer| pointer as usize as *const FunctionCommon);
     let default = if has_default {
         function
-            .and_then(|function| {
-                eg.internal_function_parameter_default_diagnostic(function, position as usize)
-            })
+            .and_then(|function| unsafe { function.as_ref() })
+            .and_then(reflected_user_function_from_common)
+            .and_then(|function| function.parameter_default_diagnostics.as_deref())
+            .and_then(|diagnostics| diagnostics.get(position as usize))
+            .and_then(|diagnostic| diagnostic.as_deref())
             .map(|diagnostic| format!(" = {diagnostic}"))
+            .or_else(|| {
+                function
+                    .and_then(|function| {
+                        eg.internal_function_parameter_default_diagnostic(
+                            function,
+                            position as usize,
+                        )
+                    })
+                    .map(|diagnostic| format!(" = {diagnostic}"))
+            })
             .or_else(|| {
                 function
                     .and_then(|function| {
@@ -5407,19 +5419,26 @@ fn render_reflection_signature_parameter(
     };
     let variadic_prefix = if variadic { "..." } else { "" };
     let default = if !variadic && index >= function.sig.required_num_args {
-        eg.internal_function_parameter_default_diagnostic(
-            function as *const FunctionCommon,
-            index as usize,
-        )
-        .map(|diagnostic| format!(" = {diagnostic}"))
-        .or_else(|| {
-            eg.internal_function_parameter_default(
-                function as *const FunctionCommon,
-                index as usize,
-            )
-            .map(|value| format!(" = {}", reflection_default_text(value)))
-        })
-        .unwrap_or_else(|| " = <default>".to_string())
+        reflected_user_function_from_common(function)
+            .and_then(|function| function.parameter_default_diagnostics.as_deref())
+            .and_then(|diagnostics| diagnostics.get(index as usize))
+            .and_then(|diagnostic| diagnostic.as_deref())
+            .map(|diagnostic| format!(" = {diagnostic}"))
+            .or_else(|| {
+                eg.internal_function_parameter_default_diagnostic(
+                    function as *const FunctionCommon,
+                    index as usize,
+                )
+                .map(|diagnostic| format!(" = {diagnostic}"))
+            })
+            .or_else(|| {
+                eg.internal_function_parameter_default(
+                    function as *const FunctionCommon,
+                    index as usize,
+                )
+                .map(|value| format!(" = {}", reflection_default_text(value)))
+            })
+            .unwrap_or_else(|| " = <default>".to_string())
     } else {
         String::new()
     };
@@ -5460,6 +5479,7 @@ fn render_reflection_method_details(
     is_final: bool,
     is_abstract: bool,
     closure_method: bool,
+    declaration_context: Option<&str>,
     eg: &ExecutorGlobals,
 ) -> String {
     let mut modifiers = String::new();
@@ -5475,7 +5495,7 @@ fn render_reflection_method_details(
         modifiers.push_str("static ");
     }
     let provenance = if function.fn_type == FunctionType::User && !closure_method {
-        "user".to_string()
+        declaration_context.map_or_else(|| "user".to_string(), |context| format!("user, {context}"))
     } else if !closure_method && let Some(extension) = eg.internal_function_extension(function) {
         format!("internal:{extension}")
     } else {
@@ -5530,6 +5550,72 @@ fn render_reflection_method_details(
     }
     rendered.push_str("}\n");
     rendered
+}
+
+#[cold]
+fn reflected_interface_method_owner(
+    eg: &ExecutorGlobals,
+    interface: &str,
+    method: &str,
+    visited: &mut HashSet<String>,
+) -> Option<String> {
+    if !visited.insert(interface.to_ascii_lowercase()) {
+        return None;
+    }
+    let definition = eg.find_class(interface)?;
+    if definition
+        .methods
+        .iter()
+        .any(|(name, ..)| name.eq_ignore_ascii_case(method))
+        || eg
+            .internal_declared_method_names(&definition.name)
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(method))
+    {
+        return Some(definition.name.clone());
+    }
+    definition
+        .implements
+        .iter()
+        .rev()
+        .find_map(|parent| reflected_interface_method_owner(eg, parent, method, visited))
+}
+
+#[cold]
+fn reflected_method_declaration_context(
+    eg: &ExecutorGlobals,
+    reflected_class: &str,
+    method: &str,
+    declaring_class: &str,
+) -> Option<String> {
+    let mut parts = Vec::with_capacity(2);
+    if !declaring_class.eq_ignore_ascii_case(reflected_class) {
+        parts.push(format!("inherits {declaring_class}"));
+    }
+    let mut current = Some(reflected_class);
+    let mut prototype = None;
+    while let Some(name) = current {
+        let Some(class) = eg.find_class(name) else {
+            break;
+        };
+        for interface in class.implements.iter().rev() {
+            let mut visited = HashSet::new();
+            if let Some(owner) =
+                reflected_interface_method_owner(eg, interface, method, &mut visited)
+            {
+                prototype = Some(owner);
+                break;
+            }
+        }
+        if prototype.is_some() {
+            break;
+        }
+        current = class.parent.as_deref();
+    }
+    if let Some(prototype) = prototype {
+        parts.push(format!("prototype {prototype}"));
+    }
+    (!parts.is_empty()).then(|| parts.join(", "))
 }
 
 fn function_to_string(
@@ -5636,6 +5722,7 @@ fn method_to_string(
         is_final,
         is_abstract,
         closure_method,
+        None,
         eg,
     );
     return_value(rv, Value::string(rendered))
@@ -5726,14 +5813,19 @@ fn class_to_string(
         .as_deref()
         .map(|backing_type| format!(": {backing_type}"))
         .unwrap_or_default();
-    let implements_declaration = if is_user_enum && !class.implements.is_empty() {
+    let parent_declaration = class
+        .parent
+        .as_deref()
+        .map(|parent| format!(" extends {parent}"))
+        .unwrap_or_default();
+    let implements_declaration = if !class.is_interface && !class.implements.is_empty() {
         format!(" implements {}", class.implements.join(", "))
     } else {
         String::new()
     };
     let mut rendered = format!(
-        "{title} [ <{provenance}>{iterateable} {modifiers}{kind} {}{backing_declaration}{implements_declaration} ] {{\n",
-        class.name
+        "{title} [ <{provenance}>{iterateable} {modifiers}{kind} {}{parent_declaration}{backing_declaration}{implements_declaration} ] {{\n",
+        class.name,
     );
     let internal_class = eg.class_is_internal(&owner);
     if internal_class {
@@ -5837,7 +5929,7 @@ fn class_to_string(
         if !is_static {
             continue;
         }
-        if (is_user_enum || internal_class) && rendered_static_method {
+        if rendered_static_method {
             rendered.push('\n');
         }
         if is_user_enum && let Some(method) = render_reflection_enum_builtin_method(name) {
@@ -5845,6 +5937,8 @@ fn class_to_string(
             rendered.push_str(&method);
             rendered.push('\n');
         } else if let Some(function) = eg.registered_function_common(*function) {
+            let declaration_context =
+                reflected_method_declaration_context(eg, &class.name, name, declaring_class);
             let method = render_reflection_method_details(
                 function,
                 reflected_user_function_from_common(function),
@@ -5855,6 +5949,7 @@ fn class_to_string(
                 eg.find_class(declaring_class)
                     .is_some_and(|class| class.method_is_abstract(name)),
                 false,
+                declaration_context.as_deref(),
                 eg,
             );
             for line in method.lines() {
@@ -5906,9 +6001,11 @@ fn class_to_string(
         let Some(function) = eg.registered_function_common(*function) else {
             continue;
         };
-        if internal_class && rendered_instance_method {
+        if rendered_instance_method {
             rendered.push('\n');
         }
+        let declaration_context =
+            reflected_method_declaration_context(eg, &class.name, name, declaring_class);
         let method = render_reflection_method_details(
             function,
             reflected_user_function_from_common(function),
@@ -5919,6 +6016,7 @@ fn class_to_string(
             eg.find_class(declaring_class)
                 .is_some_and(|class| class.method_is_abstract(name)),
             false,
+            declaration_context.as_deref(),
             eg,
         );
         for line in method.lines() {

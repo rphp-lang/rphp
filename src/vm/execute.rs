@@ -620,9 +620,35 @@ fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value
 /// uninitialized typed slots remain absent from the result.
 #[cold]
 pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value {
+    object_properties_to_array(value, eg, true)
+}
+
+/// `get_mangled_object_vars()` exposes the object's own declared and dynamic
+/// table even for ArrayObject. A language-level `(array)` cast retains
+/// ArrayObject's backing-storage projection instead.
+#[cold]
+pub(crate) fn mangled_object_properties_to_array(value: &Value, eg: &ExecutorGlobals) -> Value {
+    object_properties_to_array(value, eg, false)
+}
+
+#[inline]
+fn set_object_projection_property(result: &mut PhpArray, key: &str, value: &Value) {
+    let key = crate::value::canonical_decimal_array_key(key)
+        .map_or_else(|| ArrayKey::String(key.to_owned()), ArrayKey::Int);
+    result.set(key, value.clone_for_php_storage());
+}
+
+#[cold]
+fn object_properties_to_array(
+    value: &Value,
+    eg: &ExecutorGlobals,
+    project_array_object_storage: bool,
+) -> Value {
     let proxy_instance = eg.lazy_proxy_instance(value);
     let value = proxy_instance.as_ref().unwrap_or(value);
-    if let Some(array) = crate::stdlib::array_object_array_cast(value, eg) {
+    if project_array_object_storage
+        && let Some(array) = crate::stdlib::array_object_array_cast(value, eg)
+    {
         return array;
     }
     let object = value
@@ -644,7 +670,17 @@ pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value
             result.set(key, property.clone_for_php_storage());
         });
     } else if let Some(class) = eg.class_by_id(object.class_id) {
-        for (slot, definition) in class.properties.iter().enumerate() {
+        for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
+            let definition = &class.properties[slot];
+            if !project_array_object_storage
+                && definition.name == "storage"
+                && matches!(
+                    definition.declaring_class.as_str(),
+                    "ArrayObject" | "ArrayIterator"
+                )
+            {
+                continue;
+            }
             let Some(property) = object.get_property_slot(slot) else {
                 continue;
             };
@@ -658,15 +694,17 @@ pub(crate) fn cast_object_to_array(value: &Value, eg: &ExecutorGlobals) -> Value
                     format!("\0{}\0{}", definition.declaring_class, definition.name)
                 }
             };
-            result.set_str(&key, property.clone_for_php_storage());
+            set_object_projection_property(&mut result, &key, property);
         }
         object.for_each_dynamic_property(|key, property| {
-            result.set_str(key, property.clone_for_php_storage());
+            if !property.is_undef() {
+                set_object_projection_property(&mut result, key, property);
+            }
         });
     } else {
         object.for_each_property(|key, property| {
             if property.value_type() != ValueType::Undef {
-                result.set_str(key, property.clone_for_php_storage());
+                set_object_projection_property(&mut result, key, property);
             }
         });
     }
