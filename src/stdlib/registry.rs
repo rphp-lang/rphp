@@ -2701,6 +2701,231 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Int
     );
+    for (name, handler, first_class, return_class) in [
+        (
+            "date_add",
+            date::fn_date_add as crate::vm::function::InternalFunctionHandler,
+            "DateTime",
+            "DateTime",
+        ),
+        ("date_sub", date::fn_date_sub, "DateTime", "DateTime"),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 2, 2, vec![])
+                .with_static_parameter_names(&["object", "interval"]),
+        );
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::ClassName(first_class.to_string()),
+            ParamTypeHint::ClassName("DateInterval".to_string()),
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::ClassName(return_class.to_string());
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        funcs.push(function);
+    }
+    for (name, handler, class_name) in [
+        (
+            "date_create_from_format",
+            date::fn_date_create_from_format as crate::vm::function::InternalFunctionHandler,
+            "DateTime",
+        ),
+        (
+            "date_create_immutable_from_format",
+            date::fn_date_create_immutable_from_format,
+            "DateTimeImmutable",
+        ),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 3, 2, vec![])
+                .with_static_parameter_names(&["format", "datetime", "timezone"]),
+        );
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeZone".to_string(),
+            ))),
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ]);
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        funcs.push(function);
+    }
+    reg_typed!(
+        "date_diff",
+        date::fn_date_diff,
+        3,
+        2,
+        ["baseObject", "targetObject", "absolute"],
+        [
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::ClassName("DateInterval".to_string())
+    );
+    reg_typed!(
+        "date_get_last_errors",
+        date::fn_date_get_last_errors,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "date_interval_create_from_date_string",
+        date::fn_date_interval_create_from_date_string_global,
+        1,
+        1,
+        ["datetime"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateInterval".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "date_interval_format",
+        date::fn_date_interval_format,
+        2,
+        2,
+        ["object", "format"],
+        [
+            ParamTypeHint::ClassName("DateInterval".to_string()),
+            ParamTypeHint::String,
+        ],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "date_modify",
+        date::fn_date_modify,
+        2,
+        2,
+        ["object", "modifier"],
+        [
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::String,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "date_parse",
+        date::fn_date_parse,
+        1,
+        1,
+        ["datetime"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "date_parse_from_format",
+        date::fn_date_parse_from_format,
+        2,
+        2,
+        ["format", "datetime"],
+        [ParamTypeHint::String, ParamTypeHint::String],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "strtotime",
+        date::fn_strtotime,
+        2,
+        1,
+        ["datetime", "baseTimestamp"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    for (name, handler) in [
+        (
+            "date_sunrise",
+            date::fn_date_sunrise as crate::vm::function::InternalFunctionHandler,
+        ),
+        ("date_sunset", date::fn_date_sunset),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 6, 1, vec![]).with_static_parameter_names(&[
+                "timestamp",
+                "returnFormat",
+                "latitude",
+                "longitude",
+                "zenith",
+                "utcOffset",
+            ]),
+        );
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Float,
+            ParamTypeHint::ClassName("false".to_string()),
+        ]);
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        funcs.push(function);
+    }
+    reg_typed!(
+        "date_sun_info",
+        date::fn_date_sun_info,
+        3,
+        3,
+        ["timestamp", "latitude", "longitude"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Float,
+            ParamTypeHint::Float
+        ],
+        ParamTypeHint::Array
+    );
+    for (name, handler) in [
+        (
+            "strftime",
+            date::fn_strftime as crate::vm::function::InternalFunctionHandler,
+        ),
+        ("gmstrftime", date::fn_gmstrftime),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 2, 1, vec![])
+                .with_static_parameter_names(&["format", "timestamp"]),
+        );
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ]);
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        funcs.push(function);
+    }
     let nullable_timestamp_defaults = vec![None, Some(Value::null())];
     for (name, defaults) in [
         ("time", vec![]),
@@ -2782,6 +3007,49 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             vec![None, None, None, Some(Value::long(1))],
         ),
         ("timezone_offset_get", vec![None, None]),
+        ("date_add", vec![None, None]),
+        ("date_sub", vec![None, None]),
+        (
+            "date_create_from_format",
+            vec![None, None, Some(Value::null())],
+        ),
+        (
+            "date_create_immutable_from_format",
+            vec![None, None, Some(Value::null())],
+        ),
+        ("date_diff", vec![None, None, Some(Value::bool(false))]),
+        ("date_get_last_errors", vec![]),
+        ("date_interval_create_from_date_string", vec![None]),
+        ("date_interval_format", vec![None, None]),
+        ("date_modify", vec![None, None]),
+        ("date_parse", vec![None]),
+        ("date_parse_from_format", vec![None, None]),
+        ("strtotime", vec![None, Some(Value::null())]),
+        (
+            "date_sunrise",
+            vec![
+                None,
+                Some(Value::long(1)),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+            ],
+        ),
+        (
+            "date_sunset",
+            vec![
+                None,
+                Some(Value::long(1)),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+            ],
+        ),
+        ("date_sun_info", vec![None, None, None]),
+        ("strftime", vec![None, Some(Value::null())]),
+        ("gmstrftime", vec![None, Some(Value::null())]),
     ] {
         let function = eg
             .find_function(name)

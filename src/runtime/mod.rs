@@ -616,6 +616,16 @@ struct JsonRuntimeState {
     serializable_objects: Vec<usize>,
 }
 
+/// Cold request-local diagnostics from the most recent Date parser call.
+/// Successful parses without warnings clear the sidecar, matching PHP's
+/// `DateTimeImmutable::getLastErrors()` false sentinel without allocating in
+/// requests that never exercise textual date parsing.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct DateParseDiagnostics {
+    pub(crate) warnings: Vec<(usize, String)>,
+    pub(crate) errors: Vec<(usize, String)>,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum LazyObjectStrategy {
     Ghost,
@@ -1173,6 +1183,8 @@ pub struct ExecutorGlobals {
     /// Request-local ext/json error and reentrant JsonSerializable guards.
     /// Successful ordinary requests retain only this null sidecar word.
     json_runtime: Option<Box<JsonRuntimeState>>,
+    /// Diagnostics are allocated only after a Date parser reports something.
+    date_parse_diagnostics: Option<Box<DateParseDiagnostics>>,
 }
 
 /// Stable storage for only the positional tail that no longer has a distinct
@@ -1344,6 +1356,18 @@ impl ExecutorGlobals {
         self.json_runtime
             .get_or_insert_with(|| Box::new(JsonRuntimeState::default()))
             .error_code = code;
+    }
+
+    pub(crate) fn set_date_parse_diagnostics(&mut self, diagnostics: DateParseDiagnostics) {
+        if diagnostics.warnings.is_empty() && diagnostics.errors.is_empty() {
+            self.date_parse_diagnostics = None;
+        } else {
+            self.date_parse_diagnostics = Some(Box::new(diagnostics));
+        }
+    }
+
+    pub(crate) fn date_parse_diagnostics(&self) -> Option<&DateParseDiagnostics> {
+        self.date_parse_diagnostics.as_deref()
     }
 
     pub(crate) fn enter_json_serializable_object(&mut self, identity: usize) -> bool {
@@ -2134,6 +2158,7 @@ impl ExecutorGlobals {
             reflection_properties: None,
             reflection_parameters: None,
             json_runtime: None,
+            date_parse_diagnostics: None,
         }
     }
 
@@ -2272,6 +2297,7 @@ impl ExecutorGlobals {
             reflection_properties: None,
             reflection_parameters: None,
             json_runtime: None,
+            date_parse_diagnostics: None,
         }
     }
 
@@ -2794,6 +2820,29 @@ impl ExecutorGlobals {
             names.push((contract.name, contract.is_static));
         }
         names
+    }
+
+    /// Preserve the declaration order from an internal extension's public
+    /// stubs after its contracts were assembled from shared method families.
+    #[cold]
+    pub(crate) fn reorder_internal_method_contracts(
+        &mut self,
+        owner: &str,
+        declaration_order: &[&str],
+    ) {
+        let Some(methods) = self
+            .internal_callable_metadata
+            .as_mut()
+            .and_then(|metadata| metadata.methods.get_mut(owner))
+        else {
+            return;
+        };
+        methods.sort_by_key(|method| {
+            declaration_order
+                .iter()
+                .position(|name| name.eq_ignore_ascii_case(method.name))
+                .unwrap_or(usize::MAX)
+        });
     }
 
     #[cold]

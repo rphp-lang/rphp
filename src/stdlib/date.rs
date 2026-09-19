@@ -8,27 +8,74 @@
 use super::*;
 
 mod datetime;
+mod interval;
+mod legacy;
+mod parser;
+mod period;
 mod timezone;
 mod tzdb;
 
 pub(crate) use datetime::{
-    debug_projection as datetime_debug_projection, fn_date_create, fn_date_create_immutable,
-    fn_date_date_set, fn_date_format, fn_date_iso_date_set, fn_date_offset_get,
-    fn_date_time_construct, fn_date_time_create_from_timestamp, fn_date_time_format,
-    fn_date_time_get_microsecond, fn_date_time_get_offset, fn_date_time_get_timestamp,
-    fn_date_time_get_timezone, fn_date_time_immutable_create_from_timestamp,
-    fn_date_time_serialize, fn_date_time_set, fn_date_time_set_date, fn_date_time_set_iso_date,
-    fn_date_time_set_microsecond, fn_date_time_set_time, fn_date_time_set_timestamp,
-    fn_date_time_set_timezone, fn_date_time_zone_get_offset, fn_date_timestamp_get,
-    fn_date_timestamp_set, fn_date_timezone_get, fn_date_timezone_set, fn_timezone_offset_get,
+    comparison as datetime_state_comparison, debug_projection as datetime_state_debug_projection,
+    fn_date_add, fn_date_create, fn_date_create_from_format, fn_date_create_immutable,
+    fn_date_create_immutable_from_format, fn_date_date_set, fn_date_diff, fn_date_format,
+    fn_date_get_last_errors, fn_date_iso_date_set, fn_date_modify, fn_date_offset_get,
+    fn_date_parse, fn_date_parse_from_format, fn_date_sub, fn_date_time_add,
+    fn_date_time_construct, fn_date_time_create_from_format, fn_date_time_create_from_immutable,
+    fn_date_time_create_from_interface, fn_date_time_create_from_timestamp, fn_date_time_diff,
+    fn_date_time_format, fn_date_time_get_microsecond, fn_date_time_get_offset,
+    fn_date_time_get_timestamp, fn_date_time_get_timezone,
+    fn_date_time_immutable_create_from_format, fn_date_time_immutable_create_from_interface,
+    fn_date_time_immutable_create_from_mutable, fn_date_time_immutable_create_from_timestamp,
+    fn_date_time_immutable_set_state, fn_date_time_modify, fn_date_time_serialize,
+    fn_date_time_set, fn_date_time_set_date, fn_date_time_set_iso_date,
+    fn_date_time_set_microsecond, fn_date_time_set_state, fn_date_time_set_time,
+    fn_date_time_set_timestamp, fn_date_time_set_timezone, fn_date_time_sub,
+    fn_date_time_unserialize, fn_date_time_wakeup, fn_date_time_zone_get_offset,
+    fn_date_timestamp_get, fn_date_timestamp_set, fn_date_timezone_get, fn_date_timezone_set,
+    fn_strtotime, fn_timezone_offset_get,
 };
+pub(crate) use interval::{
+    debug_projection as date_interval_debug_projection, fn_date_interval_construct,
+    fn_date_interval_create_from_date_string, fn_date_interval_create_from_date_string_global,
+    fn_date_interval_format, fn_date_interval_serialize, fn_date_interval_set_state,
+    fn_date_interval_unserialize, fn_date_interval_wakeup,
+};
+pub(crate) use legacy::{
+    fn_date_sun_info, fn_date_sunrise, fn_date_sunset, fn_gmstrftime, fn_strftime,
+};
+pub(crate) use period::{
+    debug_projection as date_period_debug_projection, fn_date_period_construct,
+    fn_date_period_create_from_iso, fn_date_period_get_end, fn_date_period_get_interval,
+    fn_date_period_get_iterator, fn_date_period_get_recurrences, fn_date_period_get_start,
+    fn_date_period_serialize, fn_date_period_set_state, fn_date_period_unserialize,
+    fn_date_period_wakeup,
+};
+
+pub(crate) fn datetime_debug_projection(value: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    datetime_state_debug_projection(value)
+        .or_else(|| date_interval_debug_projection(value))
+        .or_else(|| date_period_debug_projection(value, eg))
+}
+
+pub(crate) fn datetime_comparison(left: &Value, right: &Value) -> Option<i32> {
+    datetime_state_comparison(left, right)
+}
+
+pub(crate) fn timezone_comparison(
+    left: &Value,
+    right: &Value,
+    eg: &mut ExecutorGlobals,
+) -> Option<i32> {
+    timezone::comparison(left, right, eg)
+}
 pub(super) use timezone::{
     fn_date_time_zone_construct, fn_date_time_zone_get_location, fn_date_time_zone_get_name,
     fn_date_time_zone_get_transitions, fn_date_time_zone_list_abbreviations,
-    fn_date_time_zone_list_identifiers, fn_date_time_zone_serialize,
-    fn_timezone_abbreviations_list, fn_timezone_identifiers_list, fn_timezone_location_get,
-    fn_timezone_name_from_abbr, fn_timezone_name_get, fn_timezone_open,
-    fn_timezone_transitions_get, fn_timezone_version_get,
+    fn_date_time_zone_list_identifiers, fn_date_time_zone_serialize, fn_date_time_zone_set_state,
+    fn_date_time_zone_unserialize, fn_date_time_zone_wakeup, fn_timezone_abbreviations_list,
+    fn_timezone_identifiers_list, fn_timezone_location_get, fn_timezone_name_from_abbr,
+    fn_timezone_name_get, fn_timezone_open, fn_timezone_transitions_get, fn_timezone_version_get,
 };
 
 const WEEKDAYS: [&str; 7] = [

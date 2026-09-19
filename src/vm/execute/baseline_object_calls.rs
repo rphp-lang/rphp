@@ -1887,6 +1887,14 @@ fn property_fetch_write_capability_error(
     caller_class: Option<&str>,
     indirect: bool,
 ) -> Option<String> {
+    if definition
+        .declaring_class
+        .eq_ignore_ascii_case("DatePeriod")
+    {
+        return Some(format!(
+            "Cannot modify readonly property DatePeriod::${name}"
+        ));
+    }
     if definition.is_readonly {
         let action = if indirect { "indirectly modify" } else { "modify" };
         return Some(format!(
@@ -2599,7 +2607,12 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             let definition = declared_slot
                 .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
             if indirect_modify
-                && !identity_preserving_object
+                && (!identity_preserving_object
+                    || definition.as_ref().is_some_and(|definition| {
+                        definition
+                            .declaring_class
+                            .eq_ignore_ascii_case("DatePeriod")
+                    }))
                 && !(val.is_undef() && opline._pad & FETCH_OBJ_COMPOUND_RECEIVER != 0)
                 && let Some(definition) = definition.as_ref()
                 && let Some(message) = property_fetch_write_capability_error(
@@ -2612,6 +2625,20 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 )
             {
                 return Ok(object_property_throw(eg, frame, "Error", message)?);
+            }
+            if opline._pad & FETCH_OBJ_REFERENCE_SOURCE != 0
+                && definition.as_ref().is_some_and(|definition| {
+                    definition
+                        .declaring_class
+                        .eq_ignore_ascii_case("DatePeriod")
+                })
+            {
+                return Ok(object_property_throw(
+                    eg,
+                    frame,
+                    "Error",
+                    format!("Cannot modify readonly property DatePeriod::${name}"),
+                )?);
             }
             if indirect_modify
                 && identity_preserving_object
@@ -3721,6 +3748,16 @@ fn op_bind_obj_prop_ref<'a>(
             .find_class(&class_name)
             .is_some_and(|class| class.readonly_props.contains(&name))
         {
+            if class_name.eq_ignore_ascii_case("DatePeriod") {
+                return Ok(object_property_throw_at(
+                    eg,
+                    frame,
+                    op_array,
+                    instruction_index,
+                    "Error",
+                    format!("Cannot modify readonly property DatePeriod::${name}"),
+                )?);
+            }
             if opline._pad & OBJ_PROP_REFERENCE_BIND == 0
                 && let Some(mut binding) = detached_restricted_object_property_reference(
                     eg,
@@ -3742,7 +3779,14 @@ fn op_bind_obj_prop_ref<'a>(
                 op_array,
                 instruction_index,
                 "Error",
-                format!("Cannot indirectly modify readonly property {class_name}::${name}"),
+                format!(
+                    "Cannot {} readonly property {class_name}::${name}",
+                    if class_name.eq_ignore_ascii_case("DatePeriod") {
+                        "modify"
+                    } else {
+                        "indirectly modify"
+                    }
+                ),
             )?);
         }
         let (lazy_declared_property, lazy_dynamic_property) = receiver

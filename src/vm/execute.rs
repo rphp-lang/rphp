@@ -670,7 +670,7 @@ fn object_properties_to_array(
     {
         return array;
     }
-    if let Some(array) = crate::stdlib::datetime_debug_projection(value) {
+    if let Some(array) = crate::stdlib::datetime_debug_projection(value, eg) {
         return array;
     }
     let object = value

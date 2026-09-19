@@ -254,7 +254,7 @@ pub(crate) use builtin_classes::{
     prepare_file_info_clone, prepare_native_deque_consumer, resolve_iterator_delegated_method,
     uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
-pub(crate) use date::datetime_debug_projection;
+pub(crate) use date::{datetime_comparison, datetime_debug_projection, timezone_comparison};
 
 /// Read a raw internal-call CV without following a PHP reference.
 ///
@@ -19662,7 +19662,7 @@ fn object_debug_projection(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Result<Option<Value>, VmError> {
-    if let Some(projection) = datetime_debug_projection(receiver) {
+    if let Some(projection) = datetime_debug_projection(receiver, eg) {
         return Ok(Some(projection));
     }
     // A root user declaration has no inherited/native method table. Its

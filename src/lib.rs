@@ -406,6 +406,9 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "DATE_RFC3339_EXTENDED",
     "DATE_RSS",
     "DATE_W3C",
+    "SUNFUNCS_RET_TIMESTAMP",
+    "SUNFUNCS_RET_STRING",
+    "SUNFUNCS_RET_DOUBLE",
     "SEEK_SET",
     "SEEK_CUR",
     "SEEK_END",
@@ -822,6 +825,9 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "DATE_RFC7231" => Some(value::Value::string("D, d M Y H:i:s \\G\\M\\T")),
         "DATE_RFC2822" => Some(value::Value::string("D, d M Y H:i:s O")),
         "DATE_RFC3339_EXTENDED" => Some(value::Value::string("Y-m-d\\TH:i:s.vP")),
+        "SUNFUNCS_RET_TIMESTAMP" => Some(value::Value::long(0)),
+        "SUNFUNCS_RET_STRING" => Some(value::Value::long(1)),
+        "SUNFUNCS_RET_DOUBLE" => Some(value::Value::long(2)),
 
         // Tokenizer identifiers are owned by the tokenizer extension.
         name if name.starts_with("T_") || name == "TOKEN_PARSE" => {

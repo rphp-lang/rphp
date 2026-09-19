@@ -117,6 +117,11 @@ fn parse_coordinate(value: &str, degree_digits: usize) -> Option<f64> {
 fn fixed_offset(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let (sign, digits): (u8, Vec<u8>) = match bytes {
+        [sign @ (b'+' | b'-'), h, b':', m1, m2]
+            if [h, m1, m2].iter().all(|byte| byte.is_ascii_digit()) =>
+        {
+            (*sign, vec![b'0', *h, *m1, *m2])
+        }
         [sign @ (b'+' | b'-'), h1, h2, b':', m1, m2]
             if [h1, h2, m1, m2].iter().all(|byte| byte.is_ascii_digit()) =>
         {
@@ -272,6 +277,29 @@ pub(super) fn object_description(value: &Value) -> Option<TimezoneDescription> {
     let kind = object.get_property("timezone_type")?.as_long()?;
     let name = object.get_property("timezone")?.as_str()?.to_string();
     Some(TimezoneDescription { kind, name })
+}
+
+pub(crate) fn comparison(left: &Value, right: &Value, eg: &mut ExecutorGlobals) -> Option<i32> {
+    let left_class = left.as_object()?.class_name.to_string();
+    let right_class = right.as_object()?.class_name.to_string();
+    if !eg.class_is_a(&left_class, "DateTimeZone") || !eg.class_is_a(&right_class, "DateTimeZone") {
+        return None;
+    }
+    let (Some(left), Some(right)) = (object_description(left), object_description(right)) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "DateObjectError",
+            "Trying to compare uninitialized DateTimeZone objects",
+        ));
+        return Some(1);
+    };
+    if left.kind != right.kind {
+        eg.exception = Some(crate::value::make_error_value(
+            "DateException",
+            "Cannot compare two different kinds of DateTimeZone objects",
+        ));
+        return Some(1);
+    }
+    Some(i32::from(left.name != right.name))
 }
 
 fn fixed_offset_seconds(value: &str) -> Option<i64> {
@@ -754,6 +782,92 @@ pub(crate) fn fn_date_time_zone_serialize(
     result.set_str("timezone_type", Value::long(description.kind));
     result.set_str("timezone", Value::string(description.name));
     ret!(rv, Value::array(result));
+}
+
+fn invalid_serialization(eg: &mut ExecutorGlobals) {
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        "Invalid serialization data for DateTimeZone object",
+    ));
+}
+
+fn serialized_description(
+    timezone_type: Option<&Value>,
+    timezone_name: Option<&Value>,
+) -> Option<TimezoneDescription> {
+    let timezone_type = timezone_type?.dereferenced().as_long()?;
+    let timezone_name = timezone_name?.dereferenced().as_str()?;
+    if !(1..=3).contains(&timezone_type) {
+        return None;
+    }
+    let mut description = parse_timezone(timezone_name)?;
+    description.kind = timezone_type;
+    Some(description)
+}
+
+fn install_description(receiver: &Value, description: TimezoneDescription) -> bool {
+    let Some(mut object) = receiver.as_object_mut() else {
+        return false;
+    };
+    object.set_property("timezone_type", Value::long(description.kind));
+    object.set_property("timezone", Value::string(description.name));
+    true
+}
+
+pub(crate) fn fn_date_time_zone_unserialize(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
+        return Ok(());
+    };
+    let Some(description) =
+        serialized_description(data.get_str("timezone_type"), data.get_str("timezone"))
+    else {
+        invalid_serialization(eg);
+        return Ok(());
+    };
+    install_description(arg!(ed, 0), description);
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_zone_wakeup(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    let Some(object) = receiver.as_object() else {
+        return Ok(());
+    };
+    let timezone_type = object.get_property("timezone_type").cloned();
+    let timezone_name = object.get_property("timezone").cloned();
+    drop(object);
+    let Some(description) = serialized_description(timezone_type.as_ref(), timezone_name.as_ref())
+    else {
+        invalid_serialization(eg);
+        return Ok(());
+    };
+    install_description(&receiver, description);
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_zone_set_state(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
+        return Ok(());
+    };
+    let Some(description) =
+        serialized_description(data.get_str("timezone_type"), data.get_str("timezone"))
+    else {
+        invalid_serialization(eg);
+        return Ok(());
+    };
+    ret!(rv, timezone_object(eg, description));
 }
 
 #[cfg(test)]

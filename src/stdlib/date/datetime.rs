@@ -39,7 +39,7 @@ impl NativeObjectState for DateTimeState {
     }
 }
 
-fn now() -> (i64, u32) {
+pub(super) fn now() -> (i64, u32) {
     use std::time::{SystemTime, UNIX_EPOCH};
 
     match SystemTime::now().duration_since(UNIX_EPOCH) {
@@ -62,7 +62,7 @@ fn now() -> (i64, u32) {
     }
 }
 
-fn parse_fraction(value: &str) -> Option<u32> {
+pub(super) fn parse_fraction(value: &str) -> Option<u32> {
     if value.is_empty() || value.len() > 6 || !value.bytes().all(|byte| byte.is_ascii_digit()) {
         return None;
     }
@@ -70,7 +70,7 @@ fn parse_fraction(value: &str) -> Option<u32> {
     Some(parsed * 10_u32.pow(6_u32.saturating_sub(value.len() as u32)))
 }
 
-fn parse_timestamp(value: &str) -> Option<(i64, u32)> {
+pub(super) fn parse_timestamp(value: &str) -> Option<(i64, u32)> {
     let number = value.parse::<f64>().ok()?;
     if !number.is_finite() || number < i64::MIN as f64 || number > i64::MAX as f64 {
         return None;
@@ -86,7 +86,7 @@ fn parse_timestamp(value: &str) -> Option<(i64, u32)> {
     Some((seconds, microsecond))
 }
 
-fn parse_date_prefix(value: &str) -> Option<(i64, i64, i64, usize)> {
+pub(super) fn parse_date_prefix(value: &str) -> Option<(i64, i64, i64, usize)> {
     let bytes = value.as_bytes();
     let year_end = if bytes
         .first()
@@ -129,7 +129,7 @@ fn parse_clock(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
     Some((hour, minute, second, microsecond, consumed))
 }
 
-fn parse_absolute(
+pub(super) fn parse_absolute(
     input: &str,
     supplied_timezone: Option<timezone::TimezoneDescription>,
     eg: &ExecutorGlobals,
@@ -196,7 +196,9 @@ fn parse_absolute(
     })
 }
 
-fn parse_timezone_argument(value: Option<&Value>) -> Option<timezone::TimezoneDescription> {
+pub(super) fn parse_timezone_argument(
+    value: Option<&Value>,
+) -> Option<timezone::TimezoneDescription> {
     let value = value?.dereferenced();
     if value.value_type() == ValueType::Null || value.value_type() == ValueType::Undef {
         return None;
@@ -204,7 +206,7 @@ fn parse_timezone_argument(value: Option<&Value>) -> Option<timezone::TimezoneDe
     timezone::object_description(value)
 }
 
-fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateTimeState> {
+pub(super) fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateTimeState> {
     let state = value
         .as_object()
         .and_then(|object| object.native_object_state::<DateTimeState>().cloned());
@@ -224,7 +226,7 @@ fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateTimeSta
     None
 }
 
-fn install_state(value: &Value, state: DateTimeState) -> bool {
+pub(super) fn install_state(value: &Value, state: DateTimeState) -> bool {
     let Some(mut object) = value.as_object_mut() else {
         return false;
     };
@@ -232,7 +234,11 @@ fn install_state(value: &Value, state: DateTimeState) -> bool {
     true
 }
 
-fn allocate(eg: &ExecutorGlobals, class_name: &str, state: DateTimeState) -> Option<Value> {
+pub(super) fn allocate(
+    eg: &ExecutorGlobals,
+    class_name: &str,
+    state: DateTimeState,
+) -> Option<Value> {
     let class = eg.find_class(class_name)?;
     let mut object = PhpObject::with_layout(
         class.class_id,
@@ -243,7 +249,7 @@ fn allocate(eg: &ExecutorGlobals, class_name: &str, state: DateTimeState) -> Opt
     Some(Value::object(object))
 }
 
-fn state_format(state: &DateTimeState, format: &str) -> String {
+pub(super) fn state_format(state: &DateTimeState, format: &str) -> String {
     let (abbreviation, offset, is_dst) =
         timezone::description_state(&state.timezone, state.timestamp);
     crate::stdlib::format_php_date_with_microseconds(
@@ -257,7 +263,7 @@ fn state_format(state: &DateTimeState, format: &str) -> String {
     )
 }
 
-fn serialized_state(state: &DateTimeState) -> Value {
+pub(super) fn serialized_state(state: &DateTimeState) -> Value {
     let mut result = PhpArray::new();
     result.set_str("date", Value::string(state_format(state, "Y-m-d H:i:s.u")));
     result.set_str("timezone_type", Value::long(state.timezone.kind));
@@ -269,6 +275,27 @@ pub(crate) fn debug_projection(value: &Value) -> Option<Value> {
     let object = value.as_object()?;
     let state = object.native_object_state::<DateTimeState>()?;
     state.initialized.then(|| serialized_state(state))
+}
+
+pub(crate) fn comparison(left: &Value, right: &Value) -> Option<i32> {
+    let left = left
+        .as_object()?
+        .native_object_state::<DateTimeState>()?
+        .clone();
+    let right = right
+        .as_object()?
+        .native_object_state::<DateTimeState>()?
+        .clone();
+    if !left.initialized || !right.initialized {
+        return None;
+    }
+    Some(
+        match (left.timestamp, left.microsecond).cmp(&(right.timestamp, right.microsecond)) {
+            std::cmp::Ordering::Less => -1,
+            std::cmp::Ordering::Equal => 0,
+            std::cmp::Ordering::Greater => 1,
+        },
+    )
 }
 
 fn malformed(eg: &mut ExecutorGlobals, input: &str) {
@@ -284,11 +311,17 @@ fn construct(
     supplied_timezone: Option<timezone::TimezoneDescription>,
     eg: &mut ExecutorGlobals,
 ) -> bool {
-    let Some(state) = parse_absolute(input, supplied_timezone, eg) else {
-        malformed(eg, input);
-        return false;
-    };
-    install_state(receiver, state)
+    match super::parser::parse_datetime(input, supplied_timezone, None, eg) {
+        Ok(parsed) => {
+            eg.set_date_parse_diagnostics(parsed.diagnostics);
+            install_state(receiver, parsed.state)
+        }
+        Err(diagnostics) => {
+            eg.set_date_parse_diagnostics(diagnostics);
+            malformed(eg, input);
+            false
+        }
+    }
 }
 
 fn create(
@@ -297,11 +330,19 @@ fn create(
     supplied_timezone: Option<timezone::TimezoneDescription>,
     eg: &mut ExecutorGlobals,
 ) -> Option<Value> {
-    let state = parse_absolute(input, supplied_timezone, eg)?;
-    allocate(eg, class_name, state)
+    match super::parser::parse_datetime(input, supplied_timezone, None, eg) {
+        Ok(parsed) => {
+            eg.set_date_parse_diagnostics(parsed.diagnostics);
+            allocate(eg, class_name, parsed.state)
+        }
+        Err(diagnostics) => {
+            eg.set_date_parse_diagnostics(diagnostics);
+            None
+        }
+    }
 }
 
-fn mutate(
+pub(super) fn mutate(
     receiver: &Value,
     eg: &mut ExecutorGlobals,
     action: impl FnOnce(&mut DateTimeState),
@@ -325,14 +366,14 @@ fn mutate(
     Some(result)
 }
 
-fn local_parts(state: &DateTimeState) -> (i64, i64, i64, i64, i64, i64) {
+pub(super) fn local_parts(state: &DateTimeState) -> (i64, i64, i64, i64, i64, i64) {
     let offset = timezone::description_state(&state.timezone, state.timestamp).1;
     let (year, month, day, hour, minute, second, _, _) =
         super::unix_to_parts(state.timestamp.saturating_add(offset));
     (year, month, day, hour, minute, second)
 }
 
-fn set_local(
+pub(super) fn set_local(
     state: &mut DateTimeState,
     year: i64,
     month: i64,
@@ -443,6 +484,126 @@ pub(crate) fn fn_date_time_serialize(
         return Ok(());
     };
     ret!(rv, serialized_state(&state));
+}
+
+fn invalid_serialization(eg: &mut ExecutorGlobals, class_name: &str) {
+    eg.exception = Some(crate::value::make_error_value(
+        "Error",
+        &format!("Invalid serialization data for {class_name} object"),
+    ));
+}
+
+fn serialized_fields_state(
+    date: Option<&Value>,
+    timezone_type: Option<&Value>,
+    timezone_name: Option<&Value>,
+    eg: &mut ExecutorGlobals,
+) -> Option<DateTimeState> {
+    let date = date?.dereferenced().as_str()?;
+    let timezone_type = timezone_type?.dereferenced().as_long()?;
+    let timezone_name = timezone_name?.dereferenced().as_str()?;
+    if !(1..=3).contains(&timezone_type) {
+        return None;
+    }
+    let mut timezone = timezone::parse_timezone(timezone_name)?;
+    timezone.kind = timezone_type;
+    parse_absolute(date, Some(timezone), eg)
+}
+
+fn unserialize_into(receiver: &Value, data: &PhpArray, eg: &mut ExecutorGlobals) -> bool {
+    let class_name = receiver
+        .as_object()
+        .map(|object| object.class_name.to_string())
+        .unwrap_or_else(|| "DateTime".to_string());
+    let Some(state) = serialized_fields_state(
+        data.get_str("date"),
+        data.get_str("timezone_type"),
+        data.get_str("timezone"),
+        eg,
+    ) else {
+        invalid_serialization(eg, &class_name);
+        return false;
+    };
+    install_state(receiver, state)
+}
+
+pub(crate) fn fn_date_time_unserialize(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
+        return Ok(());
+    };
+    unserialize_into(arg!(ed, 0), &data, eg);
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_wakeup(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    let Some(object) = receiver.as_object() else {
+        return Ok(());
+    };
+    let class_name = object.class_name.to_string();
+    let date = object.get_property("date").cloned();
+    let timezone_type = object.get_property("timezone_type").cloned();
+    let timezone_name = object.get_property("timezone").cloned();
+    drop(object);
+    let Some(state) = serialized_fields_state(
+        date.as_ref(),
+        timezone_type.as_ref(),
+        timezone_name.as_ref(),
+        eg,
+    ) else {
+        invalid_serialization(eg, &class_name);
+        return Ok(());
+    };
+    install_state(&receiver, state);
+    Ok(())
+}
+
+fn set_state(
+    class_name: &str,
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
+        return Ok(());
+    };
+    let Some(state) = serialized_fields_state(
+        data.get_str("date"),
+        data.get_str("timezone_type"),
+        data.get_str("timezone"),
+        eg,
+    ) else {
+        invalid_serialization(eg, class_name);
+        return Ok(());
+    };
+    if let Some(value) = allocate(eg, class_name, state) {
+        ret!(rv, value);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_set_state(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    set_state("DateTime", ed, rv, eg)
+}
+
+pub(crate) fn fn_date_time_immutable_set_state(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    set_state("DateTimeImmutable", ed, rv, eg)
 }
 
 pub(crate) fn fn_date_time_set_timestamp(
@@ -784,6 +945,456 @@ pub(crate) fn fn_date_time_zone_get_offset(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     fn_timezone_offset_get(ed, rv, eg)
+}
+
+fn create_from_format(
+    class_name: &str,
+    format: &str,
+    input: &str,
+    supplied_timezone: Option<timezone::TimezoneDescription>,
+    eg: &mut ExecutorGlobals,
+) -> Option<Value> {
+    match super::parser::parse_from_format(format, input, supplied_timezone, eg) {
+        Ok(parsed) => {
+            eg.set_date_parse_diagnostics(parsed.diagnostics);
+            allocate(eg, class_name, parsed.state)
+        }
+        Err(diagnostics) => {
+            eg.set_date_parse_diagnostics(diagnostics);
+            None
+        }
+    }
+}
+
+fn create_from_format_handler(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    class_name: &str,
+) -> Result<(), VmError> {
+    let format = arg_str!(ed, 1);
+    let input = arg_str!(ed, 2);
+    let timezone = parse_timezone_argument(arg_opt!(ed, 3));
+    let result = create_from_format(class_name, format.as_ref(), input.as_ref(), timezone, eg)
+        .unwrap_or_else(|| Value::bool(false));
+    ret!(rv, result)
+}
+
+pub(crate) fn fn_date_time_create_from_format(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    create_from_format_handler(ed, rv, eg, "DateTime")
+}
+
+pub(crate) fn fn_date_time_immutable_create_from_format(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    create_from_format_handler(ed, rv, eg, "DateTimeImmutable")
+}
+
+pub(crate) fn fn_date_create_from_format(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let format = arg_str!(ed, 0);
+    let input = arg_str!(ed, 1);
+    let timezone = parse_timezone_argument(arg_opt!(ed, 2));
+    let result = create_from_format("DateTime", format.as_ref(), input.as_ref(), timezone, eg)
+        .unwrap_or_else(|| Value::bool(false));
+    ret!(rv, result)
+}
+
+pub(crate) fn fn_date_create_immutable_from_format(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let format = arg_str!(ed, 0);
+    let input = arg_str!(ed, 1);
+    let timezone = parse_timezone_argument(arg_opt!(ed, 2));
+    let result = create_from_format(
+        "DateTimeImmutable",
+        format.as_ref(),
+        input.as_ref(),
+        timezone,
+        eg,
+    )
+    .unwrap_or_else(|| Value::bool(false));
+    ret!(rv, result)
+}
+
+pub(crate) fn fn_date_get_last_errors(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let result = eg
+        .date_parse_diagnostics()
+        .map(super::parser::diagnostics_value)
+        .unwrap_or_else(|| Value::bool(false));
+    ret!(rv, result)
+}
+
+fn modify_value(
+    receiver: &Value,
+    input: &str,
+    throw_on_error: bool,
+    eg: &mut ExecutorGlobals,
+) -> Option<Value> {
+    let base = state_snapshot(receiver, eg)?;
+    match super::parser::parse_datetime(input, None, Some(&base), eg) {
+        Ok(parsed) => {
+            eg.set_date_parse_diagnostics(parsed.diagnostics);
+            mutate(receiver, eg, |state| *state = parsed.state)
+        }
+        Err(diagnostics) => {
+            eg.set_date_parse_diagnostics(diagnostics);
+            if throw_on_error {
+                malformed(eg, input);
+            }
+            None
+        }
+    }
+}
+
+pub(crate) fn fn_date_time_modify(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg_str!(ed, 1);
+    if let Some(result) = modify_value(arg!(ed, 0), input.as_ref(), true, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_modify(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    let input = arg_str!(ed, 1);
+    let result =
+        modify_value(&receiver, input.as_ref(), false, eg).unwrap_or_else(|| Value::bool(false));
+    ret!(rv, result)
+}
+
+fn add_or_subtract(
+    receiver: &Value,
+    interval_value: &Value,
+    subtract: bool,
+    eg: &mut ExecutorGlobals,
+) -> Option<Value> {
+    let interval = super::interval::snapshot(interval_value, eg)?;
+    mutate(receiver, eg, |state| {
+        super::interval::apply_to_datetime(state, &interval, subtract)
+    })
+}
+
+pub(crate) fn fn_date_time_add(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(result) = add_or_subtract(arg!(ed, 0), arg!(ed, 1), false, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_sub(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(result) = add_or_subtract(arg!(ed, 0), arg!(ed, 1), true, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_add(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), false, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_sub(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let receiver = arg!(ed, 0).clone();
+    if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), true, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+fn diff_values(
+    base: &Value,
+    target: &Value,
+    absolute: bool,
+    eg: &mut ExecutorGlobals,
+) -> Option<Value> {
+    let base = state_snapshot(base, eg)?;
+    let target = state_snapshot(target, eg)?;
+    super::interval::allocate(eg, super::interval::difference(&base, &target, absolute))
+}
+
+pub(crate) fn fn_date_time_diff(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let absolute = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
+    if let Some(result) = diff_values(arg!(ed, 0), arg!(ed, 1), absolute, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_diff(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let absolute = arg_opt!(ed, 2).is_some_and(Value::is_truthy);
+    if let Some(result) = diff_values(arg!(ed, 0), arg!(ed, 1), absolute, eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+fn parse_projection(
+    parsed: Result<super::parser::ParsedDateTime, crate::runtime::DateParseDiagnostics>,
+) -> Value {
+    let (state, diagnostics, relative, fields) = match parsed {
+        Ok(parsed) => (
+            Some(parsed.state),
+            parsed.diagnostics,
+            parsed.relative,
+            parsed.fields,
+        ),
+        Err(diagnostics) => (
+            None,
+            diagnostics,
+            None,
+            super::parser::ParsedFields::default(),
+        ),
+    };
+    let mut result = PhpArray::new();
+    if relative.is_some() {
+        for name in [
+            "year", "month", "day", "hour", "minute", "second", "fraction",
+        ] {
+            result.set_str(name, Value::bool(false));
+        }
+    } else if let Some(state) = state.as_ref() {
+        let (year, month, day, hour, minute, second) = local_parts(state);
+        for (name, value, present) in [
+            ("year", year, fields.year),
+            ("month", month, fields.month),
+            ("day", day, fields.day),
+            ("hour", hour, fields.hour),
+            ("minute", minute, fields.minute),
+            ("second", second, fields.second),
+        ] {
+            result.set_str(
+                name,
+                if present {
+                    Value::long(value)
+                } else {
+                    Value::bool(false)
+                },
+            );
+        }
+        result.set_str(
+            "fraction",
+            if fields.fraction {
+                Value::double(f64::from(state.microsecond) / 1_000_000.0)
+            } else {
+                Value::bool(false)
+            },
+        );
+    } else {
+        for name in [
+            "year", "month", "day", "hour", "minute", "second", "fraction",
+        ] {
+            result.set_str(name, Value::bool(false));
+        }
+    }
+    let diagnostics_value = super::parser::diagnostics_value(&diagnostics);
+    if let Some(array) = diagnostics_value.as_array() {
+        for (key, value) in array.iter() {
+            match key {
+                ArrayKey::Int(index) => result.set_int(index, value.clone()),
+                ArrayKey::String(name) => result.set_str(&name, value.clone()),
+            }
+        }
+    }
+    if let Some(relative) = relative {
+        result.set_str("is_localtime", Value::bool(false));
+        let mut relative_value = PhpArray::new();
+        for (name, value) in [
+            ("year", relative.years),
+            ("month", relative.months),
+            ("day", relative.days),
+            ("hour", relative.hours),
+            ("minute", relative.minutes),
+            ("second", relative.seconds),
+        ] {
+            relative_value.set_str(name, Value::long(value));
+        }
+        result.set_str("relative", Value::array(relative_value));
+    } else if let Some(state) = state {
+        result.set_str("is_localtime", Value::bool(fields.timezone));
+        if fields.timezone {
+            result.set_str("zone_type", Value::long(state.timezone.kind));
+        }
+        match (fields.timezone, state.timezone.kind) {
+            (true, 1) => {
+                result.set_str(
+                    "zone",
+                    Value::long(timezone::description_state(&state.timezone, state.timestamp).1),
+                );
+                result.set_str("is_dst", Value::bool(false));
+            }
+            (true, 2) => {
+                let (_, offset, is_dst) =
+                    timezone::description_state(&state.timezone, state.timestamp);
+                result.set_str("zone", Value::long(offset));
+                result.set_str("is_dst", Value::bool(is_dst));
+                result.set_str("tz_abbr", Value::string(&state.timezone.name));
+            }
+            (true, 3) => result.set_str("tz_id", Value::string(&state.timezone.name)),
+            _ => {}
+        }
+    } else {
+        result.set_str("is_localtime", Value::bool(true));
+        result.set_str("zone_type", Value::long(0));
+    }
+    Value::array(result)
+}
+
+pub(crate) fn fn_date_parse(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg_str!(ed, 0);
+    let result = parse_projection(super::parser::parse_datetime(
+        input.as_ref(),
+        None,
+        None,
+        eg,
+    ));
+    ret!(rv, result)
+}
+
+pub(crate) fn fn_date_parse_from_format(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let format = arg_str!(ed, 0);
+    let input = arg_str!(ed, 1);
+    let result = parse_projection(super::parser::parse_from_format(
+        format.as_ref(),
+        input.as_ref(),
+        None,
+        eg,
+    ));
+    ret!(rv, result)
+}
+
+pub(crate) fn fn_strtotime(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let input = arg_str!(ed, 0);
+    let base_timestamp = arg_opt!(ed, 1)
+        .filter(|value| value.value_type() != ValueType::Null)
+        .and_then(Value::as_long)
+        .unwrap_or_else(super::current_timestamp);
+    let base = DateTimeState {
+        timestamp: base_timestamp,
+        microsecond: 0,
+        timezone: timezone::default_description(eg),
+        initialized: true,
+    };
+    let result = match super::parser::parse_datetime(input.as_ref(), None, Some(&base), eg) {
+        Ok(parsed) => {
+            eg.set_date_parse_diagnostics(parsed.diagnostics);
+            Value::long(parsed.state.timestamp)
+        }
+        Err(diagnostics) => {
+            eg.set_date_parse_diagnostics(diagnostics);
+            Value::bool(false)
+        }
+    };
+    ret!(rv, result)
+}
+
+fn create_from_interface(
+    source: &Value,
+    class_name: &str,
+    eg: &mut ExecutorGlobals,
+) -> Option<Value> {
+    let state = state_snapshot(source, eg)?;
+    allocate(eg, class_name, state)
+}
+
+pub(crate) fn fn_date_time_create_from_interface(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(result) = create_from_interface(arg!(ed, 1), "DateTime", eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_immutable_create_from_interface(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(result) = create_from_interface(arg!(ed, 1), "DateTimeImmutable", eg) {
+        ret!(rv, result);
+    }
+    Ok(())
+}
+
+pub(crate) fn fn_date_time_create_from_immutable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_date_time_create_from_interface(ed, rv, eg)
+}
+
+pub(crate) fn fn_date_time_immutable_create_from_mutable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    fn_date_time_immutable_create_from_interface(ed, rv, eg)
 }
 
 #[cfg(test)]

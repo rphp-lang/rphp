@@ -734,6 +734,12 @@ fn runtime_values_checked(
             if left_identity == right_identity {
                 return Ok(Ok(0));
             }
+            if let Some(comparison) = crate::stdlib::timezone_comparison(left, right, eg) {
+                return Ok(Ok(comparison));
+            }
+            if let Some(comparison) = crate::stdlib::datetime_comparison(left, right) {
+                return Ok(Ok(comparison));
+            }
             let same_class = if left_object.class_id != 0 || right_object.class_id != 0 {
                 left_object.class_id == right_object.class_id
             } else {

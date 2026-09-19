@@ -10,6 +10,18 @@ use crate::vm::execute::{
 use crate::vm::function::InternalFunctionHandler;
 use std::rc::Rc;
 
+pub(crate) fn iterator_from_array(eg: &ExecutorGlobals, array: PhpArray) -> Option<Value> {
+    let class = eg.find_class("ArrayIterator")?;
+    let mut object = PhpObject::with_layout(
+        class.class_id,
+        Rc::clone(&class.property_layout),
+        class.property_defaults.to_vec(),
+    );
+    object.set_property(ARRAY_ITERATOR_STORAGE, Value::array(array));
+    object.set_native_array_options(crate::value::NativeArrayOptions::default());
+    Some(Value::object(object))
+}
+
 pub(crate) mod cursor;
 mod options;
 pub(in crate::stdlib) mod serialization;

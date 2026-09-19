@@ -2822,180 +2822,913 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(empty_internal_type("HashContext", vec![], false, true))
         .unwrap();
 
-    // Date contracts are registered both as inheritance metadata and native
-    // handlers.  The contract table remains the source used by class linking;
-    // the handlers below own live DateTime state and observable behavior.
-    eg.register_internal_method_contract(
+    // Date contracts are the canonical PHP 8.5 reflection/linking surface.
+    // Native handlers below bind behavior but deliberately leave tentative
+    // return types out of FunctionCommon so Reflection reports them only in
+    // the tentative channel.
+    macro_rules! date_contract {
+        ($owner:expr, $name:expr, $static:expr, $required:expr,
+         [$($parameter:expr),* $(,)?], [$($hint:expr),* $(,)?], $result:expr,
+         [$($default:expr),* $(,)?], $tentative:expr) => {
+            eg.register_internal_method_contract(
+                $owner,
+                $name,
+                $static,
+                $required,
+                &[$($parameter),*],
+                vec![$($hint),*],
+                $result,
+                &[$($default),*],
+                $tentative,
+            );
+        };
+    }
+    let timezone_or_false = || {
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    };
+    let array_or_false = || {
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    };
+
+    date_contract!(
+        "DateTimeInterface",
+        "format",
+        false,
+        1,
+        ["format"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String,
+        [None],
+        true
+    );
+    date_contract!(
+        "DateTimeInterface",
+        "getTimezone",
+        false,
+        0,
+        [],
+        [],
+        timezone_or_false(),
+        [],
+        true
+    );
+    date_contract!(
+        "DateTimeInterface",
+        "getOffset",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Int,
+        [],
+        true
+    );
+    date_contract!(
+        "DateTimeInterface",
+        "getTimestamp",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Int,
+        [],
+        true
+    );
+    date_contract!(
+        "DateTimeInterface",
+        "getMicrosecond",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Int,
+        [],
+        false
+    );
+    date_contract!(
         "DateTimeInterface",
         "diff",
         false,
         1,
-        &["targetObject", "absolute"],
-        vec![
+        ["targetObject", "absolute"],
+        [
             ParamTypeHint::ClassName("DateTimeInterface".to_string()),
-            ParamTypeHint::Bool,
+            ParamTypeHint::Bool
         ],
         ParamTypeHint::ClassName("DateInterval".to_string()),
-        &[None, Some("false")],
-        true,
+        [None, Some("false")],
+        true
     );
-    eg.register_internal_method_contract(
-        "DateTime",
-        "diff",
+    date_contract!(
+        "DateTimeInterface",
+        "__wakeup",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Void,
+        [],
+        true
+    );
+    date_contract!(
+        "DateTimeInterface",
+        "__serialize",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        [],
+        false
+    );
+    date_contract!(
+        "DateTimeInterface",
+        "__unserialize",
         false,
         1,
-        &["targetObject", "absolute"],
-        vec![
-            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
-            ParamTypeHint::Bool,
-        ],
-        ParamTypeHint::ClassName("DateInterval".to_string()),
-        &[None, Some("false")],
-        true,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None],
+        false
     );
-    eg.register_internal_method_contract(
-        "DateTime",
-        "createFromFormat",
-        true,
-        2,
-        &["format", "datetime", "timezone"],
-        vec![
-            ParamTypeHint::String,
-            ParamTypeHint::String,
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-                "DateTimeZone".to_string(),
-            ))),
-        ],
-        ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateTime".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
-        ]),
-        &[None, None, Some("null")],
-        true,
-    );
-    eg.register_internal_method_contract(
-        "DateTime",
-        "setTime",
-        false,
-        2,
-        &["hour", "minute", "second", "microsecond"],
-        vec![
-            ParamTypeHint::Int,
-            ParamTypeHint::Int,
-            ParamTypeHint::Int,
-            ParamTypeHint::Int,
-        ],
-        ParamTypeHint::ClassName("DateTime".to_string()),
-        &[None, None, Some("0"), Some("0")],
-        true,
-    );
-    for (name, return_type) in [
-        (
-            "getTimezone",
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("DateTimeZone".to_string()),
-                ParamTypeHint::ClassName("false".to_string()),
-            ]),
-        ),
-        ("getTimestamp", ParamTypeHint::Int),
-    ] {
-        eg.register_internal_method_contract(
-            "DateTime",
-            name,
+
+    for class_name in ["DateTime", "DateTimeImmutable"] {
+        date_contract!(
+            class_name,
+            "__construct",
             false,
             0,
-            &[],
-            vec![],
-            return_type,
-            &[],
-            true,
+            ["datetime", "timezone"],
+            [
+                ParamTypeHint::String,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "DateTimeZone".to_string()
+                )))
+            ],
+            ParamTypeHint::None,
+            [Some("'now'"), Some("null")],
+            false
         );
+        date_contract!(
+            class_name,
+            "__serialize",
+            false,
+            0,
+            [],
+            [],
+            ParamTypeHint::Array,
+            [],
+            false
+        );
+        date_contract!(
+            class_name,
+            "__unserialize",
+            false,
+            1,
+            ["data"],
+            [ParamTypeHint::Array],
+            ParamTypeHint::Void,
+            [None],
+            false
+        );
+        date_contract!(
+            class_name,
+            "__wakeup",
+            false,
+            0,
+            [],
+            [],
+            ParamTypeHint::Void,
+            [],
+            true
+        );
+        date_contract!(
+            class_name,
+            "__set_state",
+            true,
+            1,
+            ["array"],
+            [ParamTypeHint::Array],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None],
+            true
+        );
+        if class_name == "DateTime" {
+            date_contract!(
+                "DateTime",
+                "createFromImmutable",
+                true,
+                1,
+                ["object"],
+                [ParamTypeHint::ClassName("DateTimeImmutable".to_string())],
+                ParamTypeHint::ClassName("static".to_string()),
+                [None],
+                true
+            );
+            date_contract!(
+                "DateTime",
+                "createFromInterface",
+                true,
+                1,
+                ["object"],
+                [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
+                ParamTypeHint::ClassName("DateTime".to_string()),
+                [None],
+                false
+            );
+        }
+        let create_result = ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ]);
+        date_contract!(
+            class_name,
+            "createFromFormat",
+            true,
+            2,
+            ["format", "datetime", "timezone"],
+            [
+                ParamTypeHint::String,
+                ParamTypeHint::String,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "DateTimeZone".to_string()
+                )))
+            ],
+            create_result,
+            [None, None, Some("null")],
+            true
+        );
+        date_contract!(
+            class_name,
+            "createFromTimestamp",
+            true,
+            1,
+            ["timestamp"],
+            [ParamTypeHint::Union(vec![
+                ParamTypeHint::Int,
+                ParamTypeHint::Float
+            ])],
+            ParamTypeHint::ClassName("static".to_string()),
+            [None],
+            true
+        );
+        date_contract!(
+            class_name,
+            "getLastErrors",
+            true,
+            0,
+            [],
+            [],
+            array_or_false(),
+            [],
+            true
+        );
+        date_contract!(
+            class_name,
+            "format",
+            false,
+            1,
+            ["format"],
+            [ParamTypeHint::String],
+            ParamTypeHint::String,
+            [None],
+            true
+        );
+        if class_name == "DateTimeImmutable" {
+            date_contract!(
+                "DateTimeImmutable",
+                "getTimezone",
+                false,
+                0,
+                [],
+                [],
+                timezone_or_false(),
+                [],
+                true
+            );
+            date_contract!(
+                "DateTimeImmutable",
+                "getOffset",
+                false,
+                0,
+                [],
+                [],
+                ParamTypeHint::Int,
+                [],
+                true
+            );
+            date_contract!(
+                "DateTimeImmutable",
+                "getTimestamp",
+                false,
+                0,
+                [],
+                [],
+                ParamTypeHint::Int,
+                [],
+                true
+            );
+            date_contract!(
+                "DateTimeImmutable",
+                "getMicrosecond",
+                false,
+                0,
+                [],
+                [],
+                ParamTypeHint::Int,
+                [],
+                false
+            );
+            date_contract!(
+                "DateTimeImmutable",
+                "diff",
+                false,
+                1,
+                ["targetObject", "absolute"],
+                [
+                    ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+                    ParamTypeHint::Bool
+                ],
+                ParamTypeHint::ClassName("DateInterval".to_string()),
+                [None, Some("false")],
+                true
+            );
+        }
+        for name in ["modify", "add", "sub"] {
+            let (parameter, hint) = if name == "modify" {
+                ("modifier", ParamTypeHint::String)
+            } else {
+                (
+                    "interval",
+                    ParamTypeHint::ClassName("DateInterval".to_string()),
+                )
+            };
+            date_contract!(
+                class_name,
+                name,
+                false,
+                1,
+                [parameter],
+                [hint],
+                ParamTypeHint::ClassName(class_name.to_string()),
+                [None],
+                true
+            );
+        }
+        date_contract!(
+            class_name,
+            "setTimezone",
+            false,
+            1,
+            ["timezone"],
+            [ParamTypeHint::ClassName("DateTimeZone".to_string())],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None],
+            true
+        );
+        date_contract!(
+            class_name,
+            "setTime",
+            false,
+            2,
+            ["hour", "minute", "second", "microsecond"],
+            [
+                ParamTypeHint::Int,
+                ParamTypeHint::Int,
+                ParamTypeHint::Int,
+                ParamTypeHint::Int
+            ],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None, None, Some("0"), Some("0")],
+            true
+        );
+        date_contract!(
+            class_name,
+            "setDate",
+            false,
+            3,
+            ["year", "month", "day"],
+            [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None, None, None],
+            true
+        );
+        date_contract!(
+            class_name,
+            "setISODate",
+            false,
+            2,
+            ["year", "week", "dayOfWeek"],
+            [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None, None, Some("1")],
+            true
+        );
+        date_contract!(
+            class_name,
+            "setTimestamp",
+            false,
+            1,
+            ["timestamp"],
+            [ParamTypeHint::Int],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None],
+            true
+        );
+        date_contract!(
+            class_name,
+            "setMicrosecond",
+            false,
+            1,
+            ["microsecond"],
+            [ParamTypeHint::Int],
+            ParamTypeHint::ClassName("static".to_string()),
+            [None],
+            false
+        );
+        if class_name == "DateTime" {
+            date_contract!(
+                "DateTime",
+                "getTimezone",
+                false,
+                0,
+                [],
+                [],
+                timezone_or_false(),
+                [],
+                true
+            );
+            date_contract!(
+                "DateTime",
+                "getOffset",
+                false,
+                0,
+                [],
+                [],
+                ParamTypeHint::Int,
+                [],
+                true
+            );
+            date_contract!(
+                "DateTime",
+                "getMicrosecond",
+                false,
+                0,
+                [],
+                [],
+                ParamTypeHint::Int,
+                [],
+                false
+            );
+            date_contract!(
+                "DateTime",
+                "getTimestamp",
+                false,
+                0,
+                [],
+                [],
+                ParamTypeHint::Int,
+                [],
+                true
+            );
+            date_contract!(
+                "DateTime",
+                "diff",
+                false,
+                1,
+                ["targetObject", "absolute"],
+                [
+                    ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+                    ParamTypeHint::Bool
+                ],
+                ParamTypeHint::ClassName("DateInterval".to_string()),
+                [None, Some("false")],
+                true
+            );
+        } else {
+            date_contract!(
+                "DateTimeImmutable",
+                "createFromMutable",
+                true,
+                1,
+                ["object"],
+                [ParamTypeHint::ClassName("DateTime".to_string())],
+                ParamTypeHint::ClassName("static".to_string()),
+                [None],
+                true
+            );
+            date_contract!(
+                "DateTimeImmutable",
+                "createFromInterface",
+                true,
+                1,
+                ["object"],
+                [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
+                ParamTypeHint::ClassName("DateTimeImmutable".to_string()),
+                [None],
+                false
+            );
+        }
     }
-    eg.register_internal_method_contract(
+
+    date_contract!(
         "DateTimeZone",
         "__construct",
         false,
         1,
-        &["timezone"],
-        vec![ParamTypeHint::String],
+        ["timezone"],
+        [ParamTypeHint::String],
         ParamTypeHint::None,
-        &[None],
-        false,
+        [None],
+        false
     );
-    eg.register_internal_method_contract(
+    date_contract!(
         "DateTimeZone",
         "getName",
         false,
         0,
-        &[],
-        vec![],
+        [],
+        [],
         ParamTypeHint::String,
-        &[],
-        true,
+        [],
+        true
     );
-    eg.register_internal_method_contract(
+    date_contract!(
         "DateTimeZone",
-        "getLocation",
+        "getOffset",
         false,
-        0,
-        &[],
-        vec![],
-        ParamTypeHint::Union(vec![
-            ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
-        ]),
-        &[],
-        true,
+        1,
+        ["datetime"],
+        [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
+        ParamTypeHint::Int,
+        [None],
+        true
     );
-    eg.register_internal_method_contract(
+    date_contract!(
         "DateTimeZone",
         "getTransitions",
         false,
         0,
-        &["timestampBegin", "timestampEnd"],
-        vec![ParamTypeHint::Int, ParamTypeHint::Int],
-        ParamTypeHint::Union(vec![
-            ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
-        ]),
-        &[Some("PHP_INT_MIN"), Some("2147483647")],
-        true,
+        ["timestampBegin", "timestampEnd"],
+        [ParamTypeHint::Int, ParamTypeHint::Int],
+        array_or_false(),
+        [Some("PHP_INT_MIN"), Some("2147483647")],
+        true
     );
-    eg.register_internal_method_contract(
+    date_contract!(
         "DateTimeZone",
-        "listIdentifiers",
-        true,
+        "getLocation",
+        false,
         0,
-        &["timezoneGroup", "countryCode"],
-        vec![
-            ParamTypeHint::Int,
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
-        ],
-        ParamTypeHint::Array,
-        &[Some("DateTimeZone::ALL"), Some("null")],
-        true,
+        [],
+        [],
+        array_or_false(),
+        [],
+        true
     );
-    eg.register_internal_method_contract(
+    date_contract!(
         "DateTimeZone",
         "listAbbreviations",
         true,
         0,
-        &[],
-        vec![],
+        [],
+        [],
         ParamTypeHint::Array,
-        &[],
-        true,
+        [],
+        true
     );
-    eg.register_internal_method_contract(
+    date_contract!(
+        "DateTimeZone",
+        "listIdentifiers",
+        true,
+        0,
+        ["timezoneGroup", "countryCode"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))
+        ],
+        ParamTypeHint::Array,
+        [Some("DateTimeZone::ALL"), Some("null")],
+        true
+    );
+    date_contract!(
         "DateTimeZone",
         "__serialize",
         false,
         0,
-        &[],
-        vec![],
+        [],
+        [],
         ParamTypeHint::Array,
-        &[],
+        [],
+        false
+    );
+    date_contract!(
+        "DateTimeZone",
+        "__unserialize",
         false,
+        1,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None],
+        false
+    );
+    date_contract!(
+        "DateTimeZone",
+        "__wakeup",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Void,
+        [],
+        true
+    );
+    date_contract!(
+        "DateTimeZone",
+        "__set_state",
+        true,
+        1,
+        ["array"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::ClassName("DateTimeZone".to_string()),
+        [None],
+        true
+    );
+
+    date_contract!(
+        "DateInterval",
+        "__construct",
+        false,
+        1,
+        ["duration"],
+        [ParamTypeHint::String],
+        ParamTypeHint::None,
+        [None],
+        false
+    );
+    date_contract!(
+        "DateInterval",
+        "createFromDateString",
+        true,
+        1,
+        ["datetime"],
+        [ParamTypeHint::String],
+        ParamTypeHint::ClassName("DateInterval".to_string()),
+        [None],
+        true
+    );
+    date_contract!(
+        "DateInterval",
+        "format",
+        false,
+        1,
+        ["format"],
+        [ParamTypeHint::String],
+        ParamTypeHint::String,
+        [None],
+        true
+    );
+    date_contract!(
+        "DateInterval",
+        "__serialize",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        [],
+        false
+    );
+    date_contract!(
+        "DateInterval",
+        "__unserialize",
+        false,
+        1,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None],
+        false
+    );
+    date_contract!(
+        "DateInterval",
+        "__wakeup",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Void,
+        [],
+        true
+    );
+    date_contract!(
+        "DateInterval",
+        "__set_state",
+        true,
+        1,
+        ["array"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::ClassName("DateInterval".to_string()),
+        [None],
+        true
+    );
+
+    date_contract!(
+        "DatePeriod",
+        "createFromISO8601String",
+        true,
+        1,
+        ["specification", "options"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::ClassName("static".to_string()),
+        [None, Some("0")],
+        false
+    );
+    date_contract!(
+        "DatePeriod",
+        "__construct",
+        false,
+        1,
+        ["start", "interval", "end", "options"],
+        [
+            ParamTypeHint::None,
+            ParamTypeHint::None,
+            ParamTypeHint::None,
+            ParamTypeHint::None
+        ],
+        ParamTypeHint::None,
+        [None, None, None, None],
+        false
+    );
+    date_contract!(
+        "DatePeriod",
+        "getStartDate",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+        [],
+        true
+    );
+    date_contract!(
+        "DatePeriod",
+        "getEndDate",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+            "DateTimeInterface".to_string()
+        ))),
+        [],
+        true
+    );
+    date_contract!(
+        "DatePeriod",
+        "getDateInterval",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::ClassName("DateInterval".to_string()),
+        [],
+        true
+    );
+    date_contract!(
+        "DatePeriod",
+        "getRecurrences",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        [],
+        true
+    );
+    date_contract!(
+        "DatePeriod",
+        "__serialize",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        [],
+        false
+    );
+    date_contract!(
+        "DatePeriod",
+        "__unserialize",
+        false,
+        1,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None],
+        false
+    );
+    date_contract!(
+        "DatePeriod",
+        "__wakeup",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::Void,
+        [],
+        true
+    );
+    date_contract!(
+        "DatePeriod",
+        "__set_state",
+        true,
+        1,
+        ["array"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::ClassName("DatePeriod".to_string()),
+        [None],
+        true
+    );
+    date_contract!(
+        "DatePeriod",
+        "getIterator",
+        false,
+        0,
+        [],
+        [],
+        ParamTypeHint::ClassName("Iterator".to_string()),
+        [],
+        false
+    );
+
+    eg.reorder_internal_method_contracts(
+        "DateTime",
+        &[
+            "__construct",
+            "__serialize",
+            "__unserialize",
+            "__wakeup",
+            "__set_state",
+            "createFromImmutable",
+            "createFromInterface",
+            "createFromFormat",
+            "createFromTimestamp",
+            "getLastErrors",
+            "format",
+            "modify",
+            "add",
+            "sub",
+            "getTimezone",
+            "setTimezone",
+            "getOffset",
+            "getMicrosecond",
+            "setTime",
+            "setDate",
+            "setISODate",
+            "setTimestamp",
+            "setMicrosecond",
+            "getTimestamp",
+            "diff",
+        ],
+    );
+    eg.reorder_internal_method_contracts(
+        "DateTimeImmutable",
+        &[
+            "__construct",
+            "__serialize",
+            "__unserialize",
+            "__wakeup",
+            "__set_state",
+            "createFromFormat",
+            "createFromTimestamp",
+            "getLastErrors",
+            "format",
+            "getTimezone",
+            "getOffset",
+            "getTimestamp",
+            "getMicrosecond",
+            "diff",
+            "modify",
+            "add",
+            "sub",
+            "setTimezone",
+            "setTime",
+            "setDate",
+            "setISODate",
+            "setTimestamp",
+            "setMicrosecond",
+            "createFromMutable",
+            "createFromInterface",
+        ],
     );
 
     let mut date_time_interface = empty_internal_type("DateTimeInterface", vec![], true, false);
@@ -3127,7 +3860,6 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             .expect("DateTimeZone::getOffset registered");
         function.common.sig.param_type_hints =
             vec![ParamTypeHint::ClassName("DateTimeInterface".to_string())];
-        function.common.sig.return_type_hint = ParamTypeHint::Int;
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
         eg.register_internal_function_reflection_metadata(pointer, vec![None], "date");
@@ -3211,6 +3943,53 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         let pointer = &function.common as *const FunctionCommon;
         eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
     }
+    reg_method!(
+        "DateTimeZone",
+        "__unserialize",
+        super::date::fn_date_time_zone_unserialize,
+        2,
+        1,
+        "data"
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::__unserialize registered");
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Array];
+        function.common.sig.return_type_hint = ParamTypeHint::Void;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![None], "date");
+    }
+    reg_method!(
+        "DateTimeZone",
+        "__wakeup",
+        super::date::fn_date_time_zone_wakeup,
+        1,
+        0
+    );
+    {
+        let function = funcs.last_mut().expect("DateTimeZone::__wakeup registered");
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
+    }
+    reg_static_method!(
+        "DateTimeZone",
+        "__set_state",
+        super::date::fn_date_time_zone_set_state,
+        2,
+        1,
+        "array"
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::__set_state registered");
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Array];
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![None], "date");
+    }
     eg.register_class(empty_internal_type(
         "DateTime",
         vec!["DateTimeInterface".to_string()],
@@ -3225,7 +4004,12 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
     ))
     .unwrap();
-    let mut date_period = empty_internal_type("DatePeriod", vec![], false, false);
+    let mut date_period = empty_internal_type(
+        "DatePeriod",
+        vec!["IteratorAggregate".to_string()],
+        false,
+        false,
+    );
     for name in ["EXCLUDE_START_DATE", "INCLUDE_END_DATE"] {
         date_period.constants.push(ClassConstantDefinition {
             attributes: Vec::new(),
@@ -3243,6 +4027,46 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             type_hint: ParamTypeHint::Int,
             is_final: false,
         });
+    }
+    for (name, type_hint) in [
+        (
+            "start",
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeInterface".to_string(),
+            ))),
+        ),
+        (
+            "current",
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeInterface".to_string(),
+            ))),
+        ),
+        (
+            "end",
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeInterface".to_string(),
+            ))),
+        ),
+        (
+            "interval",
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateInterval".to_string(),
+            ))),
+        ),
+        ("recurrences", ParamTypeHint::Int),
+        ("include_start_date", ParamTypeHint::Bool),
+        ("include_end_date", ParamTypeHint::Bool),
+    ] {
+        date_period.properties.push(PropertyDefinition::declared(
+            name.to_string(),
+            None,
+            Visibility::Public,
+            "DatePeriod".to_string(),
+            type_hint,
+            false,
+            false,
+        ));
+        date_period.readonly_props.push(name.to_string());
     }
     eg.register_class(date_period).unwrap();
 
@@ -3318,6 +4142,303 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         }};
     }
 
+    reg_date_method!(
+        "DateTimeInterface",
+        "format",
+        super::date::fn_date_time_format,
+        2,
+        1,
+        ["format"],
+        [ParamTypeHint::String],
+        ParamTypeHint::None,
+        [None]
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "getTimezone",
+        super::date::fn_date_time_get_timezone,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::None,
+        []
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "getOffset",
+        super::date::fn_date_time_get_offset,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::None,
+        []
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "getTimestamp",
+        super::date::fn_date_time_get_timestamp,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::None,
+        []
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "getMicrosecond",
+        super::date::fn_date_time_get_microsecond,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::Int,
+        []
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "diff",
+        super::date::fn_date_time_diff,
+        3,
+        1,
+        ["targetObject", "absolute"],
+        [
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::Bool
+        ],
+        ParamTypeHint::None,
+        [None, Some(Value::bool(false))]
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "__wakeup",
+        super::date::fn_date_time_wakeup,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::None,
+        []
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "__serialize",
+        super::date::fn_date_time_serialize,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        []
+    );
+    reg_date_method!(
+        "DateTimeInterface",
+        "__unserialize",
+        super::date::fn_date_time_unserialize,
+        2,
+        1,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None]
+    );
+
+    reg_date_method!(
+        "DateInterval",
+        "__construct",
+        super::date::fn_date_interval_construct,
+        2,
+        1,
+        ["duration"],
+        [ParamTypeHint::String],
+        ParamTypeHint::None,
+        [None]
+    );
+    reg_date_static_method!(
+        "DateInterval",
+        "createFromDateString",
+        super::date::fn_date_interval_create_from_date_string,
+        2,
+        1,
+        ["datetime"],
+        [ParamTypeHint::String],
+        ParamTypeHint::None,
+        [None]
+    );
+    reg_date_method!(
+        "DateInterval",
+        "format",
+        super::date::fn_date_interval_format,
+        2,
+        1,
+        ["format"],
+        [ParamTypeHint::String],
+        ParamTypeHint::None,
+        [None]
+    );
+    reg_date_method!(
+        "DateInterval",
+        "__serialize",
+        super::date::fn_date_interval_serialize,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        []
+    );
+    reg_date_method!(
+        "DateInterval",
+        "__unserialize",
+        super::date::fn_date_interval_unserialize,
+        2,
+        1,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None]
+    );
+    reg_date_method!(
+        "DateInterval",
+        "__wakeup",
+        super::date::fn_date_interval_wakeup,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::None,
+        []
+    );
+    reg_date_static_method!(
+        "DateInterval",
+        "__set_state",
+        super::date::fn_date_interval_set_state,
+        2,
+        1,
+        ["array"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::None,
+        [None]
+    );
+
+    reg_method!(
+        "DatePeriod",
+        "__construct",
+        super::date::fn_date_period_construct,
+        5,
+        1,
+        "start",
+        "interval",
+        "end",
+        "options"
+    );
+    {
+        let function = funcs.last_mut().expect("DatePeriod constructor registered");
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![
+                None,
+                Some(Value::undef()),
+                Some(Value::undef()),
+                Some(Value::undef()),
+            ],
+            "date",
+        );
+    }
+    reg_date_static_method!(
+        "DatePeriod",
+        "createFromISO8601String",
+        super::date::fn_date_period_create_from_iso,
+        3,
+        1,
+        ["specification", "options"],
+        [ParamTypeHint::String, ParamTypeHint::Int],
+        ParamTypeHint::ClassName("static".to_string()),
+        [None, Some(Value::long(0))]
+    );
+    for (name, handler) in [
+        (
+            "getStartDate",
+            super::date::fn_date_period_get_start as crate::vm::function::InternalFunctionHandler,
+        ),
+        ("getEndDate", super::date::fn_date_period_get_end),
+        ("getDateInterval", super::date::fn_date_period_get_interval),
+        (
+            "getRecurrences",
+            super::date::fn_date_period_get_recurrences,
+        ),
+    ] {
+        reg_date_method!(
+            "DatePeriod",
+            name,
+            handler,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::None,
+            []
+        );
+    }
+    reg_date_method!(
+        "DatePeriod",
+        "getIterator",
+        super::date::fn_date_period_get_iterator,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::ClassName("Iterator".to_string()),
+        []
+    );
+    reg_date_method!(
+        "DatePeriod",
+        "__serialize",
+        super::date::fn_date_period_serialize,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        []
+    );
+    reg_date_method!(
+        "DatePeriod",
+        "__unserialize",
+        super::date::fn_date_period_unserialize,
+        2,
+        1,
+        ["data"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::Void,
+        [None]
+    );
+    reg_date_method!(
+        "DatePeriod",
+        "__wakeup",
+        super::date::fn_date_period_wakeup,
+        1,
+        0,
+        [],
+        [],
+        ParamTypeHint::None,
+        []
+    );
+    reg_date_static_method!(
+        "DatePeriod",
+        "__set_state",
+        super::date::fn_date_period_set_state,
+        2,
+        1,
+        ["array"],
+        [ParamTypeHint::Array],
+        ParamTypeHint::None,
+        [None]
+    );
+
     for class_name in ["DateTime", "DateTimeImmutable"] {
         reg_date_method!(
             class_name,
@@ -3343,7 +4464,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["format"],
             [ParamTypeHint::String],
-            ParamTypeHint::String,
+            ParamTypeHint::None,
             [None]
         );
         reg_date_method!(
@@ -3354,7 +4475,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::Int,
+            ParamTypeHint::None,
             []
         );
         reg_date_method!(
@@ -3376,7 +4497,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::Int,
+            ParamTypeHint::None,
             []
         );
         reg_date_method!(
@@ -3387,10 +4508,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             0,
             [],
             [],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("DateTimeZone".to_string()),
-                ParamTypeHint::ClassName("false".to_string()),
-            ]),
+            ParamTypeHint::None,
             []
         );
         reg_date_method!(
@@ -3406,13 +4524,51 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         );
         reg_date_method!(
             class_name,
+            "__unserialize",
+            super::date::fn_date_time_unserialize,
+            2,
+            1,
+            ["data"],
+            [ParamTypeHint::Array],
+            ParamTypeHint::Void,
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "__wakeup",
+            super::date::fn_date_time_wakeup,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::None,
+            []
+        );
+        let set_state_handler = if class_name == "DateTime" {
+            super::date::fn_date_time_set_state
+        } else {
+            super::date::fn_date_time_immutable_set_state
+        };
+        reg_date_static_method!(
+            class_name,
+            "__set_state",
+            set_state_handler,
+            2,
+            1,
+            ["array"],
+            [ParamTypeHint::Array],
+            ParamTypeHint::None,
+            [None]
+        );
+        reg_date_method!(
+            class_name,
             "setTimestamp",
             super::date::fn_date_time_set_timestamp,
             2,
             1,
             ["timestamp"],
             [ParamTypeHint::Int],
-            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::None,
             [None]
         );
         reg_date_method!(
@@ -3423,7 +4579,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             1,
             ["timezone"],
             [ParamTypeHint::ClassName("DateTimeZone".to_string())],
-            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::None,
             [None]
         );
         reg_date_method!(
@@ -3434,7 +4590,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             3,
             ["year", "month", "day"],
             [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
-            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::None,
             [None, None, None]
         );
         reg_date_method!(
@@ -3450,7 +4606,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 ParamTypeHint::Int,
                 ParamTypeHint::Int
             ],
-            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::None,
             [None, None, Some(Value::long(0)), Some(Value::long(0))]
         );
         reg_date_method!(
@@ -3472,9 +4628,130 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             2,
             ["year", "week", "dayOfWeek"],
             [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
-            ParamTypeHint::ClassName(class_name.to_string()),
+            ParamTypeHint::None,
             [None, None, Some(Value::long(1))]
         );
+        reg_date_method!(
+            class_name,
+            "modify",
+            super::date::fn_date_time_modify,
+            2,
+            1,
+            ["modifier"],
+            [ParamTypeHint::String],
+            ParamTypeHint::None,
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "add",
+            super::date::fn_date_time_add,
+            2,
+            1,
+            ["interval"],
+            [ParamTypeHint::ClassName("DateInterval".to_string())],
+            ParamTypeHint::None,
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "sub",
+            super::date::fn_date_time_sub,
+            2,
+            1,
+            ["interval"],
+            [ParamTypeHint::ClassName("DateInterval".to_string())],
+            ParamTypeHint::None,
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "diff",
+            super::date::fn_date_time_diff,
+            3,
+            1,
+            ["targetObject", "absolute"],
+            [
+                ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+                ParamTypeHint::Bool
+            ],
+            ParamTypeHint::None,
+            [None, Some(Value::bool(false))]
+        );
+        let format_handler = if class_name == "DateTime" {
+            super::date::fn_date_time_create_from_format
+        } else {
+            super::date::fn_date_time_immutable_create_from_format
+        };
+        reg_date_static_method!(
+            class_name,
+            "createFromFormat",
+            format_handler,
+            4,
+            2,
+            ["format", "datetime", "timezone"],
+            [
+                ParamTypeHint::String,
+                ParamTypeHint::String,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "DateTimeZone".to_string(),
+                )))
+            ],
+            ParamTypeHint::None,
+            [None, None, Some(Value::null())]
+        );
+        reg_date_static_method!(
+            class_name,
+            "getLastErrors",
+            super::date::fn_date_get_last_errors,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::None,
+            []
+        );
+        let interface_handler = if class_name == "DateTime" {
+            super::date::fn_date_time_create_from_interface
+        } else {
+            super::date::fn_date_time_immutable_create_from_interface
+        };
+        reg_date_static_method!(
+            class_name,
+            "createFromInterface",
+            interface_handler,
+            2,
+            1,
+            ["object"],
+            [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None]
+        );
+        if class_name == "DateTime" {
+            reg_date_static_method!(
+                class_name,
+                "createFromImmutable",
+                super::date::fn_date_time_create_from_immutable,
+                2,
+                1,
+                ["object"],
+                [ParamTypeHint::ClassName("DateTimeImmutable".to_string())],
+                ParamTypeHint::None,
+                [None]
+            );
+        } else {
+            reg_date_static_method!(
+                class_name,
+                "createFromMutable",
+                super::date::fn_date_time_immutable_create_from_mutable,
+                2,
+                1,
+                ["object"],
+                [ParamTypeHint::ClassName("DateTime".to_string())],
+                ParamTypeHint::None,
+                [None]
+            );
+        }
         let create_handler = if class_name == "DateTime" {
             super::date::fn_date_time_create_from_timestamp
         } else {
@@ -3491,7 +4768,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 ParamTypeHint::Int,
                 ParamTypeHint::Float
             ])],
-            ParamTypeHint::ClassName("static".to_string()),
+            ParamTypeHint::None,
             [None]
         );
     }
