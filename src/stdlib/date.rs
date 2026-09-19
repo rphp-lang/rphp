@@ -7,6 +7,8 @@
 
 use super::*;
 
+mod tzdb;
+
 const WEEKDAYS: [&str; 7] = [
     "Sunday",
     "Monday",
@@ -62,10 +64,7 @@ pub(super) fn optional_timestamp(
 }
 
 pub(super) fn is_supported_timezone(timezone: &str) -> bool {
-    matches!(
-        timezone,
-        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" | "Asia/Kolkata"
-    )
+    tzdb::contains(timezone)
 }
 
 pub(super) fn timezone_id(eg: &ExecutorGlobals) -> &str {
@@ -76,19 +75,86 @@ pub(super) fn timezone_id(eg: &ExecutorGlobals) -> &str {
         .unwrap_or("UTC")
 }
 
-pub(super) fn timezone_offset_seconds(eg: &ExecutorGlobals, _timestamp: i64) -> i64 {
-    match timezone_id(eg) {
-        "Asia/Kolkata" => 19_800,
-        _ => 0,
+pub(super) fn timezone_offset_seconds(eg: &ExecutorGlobals, timestamp: i64) -> i64 {
+    let identifier = timezone_id(eg);
+    match identifier {
+        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" => 0,
+        _ => tzdb::state_at(identifier, timestamp)
+            .map(|state| i64::from(state.offset))
+            .unwrap_or(0),
     }
 }
 
-pub(super) fn timezone_spec(eg: &ExecutorGlobals, _timestamp: i64) -> (&str, &str, i64) {
+pub(super) fn timezone_spec(eg: &ExecutorGlobals, timestamp: i64) -> (&str, &str, i64) {
     let identifier = timezone_id(eg);
     match identifier {
-        "Asia/Kolkata" => (identifier, "IST", 19_800),
+        "UTC" | "Etc/UTC" => (identifier, "UTC", 0),
         "GMT" | "Etc/GMT" => (identifier, "GMT", 0),
-        _ => (identifier, "UTC", 0),
+        _ => {
+            let state = tzdb::state_at(identifier, timestamp).unwrap_or(tzdb::ZoneState {
+                offset: 0,
+                abbreviation: "UTC",
+                is_dst: false,
+            });
+            (identifier, state.abbreviation, i64::from(state.offset))
+        }
+    }
+}
+
+pub(super) fn timezone_is_dst(eg: &ExecutorGlobals, timestamp: i64) -> bool {
+    let identifier = timezone_id(eg);
+    match identifier {
+        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT" => false,
+        _ => tzdb::state_at(identifier, timestamp).is_some_and(|state| state.is_dst),
+    }
+}
+
+/// Resolve a wall-clock timestamp in the request timezone.  An overlap has
+/// two valid UTC representations; PHP selects the earlier (normally DST)
+/// occurrence.  A forward gap has none; PHP advances through the gap, which
+/// corresponds to interpreting the requested wall time with the old offset.
+fn local_timestamp_to_utc(eg: &ExecutorGlobals, local: i64) -> i64 {
+    let identifier = timezone_id(eg);
+    if matches!(identifier, "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT") {
+        return local;
+    }
+    let mut offsets = [0_i64; 3];
+    let mut count = 0;
+    for probe in [
+        local.saturating_sub(86_400),
+        local,
+        local.saturating_add(86_400),
+    ] {
+        let Some(state) = tzdb::state_at(identifier, probe) else {
+            return local;
+        };
+        let offset = i64::from(state.offset);
+        if !offsets[..count].contains(&offset) {
+            offsets[count] = offset;
+            count += 1;
+        }
+    }
+
+    let mut valid = [0_i64; 3];
+    let mut valid_count = 0;
+    let mut gap_candidate = i64::MIN;
+    for offset in offsets[..count].iter().copied() {
+        let candidate = local.saturating_sub(offset);
+        gap_candidate = gap_candidate.max(candidate);
+        if tzdb::state_at(identifier, candidate)
+            .is_some_and(|state| i64::from(state.offset) == offset)
+        {
+            valid[valid_count] = candidate;
+            valid_count += 1;
+        }
+    }
+    if valid_count == 0 {
+        gap_candidate
+    } else {
+        *valid[..valid_count]
+            .iter()
+            .min()
+            .expect("a valid wall-clock representation exists")
     }
 }
 
@@ -219,8 +285,7 @@ pub(super) fn fn_mktime_impl(
             exact[1].as_long().unwrap_or_default(),
             exact[2].as_long().unwrap_or_default(),
         );
-        let offset = timezone_offset_seconds(eg, local);
-        ret!(rv, Value::long(local.saturating_sub(offset)));
+        ret!(rv, Value::long(local_timestamp_to_utc(eg, local)));
     }
     let Some(hour) = super::typed_internal_int_argument(ed, eg, "mktime", 0, "hour")? else {
         return Ok(());
@@ -249,8 +314,7 @@ pub(super) fn fn_mktime_impl(
         minute.unwrap_or(current.4),
         second.unwrap_or(current.5),
     );
-    let offset = timezone_offset_seconds(eg, local);
-    ret!(rv, Value::long(local.saturating_sub(offset)));
+    ret!(rv, Value::long(local_timestamp_to_utc(eg, local)));
 }
 
 pub(super) fn fn_gmmktime(
@@ -339,7 +403,7 @@ pub(super) fn fn_localtime(
         year - 1900,
         weekday,
         year_day,
-        0,
+        i64::from(timezone_is_dst(eg, timestamp)),
     ];
     let mut result = PhpArray::with_packed_capacity(values.len());
     if associative {
@@ -432,7 +496,7 @@ pub(super) fn fn_idate(
         }
         'H' => hour,
         'i' => minute,
-        'I' => 0,
+        'I' => i64::from(timezone_is_dst(eg, timestamp)),
         'L' => i64::from(super::is_leap_year(year)),
         'm' => month,
         'N' => {

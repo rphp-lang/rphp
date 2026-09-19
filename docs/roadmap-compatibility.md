@@ -168,6 +168,14 @@ from the current 224 Zend/lang failures and preserve the exact 5,080 and 1,470
 parent pass sets. Performance optimization remains deferred to the aggregate
 sweep boundary by user direction.
 
+The separate Date workstream has accepted its transition-core checkpoint over
+the scalar 11-function surface.  Its independent IANA 2026a compiler/runtime is
+exact on 11,160 installed-reference zone/timestamp projections and moves the
+688-case `ext/date` packet from 27 to 47 passes, exact +20/-0.  The extension is
+still deliberately undiscoverable.  Continue there with `date.timezone` CLI-INI
+admission and the shared textual/relative parser before implementing DateTime
+object state; do not substitute host tzcode, timelib or FFI.
+
 ### Preceding core property-receiver checkpoint
 
 The `core-property-receiver-contracts` checkpoint over `279a6d43` reduces the

@@ -247,6 +247,67 @@ strings/array manifest/pass set
 `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
 
+### Separate Date transition-core checkpoint
+
+The separately owned `date-tzdb-transition-core` checkpoint over the scalar
+Date surface adds an independently implemented IANA **2026a**
+timezone compiler and runtime.  RPHP consumes the unmodified public-domain
+IANA data tables; its repository-owned Rust generator selects the annotated
+rearguard records required by PHP's DST flag contract, applies `zone.tab`
+packrat/link rules and emits a deterministic 765,624-byte transition database.
+No tzcode, timelib, native timezone engine, FFI or copied implementation is
+used.  The runtime lazily decodes the data, binary-searches historical
+transitions and projects recurring future rules over a complete 400-year
+Gregorian cycle.
+
+The transition core covers offset, abbreviation and DST formatting, historical
+sub-minute offsets, non-hour shifts, skipped civil days, `localtime()`/`idate()`
+DST state and PHP's `mktime()` gap/fold selection.  A clean-room sweep is exact
+for all **465** identifiers accepted by the installed PHP 8.5.10 system-tzdb
+reference across **24** timestamps, 11,160 rows total.  RPHP also retains five
+identifiers present in PHP's bundled 2026a inventory but rejected by that
+system-tzdb packaging profile; exact identifier admission for those five is an
+explicit follow-up rather than a hidden pass.
+
+The unmodified 688-case `ext/date` suite moves from **27 pass / 506 fail / 8
+skip / 147 unsupported** to **47 / 486 / 8 / 147**, exact **+20/-0**, with no
+timeout or crash.  Four original transition E2E tests plus the eleven scalar
+Date tests cover the representative positive, historical, negative-DST,
+gap/fold, diagnostic and metadata boundaries.  Zend/lang is 5,093/211/115/180
+with no lost parent pass, while strings/array remains exactly
+1,470/8/67/30.  Composer S0 and Symfony S1--S3 pass.
+
+The final five-configuration matrix is green at
+5,889/5,557/5,960/5,982/6,033 passes with zero failures, plus all-targets.
+Two CPU-2 fixed-parent 32-pair runs retain exact output; paired medians are
+ordinary **+1.574%/+1.602%**, UTC `date()` **+0.263%/-0.544%**, UTC `mktime()`
+**-1.183%/-0.906%** and startup **-0.547%/+0.033%**.  Every median remains
+below the five-percent checkpoint ceiling.
+
+SHA-256 evidence: release
+`b29f6b13117b239d1fd9f1638c37f334cef4a652adfb13a633afebfdc0a1447b`;
+generated tzdb
+`6c81fdaf16ad0762b32452b39296aaa016a9842e6ac9c60da4d3f7dce438293c`;
+Date manifest/pass set
+`82e45afa91e3b52cf8c1290fef131d90cd74c562b48d1a36960e9a7c14ca64ba` /
+`6f9b191f56501e948108db315d26eb286d913052116ca28628dfe8778198abac`;
+Zend/lang manifest/pass set
+`15483da4be7f50311cf7ed7ee898d26683c7134e6c3c6a23d5057a5017a0724e` /
+`ddf0760deff584b81a1fb505ca8a750581854b27dad6ac2a28a11f107ceac337`;
+strings/array manifest/pass set
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`;
+performance runs
+`a40055d4a5459095fddc4dcca2233ac05d3f06f2052894d5eb8dccd2cfba2260` /
+`dc6cb0c760a8e19c488a87ded92205345831245cdb67bb242a773dcfb4f61450`;
+matrix `0d7ec53de88f5fd79d76eba271ebaa0d906aeac2ac36bc79d6f7f92ff220ea68`.
+
+This remains a partial Date surface: only 11 of 48 global functions are
+implemented.  `date.timezone` CLI-INI admission, the textual/relative parser,
+`strtotime()`, `date_parse*()`, timezone enumeration/transitions and all
+DateTime/DateTimeImmutable/DateInterval/DatePeriod object state and methods are
+not claimed.  Consequently `extension_loaded('date')` remains false.
+
 ### Preceding core property-receiver checkpoint
 
 The `core-property-receiver-contracts` checkpoint over `279a6d43` adds **5

@@ -30059,6 +30059,7 @@ fn fn_date(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
             timezone_id,
             timezone_abbreviation,
             offset,
+            date::timezone_is_dst(eg, timestamp),
         ))
     );
 }
@@ -30083,7 +30084,7 @@ fn fn_gmdate(
     };
     ret!(
         rv,
-        Value::string(format_php_date(&format, timestamp, "UTC", "GMT", 0,))
+        Value::string(format_php_date(&format, timestamp, "UTC", "GMT", 0, false,))
     );
 }
 
@@ -30094,6 +30095,7 @@ fn format_php_date(
     timezone_id: &str,
     timezone_abbreviation: &str,
     offset: i64,
+    is_dst: bool,
 ) -> String {
     // Break timestamp into components using manual calculation (no chrono dependency)
     let (year, month, day, hour, min, sec, wday, yday) = unix_to_parts(ts.saturating_add(offset));
@@ -30155,7 +30157,7 @@ fn format_php_date(
                 "{:04}",
                 date::iso_week_and_year(year, month, day, wday, yday).0
             )),
-            'I' => out.push('0'),
+            'I' => out.push(if is_dst { '1' } else { '0' }),
             'Z' => out.push_str(&offset.to_string()),
             'O' => out.push_str(&date::format_timezone_offset(offset, false)),
             'P' => out.push_str(&date::format_timezone_offset(offset, true)),
