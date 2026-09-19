@@ -6,6 +6,7 @@
 
 use super::array_assoc_sets::*;
 use super::array_traversal::*;
+use super::date::*;
 use super::directory::*;
 use super::filesystem::*;
 #[cfg(feature = "formatted-io")]
@@ -2284,12 +2285,174 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         vec![Some(Value::bool(false))],
         "standard",
     );
-    reg!("time", fn_time, 0, 0);
-    reg!("date", fn_date, 2, 1, "format", "timestamp");
-    reg!("gmdate", fn_gmdate, 2, 1, "format", "timestamp");
-    reg!(
-        "mktime", fn_mktime, 6, 1, "hour", "minute", "second", "month", "day", "year"
+    reg_typed!("time", fn_time, 0, 0, [], [], ParamTypeHint::Int);
+    reg_typed!(
+        "date",
+        fn_date,
+        2,
+        1,
+        ["format", "timestamp"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::String
     );
+    reg_typed!(
+        "gmdate",
+        fn_gmdate,
+        2,
+        1,
+        ["format", "timestamp"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "mktime",
+        fn_mktime,
+        6,
+        1,
+        ["hour", "minute", "second", "month", "day", "year"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "gmmktime",
+        fn_gmmktime,
+        6,
+        1,
+        ["hour", "minute", "second", "month", "day", "year"],
+        [
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "checkdate",
+        fn_checkdate,
+        3,
+        3,
+        ["month", "day", "year"],
+        [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
+        ParamTypeHint::Bool
+    );
+    reg_typed!(
+        "idate",
+        fn_idate,
+        2,
+        1,
+        ["format", "timestamp"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "localtime",
+        fn_localtime,
+        2,
+        0,
+        ["timestamp", "associative"],
+        [
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Bool,
+        ],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "getdate",
+        fn_getdate,
+        1,
+        0,
+        ["timestamp"],
+        [ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int))],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "date_default_timezone_get",
+        fn_date_default_timezone_get,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::String
+    );
+    reg_typed!(
+        "date_default_timezone_set",
+        fn_date_default_timezone_set,
+        1,
+        1,
+        ["timezoneId"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Bool
+    );
+    let nullable_timestamp_defaults = vec![None, Some(Value::null())];
+    for (name, defaults) in [
+        ("time", vec![]),
+        ("date", nullable_timestamp_defaults.clone()),
+        ("gmdate", nullable_timestamp_defaults.clone()),
+        (
+            "mktime",
+            vec![
+                None,
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+            ],
+        ),
+        (
+            "gmmktime",
+            vec![
+                None,
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+                Some(Value::null()),
+            ],
+        ),
+        ("checkdate", vec![None, None, None]),
+        ("idate", nullable_timestamp_defaults),
+        (
+            "localtime",
+            vec![Some(Value::null()), Some(Value::bool(false))],
+        ),
+        ("getdate", vec![Some(Value::null())]),
+        ("date_default_timezone_get", vec![]),
+        ("date_default_timezone_set", vec![None]),
+    ] {
+        let function = eg
+            .find_function(name)
+            .expect("date function was just registered");
+        eg.register_internal_function_reflection_metadata(function, defaults, "date");
+    }
 
     // --- exit / die ---
     reg!("exit", fn_exit, 1, 0, "status");
