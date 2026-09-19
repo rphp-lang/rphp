@@ -162,7 +162,7 @@ var_dump(timezone_open('No/Such'));
 "#,
         ),
         concat!(
-            "Exception:DateTimeZone::__construct(): Unknown or bad timezone (No/Such)\n",
+            "DateInvalidTimeZoneException:DateTimeZone::__construct(): Unknown or bad timezone (No/Such)\n",
             "2:timezone_open(): Unknown or bad timezone (No/Such)\n",
             "bool(false)\n",
         )

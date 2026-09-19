@@ -293,6 +293,37 @@ pub(super) fn snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateIn
     Some(result)
 }
 
+pub(super) fn initialized_state(value: &Value) -> Option<DateIntervalState> {
+    let object = value.as_object()?;
+    let native = object.native_object_state::<DateIntervalState>()?;
+    if !native.initialized {
+        return None;
+    }
+    let mut result = native.clone();
+    if !result.from_string {
+        result.y = value_long(&object, "y", result.y);
+        result.m = value_long(&object, "m", result.m);
+        result.d = value_long(&object, "d", result.d);
+        result.h = value_long(&object, "h", result.h);
+        result.i = value_long(&object, "i", result.i);
+        result.s = value_long(&object, "s", result.s);
+        result.f = value_double(&object, "f", result.f);
+        result.invert = value_long(&object, "invert", result.invert);
+        result.days = object.get_property("days").and_then(Value::as_long);
+    }
+    Some(result)
+}
+
+/// DatePeriod snapshots relative intervals into its ordinary interval state,
+/// while retaining the parsed adjustment needed for weekday/first/last rules.
+pub(super) fn for_period(mut state: DateIntervalState) -> DateIntervalState {
+    if state.from_string {
+        state.from_string = false;
+        state.date_string = None;
+    }
+    state
+}
+
 pub(crate) fn virtual_property(value: &Value, name: &str) -> Option<Value> {
     let object = value.as_object()?;
     let state = object.native_object_state::<DateIntervalState>()?;

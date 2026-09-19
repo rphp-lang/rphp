@@ -67,3 +67,56 @@ foreach ([
         )
     );
 }
+
+#[test]
+fn period_relative_iteration_and_unserialize_trace_share_php_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('UTC');
+$start = new DateTimeImmutable('2024-01-31 00:00:00 UTC');
+$interval = DateInterval::createFromDateString('first monday of next month');
+$p = new DatePeriod(
+    $start,
+    $interval,
+    2,
+    DatePeriod::EXCLUDE_START_DATE | DatePeriod::INCLUDE_END_DATE,
+);
+echo implode(',', array_map(fn($d) => $d->format('Y-m-d'), iterator_to_array($p))), "\n";
+var_dump($p->__serialize()['recurrences'], $p->getRecurrences());
+$it = $p->getIterator();
+$it->rewind();
+$first = $it->current();
+$again = $it->current();
+var_dump($first === $again, $first->format('Y-m-d'), $p->current->format('Y-m-d'));
+try {
+    foreach ($p as &$value) {}
+} catch (Throwable $e) {
+    echo $e->getMessage(), "\n";
+}
+function invalid_period_trace(): array {
+    try {
+        unserialize('O:10:"DatePeriod":0:{}');
+    } catch (Throwable $e) {
+        return $e->getTrace();
+    }
+}
+$trace = invalid_period_trace();
+if ($trace) {
+    echo $trace[0]['class'], '::', $trace[0]['function'], ':',
+        isset($trace[0]['file']) ? 'file' : 'internal', "\n";
+}
+"#,
+        ),
+        concat!(
+            "2024-02-05,2024-03-04,2024-04-01\n",
+            "int(3)\n",
+            "int(2)\n",
+            "bool(false)\n",
+            "string(10) \"2024-02-05\"\n",
+            "string(10) \"2024-02-05\"\n",
+            "An iterator cannot be used with foreach by reference\n",
+            "DatePeriod::__unserialize:internal\n",
+        )
+    );
+}

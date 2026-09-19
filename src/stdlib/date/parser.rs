@@ -65,14 +65,14 @@ fn weekday_number(value: &str) -> Option<i64> {
     let lower = value
         .trim_matches(|character: char| !character.is_ascii_alphabetic())
         .to_ascii_lowercase();
-    match lower.get(..lower.len().min(3))? {
-        "sun" => Some(0),
-        "mon" => Some(1),
-        "tue" => Some(2),
-        "wed" => Some(3),
-        "thu" => Some(4),
-        "fri" => Some(5),
-        "sat" => Some(6),
+    match lower.as_str() {
+        "sun" | "sunday" => Some(0),
+        "mon" | "monday" => Some(1),
+        "tue" | "tues" | "tuesday" => Some(2),
+        "wed" | "weds" | "wednesday" => Some(3),
+        "thu" | "thur" | "thurs" | "thursday" => Some(4),
+        "fri" | "friday" => Some(5),
+        "sat" | "saturday" => Some(6),
         _ => None,
     }
 }
@@ -106,7 +106,24 @@ fn civil_state(
 
 fn parse_clock(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
     let bytes = value.as_bytes();
-    let colon = bytes.iter().position(|byte| *byte == b':')?;
+    let Some(colon) = bytes.iter().position(|byte| *byte == b':') else {
+        let digits = bytes
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        if !(1..=2).contains(&digits) {
+            return None;
+        }
+        let hour = value.get(..digits)?.parse::<i64>().ok()?;
+        let suffix = value.get(digits..digits + 2)?;
+        if suffix.eq_ignore_ascii_case("am") {
+            return Some((if hour == 12 { 0 } else { hour }, 0, 0, 0, digits + 2));
+        }
+        if suffix.eq_ignore_ascii_case("pm") {
+            return Some((if hour == 12 { 12 } else { hour + 12 }, 0, 0, 0, digits + 2));
+        }
+        return None;
+    };
     if colon == 0 || colon > 2 {
         return None;
     }
@@ -334,6 +351,31 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
     while index < tokens.len() {
         let token = tokens[index];
         let lower = token.to_ascii_lowercase();
+
+        // Ordinal weekday of a relative month, e.g. "first monday of next
+        // month". The endpoint marker is applied after month normalization.
+        if matches!(lower.as_str(), "first" | "last")
+            && let Some(weekday) = tokens
+                .get(index + 1)
+                .and_then(|value| weekday_number(value))
+            && tokens
+                .get(index + 2)
+                .is_some_and(|value| value.eq_ignore_ascii_case("of"))
+            && let Some(months) = tokens.get(index + 3).and_then(|value| parse_number(value))
+            && tokens
+                .get(index + 4)
+                .is_some_and(|value| unit_name(value).eq_ignore_ascii_case("month"))
+        {
+            result.months += months;
+            result.first_day = lower == "first";
+            result.last_day = lower == "last";
+            // -2 is the inclusive backwards weekday projection used from a
+            // month end; 0 is the inclusive forward projection from day 1.
+            result.weekday = Some((weekday, if result.last_day { -2 } else { 0 }));
+            matched = true;
+            index += 5;
+            continue;
+        }
         match lower.as_str() {
             "+" => {
                 index += 1;
@@ -400,6 +442,17 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
             result.weekday = Some((weekday, 0));
             matched = true;
             index += 1;
+            continue;
+        }
+
+        if let Some(amount) = parse_number(token)
+            && let Some(weekday) = tokens
+                .get(index + 1)
+                .and_then(|value| weekday_number(value))
+        {
+            result.weekday = Some((weekday, i8::try_from(amount).ok()?));
+            matched = true;
+            index += 2;
             continue;
         }
 
@@ -484,6 +537,11 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
             -1 => {
                 let delta = (current - wanted).rem_euclid(7);
                 -(if delta == 0 { 7 } else { delta })
+            }
+            -2 => -(current - wanted).rem_euclid(7),
+            count if count > 1 => (wanted - current).rem_euclid(7) + 7 * (i64::from(count) - 1),
+            count if count < -2 => {
+                -((current - wanted).rem_euclid(7) + 7 * (i64::from(-count) - 1))
             }
             _ => (wanted - current).rem_euclid(7),
         };
@@ -579,10 +637,21 @@ pub(super) fn parse_datetime(
             fields: ParsedFields::default(),
         });
     }
+    let error_position = parse_clock(input)
+        .map(|(_, _, _, _, consumed)| consumed)
+        .filter(|consumed| !input[*consumed..].trim().is_empty())
+        .map(|consumed| {
+            consumed
+                + input[consumed..]
+                    .bytes()
+                    .take_while(u8::is_ascii_whitespace)
+                    .count()
+        })
+        .unwrap_or(0);
     Err(DateParseDiagnostics {
         warnings: Vec::new(),
         errors: vec![(
-            0,
+            error_position,
             format!("The timezone could not be found in the database"),
         )],
     })
@@ -1013,6 +1082,19 @@ mod tests {
             parse_relative("next Thursday").unwrap().weekday,
             Some((4, 1))
         );
+        assert_eq!(parse_relative("3 tuesday").unwrap().weekday, Some((2, 3)));
+        let first = parse_relative("first monday of next month").unwrap();
+        assert_eq!(
+            (first.months, first.first_day, first.weekday),
+            (1, true, Some((1, 0)))
+        );
+        let last = parse_relative("last thursday of next month").unwrap();
+        assert_eq!(
+            (last.months, last.last_day, last.weekday),
+            (1, true, Some((4, -2)))
+        );
+        let first_day = parse_relative("first day of next month").unwrap();
+        assert_eq!((first_day.months, first_day.first_day), (1, true));
     }
 
     #[test]

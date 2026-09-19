@@ -1408,6 +1408,20 @@ fn op_foreach_init<'a>(
     let native_consumer = crate::stdlib::prepare_native_deque_consumer(resolved_iterable.as_ref().unwrap_or(source), eg);
     let arr_val = native_consumer.as_ref().or(resolved_iterable.as_ref()).unwrap_or(source);
 
+    if by_reference && crate::stdlib::date_period_iterator_disallows_references(arr_val) {
+        let error = make_error_value(
+            "Error",
+            "An iterator cannot be used with foreach by reference",
+        );
+        attach_throwable_origin(&error, eg, frame, op_array, init_ip);
+        return Ok(match throw_in_frame(eg, frame, error)? {
+            ThrowResult::Handled(new_frame, new_op_array) => {
+                ColdResult::NewFrame(new_frame, new_op_array)
+            }
+            ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
+        });
+    }
+
     // Check for Generator object
     let is_generator = if let Some(obj) = arr_val.as_object() {
         obj.class_name.as_ref() == "Generator" && arr_val.as_object_rc().map_or(false, |rc| rc.borrow().generator.is_some())

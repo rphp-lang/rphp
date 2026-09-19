@@ -3349,6 +3349,19 @@ fn op_unset_obj<'a>(
             ))
             .is_some();
     if eg
+        .find_property_visibility(&object_ref.class_name, &name)
+        .is_some_and(|(_, defining_class)| defining_class.eq_ignore_ascii_case("DatePeriod"))
+    {
+        let class_name = object_ref.class_name.to_string();
+        drop(object_ref);
+        return Ok(object_property_throw(
+            eg,
+            frame,
+            "Error",
+            format!("Cannot unset {class_name}::${name}"),
+        )?);
+    }
+    if eg
         .class_table
         .get(object_ref.class_name.as_ref())
         .is_some_and(|class| class.is_enum && class.readonly_props.contains(&name))
@@ -4955,11 +4968,10 @@ fn op_assign_obj_prop_inner<'a>(
     }
     if let Some(php_obj) = obj.as_object_mut() {
         let caller_class = get_caller_class(frame, eg);
-        let object_display_class_name = if php_obj.class_name.starts_with("class@anonymous#") {
-            std::rc::Rc::<str>::from("class@anonymous")
-        } else {
-            php_obj.class_name.clone()
-        };
+        let object_display_class_name = std::rc::Rc::<str>::from(displayed_class_name(
+            eg,
+            php_obj.class_name.as_ref(),
+        ));
 
         // Same receiver-in-scope guard as FetchObjR — only allow
         // private bypass when the receiver is in the caller's hierarchy.

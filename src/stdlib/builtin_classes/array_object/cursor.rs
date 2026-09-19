@@ -245,13 +245,22 @@ pub(crate) fn entry(
     projection: Projection,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<(Value, Value)>, VmError> {
-    if !by_reference && let Some(entry) = existing_array_entry(receiver, movement, projection) {
-        return Ok(entry);
-    }
-    if !prepare_backing(receiver, eg)? {
-        return Ok(None);
-    }
-    Ok(entry_slow(receiver, movement, by_reference, projection, eg))
+    let result = if !by_reference
+        && let Some(entry) = existing_array_entry(receiver, movement, projection)
+    {
+        entry
+    } else if !prepare_backing(receiver, eg)? {
+        None
+    } else {
+        entry_slow(receiver, movement, by_reference, projection, eg)
+    };
+    crate::stdlib::date::project_date_period_iterator(
+        receiver,
+        result.as_ref().map(|(_, value)| value),
+        result.is_none(),
+        eg,
+    );
+    Ok(result)
 }
 
 /// Movement/probing must not create unused aliases before a consumer callback.
@@ -299,7 +308,7 @@ pub(crate) fn cached_value(receiver: &Value, eg: &mut ExecutorGlobals) -> Result
         return Ok(Value::null());
     };
     let index = buckets.index(state.live);
-    Ok(if let Some(key) = key {
+    let value = if let Some(key) = key {
         object
             .get_property(key)
             .and_then(Value::as_array)
@@ -309,7 +318,11 @@ pub(crate) fn cached_value(receiver: &Value, eg: &mut ExecutorGlobals) -> Result
         object_entries(&object, eg)
             .get(index)
             .map_or_else(Value::null, |row| row.value.clone_for_php_storage())
-    })
+    };
+    drop(object);
+    Ok(crate::stdlib::date::clone_date_period_iterator_value(
+        receiver, value, eg,
+    ))
 }
 
 #[cold]
@@ -599,8 +612,10 @@ fn next(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Resul
     ret!(rv, Value::null());
 }
 fn current(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let value = projected_entry(arg!(ed, 0), Move::Current, Projection::Value, eg)?
+    let receiver = arg!(ed, 0);
+    let value = projected_entry(receiver, Move::Current, Projection::Value, eg)?
         .map_or_else(Value::null, |entry| entry.1);
+    let value = crate::stdlib::date::clone_date_period_iterator_value(receiver, value, eg);
     ret!(rv, value);
 }
 fn key(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {

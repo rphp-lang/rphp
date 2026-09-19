@@ -255,8 +255,8 @@ pub(crate) use builtin_classes::{
     uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
 pub(crate) use date::{
-    date_interval_virtual_property, datetime_comparison, datetime_debug_projection,
-    timezone_comparison,
+    date_interval_virtual_property, date_period_iterator_disallows_references, datetime_comparison,
+    datetime_debug_projection, timezone_comparison,
 };
 
 /// Read a raw internal-call CV without following a PHP reference.
@@ -13492,6 +13492,11 @@ fn fn_get_object_vars(
         return Ok(());
     };
 
+    if let Some(projection) = datetime_debug_projection(target, eg) {
+        drop(object);
+        ret!(rv, projection);
+    }
+
     let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
     let class_id = object.class_id;
     if object.has_detached_property_table()
@@ -21704,6 +21709,32 @@ fn project_ordinary_json_object(
         return Ok(PhpJsonValue::Null);
     }
 
+    if let Some(projection) = datetime_debug_projection(val, eg)
+        && let Some(properties) = projection.as_array()
+    {
+        let mut entries = PhpJsonObjectBuilder::with_capacity(properties.len());
+        for (key, value) in properties.iter() {
+            let key = match key {
+                ArrayKey::String(key) => key.clone(),
+                ArrayKey::Int(key) => key.to_string(),
+            };
+            mark_json_compact_string(&key, state.flags, compact_formatter_compatible);
+            let encoded = value_to_json(
+                value,
+                eg,
+                compact_formatter_compatible,
+                state,
+                Some(&container),
+            )?;
+            if json_stopped_container(val, state, eg) {
+                return Ok(PhpJsonValue::Null);
+            }
+            entries.push((key, encoded));
+        }
+        state.finish_container(container.depth);
+        return Ok(entries.finish(container.depth));
+    }
+
     let detached = val
         .as_object()
         .is_some_and(|object| object.has_detached_property_table());
@@ -23948,7 +23979,26 @@ pub(crate) fn call_object_protocol_method(
         }
         return call_object_public_method(eg, receiver, public_method, &[]);
     }
-    call_object_public_method(eg, receiver, public_method, args)
+    let result = call_object_public_method(eg, receiver, public_method, args)?;
+    if interface == "IteratorAggregate"
+        && public_method.eq_ignore_ascii_case("getIterator")
+        && eg.class_is_a(&class_name, "DatePeriod")
+        && let Some(exception) = eg.exception.as_ref()
+        && exception.as_object().is_some_and(|object| {
+            object
+                .get_property("message")
+                .and_then(Value::as_str)
+                .is_some_and(|message| {
+                    message
+                        .starts_with("Object of type DatePeriod has not been correctly initialized")
+                })
+        })
+        && let Some(mut object) = exception.as_object_mut()
+    {
+        let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.set_property(trace_key, Value::array(PhpArray::new()));
+    }
+    Ok(result)
 }
 
 /// Resolve an ordinary public instance method without manufacturing a PHP

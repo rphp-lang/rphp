@@ -2622,6 +2622,28 @@ impl ExecutorGlobals {
             .is_some_and(Value::is_undef)
     }
 
+    /// Internal overload dispatch can intentionally accept fewer arguments
+    /// than the public PHP stub advertises. Complete default metadata carries
+    /// the stub's leading required parameters for Reflection only.
+    pub(crate) fn internal_function_reflection_required_num_args(
+        &self,
+        function: *const FunctionCommon,
+        public_arity: u32,
+        fallback: u32,
+    ) -> u32 {
+        self.internal_callable_metadata
+            .as_deref()
+            .and_then(|metadata| metadata.functions.get(&function))
+            .map(|(defaults, _, _)| defaults)
+            .filter(|defaults| defaults.len() == public_arity as usize)
+            .map_or(fallback, |defaults| {
+                defaults
+                    .iter()
+                    .take_while(|default| default.is_none())
+                    .count() as u32
+            })
+    }
+
     pub(crate) fn internal_function_parameter_default_diagnostic(
         &self,
         function: *const FunctionCommon,

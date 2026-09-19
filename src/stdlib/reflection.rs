@@ -3572,6 +3572,11 @@ fn function_get_parameters(
     }
     let fixed = function.sig.public_arity();
     let count = fixed + u32::from(function.sig.is_variadic);
+    let required = eg.internal_function_reflection_required_num_args(
+        function as *const FunctionCommon,
+        fixed,
+        function.sig.required_num_args,
+    );
     let declaring_class = eg
         .declaring_class_of(function as *const FunctionCommon)
         .map(str::to_owned);
@@ -3592,9 +3597,9 @@ fn function_get_parameters(
         let (type_kind, type_name, allows_null) = hint_metadata(hint);
         let has_type = !matches!(hint, ParamTypeHint::None);
         let is_variadic = function.sig.is_variadic && index == fixed;
-        let is_optional = is_variadic || index >= function.sig.required_num_args;
+        let is_optional = is_variadic || index >= required;
         let has_default = !is_variadic
-            && index >= function.sig.required_num_args
+            && index >= required
             && !eg.internal_function_parameter_default_is_unknown(
                 function as *const FunctionCommon,
                 index as usize,
@@ -3744,7 +3749,13 @@ fn function_get_number_of_required_parameters(
     if reflected_magic_call_trampoline(ed, eg) {
         return return_value(rv, Value::long(0));
     }
-    let count = reflected_function(ed).map_or(0, |function| function.sig.required_num_args);
+    let count = reflected_function(ed).map_or(0, |function| {
+        eg.internal_function_reflection_required_num_args(
+            function as *const FunctionCommon,
+            function.sig.public_arity(),
+            function.sig.required_num_args,
+        )
+    });
     return_value(rv, Value::long(i64::from(count)))
 }
 
@@ -3999,6 +4010,11 @@ fn populate_reflection_parameter(
     eg: &ExecutorGlobals,
 ) {
     let fixed = function.sig.public_arity();
+    let required = eg.internal_function_reflection_required_num_args(
+        function as *const FunctionCommon,
+        fixed,
+        function.sig.required_num_args,
+    );
     let name = function
         .sig
         .param_names
@@ -4033,13 +4049,13 @@ fn populate_reflection_parameter(
         );
         object.set_property(
             "__reflection_optional",
-            Value::bool(is_variadic || index >= function.sig.required_num_args),
+            Value::bool(is_variadic || index >= required),
         );
         object.set_property(
             "__reflection_has_default",
             Value::bool(
                 !is_variadic
-                    && index >= function.sig.required_num_args
+                    && index >= required
                     && !eg.internal_function_parameter_default_is_unknown(
                         function as *const FunctionCommon,
                         index as usize,
@@ -5562,7 +5578,12 @@ fn render_reflection_signature_parameter(
     } else {
         format!("{} ", hint.display_name())
     };
-    let requirement = if variadic || index >= function.sig.required_num_args {
+    let required = eg.internal_function_reflection_required_num_args(
+        function as *const FunctionCommon,
+        function.sig.public_arity(),
+        function.sig.required_num_args,
+    );
+    let requirement = if variadic || index >= required {
         "optional"
     } else {
         "required"

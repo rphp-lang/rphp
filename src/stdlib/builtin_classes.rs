@@ -4356,7 +4356,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         "__construct",
         super::date::fn_date_period_construct,
         5,
-        1,
+        0,
         "start",
         "interval",
         "end",

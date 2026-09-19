@@ -45,6 +45,11 @@ pub(crate) use legacy::{
     fn_date_sun_info, fn_date_sunrise, fn_date_sunset, fn_gmstrftime, fn_strftime,
 };
 pub(crate) use period::{
+    clone_iterator_value as clone_date_period_iterator_value,
+    iterator_disallows_references as date_period_iterator_disallows_references,
+    iterator_projection as project_date_period_iterator,
+};
+pub(crate) use period::{
     debug_projection as date_period_debug_projection, fn_date_period_construct,
     fn_date_period_create_from_iso, fn_date_period_get_end, fn_date_period_get_interval,
     fn_date_period_get_iterator, fn_date_period_get_recurrences, fn_date_period_get_start,

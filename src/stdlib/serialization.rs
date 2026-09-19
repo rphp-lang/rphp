@@ -14,6 +14,85 @@ fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
     Ok(())
 }
 
+/// Engine-dispatched `__unserialize()` hooks have an observable two-frame
+/// boundary in PHP: the hook itself is internal, followed by the public
+/// `unserialize()` activation at the source call site. The ordinary detached
+/// method dispatcher correctly captures the rest of the live user stack, but
+/// projects the hook directly onto that call site. Split only that first frame
+/// after an escaping hook exception so unrelated method calls keep their
+/// established trace shape.
+#[cold]
+#[inline(never)]
+fn project_unserialize_hook_trace(eg: &ExecutorGlobals, source_frame: *mut ExecuteData) {
+    let Some(exception) = eg.exception.as_ref() else {
+        return;
+    };
+    let Some(object) = exception.as_object() else {
+        return;
+    };
+    let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+    let Some(trace) = object
+        .get_property(&trace_key)
+        .and_then(Value::as_array)
+        .cloned()
+    else {
+        return;
+    };
+    let Some(first) = trace.get_value_at(0).and_then(Value::as_array) else {
+        return;
+    };
+    if !first
+        .get_str("function")
+        .and_then(Value::as_str)
+        .is_some_and(|function| function.eq_ignore_ascii_case("__unserialize"))
+    {
+        return;
+    }
+    let Some(file) = first.get_str("file").cloned() else {
+        return;
+    };
+    let Some(line) = first.get_str("line").cloned() else {
+        return;
+    };
+
+    let mut internal = PhpArray::with_hash_capacity(5);
+    for key in ["function", "class", "type", "object", "args"] {
+        if let Some(value) = first.get_str(key) {
+            internal.set_str(key, value.clone());
+        }
+    }
+
+    let mut public = PhpArray::with_hash_capacity(4);
+    public.set_str("file", file);
+    public.set_str("line", line);
+    public.set_str("function", Value::string("unserialize"));
+    if first.get_str("args").is_some() {
+        let count = if source_frame.is_null() {
+            0
+        } else {
+            // SAFETY: parsing and hook dispatch are synchronous beneath the
+            // still-live native unserialize activation supplied to Parser.
+            unsafe { (*source_frame).num_args }
+        };
+        let mut arguments = PhpArray::with_packed_capacity(count as usize);
+        for index in 0..count {
+            arguments.push(argument(source_frame, index));
+        }
+        public.set_str("args", Value::array(arguments));
+    }
+
+    let mut projected = PhpArray::with_packed_capacity(trace.len() + 1);
+    projected.push(Value::array(internal));
+    projected.push(Value::array(public));
+    for entry in trace.values().skip(1) {
+        projected.push(entry.clone());
+    }
+    drop(object);
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property(&trace_key, Value::array(projected));
+    }
+}
+
 /// Native serialization policy belongs to the actual allocated class, not an
 /// incomplete object's retained wire name. Ordinary root classes need no
 /// interface traversal, name allocation, or target-class lookup.
@@ -1590,6 +1669,9 @@ impl<'a> Parser<'a> {
                                 std::slice::from_ref(&serialized),
                             )
                             .map_err(|_| ())?;
+                            if eg.exception.is_some() {
+                                project_unserialize_hook_trace(eg, self.source_frame);
+                            }
                         }
                         None => {
                             let virtual_property = object.as_object().and_then(|object| {

@@ -797,7 +797,7 @@ pub(crate) fn fn_date_time_zone_construct(
     let timezone = arg_str!(ed, 1);
     let Some(description) = parse_timezone(&timezone) else {
         eg.exception = Some(crate::value::make_error_value(
-            "Exception",
+            "DateInvalidTimeZoneException",
             &format!("DateTimeZone::__construct(): Unknown or bad timezone ({timezone})"),
         ));
         return Ok(());

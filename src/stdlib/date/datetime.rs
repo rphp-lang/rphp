@@ -1,6 +1,7 @@
 //! Native DateTime/DateTimeImmutable state and the absolute civil-time API.
 
 use super::*;
+use crate::runtime::DateParseDiagnostics;
 use crate::value::NativeObjectState;
 
 #[derive(Clone, Debug)]
@@ -207,10 +208,8 @@ pub(super) fn parse_timezone_argument(
 }
 
 pub(super) fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<DateTimeState> {
-    let state = value
-        .as_object()
-        .and_then(|object| object.native_object_state::<DateTimeState>().cloned());
-    if state.as_ref().is_some_and(|state| state.initialized) {
+    let state = initialized_state(value);
+    if state.is_some() {
         return state;
     }
     let class = value
@@ -232,6 +231,14 @@ pub(super) fn state_snapshot(value: &Value, eg: &mut ExecutorGlobals) -> Option<
         ),
     ));
     None
+}
+
+pub(super) fn initialized_state(value: &Value) -> Option<DateTimeState> {
+    value
+        .as_object()?
+        .native_object_state::<DateTimeState>()
+        .filter(|state| state.initialized)
+        .cloned()
 }
 
 pub(super) fn install_state(value: &Value, state: DateTimeState) -> bool {
@@ -262,6 +269,25 @@ fn called_date_class(ed: *mut ExecuteData, eg: &ExecutorGlobals, base_class: &st
         .filter(|class_name| eg.class_is_a(class_name, base_class))
         .unwrap_or(base_class)
         .to_string()
+}
+
+fn called_instantiable_date_class(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    base_class: &str,
+) -> Option<String> {
+    let class_name = called_date_class(ed, eg, base_class);
+    if eg
+        .find_class(&class_name)
+        .is_some_and(|class| class.is_abstract)
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Cannot instantiate abstract class {class_name}"),
+        ));
+        return None;
+    }
+    Some(class_name)
 }
 
 pub(super) fn state_format(state: &DateTimeState, format: &str) -> String {
@@ -325,10 +351,21 @@ pub(crate) fn comparison(left: &Value, right: &Value) -> Option<i32> {
     )
 }
 
-fn malformed(eg: &mut ExecutorGlobals, input: &str) {
+fn malformed(eg: &mut ExecutorGlobals, input: &str, diagnostics: &DateParseDiagnostics) {
+    let (position, reason) = diagnostics
+        .errors
+        .first()
+        .map(|(position, reason)| (*position, reason.as_str()))
+        .unwrap_or((0, "The timezone could not be found in the database"));
+    let character = input
+        .get(position..)
+        .and_then(|suffix| suffix.chars().next())
+        .unwrap_or(' ');
     eg.exception = Some(crate::value::make_error_value(
         "DateMalformedStringException",
-        &format!("Failed to parse time string ({input}) at position 0: Could not parse '{input}'"),
+        &format!(
+            "Failed to parse time string ({input}) at position {position} ({character}): {reason}"
+        ),
     ));
 }
 
@@ -344,8 +381,8 @@ fn construct(
             install_state(receiver, parsed.state)
         }
         Err(diagnostics) => {
+            malformed(eg, input, &diagnostics);
             eg.set_date_parse_diagnostics(diagnostics);
-            malformed(eg, input);
             false
         }
     }
@@ -757,6 +794,9 @@ fn create_from_timestamp(
     eg: &mut ExecutorGlobals,
     class_name: &str,
 ) -> Result<(), VmError> {
+    let Some(target_class) = called_instantiable_date_class(ed, eg, class_name) else {
+        return Ok(());
+    };
     let value = arg!(ed, 1).dereferenced();
     let number = value
         .as_long()
@@ -792,8 +832,7 @@ fn create_from_timestamp(
         },
         initialized: true,
     };
-    let class_name = called_date_class(ed, eg, class_name);
-    if let Some(result) = allocate(eg, &class_name, state) {
+    if let Some(result) = allocate(eg, &target_class, state) {
         ret!(rv, result);
     }
     Ok(())
@@ -1057,11 +1096,13 @@ fn create_from_format_handler(
     eg: &mut ExecutorGlobals,
     class_name: &str,
 ) -> Result<(), VmError> {
+    let Some(target_class) = called_instantiable_date_class(ed, eg, class_name) else {
+        return Ok(());
+    };
     let format = arg_str!(ed, 1);
     let input = arg_str!(ed, 2);
     let timezone = parse_timezone_argument(arg_opt!(ed, 3));
-    let class_name = called_date_class(ed, eg, class_name);
-    let result = create_from_format(&class_name, format.as_ref(), input.as_ref(), timezone, eg)
+    let result = create_from_format(&target_class, format.as_ref(), input.as_ref(), timezone, eg)
         .unwrap_or_else(|| Value::bool(false));
     ret!(rv, result)
 }
@@ -1139,10 +1180,10 @@ fn modify_value(
             mutate(receiver, eg, |state| *state = parsed.state)
         }
         Err(diagnostics) => {
-            eg.set_date_parse_diagnostics(diagnostics);
             if throw_on_error {
-                malformed(eg, input);
+                malformed(eg, input, &diagnostics);
             }
+            eg.set_date_parse_diagnostics(diagnostics);
             None
         }
     }
@@ -1458,8 +1499,8 @@ fn create_from_interface(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Option<Value> {
+    let class_name = called_instantiable_date_class(ed, eg, class_name)?;
     let state = state_snapshot(source, eg)?;
-    let class_name = called_date_class(ed, eg, class_name);
     allocate(eg, &class_name, state)
 }
 
