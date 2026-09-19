@@ -316,6 +316,7 @@ fn match_atom(node: &Node, pos: usize, bytes: &[u8], flags: RegexFlags) -> Optio
             };
             matches.then_some(pos)
         }
+        Node::Anchor(Anchor::AbsoluteStart) => (pos == 0).then_some(pos),
         Node::Anchor(Anchor::End) => {
             let matches = if flags.multiline {
                 pos == bytes.len() || bytes[pos] == b'\n'

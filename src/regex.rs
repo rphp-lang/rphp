@@ -60,6 +60,9 @@ enum Node {
         positive: bool,
         inner: Box<Node>,
     },
+    /// Atomic group `(?>...)`: the selected inner path cannot be revisited
+    /// when a later node fails.
+    Atomic(Box<Node>),
     /// PCRE `(*MARK:name)` / `(*:name)`: publish the last successful mark as
     /// the synthetic named capture `MARK` without consuming input.
     Mark(String),
@@ -68,8 +71,9 @@ enum Node {
 
 #[derive(Debug, Clone)]
 enum Anchor {
-    Start, // ^
-    End,   // $
+    Start,         // ^
+    End,           // $
+    AbsoluteStart, // \A
 }
 
 #[derive(Debug, Clone)]
@@ -766,7 +770,8 @@ fn contains_backreference(node: &Node) -> bool {
         Node::Group { inner, .. }
         | Node::Quantifier { inner, .. }
         | Node::Lookahead { inner, .. }
-        | Node::Lookbehind { inner, .. } => contains_backreference(inner),
+        | Node::Lookbehind { inner, .. }
+        | Node::Atomic(inner) => contains_backreference(inner),
         Node::Alternation(nodes) | Node::Sequence(nodes) => {
             nodes.iter().any(contains_backreference)
         }
@@ -948,6 +953,13 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             };
             if ok { match_rest(rest, pos, ctx) } else { None }
         }
+        Node::Anchor(Anchor::AbsoluteStart) => {
+            if pos == 0 {
+                match_rest(rest, pos, ctx)
+            } else {
+                None
+            }
+        }
         Node::Anchor(Anchor::End) => {
             let ok = end_anchor_matches(pos, ctx.chars, ctx.flags);
             if ok { match_rest(rest, pos, ctx) } else { None }
@@ -1065,6 +1077,10 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             } else {
                 None
             }
+        }
+        Node::Atomic(inner) => {
+            let end = match_seq_from(inner, &[], pos, ctx)?;
+            match_rest(rest, end, ctx)
         }
         Node::Mark(name) => {
             let saved = ctx.mark.clone();
@@ -1656,6 +1672,7 @@ impl Parser {
             Some('S') => Ok(Node::Shorthand(Shorthand::NonSpace)),
             Some('b') => Ok(Node::WordBoundary(true)),
             Some('B') => Ok(Node::WordBoundary(false)),
+            Some('A') => Ok(Node::Anchor(Anchor::AbsoluteStart)),
             Some('n') => Ok(Node::Literal('\n')),
             Some('r') => Ok(Node::Literal('\r')),
             Some('t') => Ok(Node::Literal('\t')),
@@ -1893,6 +1910,14 @@ impl Parser {
                     }
                     Ok(inner) // no wrapping Group node
                 }
+                Some('>') => {
+                    self.advance();
+                    let inner = self.parse_alternation()?;
+                    if self.advance() != Some(')') {
+                        return Err("Unterminated atomic group".into());
+                    }
+                    Ok(Node::Atomic(Box::new(inner)))
+                }
                 Some('=') => {
                     // Positive lookahead (?=...)
                     self.advance();
@@ -1946,6 +1971,12 @@ impl Parser {
                         }
                         _ => {
                             // Named group (?<name>...)
+                            if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                                return Err(format!(
+                                    "subpattern name must start with a non-digit at offset {}",
+                                    self.pos
+                                ));
+                            }
                             let mut name = String::new();
                             while let Some(c) = self.peek() {
                                 if c == '>' {
@@ -1991,6 +2022,12 @@ impl Parser {
                     // (?P<name>...)
                     if self.advance() != Some('<') {
                         return Err("Expected '<' or '=' after (?P".into());
+                    }
+                    if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                        return Err(format!(
+                            "subpattern name must start with a non-digit at offset {}",
+                            self.pos
+                        ));
                     }
                     let mut name = String::new();
                     while let Some(c) = self.peek() {
@@ -2169,14 +2206,19 @@ impl Parser {
 /// Parse a PHP-style regex like `/pattern/flags` into (pattern, flags).
 /// Supports paired delimiters: `{...}`, `(...)`, `[...]`, `<...>`.
 pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
-    // PHP ignores whitespace surrounding the delimited expression. This is
-    // commonly used for readable multi-line extended-mode patterns.
-    let input = input.trim();
     let bytes = input.as_bytes();
-    if bytes.is_empty() {
+    // PHP skips ASCII whitespace before looking for the delimiter.  Modifier
+    // parsing is deliberately narrower: only spaces and line endings are
+    // ignored there, while tabs and the other control-space bytes are unknown
+    // modifiers.  `str::trim()` therefore cannot model either boundary.
+    let mut start = 0;
+    while bytes.get(start).is_some_and(u8::is_ascii_whitespace) {
+        start += 1;
+    }
+    if start == bytes.len() {
         return Err("Empty regular expression".into());
     }
-    let open = bytes[0];
+    let open = bytes[start];
     if open.is_ascii_alphanumeric() || open == b'\\' || open == 0 {
         return Err("Delimiter must not be alphanumeric, backslash, or NUL byte".into());
     }
@@ -2189,20 +2231,38 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
     };
 
     let is_paired = matches!(open, b'{' | b'(' | b'[' | b'<');
-    let close_pos = if is_paired {
-        // Paired delimiters: first matching close after open
-        match bytes[1..].iter().position(|&b| b == close) {
-            Some(pos) => pos + 1,
-            None => return Err(format!("No ending delimiter '{}' found", close as char)),
+    let mut depth = 1usize;
+    let mut escaped = false;
+    let mut close_pos = None;
+    for (position, &byte) in bytes.iter().enumerate().skip(start + 1) {
+        if escaped {
+            escaped = false;
+            continue;
         }
-    } else {
-        // Symmetric delimiters: last occurrence (standard PHP behavior)
-        match bytes[1..].iter().rposition(|&b| b == close) {
-            Some(pos) => pos + 1,
-            None => return Err(format!("No ending delimiter '{}' found", close as char)),
+        if byte == b'\\' {
+            escaped = true;
+            continue;
         }
-    };
-    let pattern = &input[1..close_pos];
+        if is_paired && byte == open {
+            depth += 1;
+            continue;
+        }
+        if byte == close {
+            depth -= 1;
+            if depth == 0 {
+                close_pos = Some(position);
+                break;
+            }
+        }
+    }
+    let close_pos = close_pos.ok_or_else(|| {
+        if is_paired {
+            format!("No ending matching delimiter '{}' found", close as char)
+        } else {
+            format!("No ending delimiter '{}' found", close as char)
+        }
+    })?;
+    let pattern = &input[start + 1..close_pos];
     let flags_str = &input[close_pos + 1..];
 
     let mut flags = RegexFlags::default();
@@ -2226,6 +2286,8 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             'A' | 'J' | 'X' | 'n' | 'r' => {
                 unsupported_modifier.get_or_insert(ch);
             }
+            ' ' | '\n' | '\r' => {}
+            '\0' => return Err("NUL byte is not a valid modifier".into()),
             _ => return Err(format!("Unknown modifier '{}'", ch)),
         }
     }

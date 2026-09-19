@@ -486,6 +486,16 @@ fn test_lookahead() {
 }
 
 #[test]
+fn test_absolute_start_anchor_and_atomic_group() {
+    let start = Regex::new(r"\A.", RegexFlags::default()).unwrap();
+    assert!(start.captures("ab").is_some());
+
+    let atomic = Regex::new(r"(?>ab|a)b", RegexFlags::default()).unwrap();
+    assert!(atomic.captures("abb").is_some());
+    assert!(atomic.captures("ab").is_none());
+}
+
+#[test]
 fn test_php_delimiter() {
     let (pattern, flags) = parse_php_regex("/hello/i").unwrap();
     assert_eq!(pattern, "hello");
@@ -497,6 +507,37 @@ fn test_php_delimiter_ignores_surrounding_whitespace() {
     let (pattern, flags) = parse_php_regex("\n    / a+ /x   \n").unwrap();
     assert_eq!(pattern, " a+ ");
     assert!(flags.extended);
+}
+
+#[test]
+fn php_delimiter_scanner_preserves_escaped_and_nested_boundaries() {
+    let (pattern, _) = parse_php_regex(r"@\@\@@").unwrap();
+    assert_eq!(pattern, r"\@\@");
+
+    let (pattern, _) = parse_php_regex("{a{b}c}").unwrap();
+    assert_eq!(pattern, "a{b}c");
+
+    let (pattern, _) = parse_php_regex(r"{a\}b}").unwrap();
+    assert_eq!(pattern, r"a\}b");
+
+    assert_eq!(
+        parse_php_regex("{").unwrap_err(),
+        "No ending matching delimiter '}' found"
+    );
+}
+
+#[test]
+fn php_modifier_scanner_ignores_only_php_line_spacing() {
+    let (_, flags) = parse_php_regex("/a/  S\r\n").unwrap();
+    assert!(!flags.unicode);
+    assert_eq!(
+        parse_php_regex("/a/\t").unwrap_err(),
+        "Unknown modifier '\t'"
+    );
+    assert_eq!(
+        parse_php_regex("/a/\0i").unwrap_err(),
+        "NUL byte is not a valid modifier"
+    );
 }
 
 // ── Compiled regex cache ──────────────────────────────────────────────
@@ -662,6 +703,18 @@ fn test_named_group_angle_syntax() {
     let re = Regex::new("(?<word>\\w+)", RegexFlags::default()).unwrap();
     let caps = re.captures("hello").unwrap();
     assert_eq!(caps.get_named("word").unwrap().as_str("hello"), "hello");
+}
+
+#[test]
+fn named_group_names_cannot_start_with_a_digit() {
+    assert_eq!(
+        Regex::new("(?P<3>)", RegexFlags::default()).unwrap_err(),
+        "subpattern name must start with a non-digit at offset 4"
+    );
+    assert_eq!(
+        Regex::new("(?<7>)", RegexFlags::default()).unwrap_err(),
+        "subpattern name must start with a non-digit at offset 3"
+    );
 }
 
 // ── P1: Unknown modifiers are rejected ─────────────────────────────────

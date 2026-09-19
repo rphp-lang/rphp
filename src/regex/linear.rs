@@ -197,6 +197,7 @@ fn match_atom(node: &Node, pos: usize, chars: &[char], flags: RegexFlags) -> Opt
             };
             matches.then_some(pos)
         }
+        Node::Anchor(Anchor::AbsoluteStart) => (pos == 0).then_some(pos),
         Node::Anchor(Anchor::End) => end_anchor_matches(pos, chars, flags).then_some(pos),
         Node::WordBoundary(positive) => {
             (is_word_boundary(chars, pos, flags.unicode) == *positive).then_some(pos)

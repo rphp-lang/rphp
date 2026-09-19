@@ -47,8 +47,11 @@ fn preg_error_message(code: u8) -> &'static str {
 fn rendered_compile_error(pattern: &str, error: &str) -> String {
     if matches!(
         error,
-        "Empty regular expression" | "Delimiter must not be alphanumeric, backslash, or NUL byte"
+        "Empty regular expression"
+            | "Delimiter must not be alphanumeric, backslash, or NUL byte"
+            | "NUL byte is not a valid modifier"
     ) || error.starts_with("No ending delimiter")
+        || error.starts_with("No ending matching delimiter")
         || error.starts_with("Unknown modifier")
     {
         return error.to_string();
@@ -440,7 +443,7 @@ fn resolve_array_callback(
     Ok(resolved)
 }
 
-fn replace_callback_value(
+pub(super) fn replace_callback_value(
     value: &Value,
     regex: &Regex,
     callback: &ResolvedCallback,

@@ -22746,12 +22746,31 @@ fn fn_preg_match(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let pattern_str = arg_str!(ed, 0);
-    let subject = arg_str!(ed, 1);
-    let flags = arg_opt!(ed, 3).map_or(0, Value::to_long_val);
+    let Some(pattern_str) = typed_internal_string_argument(ed, eg, "preg_match", 0, "pattern")?
+    else {
+        return Ok(());
+    };
+    let Some(subject) = typed_internal_string_argument(ed, eg, "preg_match", 1, "subject")? else {
+        return Ok(());
+    };
+    let flags = if arg_opt!(ed, 3).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "preg_match", 3, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
     let offset_capture = flags & PREG_OFFSET_CAPTURE_RESULT != 0;
     let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL_RESULT != 0;
-    let raw_offset = arg_opt!(ed, 4).map_or(0, Value::to_long_val);
+    let raw_offset = if arg_opt!(ed, 4).is_some() {
+        let Some(offset) = typed_internal_int_argument(ed, eg, "preg_match", 4, "offset")? else {
+            return Ok(());
+        };
+        offset
+    } else {
+        0
+    };
 
     let has_matches = {
         let raw = unsafe { (*ed).cv(2) };
@@ -22767,7 +22786,7 @@ fn fn_preg_match(
             rv,
             eg,
             &re,
-            subject,
+            Cow::Owned(subject),
             raw_offset,
             has_matches,
             offset_capture,
@@ -22873,17 +22892,25 @@ fn preg_replace_strings(
     Ok((Some(result), count))
 }
 
-fn preg_replace_argument_strings(value: &Value) -> (Vec<String>, bool) {
+fn preg_replace_argument_strings(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<(Vec<String>, bool)>, VmError> {
     if let Some(values) = value.as_array() {
-        (
-            values
-                .iter()
-                .map(|(_, value)| value.dereferenced().echo_to_string())
-                .collect(),
-            true,
-        )
+        let mut strings = Vec::with_capacity(values.len());
+        for (_, value) in values.iter() {
+            let Some(value) = internal_value_to_string(ed, eg, value)? else {
+                return Ok(None);
+            };
+            strings.push(value);
+        }
+        Ok(Some((strings, true)))
     } else {
-        (vec![value.dereferenced().echo_to_string()], false)
+        Ok(Some((
+            vec![value.as_str().unwrap_or_default().to_string()],
+            false,
+        )))
     }
 }
 
@@ -22893,7 +22920,40 @@ fn fn_preg_replace(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let limit = arg_opt!(ed, 3).map_or(-1, Value::to_long_val);
+    let Some(pattern_value) =
+        typed_internal_array_or_string_argument(ed, eg, "preg_replace", 0, "pattern")?
+    else {
+        return Ok(());
+    };
+    let Some(replacement_value) =
+        typed_internal_array_or_string_argument(ed, eg, "preg_replace", 1, "replacement")?
+    else {
+        return Ok(());
+    };
+    let Some(subject_value) =
+        typed_internal_array_or_string_argument(ed, eg, "preg_replace", 2, "subject")?
+    else {
+        return Ok(());
+    };
+    if replacement_value.as_array().is_some() && pattern_value.as_array().is_none() {
+        typed_internal_argument_error(
+            eg,
+            "preg_replace",
+            &pattern_value,
+            1,
+            "pattern",
+            "array when argument #2 ($replacement) is an array",
+        );
+        return Ok(());
+    }
+    let limit = if arg_opt!(ed, 3).is_some() {
+        let Some(limit) = typed_internal_int_argument(ed, eg, "preg_replace", 3, "limit")? else {
+            return Ok(());
+        };
+        limit
+    } else {
+        -1
+    };
     let limit = if limit < 0 {
         usize::MAX
     } else {
@@ -22906,18 +22966,18 @@ fn fn_preg_replace(
     // but scalar strings can continue to borrow directly from their Values.
     if limit == usize::MAX
         && !has_count
-        && arg!(ed, 0).as_array().is_none()
-        && arg!(ed, 1).as_array().is_none()
-        && arg!(ed, 2).as_array().is_none()
+        && pattern_value.as_array().is_none()
+        && replacement_value.as_array().is_none()
+        && subject_value.as_array().is_none()
     {
-        let pattern = arg_str!(ed, 0);
-        let replacement = arg_str!(ed, 1);
-        let subject = arg_str!(ed, 2);
+        let pattern = pattern_value.as_str().unwrap_or_default();
+        let replacement = replacement_value.as_str().unwrap_or_default();
+        let subject = subject_value.as_str().unwrap_or_default();
         let Some(regex) = pcre::compile_pattern(eg, ed, "preg_replace", &pattern)? else {
             ret!(rv, Value::null());
         };
         let subject = if regex.is_unicode() {
-            match pcre::prepare_utf_subject(arg!(ed, 2), subject, 0) {
+            match pcre::prepare_utf_subject(&subject_value, Cow::Borrowed(subject), 0) {
                 Ok(subject) => subject,
                 Err(error) => {
                     pcre::set_last_error(eg, error);
@@ -22925,23 +22985,28 @@ fn fn_preg_replace(
                 }
             }
         } else {
-            subject
+            Cow::Borrowed(subject)
         };
         let result = regex.replace_all(&subject, &replacement);
         ret!(rv, Value::string(result));
     }
 
-    let (patterns, _) = preg_replace_argument_strings(arg!(ed, 0));
-    let (replacements, replacement_is_array) = preg_replace_argument_strings(arg!(ed, 1));
+    let Some((patterns, _)) = preg_replace_argument_strings(ed, eg, &pattern_value)? else {
+        return Ok(());
+    };
+    let Some((replacements, replacement_is_array)) =
+        preg_replace_argument_strings(ed, eg, &replacement_value)?
+    else {
+        return Ok(());
+    };
     let mut total_count = 0;
 
-    if let Some(subjects) = arg!(ed, 2).as_array() {
-        let subjects: Vec<_> = subjects
-            .iter()
-            .map(|(key, value)| (key, value.dereferenced().echo_to_string()))
-            .collect();
+    if let Some(subjects) = subject_value.as_array() {
         let mut result = PhpArray::new();
-        for (key, subject) in subjects {
+        for (key, value) in subjects.iter() {
+            let Some(subject) = internal_value_to_string(ed, eg, value)? else {
+                return Ok(());
+            };
             let (replaced, count) = preg_replace_strings(
                 eg,
                 ed,
@@ -22964,19 +23029,14 @@ fn fn_preg_replace(
                 ArrayKey::String(key) => result.set_str(&key, Value::string(replaced)),
             }
         }
-        copy_array_key_provenance(
-            arg!(ed, 2)
-                .as_array()
-                .expect("preg_replace subject array was matched above"),
-            &result,
-        );
+        copy_array_key_provenance(subjects, &result);
         if has_count {
             arg_mut!(ed, 4, Value::long(total_count as i64));
         }
         ret!(rv, Value::array(result));
     }
 
-    let subject = arg!(ed, 2).dereferenced().echo_to_string();
+    let subject = subject_value.as_str().unwrap_or_default();
     let (result, count) = preg_replace_strings(
         eg,
         ed,
@@ -22984,7 +23044,7 @@ fn fn_preg_replace(
         &patterns,
         &replacements,
         replacement_is_array,
-        &subject,
+        subject,
         limit,
     )?;
     let Some(result) = result else {
@@ -31963,9 +32023,31 @@ fn fn_preg_match_all(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let pattern_str = arg_str!(ed, 0);
-    let subject = arg_str!(ed, 1);
-    let flags = arg_opt!(ed, 3).map(|v| v.to_long_val()).unwrap_or(0);
+    let Some(pattern_str) = typed_internal_string_argument(ed, eg, "preg_match_all", 0, "pattern")?
+    else {
+        return Ok(());
+    };
+    let Some(subject) = typed_internal_string_argument(ed, eg, "preg_match_all", 1, "subject")?
+    else {
+        return Ok(());
+    };
+    let flags = if arg_opt!(ed, 3).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "preg_match_all", 3, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
+    let raw_offset = if arg_opt!(ed, 4).is_some() {
+        let Some(offset) = typed_internal_int_argument(ed, eg, "preg_match_all", 4, "offset")?
+        else {
+            return Ok(());
+        };
+        offset
+    } else {
+        0
+    };
     let offset_capture = flags & PREG_OFFSET_CAPTURE_RESULT != 0;
     let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL_RESULT != 0;
 
@@ -31978,8 +32060,21 @@ fn fn_preg_match_all(
         ret!(rv, Value::bool(false));
     };
 
+    let subject_len = subject.len() as i64;
+    if raw_offset > subject_len {
+        if has_matches {
+            pcre_clear_matches_argument(ed, 2);
+        }
+        pcre::set_last_error(eg, 1);
+        ret!(rv, Value::bool(false));
+    }
+    let offset = if raw_offset < 0 {
+        (subject_len + raw_offset).max(0)
+    } else {
+        raw_offset
+    } as usize;
     let subject = if re.is_unicode() {
-        match pcre::prepare_utf_subject(arg!(ed, 1), subject, 0) {
+        match pcre::prepare_utf_subject(arg!(ed, 1), Cow::Owned(subject), offset) {
             Ok(subject) => subject,
             Err(error) => {
                 if has_matches {
@@ -31991,7 +32086,7 @@ fn fn_preg_match_all(
             }
         }
     } else {
-        subject
+        Cow::Owned(subject[offset..].to_string())
     };
 
     if !has_matches {
@@ -32019,7 +32114,7 @@ fn fn_preg_match_all(
                     let capture = pcre_capture_value(
                         caps.get(index),
                         &subject,
-                        0,
+                        offset,
                         offset_capture,
                         unmatched_as_null,
                     );
@@ -32062,7 +32157,7 @@ fn fn_preg_match_all(
             let capture = pcre_capture_value(
                 caps.get(index),
                 &subject,
-                0,
+                offset,
                 offset_capture,
                 unmatched_as_null,
             );
@@ -32108,17 +32203,36 @@ fn fn_preg_split(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let pattern_str = arg_str!(ed, 0);
-    let subject = arg_str!(ed, 1);
-    let limit = arg_opt!(ed, 2).map(|v| v.to_long_val()).unwrap_or(-1);
-    let flags = arg_opt!(ed, 3).map(Value::to_long_val).unwrap_or(0);
+    let Some(pattern_str) = typed_internal_string_argument(ed, eg, "preg_split", 0, "pattern")?
+    else {
+        return Ok(());
+    };
+    let Some(subject) = typed_internal_string_argument(ed, eg, "preg_split", 1, "subject")? else {
+        return Ok(());
+    };
+    let limit = if arg_opt!(ed, 2).is_some() {
+        let Some(limit) = typed_internal_int_argument(ed, eg, "preg_split", 2, "limit")? else {
+            return Ok(());
+        };
+        limit
+    } else {
+        -1
+    };
+    let flags = if arg_opt!(ed, 3).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "preg_split", 3, "flags")? else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
+    };
 
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_split", &pattern_str)? else {
         ret!(rv, Value::bool(false));
     };
 
     let subject = if re.is_unicode() {
-        match pcre::prepare_utf_subject(arg!(ed, 1), subject, 0) {
+        match pcre::prepare_utf_subject(arg!(ed, 1), Cow::Owned(subject), 0) {
             Ok(subject) => subject,
             Err(error) => {
                 pcre::set_last_error(eg, error);
@@ -32126,7 +32240,7 @@ fn fn_preg_split(
             }
         }
     } else {
-        subject
+        Cow::Owned(subject)
     };
 
     let mut arr = PhpArray::new();
@@ -32183,7 +32297,11 @@ fn fn_preg_replace_callback(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let pattern_str = arg_str!(ed, 0);
+    let Some(pattern_value) =
+        typed_internal_array_or_string_argument(ed, eg, "preg_replace_callback", 0, "pattern")?
+    else {
+        return Ok(());
+    };
     let callback = arg!(ed, 1).clone();
     let resolved = match resolve_callback_at_callsite_checked(&callback, eg, ed)? {
         Some(resolved) => resolved,
@@ -32201,53 +32319,108 @@ fn fn_preg_replace_callback(
             return Ok(());
         }
     };
-    let subject = if arg!(ed, 2).as_array().is_some() {
-        arg_str!(ed, 2).into_owned()
-    } else {
-        let Some(subject) = typed_internal_string_argument_expected(
-            ed,
-            eg,
-            "preg_replace_callback",
-            2,
-            "subject",
-            "array|string",
-        )?
+    let Some(subject_value) =
+        typed_internal_array_or_string_argument(ed, eg, "preg_replace_callback", 2, "subject")?
+    else {
+        return Ok(());
+    };
+    let limit = if arg_opt!(ed, 3).is_some() {
+        let Some(limit) = typed_internal_int_argument(ed, eg, "preg_replace_callback", 3, "limit")?
         else {
             return Ok(());
         };
-        subject
+        limit
+    } else {
+        -1
     };
-    let limit = arg_opt!(ed, 3).map_or(-1, Value::to_long_val);
     let limit = if limit < 0 {
         usize::MAX
     } else {
         usize::try_from(limit).unwrap_or(usize::MAX)
     };
     let has_count = arg_opt!(ed, 4).is_some();
-    let flags = arg_opt!(ed, 5).map_or(0, Value::to_long_val);
-
-    let Some(re) = pcre::compile_pattern(eg, ed, "preg_replace_callback", &pattern_str)? else {
-        ret!(rv, Value::null());
+    let flags = if arg_opt!(ed, 5).is_some() {
+        let Some(flags) = typed_internal_int_argument(ed, eg, "preg_replace_callback", 5, "flags")?
+        else {
+            return Ok(());
+        };
+        flags
+    } else {
+        0
     };
+    let mut total_count = 0usize;
 
-    let Some((result, replacements)) = regex_callback::replace(
-        &re,
-        subject,
-        &resolved,
-        limit,
-        flags & 512 != 0,
-        flags & 256 != 0,
-        eg,
-    )?
-    else {
-        return Ok(());
-    };
+    if let Some(subjects) = subject_value.as_array() {
+        let Some((patterns, _)) = preg_replace_argument_strings(ed, eg, &pattern_value)? else {
+            return Ok(());
+        };
+        let mut regexes = Vec::with_capacity(patterns.len());
+        for pattern in &patterns {
+            let Some(regex) = pcre::compile_pattern(eg, ed, "preg_replace_callback", pattern)?
+            else {
+                if has_count {
+                    arg_mut!(ed, 4, Value::long(total_count as i64));
+                }
+                ret!(rv, Value::null());
+            };
+            regexes.push(regex);
+        }
 
-    if has_count {
-        arg_mut!(ed, 4, Value::long(replacements as i64));
+        let mut values = Vec::with_capacity(subjects.len());
+        for (key, source) in subjects.iter() {
+            let Some(mut value) = internal_value_to_string_value(ed, eg, source)? else {
+                return Ok(());
+            };
+            for regex in &regexes {
+                let Some((replaced, count)) =
+                    pcre::replace_callback_value(&value, regex, &resolved, limit, flags, ed, eg)?
+                else {
+                    return Ok(());
+                };
+                value = replaced;
+                total_count += count;
+            }
+            values.push((key, value));
+        }
+
+        let mut result = PhpArray::new();
+        for (key, value) in values {
+            match key {
+                ArrayKey::Int(key) => result.set_int(key, value),
+                ArrayKey::String(key) => result.set_str(&key, value),
+            }
+        }
+        copy_array_key_provenance(subjects, &result);
+        if has_count {
+            arg_mut!(ed, 4, Value::long(total_count as i64));
+        }
+        ret!(rv, Value::array(result));
     }
 
-    ret!(rv, Value::string(result));
+    let Some((patterns, _)) = preg_replace_argument_strings(ed, eg, &pattern_value)? else {
+        return Ok(());
+    };
+    let mut result = subject_value;
+    for pattern in &patterns {
+        let Some(regex) = pcre::compile_pattern(eg, ed, "preg_replace_callback", pattern)? else {
+            if has_count {
+                arg_mut!(ed, 4, Value::long(total_count as i64));
+            }
+            ret!(rv, Value::null());
+        };
+        let Some((replaced, count)) =
+            pcre::replace_callback_value(&result, &regex, &resolved, limit, flags, ed, eg)?
+        else {
+            return Ok(());
+        };
+        result = replaced;
+        total_count += count;
+    }
+
+    if has_count {
+        arg_mut!(ed, 4, Value::long(total_count as i64));
+    }
+    ret!(rv, result);
 }
 
 #[cfg(any(

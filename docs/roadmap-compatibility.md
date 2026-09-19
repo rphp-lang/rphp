@@ -36,6 +36,23 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `pcre-public-boundaries` checkpoint over `49aa752a` reduces the measured
+supported failure debt from **267 to 251**, with **16 new ext/pcre passes and no
+lost pass**. The identical 165-case upstream runner packet moves from 89/51 to
+105/35 pass/fail; its one `--EXTENSIONS-- pcre` precondition skips on both sides,
+while a task-scoped copy removing only that precondition passes byte-exact on
+both sides. The compatible 165-case accounting is therefore 90 to 106 passes,
+51 to 35 failures, with the other statuses unchanged. The 7,174-case stable
+core remains exactly 6,536/246/182/210 with the same 6,536-path pass set.
+Delimiter and modifier parsing, PCRE `\A`/atomic/named-group boundaries and
+typed match/split/replace/callback inputs now follow PHP 8.5; engine-wide JIT
+and backtracking equivalence remain outside this checkpoint. Continue the
+supported-failure sweep from **251 to zero**, selecting another shared-cause
+cluster rather than a fixture-specific fix. Performance optimization remains
+deferred to the aggregate sweep boundary by user direction.
+
+### Preceding declaration runtime checkpoint
+
 The accepted `declaration-runtime-boundaries` checkpoint over `c704a1f3` adds
 **10 PHP 8.5 passes without losses**. The 8,258-case supported ledger is now
 **7,518 pass / 267 fail / 194 skip / 276 unsupported / three XFAIL**.
@@ -48,7 +65,7 @@ all-target compilation, exact no-loss families, Composer/Symfony S0--S3 and
 unsafe policy pass. The unsafe ratchet remains 1,626/289 and performance work
 remains deferred to the aggregate sweep boundary.
 
-Continue the supported-failure sweep from **267 to zero**. Re-cluster the
+The preceding supported-failure sweep started from **267**. Re-cluster the
 fresh 238 Zend/lang failures and 21 failures in other admitted supported
 families by common root cause, then take the largest coherent safe slice.
 Prefer a 10--30-case train, but do not withhold a smaller independently green

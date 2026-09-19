@@ -7,6 +7,32 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `pcre-public-boundaries` checkpoint over `49aa752a` adds **16 PHP 8.5
+ext/pcre passes without loss**, reducing measured supported failures from
+**267 to 251**. On an identical 165-case upstream runner packet, parent and
+candidate are 89/51/10/14/1 and 105/35/10/14/1
+(pass/fail/skip/unsupported/timeout). The one `pcre_reentrancy` extension
+precondition skips equally on both; removing only that precondition in a
+task-scoped copy gives exact parent and candidate passes, preserving the
+previously accepted pass. The normalized accounting is 90 to 106 passes,
+51 to 35 failures and no status loss. The stable 7,174-case core is
+byte-identical at 6,536/246/182/210, with no timeout or crash. Full default
+Cargo tests, all-features/all-targets compilation, the Symfony Routing S1 gate,
+focused PCRE regressions and the unsafe ratchet pass. Performance is deliberately
+deferred to the larger sweep boundary.
+
+Evidence SHA-256: ext/pcre parent/candidate manifests
+`4c8de7348a60102b23796996d32e58126764a04e49e4e170b619c1101588d4dd` /
+`2afb06adb73a9c499fc5be231d32ef90fb86cb7eb22a2aa304c523925955a3b3`;
+normalized reentrancy parent/candidate
+`19ebf637da97cfa469a9c4e20e8ae4d68e69d009d5de46ca8f28e071f8c72c59` /
+`04ef28980f3dc5c8be0264067484a5921ea8ec48d4ff74229a95240ba0ff6608`;
+stable core manifest/pass set
+`aad25cd7f2552bbe9f8fd0d135e86d23164041e64535c57ce03e8436d839795e` /
+`3442a29c3df4110cc85fd07e823596ad1a8880751bebbd2046021084ba081eb4`.
+
+### Preceding declaration runtime checkpoint
+
 The accepted `declaration-runtime-boundaries` checkpoint over `c704a1f3`
 adds **10 exact PHP 8.5 passes without losses**. The shared declaration and
 runtime slice covers direct versus inherited `Throwable` implementation,
