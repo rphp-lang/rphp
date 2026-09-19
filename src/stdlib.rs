@@ -30255,6 +30255,20 @@ pub fn startup_precision(settings: &[(String, String)]) -> i32 {
         .unwrap_or(14)
 }
 
+/// PHP validates the final command-line date.timezone value during module
+/// startup, before request parsing or execution.  Keep the diagnostic outside
+/// the request error-handler pipeline and fall back to UTC on rejection.
+pub fn startup_date_timezone_warning(settings: &[(String, String)]) -> Option<String> {
+    let value = settings
+        .iter()
+        .rev()
+        .find(|(name, _)| name.eq_ignore_ascii_case("date.timezone"))?
+        .1
+        .as_str();
+    (!date::is_supported_timezone(value))
+        .then(|| format!("Invalid date.timezone value '{value}', using 'UTC' instead"))
+}
+
 /// Apply the admitted request-startup INI subset after compilation. Unknown
 /// CLI definitions remain accepted by the CLI but are not published through
 /// `ini_get()` until their observable runtime contract is implemented.

@@ -2885,6 +2885,42 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     }
     eg.register_internal_method_contract(
         "DateTimeZone",
+        "__construct",
+        false,
+        1,
+        &["timezone"],
+        vec![ParamTypeHint::String],
+        ParamTypeHint::None,
+        &[None],
+        false,
+    );
+    eg.register_internal_method_contract(
+        "DateTimeZone",
+        "getName",
+        false,
+        0,
+        &[],
+        vec![],
+        ParamTypeHint::String,
+        &[],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTimeZone",
+        "getLocation",
+        false,
+        0,
+        &[],
+        vec![],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ]),
+        &[],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTimeZone",
         "getTransitions",
         false,
         0,
@@ -2911,6 +2947,28 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         &[Some("DateTimeZone::ALL"), Some("null")],
         true,
     );
+    eg.register_internal_method_contract(
+        "DateTimeZone",
+        "listAbbreviations",
+        true,
+        0,
+        &[],
+        vec![],
+        ParamTypeHint::Array,
+        &[],
+        true,
+    );
+    eg.register_internal_method_contract(
+        "DateTimeZone",
+        "__serialize",
+        false,
+        0,
+        &[],
+        vec![],
+        ParamTypeHint::Array,
+        &[],
+        false,
+    );
 
     eg.register_class(empty_internal_type(
         "DateTimeInterface",
@@ -2922,23 +2980,162 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(empty_internal_type("DateInterval", vec![], false, false))
         .unwrap();
     let mut date_time_zone = empty_internal_type("DateTimeZone", vec![], false, false);
-    date_time_zone.constants.push(ClassConstantDefinition {
-        attributes: Vec::new(),
-        name: "ALL".to_string(),
-        value: crate::builtin_class_constant("DateTimeZone", "ALL")
-            .expect("DateTimeZone::ALL has a builtin value"),
-        source_file: String::new(),
-        evaluation_error: None,
-        source_expression: None,
-        callable_factory: None,
-        evaluation_scope: None,
-        value_is_deferred: false,
-        visibility: Visibility::Public,
-        declaring_class: "DateTimeZone".to_string(),
-        type_hint: ParamTypeHint::Int,
-        is_final: false,
-    });
+    for name in [
+        "AFRICA",
+        "AMERICA",
+        "ANTARCTICA",
+        "ARCTIC",
+        "ASIA",
+        "ATLANTIC",
+        "AUSTRALIA",
+        "EUROPE",
+        "INDIAN",
+        "PACIFIC",
+        "UTC",
+        "ALL",
+        "ALL_WITH_BC",
+        "PER_COUNTRY",
+    ] {
+        date_time_zone.constants.push(ClassConstantDefinition {
+            attributes: Vec::new(),
+            name: name.to_string(),
+            value: crate::builtin_class_constant("DateTimeZone", name)
+                .expect("DateTimeZone constant has a builtin value"),
+            source_file: String::new(),
+            evaluation_error: None,
+            source_expression: None,
+            callable_factory: None,
+            evaluation_scope: None,
+            value_is_deferred: false,
+            visibility: Visibility::Public,
+            declaring_class: "DateTimeZone".to_string(),
+            type_hint: ParamTypeHint::Int,
+            is_final: false,
+        });
+    }
     eg.register_class(date_time_zone).unwrap();
+    reg_method!(
+        "DateTimeZone",
+        "__construct",
+        super::date::fn_date_time_zone_construct,
+        2,
+        1,
+        "timezone"
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone constructor registered");
+        function.common.sig.param_type_hints = vec![ParamTypeHint::String];
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![None], "date");
+    }
+    reg_method!(
+        "DateTimeZone",
+        "getName",
+        super::date::fn_date_time_zone_get_name,
+        1,
+        0
+    );
+    {
+        let function = funcs.last_mut().expect("DateTimeZone::getName registered");
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
+    }
+    reg_method!(
+        "DateTimeZone",
+        "getLocation",
+        super::date::fn_date_time_zone_get_location,
+        1,
+        0
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::getLocation registered");
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
+    }
+    reg_method!(
+        "DateTimeZone",
+        "getTransitions",
+        super::date::fn_date_time_zone_get_transitions,
+        3,
+        0,
+        "timestampBegin",
+        "timestampEnd"
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::getTransitions registered");
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Int, ParamTypeHint::Int];
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![
+                Some(Value::long(i64::MIN)),
+                Some(Value::long(i64::from(i32::MAX))),
+            ],
+            "date",
+        );
+    }
+    reg_static_method!(
+        "DateTimeZone",
+        "listAbbreviations",
+        super::date::fn_date_time_zone_list_abbreviations,
+        1,
+        0,
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::listAbbreviations registered");
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
+    }
+    reg_static_method!(
+        "DateTimeZone",
+        "listIdentifiers",
+        super::date::fn_date_time_zone_list_identifiers,
+        3,
+        0,
+        "timezoneGroup",
+        "countryCode"
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::listIdentifiers registered");
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::Int,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ];
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![Some(Value::long(0x07ff)), Some(Value::null())],
+            "date",
+        );
+    }
+    reg_method!(
+        "DateTimeZone",
+        "__serialize",
+        super::date::fn_date_time_zone_serialize,
+        1,
+        0
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::__serialize registered");
+        function.common.sig.return_type_hint = ParamTypeHint::Array;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
+    }
     eg.register_class(empty_internal_type(
         "DateTime",
         vec!["DateTimeInterface".to_string()],

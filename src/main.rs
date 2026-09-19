@@ -208,6 +208,9 @@ fn main() {
         }
         _ => {}
     }
+    if let Some(warning) = stdlib::startup_date_timezone_warning(&ini_settings) {
+        eprintln!("PHP Warning:  PHP Startup: {warning} in Unknown on line 0");
+    }
 
     let source_directory = std::env::current_dir()
         .map(|path| path.to_string_lossy().into_owned())
