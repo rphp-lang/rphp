@@ -818,14 +818,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "data",
         "options"
     );
-    reg!(
-        "token_get_all",
-        tokenizer::token_get_all,
-        2,
-        1,
-        "code",
-        "flags"
-    );
+    funcs.extend(tokenizer::register_functions(eg));
     reg_typed!(
         "substr",
         fn_substr,

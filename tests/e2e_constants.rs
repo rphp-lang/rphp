@@ -2537,9 +2537,9 @@ echo 'version:', PHP_VERSION, ':', zend_version(), "\n";
 "#,
         ),
         concat!(
-            "initial:Core:1:1\n",
+            "initial:Core,tokenizer:1:1\n",
             "flat:1:12\n",
-            "groups:Core,user:1:12\n",
+            "groups:Core,tokenizer,user:1:12\n",
             "user-order:INTROSPECTION_SECOND,INTROSPECTION_FIRST\n",
             "2:Constant PHP_VERSION already defined, this will be an error in PHP 9\n",
             "bool(false)\n",

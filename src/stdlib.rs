@@ -70,7 +70,7 @@ mod regex_callback;
 mod registry;
 mod scalar_float;
 mod serialization;
-mod tokenizer;
+pub(crate) mod tokenizer;
 
 pub use registry::register_stdlib;
 
@@ -13541,15 +13541,25 @@ fn fn_get_defined_constants(
     };
     let builtins = builtin_constants_value(eg);
     let user = user_constants_value(eg);
+    let mut tokenizer_constants = PhpArray::new();
+    for (name, value) in tokenizer::TOKEN_CONSTANTS {
+        tokenizer_constants.set_str(name, Value::long(*value));
+    }
     if categorize {
         let mut result = PhpArray::new();
         result.set_str("Core", Value::array(builtins));
+        result.set_str("tokenizer", Value::array(tokenizer_constants));
         if !user.is_empty() {
             result.set_str("user", Value::array(user));
         }
         ret!(rv, Value::array(result));
     }
     let mut result = builtins;
+    for (key, value) in tokenizer_constants.iter() {
+        if let ArrayKey::String(name) = key {
+            result.set_str(&name, value.clone());
+        }
+    }
     for (key, value) in user.iter() {
         if let ArrayKey::String(name) = key {
             result.set_str(&name, value.clone());
@@ -30246,6 +30256,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "gettext",
     #[cfg(target_os = "linux")]
     "iconv",
+    "tokenizer",
 ];
 
 #[inline(always)]
@@ -30254,7 +30265,7 @@ fn admitted_extension_name(bytes: &[u8]) -> bool {
     // admitted extensions. Actual name comparisons are explicit pay-use work
     // and stay out of the hot caller's instruction footprint.
     let admitted_length = match bytes.len() {
-        8 => true,
+        8 | 9 => true,
         #[cfg(target_os = "linux")]
         7 => true,
         #[cfg(target_os = "linux")]

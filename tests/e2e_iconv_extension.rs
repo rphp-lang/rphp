@@ -53,7 +53,10 @@ echo "\n", ICONV_IMPL, '|', ICONV_VERSION, '|', ICONV_MIME_DECODE_STRICT,
     } else {
         assert_eq!(&identity[..2], ["unknown", "unknown"]);
     }
-    assert_eq!(&identity[2..], ["12", "11", "calendar,gettext,iconv"]);
+    assert_eq!(
+        &identity[2..],
+        ["12", "11", "calendar,gettext,iconv,tokenizer"]
+    );
 }
 
 #[test]
