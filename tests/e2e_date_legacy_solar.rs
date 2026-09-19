@@ -26,6 +26,7 @@ fn solar_functions_share_the_independent_astronomy_core() {
     assert_eq!(
         run_php(
             r#"<?php
+error_reporting(E_ALL & ~E_DEPRECATED);
 date_default_timezone_set('Europe/Prague');
 foreach ([SUNFUNCS_RET_TIMESTAMP, SUNFUNCS_RET_STRING, SUNFUNCS_RET_DOUBLE] as $format) {
     $rise = date_sunrise(1165881600, $format, 31.7667, 35.2333, 90.833333, 2.0);

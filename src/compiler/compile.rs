@@ -14379,6 +14379,9 @@ impl Compiler {
                                 | "FILTER_SANITIZE_STRING"
                                 | "FILTER_SANITIZE_STRIPPED"
                                 | "DATE_RFC7231"
+                                | "SUNFUNCS_RET_TIMESTAMP"
+                                | "SUNFUNCS_RET_STRING"
+                                | "SUNFUNCS_RET_DOUBLE"
                         )
                     });
                 let name_idx = self.add_literal(Value::string(runtime_name));

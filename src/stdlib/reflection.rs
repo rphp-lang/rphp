@@ -1734,6 +1734,19 @@ pub(crate) fn report_deprecated_global_constant_use(
         "DATE_RFC7231" => Some(
             "Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT",
         ),
+        "SUNFUNCS_RET_TIMESTAMP" | "SUNFUNCS_RET_STRING" | "SUNFUNCS_RET_DOUBLE" => {
+            Some(match name {
+                "SUNFUNCS_RET_TIMESTAMP" => {
+                    "Constant SUNFUNCS_RET_TIMESTAMP is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1"
+                }
+                "SUNFUNCS_RET_STRING" => {
+                    "Constant SUNFUNCS_RET_STRING is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1"
+                }
+                _ => {
+                    "Constant SUNFUNCS_RET_DOUBLE is deprecated since 8.4, as date_sunrise() and date_sunset() were deprecated in 8.1"
+                }
+            })
+        }
         _ => None,
     };
     if let Some(message) = builtin_message {

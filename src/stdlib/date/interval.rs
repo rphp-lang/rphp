@@ -602,8 +602,34 @@ pub(super) fn difference(
     target: &datetime::DateTimeState,
     absolute: bool,
 ) -> DateIntervalState {
-    let inverted = target.timestamp < base.timestamp
-        || (target.timestamp == base.timestamp && target.microsecond < base.microsecond);
+    let same_region = base.timezone.kind == 3
+        && target.timezone.kind == 3
+        && base.timezone.name == target.timezone.name;
+    let base_local = datetime::local_parts(base);
+    let target_local = datetime::local_parts(target);
+    let base_civil = (
+        base_local.0,
+        base_local.1,
+        base_local.2,
+        base_local.3,
+        base_local.4,
+        base_local.5,
+        base.microsecond,
+    );
+    let target_civil = (
+        target_local.0,
+        target_local.1,
+        target_local.2,
+        target_local.3,
+        target_local.4,
+        target_local.5,
+        target.microsecond,
+    );
+    let inverted = if same_region {
+        base_civil > target_civil
+    } else {
+        (base.timestamp, base.microsecond) > (target.timestamp, target.microsecond)
+    };
     let (earlier, later) = if inverted {
         (target, base)
     } else {
@@ -611,7 +637,6 @@ pub(super) fn difference(
     };
     let (ey, em, ed, eh, ei, es) = datetime::local_parts(earlier);
     let (ly, lm, ld, lh, li, ls) = datetime::local_parts(later);
-    let same_local_date = (ey, em, ed) == (ly, lm, ld);
     let mut years = ly - ey;
     let mut months = lm - em;
     let mut days = ld - ed;
@@ -619,87 +644,84 @@ pub(super) fn difference(
     let mut minutes = li - ei;
     let mut seconds = ls - es;
     let mut micros = i64::from(later.microsecond) - i64::from(earlier.microsecond);
-    if micros < 0 {
-        micros += 1_000_000;
-        seconds -= 1;
+    let earlier_zone = timezone::description_state(&earlier.timezone, earlier.timestamp);
+    let later_zone = timezone::description_state(&later.timezone, later.timestamp);
+    let offset_delta = later_zone.1 - earlier_zone.1;
+    let mut interval_inverted = inverted;
+
+    if !same_region {
+        seconds = seconds
+            .saturating_sub(later_zone.1)
+            .saturating_add(earlier_zone.1);
+    } else if later.timestamp < earlier.timestamp {
+        // During a backward overlap civil ordering and absolute ordering can
+        // disagree.  PHP flips the minute/second distance and the interval
+        // direction while retaining the surrounding civil date components.
+        let flipped = (minutes.saturating_mul(60) + seconds - offset_delta).unsigned_abs() as i64;
+        hours = flipped / 3_600;
+        minutes = (flipped % 3_600) / 60;
+        seconds = flipped % 60;
+        interval_inverted = !interval_inverted;
     }
-    if seconds < 0 {
-        seconds += 60;
-        minutes -= 1;
-    }
-    if minutes < 0 {
-        minutes += 60;
-        hours -= 1;
-    }
-    if hours < 0 {
-        hours += 24;
-        days -= 1;
-    }
-    // When calendar normalization consumes the date boundary, PHP reports
-    // the exact elapsed clock duration. This is what makes a spring-forward
-    // gap one hour shorter and distinguishes both copies of a repeated fall
-    // hour even though their civil labels overlap.
-    if same_local_date || (years == 0 && months == 0 && days == 0) {
-        years = 0;
-        months = 0;
-        days = 0;
-        let earlier_micros =
-            i128::from(earlier.timestamp) * 1_000_000 + i128::from(earlier.microsecond);
-        let later_micros = i128::from(later.timestamp) * 1_000_000 + i128::from(later.microsecond);
-        let elapsed = (later_micros - earlier_micros).max(0);
-        hours = i64::try_from(elapsed / 3_600_000_000).unwrap_or(i64::MAX);
-        minutes = i64::try_from((elapsed / 60_000_000) % 60).unwrap_or_default();
-        seconds = i64::try_from((elapsed / 1_000_000) % 60).unwrap_or_default();
-        micros = i64::try_from(elapsed % 1_000_000).unwrap_or_default();
-    } else {
-        // Type-1/2 zones are fixed-offset values. Their civil labels do not
-        // carry a shared transition rule, so PHP retains the offset delta in
-        // the clock portion even for multi-day differences. Two type-3 dates
-        // in a region instead use calendar arithmetic once a day remains.
-        if earlier.timezone.kind != 3 || later.timezone.kind != 3 {
-            let earlier_offset =
-                timezone::description_state(&earlier.timezone, earlier.timestamp).1;
-            let later_offset = timezone::description_state(&later.timezone, later.timestamp).1;
-            let clock = hours
-                .saturating_mul(3_600)
-                .saturating_add(minutes.saturating_mul(60))
-                .saturating_add(seconds)
-                .saturating_add(earlier_offset.saturating_sub(later_offset));
-            days = days.saturating_add(clock.div_euclid(86_400));
-            let clock = clock.rem_euclid(86_400);
-            hours = clock / 3_600;
-            minutes = (clock / 60) % 60;
-            seconds = clock % 60;
-        }
-        let (mut borrow_year, mut borrow_month) = if inverted {
-            (ey, em)
-        } else {
-            let previous_month = lm - 1;
-            (
-                ly + (previous_month - 1).div_euclid(12),
-                (previous_month - 1).rem_euclid(12) + 1,
+
+    normalize_difference(
+        if interval_inverted { earlier } else { later },
+        interval_inverted,
+        &mut years,
+        &mut months,
+        &mut days,
+        &mut hours,
+        &mut minutes,
+        &mut seconds,
+        &mut micros,
+    );
+
+    if same_region {
+        if earlier_zone.2 && !later_zone.2 {
+            if later
+                .timestamp
+                .saturating_sub(earlier.timestamp)
+                .saturating_add(offset_delta)
+                < 86_400
+            {
+                hours -= offset_delta / 3_600;
+                minutes -= (offset_delta % 3_600) / 60;
+            }
+        } else if !earlier_zone.2 && later_zone.2 {
+            if let Some((transition_state, transition_time)) =
+                super::tzdb::state_and_transition_at(&later.timezone.name, later.timestamp)
+                && !(earlier.timestamp.saturating_add(86_400) > transition_time
+                    && earlier.timestamp.saturating_add(86_400)
+                        <= transition_time.saturating_add(offset_delta))
+                && later.timestamp >= transition_time
+                && later
+                    .timestamp
+                    .saturating_sub(earlier.timestamp)
+                    .saturating_add(offset_delta)
+                    .rem_euclid(86_400)
+                    > later.timestamp.saturating_sub(transition_time)
+            {
+                let transition_offset = i64::from(transition_state.offset);
+                hours -= (transition_offset - earlier_zone.1) / 3_600;
+                minutes -= ((transition_offset - earlier_zone.1) % 3_600) / 60;
+            }
+        } else if later.timestamp.saturating_sub(earlier.timestamp) >= 86_400
+            && let Some((transition_state, transition_time)) = super::tzdb::state_and_transition_at(
+                &later.timezone.name,
+                later.timestamp - later_zone.1,
             )
-        };
-        while days < 0 {
-            months -= 1;
-            days += super::super::days_in_month(borrow_year, borrow_month);
-            let previous_month = borrow_month - 1;
-            borrow_year += (previous_month - 1).div_euclid(12);
-            borrow_month = (previous_month - 1).rem_euclid(12) + 1;
-        }
-        if months < 0 {
-            months += 12;
-            years -= 1;
+        {
+            let correction = earlier_zone.1 - i64::from(transition_state.offset);
+            if later.timestamp >= transition_time.saturating_sub(correction)
+                && later.timestamp < transition_time
+            {
+                days -= 1;
+                hours = 24;
+            }
         }
     }
-    let earlier_day = super::super::parts_to_unix(ey, em, ed, 0, 0, 0).div_euclid(86_400);
-    let later_day = super::super::parts_to_unix(ly, lm, ld, 0, 0, 0).div_euclid(86_400);
-    let mut total_days = later_day.saturating_sub(earlier_day).unsigned_abs() as i64;
-    let earlier_clock = (eh, ei, es, earlier.microsecond);
-    let later_clock = (lh, li, ls, later.microsecond);
-    if total_days != 0 && later_clock < earlier_clock {
-        total_days -= 1;
-    }
+
+    let total_days = difference_days(base, target);
     DateIntervalState {
         y: years,
         m: months,
@@ -708,10 +730,99 @@ pub(super) fn difference(
         i: minutes,
         s: seconds,
         f: micros as f64 / 1_000_000.0,
-        invert: i64::from(inverted && !absolute),
+        invert: i64::from(interval_inverted && !absolute),
         days: Some(total_days),
         initialized: true,
         ..DateIntervalState::default()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn normalize_difference(
+    calendar_base: &datetime::DateTimeState,
+    inverted: bool,
+    years: &mut i64,
+    months: &mut i64,
+    days: &mut i64,
+    hours: &mut i64,
+    minutes: &mut i64,
+    seconds: &mut i64,
+    micros: &mut i64,
+) {
+    normalize_unit(micros, seconds, 1_000_000);
+    normalize_unit(seconds, minutes, 60);
+    normalize_unit(minutes, hours, 60);
+    normalize_unit(hours, days, 24);
+    normalize_unit(months, years, 12);
+
+    let (mut year, mut month, ..) = datetime::local_parts(calendar_base);
+    while *days < 0 {
+        if inverted {
+            *days += super::super::days_in_month(year, month);
+            *months -= 1;
+            month += 1;
+            if month > 12 {
+                month = 1;
+                year += 1;
+            }
+        } else {
+            month -= 1;
+            if month < 1 {
+                month = 12;
+                year -= 1;
+            }
+            *days += super::super::days_in_month(year, month);
+            *months -= 1;
+        }
+    }
+    normalize_unit(months, years, 12);
+}
+
+fn normalize_unit(value: &mut i64, carry: &mut i64, radix: i64) {
+    if !(0..radix).contains(value) {
+        *carry = carry.saturating_add(value.div_euclid(radix));
+        *value = value.rem_euclid(radix);
+    }
+}
+
+fn difference_days(one: &datetime::DateTimeState, two: &datetime::DateTimeState) -> i64 {
+    let one_zone = timezone::description_state(&one.timezone, one.timestamp);
+    let two_zone = timezone::description_state(&two.timezone, two.timestamp);
+    let same_timezone = one.timezone.kind == two.timezone.kind
+        && if one.timezone.kind == 3 {
+            one.timezone.name == two.timezone.name
+        } else {
+            one_zone.1 == two_zone.1
+        };
+    if same_timezone {
+        let one_local = datetime::local_parts(one);
+        let two_local = datetime::local_parts(two);
+        let one_day = super::super::parts_to_unix(one_local.0, one_local.1, one_local.2, 0, 0, 0)
+            .div_euclid(86_400);
+        let two_day = super::super::parts_to_unix(two_local.0, two_local.1, two_local.2, 0, 0, 0)
+            .div_euclid(86_400);
+        let mut days = two_day.saturating_sub(one_day).unsigned_abs() as i64;
+        let (earliest, latest) =
+            if (one.timestamp, one.microsecond) <= (two.timestamp, two.microsecond) {
+                (one, two)
+            } else {
+                (two, one)
+            };
+        let earliest_microsecond = earliest.microsecond;
+        let latest_microsecond = latest.microsecond;
+        let earliest = datetime::local_parts(earliest);
+        let latest = datetime::local_parts(latest);
+        if (latest.3, latest.4, latest.5, latest_microsecond)
+            < (earliest.3, earliest.4, earliest.5, earliest_microsecond)
+            && days > 0
+        {
+            days -= 1;
+        }
+        days
+    } else {
+        // timelib's public `days` field intentionally ignores fractions and
+        // truncates the absolute epoch-second distance towards zero.
+        one.timestamp.abs_diff(two.timestamp).saturating_div(86_400) as i64
     }
 }
 

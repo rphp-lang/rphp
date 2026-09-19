@@ -53,6 +53,7 @@ foreach ([
     $date->add(new DateInterval($interval));
     echo $date->format('Y-m-d H:i:s T U'), "\n";
 }
+
 $date = new DateTime('2006-04-02 04:00:00');
 while ($date > new DateTime('2006-04-02 01:00:00')) {
     $date->sub(new DateInterval('PT1H'));
@@ -72,6 +73,37 @@ echo $before->diff($after)->format('%R%yY%mM%dDT%hH%iM%sS'), "\n";
             "2006-04-02 03:00 EDT\n",
             "2006-04-02 01:00 EST\n",
             "+0Y0M0DT0H0M1S\n",
+        )
+    );
+}
+
+#[test]
+fn diff_normalizes_region_fixed_and_cross_zone_boundaries_like_php() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$la = new DateTimeImmutable('2022-10-09 02:41:54.515330', new DateTimeZone('America/Los_Angeles'));
+$utc = new DateTimeImmutable('2022-10-10 08:41:54.534620', new DateTimeZone('UTC'));
+echo $la->diff($utc)->format('%R %Y %M %D %H %I %S %F %a'), "\n";
+
+$chicago = new DateTimeImmutable('2000-11-01 09:29:22.907606', new DateTimeZone('America/Chicago'));
+$newYork = new DateTimeImmutable('2022-06-06 11:00:00.000000', new DateTimeZone('America/New_York'));
+echo $chicago->diff($newYork)->format('%R %Y %M %D %H %I %S %F %a'), "\n";
+
+foreach ([
+    ['2010-03-14 01:59:59 -0500', '2010-03-14 03:00:00 -0400'],
+    ['2010-11-07 01:59:59 EDT', '2010-11-07 01:00:00 EST'],
+] as [$start, $end]) {
+    echo (new DateTimeImmutable($start))->diff(new DateTimeImmutable($end))
+        ->format('%R P%yY%mM%dDT%hH%iM%sS'), "\n";
+}
+"#,
+        ),
+        concat!(
+            "+ 00 00 00 23 00 00 019290 0\n",
+            "+ 21 07 04 23 30 37 092394 7886\n",
+            "+ P0Y0M0DT0H0M1S\n",
+            "+ P0Y0M0DT0H0M1S\n",
         )
     );
 }

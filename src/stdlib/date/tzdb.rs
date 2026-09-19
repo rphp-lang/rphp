@@ -82,6 +82,35 @@ pub(super) fn state_at(identifier: &str, timestamp: i64) -> Option<ZoneState> {
     Some(decode_state(database, state))
 }
 
+/// Return the state active at `timestamp` together with the transition that
+/// selected it.  Date interval normalization needs the transition boundary,
+/// not just the resulting UTC offset, to reproduce PHP's civil-time diff
+/// rules around daylight-saving gaps and overlaps.
+pub(super) fn state_and_transition_at(
+    identifier: &str,
+    timestamp: i64,
+) -> Option<(ZoneState, i64)> {
+    if let Some(state) = fixed_state(identifier) {
+        return Some((state, i64::MIN));
+    }
+    let database = database();
+    let zone = lookup_zone_in(database, identifier)?;
+    let timestamp = canonical_transition_timestamp(timestamp);
+    let transition = zone
+        .transitions
+        .partition_point(|transition| transition.timestamp <= timestamp);
+    Some(match transition.checked_sub(1) {
+        Some(index) => {
+            let transition = zone.transitions[index];
+            (
+                decode_state(database, transition.state),
+                transition.timestamp,
+            )
+        }
+        None => (decode_state(database, zone.initial), i64::MIN),
+    })
+}
+
 #[inline]
 pub(super) fn fixed_state(identifier: &str) -> Option<ZoneState> {
     let abbreviation = match identifier {
