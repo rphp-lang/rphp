@@ -2822,11 +2822,9 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     eg.register_class(empty_internal_type("HashContext", vec![], false, true))
         .unwrap();
 
-    // The date extension is not otherwise implemented yet, but its internal
-    // class and method declarations are part of PHP's inheritance contract.
-    // Keep them as link-only metadata: declarations can extend these types
-    // and receive canonical variance diagnostics without claiming callable
-    // DateTime behavior.
+    // Date contracts are registered both as inheritance metadata and native
+    // handlers.  The contract table remains the source used by class linking;
+    // the handlers below own live DateTime state and observable behavior.
     eg.register_internal_method_contract(
         "DateTimeInterface",
         "diff",
@@ -3000,13 +2998,41 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
     );
 
-    eg.register_class(empty_internal_type(
-        "DateTimeInterface",
-        vec![],
-        true,
-        false,
-    ))
-    .unwrap();
+    let mut date_time_interface = empty_internal_type("DateTimeInterface", vec![], true, false);
+    for name in [
+        "ATOM",
+        "COOKIE",
+        "ISO8601",
+        "ISO8601_EXPANDED",
+        "RFC822",
+        "RFC850",
+        "RFC1036",
+        "RFC1123",
+        "RFC7231",
+        "RFC2822",
+        "RFC3339",
+        "RFC3339_EXTENDED",
+        "RSS",
+        "W3C",
+    ] {
+        date_time_interface.constants.push(ClassConstantDefinition {
+            attributes: Vec::new(),
+            name: name.to_string(),
+            value: crate::builtin_class_constant("DateTimeInterface", name)
+                .expect("DateTimeInterface constant has a builtin value"),
+            source_file: String::new(),
+            evaluation_error: None,
+            source_expression: None,
+            callable_factory: None,
+            evaluation_scope: None,
+            value_is_deferred: false,
+            visibility: Visibility::Public,
+            declaring_class: "DateTimeInterface".to_string(),
+            type_hint: ParamTypeHint::String,
+            is_final: false,
+        });
+    }
+    eg.register_class(date_time_interface).unwrap();
     eg.register_class(empty_internal_type("DateInterval", vec![], false, false))
         .unwrap();
     let mut date_time_zone = empty_internal_type("DateTimeZone", vec![], false, false);
@@ -3086,6 +3112,25 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             .expect("DateTimeZone::getLocation registered");
         let pointer = &function.common as *const FunctionCommon;
         eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
+    }
+    reg_method!(
+        "DateTimeZone",
+        "getOffset",
+        super::date::fn_date_time_zone_get_offset,
+        2,
+        1,
+        "datetime"
+    );
+    {
+        let function = funcs
+            .last_mut()
+            .expect("DateTimeZone::getOffset registered");
+        function.common.sig.param_type_hints =
+            vec![ParamTypeHint::ClassName("DateTimeInterface".to_string())];
+        function.common.sig.return_type_hint = ParamTypeHint::Int;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_internal_function_reflection_metadata(pointer, vec![None], "date");
     }
     reg_method!(
         "DateTimeZone",
@@ -3173,6 +3218,283 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         false,
     ))
     .unwrap();
+    eg.register_class(empty_internal_type(
+        "DateTimeImmutable",
+        vec!["DateTimeInterface".to_string()],
+        false,
+        false,
+    ))
+    .unwrap();
+    let mut date_period = empty_internal_type("DatePeriod", vec![], false, false);
+    for name in ["EXCLUDE_START_DATE", "INCLUDE_END_DATE"] {
+        date_period.constants.push(ClassConstantDefinition {
+            attributes: Vec::new(),
+            name: name.to_string(),
+            value: crate::builtin_class_constant("DatePeriod", name)
+                .expect("DatePeriod constant has a builtin value"),
+            source_file: String::new(),
+            evaluation_error: None,
+            source_expression: None,
+            callable_factory: None,
+            evaluation_scope: None,
+            value_is_deferred: false,
+            visibility: Visibility::Public,
+            declaring_class: "DatePeriod".to_string(),
+            type_hint: ParamTypeHint::Int,
+            is_final: false,
+        });
+    }
+    eg.register_class(date_period).unwrap();
+
+    for (name, parent) in [
+        ("DateError", "Error"),
+        ("DateObjectError", "DateError"),
+        ("DateRangeError", "DateError"),
+        ("DateException", "Exception"),
+        ("DateInvalidOperationException", "DateException"),
+        ("DateInvalidTimeZoneException", "DateException"),
+        ("DateMalformedIntervalStringException", "DateException"),
+        ("DateMalformedPeriodStringException", "DateException"),
+        ("DateMalformedStringException", "DateException"),
+    ] {
+        let mut definition = empty_internal_type(name, vec![], false, false);
+        definition.parent = Some(parent.to_string());
+        eg.register_class(definition).unwrap();
+    }
+
+    macro_rules! reg_date_method {
+        (
+            $class:expr, $method:expr, $handler:expr, $max_args:expr, $min_args:expr,
+            [$($pname:expr),* $(,)?], [$($hint:expr),* $(,)?], $return_hint:expr,
+            [$($default:expr),* $(,)?]
+        ) => {{
+            reg_method!(
+                $class,
+                $method,
+                $handler,
+                $max_args,
+                $min_args,
+                $($pname),*
+            );
+            let function = funcs.last_mut().expect("DateTime method registered");
+            function.common.sig.param_type_hints = vec![$($hint),*];
+            function.common.sig.return_type_hint = $return_hint;
+            function.handler_validates_types = true;
+            let pointer = &function.common as *const FunctionCommon;
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![$($default),*],
+                "date",
+            );
+        }};
+    }
+
+    macro_rules! reg_date_static_method {
+        (
+            $class:expr, $method:expr, $handler:expr, $max_args:expr, $min_args:expr,
+            [$($pname:expr),* $(,)?], [$($hint:expr),* $(,)?], $return_hint:expr,
+            [$($default:expr),* $(,)?]
+        ) => {{
+            reg_static_method!(
+                $class,
+                $method,
+                $handler,
+                $max_args,
+                $min_args,
+                $($pname),*
+            );
+            let function = funcs
+                .last_mut()
+                .expect("DateTime static method registered");
+            function.common.sig.param_type_hints = vec![$($hint),*];
+            function.common.sig.return_type_hint = $return_hint;
+            function.handler_validates_types = true;
+            let pointer = &function.common as *const FunctionCommon;
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![$($default),*],
+                "date",
+            );
+        }};
+    }
+
+    for class_name in ["DateTime", "DateTimeImmutable"] {
+        reg_date_method!(
+            class_name,
+            "__construct",
+            super::date::fn_date_time_construct,
+            3,
+            0,
+            ["datetime", "timezone"],
+            [
+                ParamTypeHint::String,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                    "DateTimeZone".to_string(),
+                )))
+            ],
+            ParamTypeHint::None,
+            [Some(Value::string("now")), Some(Value::null())]
+        );
+        reg_date_method!(
+            class_name,
+            "format",
+            super::date::fn_date_time_format,
+            2,
+            1,
+            ["format"],
+            [ParamTypeHint::String],
+            ParamTypeHint::String,
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "getTimestamp",
+            super::date::fn_date_time_get_timestamp,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::Int,
+            []
+        );
+        reg_date_method!(
+            class_name,
+            "getMicrosecond",
+            super::date::fn_date_time_get_microsecond,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::Int,
+            []
+        );
+        reg_date_method!(
+            class_name,
+            "getOffset",
+            super::date::fn_date_time_get_offset,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::Int,
+            []
+        );
+        reg_date_method!(
+            class_name,
+            "getTimezone",
+            super::date::fn_date_time_get_timezone,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::Union(vec![
+                ParamTypeHint::ClassName("DateTimeZone".to_string()),
+                ParamTypeHint::ClassName("false".to_string()),
+            ]),
+            []
+        );
+        reg_date_method!(
+            class_name,
+            "__serialize",
+            super::date::fn_date_time_serialize,
+            1,
+            0,
+            [],
+            [],
+            ParamTypeHint::Array,
+            []
+        );
+        reg_date_method!(
+            class_name,
+            "setTimestamp",
+            super::date::fn_date_time_set_timestamp,
+            2,
+            1,
+            ["timestamp"],
+            [ParamTypeHint::Int],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "setTimezone",
+            super::date::fn_date_time_set_timezone,
+            2,
+            1,
+            ["timezone"],
+            [ParamTypeHint::ClassName("DateTimeZone".to_string())],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "setDate",
+            super::date::fn_date_time_set_date,
+            4,
+            3,
+            ["year", "month", "day"],
+            [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None, None, None]
+        );
+        reg_date_method!(
+            class_name,
+            "setTime",
+            super::date::fn_date_time_set_time,
+            5,
+            2,
+            ["hour", "minute", "second", "microsecond"],
+            [
+                ParamTypeHint::Int,
+                ParamTypeHint::Int,
+                ParamTypeHint::Int,
+                ParamTypeHint::Int
+            ],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None, None, Some(Value::long(0)), Some(Value::long(0))]
+        );
+        reg_date_method!(
+            class_name,
+            "setMicrosecond",
+            super::date::fn_date_time_set_microsecond,
+            2,
+            1,
+            ["microsecond"],
+            [ParamTypeHint::Int],
+            ParamTypeHint::ClassName("static".to_string()),
+            [None]
+        );
+        reg_date_method!(
+            class_name,
+            "setISODate",
+            super::date::fn_date_time_set_iso_date,
+            4,
+            2,
+            ["year", "week", "dayOfWeek"],
+            [ParamTypeHint::Int, ParamTypeHint::Int, ParamTypeHint::Int],
+            ParamTypeHint::ClassName(class_name.to_string()),
+            [None, None, Some(Value::long(1))]
+        );
+        let create_handler = if class_name == "DateTime" {
+            super::date::fn_date_time_create_from_timestamp
+        } else {
+            super::date::fn_date_time_immutable_create_from_timestamp
+        };
+        reg_date_static_method!(
+            class_name,
+            "createFromTimestamp",
+            create_handler,
+            2,
+            1,
+            ["timestamp"],
+            [ParamTypeHint::Union(vec![
+                ParamTypeHint::Int,
+                ParamTypeHint::Float
+            ])],
+            ParamTypeHint::ClassName("static".to_string()),
+            [None]
+        );
+    }
     // Static methods still reserve the canonical hidden method slot at CV 0;
     // explicit Closure::bind arguments begin at CV 1.
     reg_static_method!(

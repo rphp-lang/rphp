@@ -670,6 +670,9 @@ fn object_properties_to_array(
     {
         return array;
     }
+    if let Some(array) = crate::stdlib::datetime_debug_projection(value) {
+        return array;
+    }
     let object = value
         .as_object()
         .expect("object-to-array cast requires an object value");

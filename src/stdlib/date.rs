@@ -7,9 +7,21 @@
 
 use super::*;
 
+mod datetime;
 mod timezone;
 mod tzdb;
 
+pub(crate) use datetime::{
+    debug_projection as datetime_debug_projection, fn_date_create, fn_date_create_immutable,
+    fn_date_date_set, fn_date_format, fn_date_iso_date_set, fn_date_offset_get,
+    fn_date_time_construct, fn_date_time_create_from_timestamp, fn_date_time_format,
+    fn_date_time_get_microsecond, fn_date_time_get_offset, fn_date_time_get_timestamp,
+    fn_date_time_get_timezone, fn_date_time_immutable_create_from_timestamp,
+    fn_date_time_serialize, fn_date_time_set, fn_date_time_set_date, fn_date_time_set_iso_date,
+    fn_date_time_set_microsecond, fn_date_time_set_time, fn_date_time_set_timestamp,
+    fn_date_time_set_timezone, fn_date_time_zone_get_offset, fn_date_timestamp_get,
+    fn_date_timestamp_set, fn_date_timezone_get, fn_date_timezone_set, fn_timezone_offset_get,
+};
 pub(super) use timezone::{
     fn_date_time_zone_construct, fn_date_time_zone_get_location, fn_date_time_zone_get_name,
     fn_date_time_zone_get_transitions, fn_date_time_zone_list_abbreviations,
@@ -253,7 +265,7 @@ fn nullable_component(
     Ok(super::typed_internal_int_argument(ed, eg, function, index, parameter)?.map(Some))
 }
 
-fn normalized_timestamp(
+pub(super) fn normalized_timestamp(
     year: i64,
     month: i64,
     day: i64,

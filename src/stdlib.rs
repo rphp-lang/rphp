@@ -254,6 +254,7 @@ pub(crate) use builtin_classes::{
     prepare_file_info_clone, prepare_native_deque_consumer, resolve_iterator_delegated_method,
     uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
+pub(crate) use date::datetime_debug_projection;
 
 /// Read a raw internal-call CV without following a PHP reference.
 ///
@@ -19661,6 +19662,9 @@ fn object_debug_projection(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
 ) -> Result<Option<Value>, VmError> {
+    if let Some(projection) = datetime_debug_projection(receiver) {
+        return Ok(Some(projection));
+    }
     // A root user declaration has no inherited/native method table. Its
     // immutable declaration can prove a missing hook without constructing a
     // qualified function name. Traits and internal classes retain the full
@@ -30097,6 +30101,26 @@ fn format_php_date(
     offset: i64,
     is_dst: bool,
 ) -> String {
+    format_php_date_with_microseconds(
+        fmt,
+        ts,
+        0,
+        timezone_id,
+        timezone_abbreviation,
+        offset,
+        is_dst,
+    )
+}
+
+pub(crate) fn format_php_date_with_microseconds(
+    fmt: &str,
+    ts: i64,
+    microsecond: u32,
+    timezone_id: &str,
+    timezone_abbreviation: &str,
+    offset: i64,
+    is_dst: bool,
+) -> String {
     // Break timestamp into components using manual calculation (no chrono dependency)
     let (year, month, day, hour, min, sec, wday, yday) = unix_to_parts(ts.saturating_add(offset));
     let mut out = String::new();
@@ -30112,6 +30136,14 @@ fn format_php_date(
                 escape = true;
             }
             'Y' => out.push_str(&format!("{:04}", year)),
+            'X' => out.push_str(&format!("{year:+05}")),
+            'x' => {
+                if (0..=9_999).contains(&year) {
+                    out.push_str(&format!("{year:04}"));
+                } else {
+                    out.push_str(&format!("{year:+05}"));
+                }
+            }
             'y' => out.push_str(&format!("{:02}", year % 100)),
             'm' => out.push_str(&format!("{:02}", month)),
             'n' => out.push_str(&format!("{}", month)),
@@ -30122,6 +30154,8 @@ fn format_php_date(
             'G' => out.push_str(&format!("{}", hour)),
             'i' => out.push_str(&format!("{:02}", min)),
             's' => out.push_str(&format!("{:02}", sec)),
+            'u' => out.push_str(&format!("{microsecond:06}")),
+            'v' => out.push_str(&format!("{:03}", microsecond / 1_000)),
             'g' => {
                 let h = if hour == 0 {
                     12
@@ -30161,6 +30195,13 @@ fn format_php_date(
             'Z' => out.push_str(&offset.to_string()),
             'O' => out.push_str(&date::format_timezone_offset(offset, false)),
             'P' => out.push_str(&date::format_timezone_offset(offset, true)),
+            'p' => {
+                if offset == 0 {
+                    out.push('Z');
+                } else {
+                    out.push_str(&date::format_timezone_offset(offset, true));
+                }
+            }
             'e' => out.push_str(timezone_id),
             'T' => out.push_str(timezone_abbreviation),
             'D' => out.push_str(["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"][wday as usize]),

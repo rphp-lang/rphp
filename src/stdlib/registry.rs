@@ -2546,6 +2546,161 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::ClassName("false".to_string()),
         ])
     );
+    reg_typed!(
+        "date_create",
+        date::fn_date_create,
+        2,
+        0,
+        ["datetime", "timezone"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeZone".to_string(),
+            ))),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "date_create_immutable",
+        date::fn_date_create_immutable,
+        2,
+        0,
+        ["datetime", "timezone"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
+                "DateTimeZone".to_string(),
+            ))),
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTimeImmutable".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "date_format",
+        date::fn_date_format,
+        2,
+        2,
+        ["object", "format"],
+        [
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::String,
+        ],
+        ParamTypeHint::String
+    );
+    for (name, handler) in [
+        (
+            "date_timestamp_get",
+            date::fn_date_timestamp_get as crate::vm::function::InternalFunctionHandler,
+        ),
+        ("date_offset_get", date::fn_date_offset_get),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 1, 1, vec![]).with_static_parameter_names(&["object"]),
+        );
+        function.common.sig.param_type_hints =
+            vec![ParamTypeHint::ClassName("DateTimeInterface".to_string())];
+        function.common.sig.return_type_hint = ParamTypeHint::Int;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        funcs.push(function);
+    }
+    reg_typed!(
+        "date_timezone_get",
+        date::fn_date_timezone_get,
+        1,
+        1,
+        ["object"],
+        [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    reg_typed!(
+        "date_timestamp_set",
+        date::fn_date_timestamp_set,
+        2,
+        2,
+        ["object", "timestamp"],
+        [
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::ClassName("DateTime".to_string())
+    );
+    reg_typed!(
+        "date_timezone_set",
+        date::fn_date_timezone_set,
+        2,
+        2,
+        ["object", "timezone"],
+        [
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+        ],
+        ParamTypeHint::ClassName("DateTime".to_string())
+    );
+    reg_typed!(
+        "date_date_set",
+        date::fn_date_date_set,
+        4,
+        4,
+        ["object", "year", "month", "day"],
+        [
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::ClassName("DateTime".to_string())
+    );
+    reg_typed!(
+        "date_time_set",
+        date::fn_date_time_set,
+        5,
+        3,
+        ["object", "hour", "minute", "second", "microsecond"],
+        [
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::ClassName("DateTime".to_string())
+    );
+    reg_typed!(
+        "date_isodate_set",
+        date::fn_date_iso_date_set,
+        4,
+        3,
+        ["object", "year", "week", "dayOfWeek"],
+        [
+            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+            ParamTypeHint::Int,
+        ],
+        ParamTypeHint::ClassName("DateTime".to_string())
+    );
+    reg_typed!(
+        "timezone_offset_get",
+        date::fn_timezone_offset_get,
+        2,
+        2,
+        ["object", "datetime"],
+        [
+            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+        ],
+        ParamTypeHint::Int
+    );
     let nullable_timestamp_defaults = vec![None, Some(Value::null())];
     for (name, defaults) in [
         ("time", vec![]),
@@ -2603,6 +2758,30 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 Some(Value::long(i64::from(i32::MAX))),
             ],
         ),
+        (
+            "date_create",
+            vec![Some(Value::string("now")), Some(Value::null())],
+        ),
+        (
+            "date_create_immutable",
+            vec![Some(Value::string("now")), Some(Value::null())],
+        ),
+        ("date_format", vec![None, None]),
+        ("date_timestamp_get", vec![None]),
+        ("date_offset_get", vec![None]),
+        ("date_timezone_get", vec![None]),
+        ("date_timestamp_set", vec![None, None]),
+        ("date_timezone_set", vec![None, None]),
+        ("date_date_set", vec![None, None, None, None]),
+        (
+            "date_time_set",
+            vec![None, None, None, Some(Value::long(0)), Some(Value::long(0))],
+        ),
+        (
+            "date_isodate_set",
+            vec![None, None, None, Some(Value::long(1))],
+        ),
+        ("timezone_offset_get", vec![None, None]),
     ] {
         let function = eg
             .find_function(name)

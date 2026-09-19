@@ -38,9 +38,9 @@ struct AbbreviationRecord {
 }
 
 #[derive(Clone, Debug)]
-struct TimezoneDescription {
-    kind: i64,
-    name: String,
+pub(super) struct TimezoneDescription {
+    pub(super) kind: i64,
+    pub(super) name: String,
 }
 
 fn locations() -> &'static BTreeMap<&'static str, Location> {
@@ -231,7 +231,7 @@ fn abbreviations() -> &'static BTreeMap<String, Vec<AbbreviationRecord>> {
     })
 }
 
-fn parse_timezone(value: &str) -> Option<TimezoneDescription> {
+pub(super) fn parse_timezone(value: &str) -> Option<TimezoneDescription> {
     if let Some(name) = fixed_offset(value) {
         return Some(TimezoneDescription { kind: 1, name });
     }
@@ -253,7 +253,7 @@ fn parse_timezone(value: &str) -> Option<TimezoneDescription> {
     })
 }
 
-fn timezone_object(eg: &ExecutorGlobals, description: TimezoneDescription) -> Value {
+pub(super) fn timezone_object(eg: &ExecutorGlobals, description: TimezoneDescription) -> Value {
     let class = eg
         .find_class("DateTimeZone")
         .expect("DateTimeZone is registered before request execution");
@@ -267,11 +267,122 @@ fn timezone_object(eg: &ExecutorGlobals, description: TimezoneDescription) -> Va
     Value::object(object)
 }
 
-fn object_description(value: &Value) -> Option<TimezoneDescription> {
+pub(super) fn object_description(value: &Value) -> Option<TimezoneDescription> {
     let object = value.as_object()?;
     let kind = object.get_property("timezone_type")?.as_long()?;
     let name = object.get_property("timezone")?.as_str()?.to_string();
     Some(TimezoneDescription { kind, name })
+}
+
+fn fixed_offset_seconds(value: &str) -> Option<i64> {
+    let normalized = fixed_offset(value)?;
+    let sign = if normalized.as_bytes()[0] == b'-' {
+        -1
+    } else {
+        1
+    };
+    let hour = normalized.get(1..3)?.parse::<i64>().ok()?;
+    let minute = normalized.get(4..6)?.parse::<i64>().ok()?;
+    Some(sign * (hour * 3_600 + minute * 60))
+}
+
+pub(super) fn default_description(eg: &ExecutorGlobals) -> TimezoneDescription {
+    parse_timezone(super::timezone_id(eg)).unwrap_or(TimezoneDescription {
+        kind: 3,
+        name: "UTC".to_string(),
+    })
+}
+
+pub(super) fn description_state(
+    description: &TimezoneDescription,
+    timestamp: i64,
+) -> (String, i64, bool) {
+    match description.kind {
+        1 => {
+            let offset = fixed_offset_seconds(&description.name).unwrap_or_default();
+            (
+                format!("GMT{}", super::format_timezone_offset(offset, false)),
+                offset,
+                false,
+            )
+        }
+        2 => {
+            let record = abbreviations()
+                .get(&description.name.to_ascii_lowercase())
+                .and_then(|records| records.first());
+            (
+                description.name.clone(),
+                record.map_or(0, |record| i64::from(record.offset)),
+                record.is_some_and(|record| record.dst),
+            )
+        }
+        _ if matches!(description.name.as_str(), "UTC" | "Etc/UTC") => {
+            ("UTC".to_string(), 0, false)
+        }
+        _ if matches!(description.name.as_str(), "GMT" | "Etc/GMT") => {
+            ("GMT".to_string(), 0, false)
+        }
+        _ => tzdb::state_at(&description.name, timestamp).map_or_else(
+            || ("UTC".to_string(), 0, false),
+            |state| {
+                (
+                    state.abbreviation.to_string(),
+                    i64::from(state.offset),
+                    state.is_dst,
+                )
+            },
+        ),
+    }
+}
+
+pub(super) fn description_local_to_utc(description: &TimezoneDescription, local: i64) -> i64 {
+    if description.kind != 3 {
+        return local.saturating_sub(description_state(description, local).1);
+    }
+    if matches!(
+        description.name.as_str(),
+        "UTC" | "Etc/UTC" | "GMT" | "Etc/GMT"
+    ) {
+        return local;
+    }
+    let mut offsets = [0_i64; 3];
+    let mut count = 0;
+    for probe in [
+        local.saturating_sub(86_400),
+        local,
+        local.saturating_add(86_400),
+    ] {
+        let Some(state) = tzdb::state_at(&description.name, probe) else {
+            return local;
+        };
+        let offset = i64::from(state.offset);
+        if !offsets[..count].contains(&offset) {
+            offsets[count] = offset;
+            count += 1;
+        }
+    }
+
+    let mut valid = [0_i64; 3];
+    let mut valid_count = 0;
+    let mut gap_candidate = i64::MIN;
+    for offset in offsets[..count].iter().copied() {
+        let candidate = local.saturating_sub(offset);
+        gap_candidate = gap_candidate.max(candidate);
+        if tzdb::state_at(&description.name, candidate)
+            .is_some_and(|state| i64::from(state.offset) == offset)
+        {
+            valid[valid_count] = candidate;
+            valid_count += 1;
+        }
+    }
+    if valid_count == 0 {
+        gap_candidate
+    } else {
+        *valid[..valid_count]
+            .iter()
+            .min()
+            .expect("a valid wall-clock representation exists")
+    }
 }
 
 fn location_array(location: &Location) -> Value {

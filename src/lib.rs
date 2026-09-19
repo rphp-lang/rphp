@@ -392,7 +392,20 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "UPLOAD_ERR_NO_TMP_DIR",
     "UPLOAD_ERR_CANT_WRITE",
     "UPLOAD_ERR_EXTENSION",
+    "DATE_ATOM",
+    "DATE_COOKIE",
+    "DATE_ISO8601",
+    "DATE_ISO8601_EXPANDED",
+    "DATE_RFC822",
+    "DATE_RFC850",
+    "DATE_RFC1036",
+    "DATE_RFC1123",
+    "DATE_RFC7231",
     "DATE_RFC2822",
+    "DATE_RFC3339",
+    "DATE_RFC3339_EXTENDED",
+    "DATE_RSS",
+    "DATE_W3C",
     "SEEK_SET",
     "SEEK_CUR",
     "SEEK_END",
@@ -798,7 +811,17 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "UPLOAD_ERR_NO_TMP_DIR" => Some(value::Value::long(6)),
         "UPLOAD_ERR_CANT_WRITE" => Some(value::Value::long(7)),
         "UPLOAD_ERR_EXTENSION" => Some(value::Value::long(8)),
+        "DATE_ATOM" | "DATE_RFC3339" | "DATE_W3C" => Some(value::Value::string("Y-m-d\\TH:i:sP")),
+        "DATE_COOKIE" => Some(value::Value::string("l, d-M-Y H:i:s T")),
+        "DATE_ISO8601" => Some(value::Value::string("Y-m-d\\TH:i:sO")),
+        "DATE_ISO8601_EXPANDED" => Some(value::Value::string("X-m-d\\TH:i:sP")),
+        "DATE_RFC822" => Some(value::Value::string("D, d M y H:i:s O")),
+        "DATE_RFC850" => Some(value::Value::string("l, d-M-y H:i:s T")),
+        "DATE_RFC1036" => Some(value::Value::string("D, d M y H:i:s O")),
+        "DATE_RFC1123" | "DATE_RSS" => Some(value::Value::string("D, d M Y H:i:s O")),
+        "DATE_RFC7231" => Some(value::Value::string("D, d M Y H:i:s \\G\\M\\T")),
         "DATE_RFC2822" => Some(value::Value::string("D, d M Y H:i:s O")),
+        "DATE_RFC3339_EXTENDED" => Some(value::Value::string("Y-m-d\\TH:i:s.vP")),
 
         // Tokenizer identifiers are owned by the tokenizer extension.
         name if name.starts_with("T_") || name == "TOKEN_PARSE" => {
@@ -859,6 +882,33 @@ fn builtin_ini_access_constant(name: &str) -> Option<value::Value> {
 /// registry exists. Constant expressions in declarations (notably attribute
 /// flags) use the same values that stdlib publishes at request startup.
 pub fn builtin_class_constant(class: &str, constant: &str) -> Option<value::Value> {
+    if class.eq_ignore_ascii_case("DateTimeInterface")
+        || class.eq_ignore_ascii_case("DateTime")
+        || class.eq_ignore_ascii_case("DateTimeImmutable")
+    {
+        let format = match constant {
+            "ATOM" | "RFC3339" | "W3C" => "Y-m-d\\TH:i:sP",
+            "COOKIE" => "l, d-M-Y H:i:s T",
+            "ISO8601" => "Y-m-d\\TH:i:sO",
+            "ISO8601_EXPANDED" => "X-m-d\\TH:i:sP",
+            "RFC822" => "D, d M y H:i:s O",
+            "RFC850" => "l, d-M-y H:i:s T",
+            "RFC1036" => "D, d M y H:i:s O",
+            "RFC1123" | "RSS" => "D, d M Y H:i:s O",
+            "RFC7231" => "D, d M Y H:i:s \\G\\M\\T",
+            "RFC2822" => "D, d M Y H:i:s O",
+            "RFC3339_EXTENDED" => "Y-m-d\\TH:i:s.vP",
+            _ => return None,
+        };
+        return Some(value::Value::string(format));
+    }
+    if class.eq_ignore_ascii_case("DatePeriod") {
+        return match constant {
+            "EXCLUDE_START_DATE" => Some(value::Value::long(1)),
+            "INCLUDE_END_DATE" => Some(value::Value::long(2)),
+            _ => None,
+        };
+    }
     let value = if class.eq_ignore_ascii_case("Attribute") {
         match constant {
             "TARGET_CLASS" => 1,
