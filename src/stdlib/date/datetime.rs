@@ -351,7 +351,12 @@ pub(crate) fn comparison(left: &Value, right: &Value) -> Option<i32> {
     )
 }
 
-fn malformed(eg: &mut ExecutorGlobals, input: &str, diagnostics: &DateParseDiagnostics) {
+fn malformed(
+    eg: &mut ExecutorGlobals,
+    input: &str,
+    diagnostics: &DateParseDiagnostics,
+    function: Option<&str>,
+) {
     let (position, reason) = diagnostics
         .errors
         .first()
@@ -364,7 +369,8 @@ fn malformed(eg: &mut ExecutorGlobals, input: &str, diagnostics: &DateParseDiagn
     eg.exception = Some(crate::value::make_error_value(
         "DateMalformedStringException",
         &format!(
-            "Failed to parse time string ({input}) at position {position} ({character}): {reason}"
+            "{}Failed to parse time string ({input}) at position {position} ({character}): {reason}",
+            function.map_or_else(String::new, |function| format!("{function}(): "))
         ),
     ));
 }
@@ -381,7 +387,7 @@ fn construct(
             install_state(receiver, parsed.state)
         }
         Err(diagnostics) => {
-            malformed(eg, input, &diagnostics);
+            malformed(eg, input, &diagnostics, None);
             eg.set_date_parse_diagnostics(diagnostics);
             false
         }
@@ -1181,7 +1187,11 @@ fn modify_value(
         }
         Err(diagnostics) => {
             if throw_on_error {
-                malformed(eg, input, &diagnostics);
+                let class = receiver
+                    .as_object()
+                    .map(|object| object.class_name.to_string())
+                    .unwrap_or_else(|| "DateTime".to_string());
+                malformed(eg, input, &diagnostics, Some(&format!("{class}::modify")));
             }
             eg.set_date_parse_diagnostics(diagnostics);
             None
@@ -1281,6 +1291,16 @@ pub(crate) fn fn_date_sub(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let receiver = arg!(ed, 0).clone();
+    if let Some(interval) = super::interval::snapshot(arg!(ed, 1), eg)
+        && super::interval::subtraction_is_unsupported(&interval)
+    {
+        let message = "date_sub(): Only non-special relative time specifications are supported for subtraction";
+        let (file, line) = super::internal_call_source(ed);
+        if !super::dispatch_php_error(eg, ed, 2, message, &file, line)? {
+            eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
+        }
+        ret!(rv, receiver);
+    }
     if let Some(result) = add_or_subtract(&receiver, arg!(ed, 1), true, "date_sub", eg) {
         ret!(rv, result);
     }

@@ -552,6 +552,7 @@ pub(super) fn apply_to_datetime(
         hours: sign * relative.hours,
         minutes: sign * relative.minutes,
         seconds: sign * relative.seconds,
+        microseconds: sign * relative.microseconds,
         business_days: sign * relative.business_days,
         weekday: relative
             .weekday

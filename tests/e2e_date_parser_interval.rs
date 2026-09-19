@@ -101,6 +101,57 @@ echo strtotime('+1 week 2 days', 0), ':', strtotime('tomorrow', 0), "\n";
 }
 
 #[test]
+fn parser_accepts_php_textual_numeric_and_subsecond_grammar() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('UTC');
+foreach ([
+    '2015-2-1',
+    '18-01-2009 00:00:00',
+    '7.8.2010',
+    '0099-01',
+    '1985-102',
+    '2012-02-02T10',
+    '28-July-2008',
+    '1pm Aug 1 GMT 2007',
+] as $input) {
+    echo (new DateTimeImmutable($input))->format('Y-m-d H:i:s.u T'), "\n";
+}
+$base = new DateTimeImmutable('2016-10-07 13:25:50.000000 UTC');
+foreach (['+1 ms', '-2 msec', '+7 usecs', '-10 µs', '+8 msec -2 µsec'] as $input) {
+    echo $base->modify($input)->format('Y-m-d H:i:s.u'), "\n";
+}
+echo (new DateTimeImmutable('2008-01-17 last Monday'))->format('Y-m-d H:i:s'), "\n";
+echo (new DateTimeImmutable('Monday next week 13:00'))->format('l H:i:s'), "\n";
+echo (new DateTimeImmutable('first day of January 2011'))->format('Y-m-d H:i:s.u'), "\n";
+$special = DateInterval::createFromDateString('third Tuesday of next month');
+echo (new DateTimeImmutable('2010-03-07 13:21:38 UTC'))->add($special)->format('c'), "\n";
+"#,
+        ),
+        concat!(
+            "2015-02-01 00:00:00.000000 UTC\n",
+            "2009-01-18 00:00:00.000000 UTC\n",
+            "2010-08-07 00:00:00.000000 UTC\n",
+            "0099-01-01 00:00:00.000000 UTC\n",
+            "1985-04-12 00:00:00.000000 UTC\n",
+            "2012-02-02 10:00:00.000000 UTC\n",
+            "2008-07-28 00:00:00.000000 UTC\n",
+            "2007-08-01 13:00:00.000000 GMT\n",
+            "2016-10-07 13:25:50.001000\n",
+            "2016-10-07 13:25:49.998000\n",
+            "2016-10-07 13:25:50.000007\n",
+            "2016-10-07 13:25:49.999990\n",
+            "2016-10-07 13:25:50.007998\n",
+            "2008-01-14 00:00:00\n",
+            "Monday 13:00:00\n",
+            "2011-01-01 00:00:00.000000\n",
+            "2010-04-20T13:21:38+00:00\n",
+        )
+    );
+}
+
+#[test]
 fn format_parser_preserves_offsets_fractions_and_last_diagnostics() {
     assert_eq!(
         run_php(
