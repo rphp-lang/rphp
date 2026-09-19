@@ -3073,23 +3073,25 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 (*frame).get_op_mut(opline.result as u32, opline.result_type);
                             frame_tmp_set(frame, result, Value::null());
                         }
-                        report_undefined_variable_read(
-                            eg,
-                            frame,
-                            op_array,
-                            opline,
-                            opline.op2,
-                            opline._pad & crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS != 0,
-                        )?;
-                        if let Some(exception) = eg.exception.take() {
-                            cleanup_pending_calls(eg, frame);
-                            match throw_in_frame(eg, frame, exception)? {
-                                ThrowResult::Handled(new_frame, new_op_array) => {
-                                    resume_activation!(new_frame, new_op_array);
-                                }
-                                ThrowResult::Unhandled(exception) => {
-                                    eg.exception = Some(exception);
-                                    return Ok(());
+                        if opline._pad & crate::vm::instruction::FETCH_CV_SILENT == 0 {
+                            report_undefined_variable_read(
+                                eg,
+                                frame,
+                                op_array,
+                                opline,
+                                opline.op2,
+                                opline._pad & crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS != 0,
+                            )?;
+                            if let Some(exception) = eg.exception.take() {
+                                cleanup_pending_calls(eg, frame);
+                                match throw_in_frame(eg, frame, exception)? {
+                                    ThrowResult::Handled(new_frame, new_op_array) => {
+                                        resume_activation!(new_frame, new_op_array);
+                                    }
+                                    ThrowResult::Unhandled(exception) => {
+                                        eg.exception = Some(exception);
+                                        return Ok(());
+                                    }
                                 }
                             }
                         }
@@ -10765,35 +10767,11 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         eg.mark_global_dirty(var_name.clone());
                     }
                 }
-                if !op_array.static_vars.is_empty() {
-                    let func_name = op_array.name.clone();
-                    for (cv_idx, var_name, _) in &op_array.static_vars {
-                        // SAFETY: `cv_idx` comes from this frame's validated
-                        // op array and the frame remains live until return.
-                        // Inspect the raw CV wrapper. `get_op_mut` follows PHP
-                        // references and would make every correctly bound
-                        // static look like an ordinary value, replacing its
-                        // shared cell at each return boundary.
-                        let cv_ptr = unsafe { (*frame).cv_mut(*cv_idx) as *mut Value };
-                        // SAFETY: `cv_mut` returned the initialized raw CV slot
-                        // owned by the still-live frame.
-                        let value = unsafe { &*cv_ptr };
-                        // BindStatic installs the request-owned reference cell
-                        // eagerly, so recursive calls observe mutations before
-                        // the outer frame returns. Retain a defensive fallback
-                        // for hand-built op arrays that predate that contract.
-                        if !value.is_owned_reference() {
-                            let binding = Value::owned_reference(value.dereferenced().clone());
-                            eg.with_function_static_vars_mut(
-                                frame as usize,
-                                &func_name,
-                                |statics| {
-                                    statics.insert(var_name.clone(), binding);
-                                },
-                            );
-                        }
-                    }
-                }
+                // BindStatic installs every request-owned reference cell
+                // eagerly, so static mutations have already reached storage.
+                // Do not copy raw CVs back here: unset() intentionally detaches
+                // the local name for the rest of this invocation, and a later
+                // local assignment must not replace the persistent value.
 
                 // ── Return type validation ──
                 let mut prepared_return = None;

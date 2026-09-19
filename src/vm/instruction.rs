@@ -109,6 +109,10 @@ pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
 /// parameters can promote its members without an incidental array COW copy;
 /// an undefined CV still snapshots null before its warning handler runs.
 pub const FETCH_CV_LIVE_UNPACK_SOURCE: u16 = 1 << 1;
+/// FetchCvR flag: snapshot an undefined CV as null without raising the
+/// ordinary undefined-variable diagnostic. Property assignment receivers use
+/// this while compound/increment reads retain the warning.
+pub const FETCH_CV_SILENT: u16 = 1 << 2;
 /// Direct increment/decrement executes inside an `@` suppression scope.
 pub const INCDEC_ERROR_SUPPRESS: u16 = 1;
 

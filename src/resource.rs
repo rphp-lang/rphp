@@ -400,6 +400,11 @@ impl ResourceRegistry {
         id
     }
 
+    #[cold]
+    fn reserve_next_id(&mut self) {
+        let _ = self.allocate_id();
+    }
+
     #[cfg(feature = "resource-lifetime")]
     #[cold]
     fn insert_value(
@@ -721,6 +726,19 @@ pub(crate) fn insert_for_request<T: 'static>(
     payload: T,
 ) -> i64 {
     insert(ensure_request_scope(eg), resource_type, payload)
+}
+
+/// Reserve the next public resource identifier for request bootstrap state
+/// that PHP exposes as an intentional gap rather than a live resource.
+#[cold]
+pub(crate) fn reserve_next_id_for_request(eg: &mut ExecutorGlobals) {
+    let scope = ensure_request_scope(eg);
+    REQUEST_RESOURCES.with(|registries| {
+        registries
+            .borrow_mut()
+            .get_or_insert(scope)
+            .reserve_next_id();
+    });
 }
 
 #[cfg(feature = "resource-lifetime")]

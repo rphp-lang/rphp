@@ -1835,6 +1835,7 @@ fn scalar_property_write_fetch_throw<'a>(
 #[inline(always)]
 fn property_write_receiver_type(value: &Value) -> &'static str {
     match value.value_type() {
+        ValueType::Undef => "null",
         ValueType::False => "false",
         ValueType::True => "true",
         _ => value.type_name(),

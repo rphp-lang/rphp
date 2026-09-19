@@ -49,6 +49,22 @@ foreach (['STDIN' => STDIN, 'STDOUT' => STDOUT, 'STDERR' => STDERR] as $name => 
 }
 
 #[test]
+fn first_user_stream_follows_the_php_bootstrap_resource_gap() {
+    let source = r#"
+$memory = fopen('php://memory', 'r+');
+$directory = opendir(sys_get_temp_dir());
+echo get_resource_id(STDIN), ':', get_resource_id(STDOUT), ':',
+    get_resource_id(STDERR), ':', get_resource_id($memory), ':',
+    get_resource_id($directory), "\n";
+"#;
+    let (status, stdout, stderr) = run(source, b"");
+
+    assert_eq!(status, 0);
+    assert_eq!(stdout, "1:2:3:5:6\n");
+    assert_eq!(stderr, "");
+}
+
+#[test]
 fn standard_stream_io_uses_the_process_channels_and_runtime_stdin() {
     let source = r#"
 fwrite(STDOUT, 'stdout>');

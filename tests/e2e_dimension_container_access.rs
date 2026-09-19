@@ -7,7 +7,7 @@ fn compiler_marks_terminal_dimension_write_contexts() {
     use rphp::compiler::compile::Compiler;
     use rphp::lexer::Lexer;
     use rphp::parser::Parser;
-    use rphp::vm::instruction::{FETCH_DIM_INCDEC, FETCH_DIM_OBJECT};
+    use rphp::vm::instruction::{FETCH_DIM_INCDEC, FETCH_DIM_OBJECT, FETCH_DIM_SILENT};
     use rphp::vm::opcode::OpCode;
 
     let source = r#"<?php
@@ -39,9 +39,9 @@ $objectOperation = function () use (&$text) { return $text[0]->property = 1; };
         flags,
         vec![
             FETCH_DIM_INCDEC | rphp::vm::instruction::FETCH_DIM_MUTABLE,
-            FETCH_DIM_OBJECT,
+            FETCH_DIM_OBJECT | FETCH_DIM_SILENT,
             FETCH_DIM_INCDEC | rphp::vm::instruction::FETCH_DIM_MUTABLE,
-            FETCH_DIM_OBJECT,
+            FETCH_DIM_OBJECT | FETCH_DIM_SILENT,
         ],
         "terminal dimension contexts must survive lowering"
     );

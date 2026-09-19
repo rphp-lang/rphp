@@ -4604,6 +4604,7 @@ impl Compiler {
                             nullsafe: false,
                             line,
                         } => {
+                            let first_tmp = self.next_tmp as u16;
                             if let Some(line) = class_constant_temporary_write_line(object) {
                                 return Err(self.goto_error(
                                     "Cannot use temporary expression in write context",
@@ -4637,6 +4638,15 @@ impl Compiler {
                             unset.op2 = property;
                             unset.op2_type = OpType::Const;
                             self.push_instruction_at_line(unset, *line);
+                            let end_tmp = self.next_tmp as u16;
+                            if end_tmp > first_tmp {
+                                let mut release = Instruction::new(OpCode::ReleaseTemps);
+                                release.op1 = first_tmp;
+                                release.op1_type = OpType::Tmp;
+                                release.op2 = end_tmp;
+                                release.op2_type = OpType::Tmp;
+                                self.instructions.push(release);
+                            }
                         }
                         Expr::DynamicPropertyAccess {
                             object,
@@ -4644,6 +4654,7 @@ impl Compiler {
                             nullsafe: false,
                             line,
                         } => {
+                            let first_tmp = self.next_tmp as u16;
                             if let Some(line) = class_constant_temporary_write_line(object) {
                                 return Err(self.goto_error(
                                     "Cannot use temporary expression in write context",
@@ -4677,6 +4688,15 @@ impl Compiler {
                             unset.op2 = property;
                             unset.op2_type = property_type;
                             self.push_instruction_at_line(unset, *line);
+                            let end_tmp = self.next_tmp as u16;
+                            if end_tmp > first_tmp {
+                                let mut release = Instruction::new(OpCode::ReleaseTemps);
+                                release.op1 = first_tmp;
+                                release.op1_type = OpType::Tmp;
+                                release.op2 = end_tmp;
+                                release.op2_type = OpType::Tmp;
+                                self.instructions.push(release);
+                            }
                         }
                         static_property @ (Expr::StaticProperty { .. }
                         | Expr::DynamicNamedStaticProperty { .. }

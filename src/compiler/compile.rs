@@ -9434,65 +9434,15 @@ impl Compiler {
     /// reads are mutable l-values: PHP throws `Attempt to modify property`
     /// when any receiver in the chain is null or scalar.
     fn compile_property_modify_base(&mut self, expr: &Expr) -> (u16, OpType) {
-        match expr {
-            Expr::ArrayAppendArgument { target, .. } => {
-                match self.compile_array_append_argument_reference(target, &[]) {
-                    Ok(result) => result,
-                    Err(error) => {
-                        self.deferred_error = Some(error);
-                        let null = self.add_literal(Value::null());
-                        (null, OpType::Const)
-                    }
-                }
-            }
-            Expr::PropertyAccess {
-                object,
-                property,
-                nullsafe: false,
-                line,
-            } => {
-                let (object, object_type) = self.compile_property_modify_base(object);
-                let property = self.add_literal(Value::string(property.clone()));
-                let result = self.alloc_tmp();
-                let mut fetch = Instruction::new(OpCode::FetchObjR);
-                fetch.op1 = object;
-                fetch.op1_type = object_type;
-                fetch.op2 = property;
-                fetch.op2_type = OpType::Const;
-                fetch.result = result;
-                fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_MODIFY;
-                self.push_instruction_at_line(fetch, *line);
-                (result, OpType::Tmp)
-            }
-            Expr::DynamicPropertyAccess {
-                object,
-                property,
-                nullsafe: false,
-                line,
-            } => {
-                let (object, object_type) = self.compile_property_modify_base(object);
-                let (property, property_type) = self.compile_expr(property);
-                let result = self.alloc_tmp();
-                let mut fetch = Instruction::new(OpCode::FetchObjR);
-                fetch.op1 = object;
-                fetch.op1_type = object_type;
-                fetch.op2 = property;
-                fetch.op2_type = property_type;
-                fetch.result = result;
-                fetch.result_type = OpType::Tmp;
-                fetch._pad |= FETCH_OBJ_MODIFY;
-                self.push_instruction_at_line(fetch, *line);
-                (result, OpType::Tmp)
-            }
-            _ => {
-                let result = self.compile_expr(expr);
-                if matches!(expr, Expr::ArrayAccess { .. }) {
-                    self.mark_dimension_fetch_result(result.0, result.1, FETCH_DIM_OBJECT);
-                }
-                result
-            }
+        let (operand, operand_type, deferred) = self.prepare_property_modify_base_with_root_mode(
+            expr,
+            false,
+            expression_source_line(expr),
+        );
+        for (instruction, line) in deferred {
+            self.push_instruction_at_line(instruction, line);
         }
+        (operand, operand_type)
     }
 
     /// Prepare a mutable receiver chain while deferring the property fetches
@@ -9502,6 +9452,15 @@ impl Compiler {
     fn prepare_property_modify_base(
         &mut self,
         expr: &Expr,
+    ) -> (u16, OpType, Vec<(Instruction, usize)>) {
+        self.prepare_property_modify_base_with_root_mode(expr, true, expression_source_line(expr))
+    }
+
+    fn prepare_property_modify_base_with_root_mode(
+        &mut self,
+        expr: &Expr,
+        silent_undefined_root: bool,
+        fallback_line: usize,
     ) -> (u16, OpType, Vec<(Instruction, usize)>) {
         match expr {
             Expr::ArrayAppendArgument { target, .. } => {
@@ -9520,7 +9479,12 @@ impl Compiler {
                 nullsafe: false,
                 line,
             } => {
-                let (object, object_type, mut deferred) = self.prepare_property_modify_base(object);
+                let (object, object_type, mut deferred) = self
+                    .prepare_property_modify_base_with_root_mode(
+                        object,
+                        silent_undefined_root,
+                        *line,
+                    );
                 let property = self.add_literal(Value::string(property.clone()));
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -9540,7 +9504,12 @@ impl Compiler {
                 nullsafe: false,
                 line,
             } => {
-                let (object, object_type, mut deferred) = self.prepare_property_modify_base(object);
+                let (object, object_type, mut deferred) = self
+                    .prepare_property_modify_base_with_root_mode(
+                        object,
+                        silent_undefined_root,
+                        *line,
+                    );
                 let (property, property_type) = self.compile_expr(property);
                 let result = self.alloc_tmp();
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
@@ -9554,11 +9523,64 @@ impl Compiler {
                 deferred.push((fetch, *line));
                 (result, OpType::Tmp, deferred)
             }
+            Expr::ArrayAccess { .. } => {
+                let mut root = expr;
+                let mut dimensions = Vec::new();
+                while let Expr::ArrayAccess { array, index, line } = root {
+                    dimensions.push((index.as_ref(), *line));
+                    root = array.as_ref();
+                }
+                dimensions.reverse();
+
+                let (mut current, mut current_type, mut deferred) = self
+                    .prepare_property_modify_base_with_root_mode(
+                        root,
+                        silent_undefined_root,
+                        fallback_line,
+                    );
+                let keys: Vec<(u16, OpType, usize)> = dimensions
+                    .iter()
+                    .map(|(index, line)| {
+                        let (key, key_type) = self.compile_expr(index);
+                        (key, key_type, *line)
+                    })
+                    .collect();
+                for (position, (key, key_type, line)) in keys.into_iter().enumerate() {
+                    let result = self.alloc_tmp();
+                    let mut fetch = Instruction::new(OpCode::FetchDimR);
+                    fetch.op1 = current;
+                    fetch.op1_type = current_type;
+                    fetch.op2 = key;
+                    fetch.op2_type = key_type;
+                    fetch.result = result;
+                    fetch.result_type = OpType::Tmp;
+                    if silent_undefined_root {
+                        fetch._pad |= FETCH_DIM_SILENT;
+                    }
+                    if position + 1 == dimensions.len() {
+                        fetch._pad |= FETCH_DIM_OBJECT;
+                    }
+                    deferred.push((fetch, line));
+                    current = result;
+                    current_type = OpType::Tmp;
+                }
+                (current, current_type, deferred)
+            }
+            Expr::Variable { name, line } if name == "this" => {
+                let (operand, operand_type) = self.compile_variable_read(name, *line);
+                (operand, operand_type, Vec::new())
+            }
+            Expr::Variable { name, line } if silent_undefined_root => {
+                let (operand, operand_type) = self.compile_variable_read_silent(name, *line);
+                (operand, operand_type, Vec::new())
+            }
+            Expr::Variable { name, line } => {
+                let line = if *line == 0 { fallback_line } else { *line };
+                let (operand, operand_type) = self.compile_variable_read(name, line);
+                (operand, operand_type, Vec::new())
+            }
             _ => {
                 let (operand, operand_type) = self.compile_expr(expr);
-                if matches!(expr, Expr::ArrayAccess { .. }) {
-                    self.mark_dimension_fetch_result(operand, operand_type, FETCH_DIM_OBJECT);
-                }
                 (operand, operand_type, Vec::new())
             }
         }
@@ -9630,7 +9652,36 @@ impl Compiler {
     /// Compile expression. Returns (operand_index, OpType).
     fn compile_isset_object_base(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
+            Expr::Variable { name, line }
+                if name == "this"
+                    && (self.static_method_context
+                        || (!self.bindable_closure_scope
+                            && self.lexical_static_class.is_none())) =>
+            {
+                self.compile_variable_read(name, *line)
+            }
+            Expr::Variable { name, .. } if name == "GLOBALS" => {
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchGlobals);
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                self.instructions.push(fetch);
+                (result, OpType::Tmp)
+            }
             Expr::Variable { name, .. } => (self.resolve_cv(name), OpType::Cv),
+            Expr::DynamicVariable { name, line } => {
+                self.needs_compact_receiver = true;
+                let (name, name_type) = self.compile_expr(name);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchDynamicVar);
+                fetch.op1 = name;
+                fetch.op1_type = name_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                fetch._pad |= FETCH_DYNAMIC_SILENT;
+                self.push_instruction_at_line(fetch, *line);
+                (result, OpType::Tmp)
+            }
             Expr::PropertyAccess {
                 object,
                 property,
@@ -9708,7 +9759,12 @@ impl Compiler {
 
     fn compile_isset_operand(&mut self, expr: &Expr) -> (u16, OpType) {
         match expr {
-            Expr::Variable { name, .. } if name == "this" && self.static_method_context => {
+            Expr::Variable { name, .. }
+                if name == "this"
+                    && (self.static_method_context
+                        || (!self.bindable_closure_scope
+                            && self.lexical_static_class.is_none())) =>
+            {
                 (self.add_literal(Value::null()), OpType::Const)
             }
             Expr::DynamicVariable { name, line } => {
@@ -9749,8 +9805,20 @@ impl Compiler {
     }
 
     fn compile_variable_read(&mut self, name: &str, line: usize) -> (u16, OpType) {
+        if name == "GLOBALS" {
+            let result = self.alloc_tmp();
+            let mut fetch = Instruction::new(OpCode::FetchGlobals);
+            fetch.result = result;
+            fetch.result_type = OpType::Tmp;
+            self.instructions.push(fetch);
+            return (result, OpType::Tmp);
+        }
         let cv = self.resolve_cv(name);
-        if line != 0 && name == "this" && self.static_method_context {
+        if line != 0
+            && name == "this"
+            && (self.static_method_context
+                || (!self.bindable_closure_scope && self.lexical_static_class.is_none()))
+        {
             // Keep the ordinary FetchCvR handler branch-free. This source-only
             // error is equivalent to `throw new Error(...)`, so lower it
             // through the existing object/call/throw path instead of making
@@ -9791,6 +9859,28 @@ impl Compiler {
         // remain defined across ordinary calls. Keep the snapshot result and
         // invalidate only the proofs reachable from this scope.
         self.invalidate_reentrant_definitions();
+        (result, OpType::Tmp)
+    }
+
+    fn compile_variable_read_silent(&mut self, name: &str, line: usize) -> (u16, OpType) {
+        if name == "GLOBALS" || name == "this" {
+            return self.compile_variable_read(name, line);
+        }
+        let cv = self.resolve_cv(name);
+        if line == 0 || self.definitely_defined_cvs.contains(&cv) {
+            return (cv, OpType::Cv);
+        }
+        let name_literal = self.add_literal(Value::string(name.to_string()));
+        let result = self.alloc_tmp();
+        let mut fetch = Instruction::new(OpCode::FetchCvR);
+        fetch.op1 = cv;
+        fetch.op1_type = OpType::Cv;
+        fetch.op2 = name_literal;
+        fetch.op2_type = OpType::Const;
+        fetch.result = result;
+        fetch.result_type = OpType::Tmp;
+        fetch._pad |= crate::vm::instruction::FETCH_CV_SILENT;
+        self.push_instruction_at_line(fetch, line);
         (result, OpType::Tmp)
     }
 
@@ -10379,8 +10469,8 @@ impl Compiler {
                             nullsafe: false,
                             line,
                         } => {
-                            let (object, object_type, mut deferred) =
-                                self.prepare_property_modify_base(object);
+                            let (object, object_type, mut deferred) = self
+                                .prepare_property_modify_base_with_root_mode(object, false, *line);
                             for (fetch, _) in &mut deferred {
                                 if fetch.opcode == OpCode::FetchObjR {
                                     fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
@@ -10421,8 +10511,8 @@ impl Compiler {
                             nullsafe: false,
                             line,
                         } => {
-                            let (object, object_type, mut deferred) =
-                                self.prepare_property_modify_base(object);
+                            let (object, object_type, mut deferred) = self
+                                .prepare_property_modify_base_with_root_mode(object, false, *line);
                             for (fetch, _) in &mut deferred {
                                 if fetch.opcode == OpCode::FetchObjR {
                                     fetch._pad |= FETCH_OBJ_COMPOUND_RECEIVER;
@@ -11695,6 +11785,7 @@ impl Compiler {
                     fetch.op1_type = key_type;
                     fetch.result = result;
                     fetch.result_type = OpType::Tmp;
+                    fetch._pad |= FETCH_GLOBAL_WARN_UNDEFINED;
                     self.instructions.push(fetch);
                     return (result, OpType::Tmp);
                 }

@@ -7,26 +7,23 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `lvalue-reference-materialization` checkpoint over `2ba729ae` adds **11
+The `undefined-silent-read-contexts` checkpoint over `49fe3590` adds **10
 exact PHP 8.5 passes without loss**, reducing measured supported failures from
-**225 to 214**. Runtime-resolved functions, methods, static calls and
-constructors now choose value versus reference context before materializing
-append or nested array dimensions. Nested `ArrayAccess` coalescing preserves
-exists/get/write ordering without evaluating keys twice, nullsafe reference
-destructuring fails at compilation, reference-assignment precedence matches
-PHP, and rejected negative string-offset assignment preserves both its null
-result and original storage.
+**214 to 204**. Silent receiver materialization is now limited to ordinary
+assignment, unset and isset contexts, while compound writes retain PHP's
+undefined-variable warning. `$GLOBALS`, unavailable `$this`, deferred
+dimension reads, static-local rebinding, object lifetime during unset and the
+bootstrap standard-stream resource IDs preserve PHP's observable state and
+diagnostic ordering.
 
-The 8,258-case supported ledger is **7,571 pass / 214 fail / 194 skip / 276
-unsupported / three XFAIL**. The stable 7,174-case core is **6,573 pass / 209
+The 8,258-case supported ledger is **7,581 pass / 204 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,583 pass / 199
 fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
-**5,103/201/115/180**, exact **+11/-0**; strings/array preserves the exact
-1,470-pass set at **1,470/8/67/30**. The selected upstream packet is 11/18;
-the seven remaining cases stay visible for separate isset, typed-property and
-undefined-variable clusters. Default, no-default, erased, reified,
-all-features and all-targets Cargo gates, Composer/Symfony S0--S3, formatting
-and the unsafe ratchet pass. Network and socket integration tests must run
-outside the restricted development sandbox; the same tests are green there.
+**5,113/191/115/180**, exact **+10/-0**; strings/array preserves the exact
+1,470-pass set at **1,470/8/67/30**. Default, no-default, erased, reified,
+all-features and all-targets Cargo gates, Composer/Symfony S0--S3, formatting,
+runner tooling and the unsafe ratchet pass. Network and socket integration
+tests run outside the restricted development sandbox and are green there.
 Performance remains deferred to the aggregate correctness-sweep boundary.
 
 The multi-minute 20,000-level JSON container stress case is explicitly ignored
@@ -34,18 +31,21 @@ with a TODO to move it to an opt-in stress lane; it is not counted as a pass or
 used for any compatibility claim.
 
 SHA-256 evidence: candidate
-`94edc29cb6f14baf05b8b04519cec58dc322d4218bd084efac1bcc460b45a417`;
-focused manifest
-`98a666a885afad2efc007571e351e6346d475dd2604cf73103e083f4641bf710`;
-stable-core status/pass sets
-`e81c171134f2529a68a0123ac2f338fda5bffcbe608447e00d2f02875bef8f4c` /
-`6fe2eb865e87303ae11bd27e041303554e4dd097e45dfaaf17c7d1675dfacd81`;
+`f6718d2b3c6eef1849215acdf0420b23f89c2b9c5ff94ff0974c5d9043802686`;
 Zend/lang manifest/pass set
-`8af80937e14dffedbbe7b6afb804a06cd3b4df97066436cd6d5f2173345c81a7` /
-`d78b988fe4c5195a0fd1505dc2e62c8b79fdf4287420f107819c17237fab3621`;
+`ee458d947f138a0eb1faf854b727f83d38ca255a57dce2edab12d61e9a37d25a` /
+`67e903d248ebb906c8fbfe056e44daa1cdeff6e6948816fc8d7f8694e7ff7a49`;
 strings/array manifest/pass set
 `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+### Preceding lvalue reference checkpoint
+
+The `lvalue-reference-materialization` checkpoint over `2ba729ae` added 11
+exact passes without loss and reduced supported failure debt from 225 to 214.
+It aligned reference context before append and nested-dimension
+materialization, `ArrayAccess` coalescing order, nullsafe reference rejection,
+reference precedence and rejected string-offset result state.
 
 ### Preceding closure invocation checkpoint
 

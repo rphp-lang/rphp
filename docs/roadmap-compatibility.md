@@ -36,29 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `lvalue-reference-materialization` checkpoint over `2ba729ae` reduces
-supported failure debt from **225 to 214**, exact **+11/-0**. The 8,258-case
-supported ledger is **7,571/214/194/276 with three XFAIL**. The 7,174-case
-stable core is **6,573/209/182/210**; Zend/lang reaches
-**5,103/201/115/180**, while strings/array preserves its exact 1,470-pass set
+The `undefined-silent-read-contexts` checkpoint over `49fe3590` reduces
+supported failure debt from **214 to 204**, exact **+10/-0**. The 8,258-case
+supported ledger is **7,581/204/194/276 with three XFAIL**. The 7,174-case
+stable core is **6,583/199/182/210**; Zend/lang reaches
+**5,113/191/115/180**, while strings/array preserves its exact 1,470-pass set
 at **1,470/8/67/30**.
 
-The shared compiler/VM boundary selects reference context before append and
-nested-dimension materialization for runtime-resolved calls, preserves
-coalesce evaluation order across `ArrayAccess`, and aligns nullsafe reference,
-reference-precedence and rejected string-offset result semantics. The quick
-planner recognizes the same explicitly marked argument fetch without changing
-baseline behavior. Default, no-default, erased, reified,
-all-features/all-targets, exact no-loss families, Composer/Symfony S0--S3,
-formatting and unsafe gates are green. The multi-minute deep-JSON stress case
-remains ignored pending relocation to an opt-in stress lane and is not counted
-as compatibility evidence.
+The shared compiler/VM boundary now distinguishes silent ordinary
+assignment/unset/isset receiver materialization from warning compound writes,
+including `$GLOBALS`, unavailable `$this` and deferred dimension reads.
+Static-local rebinding, object lifetime during unset and bootstrap stream IDs
+also match PHP's observable state. Five Cargo configurations/all-targets,
+exact no-loss families, Composer/Symfony S0--S3, formatting, tooling and unsafe
+gates are green. The multi-minute deep-JSON stress case remains ignored with a
+TODO for an opt-in stress lane and is not compatibility evidence.
 
-Continue the shared-cause supported-failure sweep from **214 to zero**. The
-complete Date/DateTime surface remains owned by the separate Date workstream.
-Select another 10--30-case non-Date cluster from the current 201 Zend/lang
-failures, preserve the exact 5,103 and 1,470 parent pass sets, and keep
-aggregate performance optimization deferred by user direction.
+Continue the shared-cause supported-failure sweep from **204 to zero**. Keep
+the complete Date/DateTime surface out of this stream. Select another 10--30
+case non-Date cluster from the current 191 Zend/lang failures, preserve the
+exact 5,113 and 1,470 parent pass sets, and keep aggregate performance
+optimization deferred by user direction.
+
+### Preceding lvalue reference checkpoint
+
+The `lvalue-reference-materialization` checkpoint over `2ba729ae` reduced
+supported failure debt from 225 to 214, exact +11/-0. It aligned reference
+context before append and nested-dimension materialization, `ArrayAccess`
+coalescing order, nullsafe reference rejection and rejected string-offset
+state.
 
 ### Preceding closure invocation checkpoint
 

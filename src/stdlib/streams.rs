@@ -369,6 +369,9 @@ fn register_standard_streams(eg: &mut ExecutorGlobals) {
         eg.define_constant(name, value)
             .expect("CLI standard stream constants are registered once");
     }
+    // PHP reserves resource id 4 during request bootstrap. Keep the visible
+    // standard streams at 1..=3 while the first user resource starts at 5.
+    super::resource::reserve_next_id_for_request(eg);
 }
 
 #[cfg(all(target_vendor = "apple", not(feature = "csv-errors")))]
