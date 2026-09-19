@@ -1,0 +1,24 @@
+RPHP timezone data snapshot
+===========================
+
+Source: https://data.iana.org/time-zones/releases/tzdata2026a.tar.gz
+Release: 2026a
+Archive SHA-256: 77b541725937bb53bd92bd484c0b43bec8545e2d3431ee01f04ef8f2203ba2b7
+
+The files in this directory are unmodified data files from the IANA Time Zone
+Database data-only distribution.  The accompanying LICENSE states that these
+files are in the public domain unless specified otherwise.
+
+RPHP does not use IANA's tzcode implementation.  The repository-owned Rust
+generator in scripts/generate-tzdb.rs parses these source tables and produces
+the compact transition database consumed by RPHP's independently implemented
+Date engine.
+
+Regeneration from the repository root:
+
+    rustc --edition=2024 scripts/generate-tzdb.rs -o /tmp/rphp-generate-tzdb
+    /tmp/rphp-generate-tzdb data/tzdata/2026a \
+        data/tzdata/2026a/rphp-tzdb.bin
+
+Generated database SHA-256:
+6c81fdaf16ad0762b32452b39296aaa016a9842e6ac9c60da4d3f7dce438293c
