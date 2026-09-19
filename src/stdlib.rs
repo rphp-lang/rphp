@@ -256,7 +256,7 @@ pub(crate) use builtin_classes::{
 };
 pub(crate) use date::{
     date_interval_virtual_property, date_period_iterator_disallows_references, datetime_comparison,
-    datetime_debug_projection, timezone_comparison,
+    datetime_debug_projection, timezone_comparison, write_date_interval_virtual_property,
 };
 
 /// Read a raw internal-call CV without following a PHP reference.

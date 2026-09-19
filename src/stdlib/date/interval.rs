@@ -351,6 +351,57 @@ pub(crate) fn virtual_property(value: &Value, name: &str) -> Option<Value> {
     Some(Value::long(integer))
 }
 
+/// DateInterval's public component fields are native virtual properties. PHP
+/// stores their normalized numeric value in timelib state while the value of
+/// the assignment expression itself remains unchanged.
+pub(crate) fn write_virtual_property(value: &Value, name: &str, supplied: &Value) -> bool {
+    let supplied = supplied.dereferenced();
+    let Some(mut object) = value.as_object_mut() else {
+        return false;
+    };
+    let state = object.native_object_state_mut::<DateIntervalState>();
+    if !state.initialized {
+        return false;
+    }
+    let stored = match name {
+        "y" => {
+            state.y = supplied.to_long_val();
+            Value::long(state.y)
+        }
+        "m" => {
+            state.m = supplied.to_long_val();
+            Value::long(state.m)
+        }
+        "d" => {
+            state.d = supplied.to_long_val();
+            Value::long(state.d)
+        }
+        "h" => {
+            state.h = supplied.to_long_val();
+            Value::long(state.h)
+        }
+        "i" => {
+            state.i = supplied.to_long_val();
+            Value::long(state.i)
+        }
+        "s" => {
+            state.s = supplied.to_long_val();
+            Value::long(state.s)
+        }
+        "f" => {
+            state.f = supplied.to_float_val();
+            Value::double(state.f)
+        }
+        "invert" => {
+            state.invert = supplied.to_long_val();
+            Value::long(state.invert)
+        }
+        _ => return false,
+    };
+    object.set_property(name, stored);
+    true
+}
+
 const SERIALIZED_KEYS: [&str; 12] = [
     "y",
     "m",
@@ -478,14 +529,18 @@ pub(super) fn apply_to_datetime(
     if subtract {
         sign = -sign;
     }
+    let elapsed_seconds = interval.relative.is_none().then(|| {
+        interval
+            .h
+            .saturating_mul(3_600)
+            .saturating_add(interval.i.saturating_mul(60))
+            .saturating_add(interval.s)
+    });
     let relative = interval.relative.clone().map_or_else(
         || parser::RelativeAdjustment {
             years: interval.y,
             months: interval.m,
             days: interval.d,
-            hours: interval.h,
-            minutes: interval.i,
-            seconds: interval.s,
             ..parser::RelativeAdjustment::default()
         },
         |relative| relative,
@@ -504,7 +559,18 @@ pub(super) fn apply_to_datetime(
         first_day: relative.first_day,
         last_day: relative.last_day,
     };
-    parser::apply_relative(state, &relative);
+    if interval.relative.is_some()
+        || relative.years != 0
+        || relative.months != 0
+        || relative.days != 0
+    {
+        parser::apply_relative(state, &relative);
+    }
+    if let Some(elapsed_seconds) = elapsed_seconds {
+        state.timestamp = state
+            .timestamp
+            .saturating_add(elapsed_seconds.saturating_mul(sign));
+    }
     let micros = (interval.f * 1_000_000.0).round() as i64 * sign;
     let total = i64::from(state.microsecond) + micros;
     state.timestamp = state.timestamp.saturating_add(total.div_euclid(1_000_000));
@@ -534,6 +600,7 @@ pub(super) fn difference(
     };
     let (ey, em, ed, eh, ei, es) = datetime::local_parts(earlier);
     let (ly, lm, ld, lh, li, ls) = datetime::local_parts(later);
+    let same_local_date = (ey, em, ed) == (ly, lm, ld);
     let mut years = ly - ey;
     let mut months = lm - em;
     let mut days = ld - ed;
@@ -557,20 +624,71 @@ pub(super) fn difference(
         hours += 24;
         days -= 1;
     }
-    if days < 0 {
-        months -= 1;
-        let previous_month = lm - 1;
-        let previous_year = ly + (previous_month - 1).div_euclid(12);
-        let previous_month = (previous_month - 1).rem_euclid(12) + 1;
-        days += super::super::days_in_month(previous_year, previous_month);
+    // When calendar normalization consumes the date boundary, PHP reports
+    // the exact elapsed clock duration. This is what makes a spring-forward
+    // gap one hour shorter and distinguishes both copies of a repeated fall
+    // hour even though their civil labels overlap.
+    if same_local_date || (years == 0 && months == 0 && days == 0) {
+        years = 0;
+        months = 0;
+        days = 0;
+        let earlier_micros =
+            i128::from(earlier.timestamp) * 1_000_000 + i128::from(earlier.microsecond);
+        let later_micros = i128::from(later.timestamp) * 1_000_000 + i128::from(later.microsecond);
+        let elapsed = (later_micros - earlier_micros).max(0);
+        hours = i64::try_from(elapsed / 3_600_000_000).unwrap_or(i64::MAX);
+        minutes = i64::try_from((elapsed / 60_000_000) % 60).unwrap_or_default();
+        seconds = i64::try_from((elapsed / 1_000_000) % 60).unwrap_or_default();
+        micros = i64::try_from(elapsed % 1_000_000).unwrap_or_default();
+    } else {
+        // Type-1/2 zones are fixed-offset values. Their civil labels do not
+        // carry a shared transition rule, so PHP retains the offset delta in
+        // the clock portion even for multi-day differences. Two type-3 dates
+        // in a region instead use calendar arithmetic once a day remains.
+        if earlier.timezone.kind != 3 || later.timezone.kind != 3 {
+            let earlier_offset =
+                timezone::description_state(&earlier.timezone, earlier.timestamp).1;
+            let later_offset = timezone::description_state(&later.timezone, later.timestamp).1;
+            let clock = hours
+                .saturating_mul(3_600)
+                .saturating_add(minutes.saturating_mul(60))
+                .saturating_add(seconds)
+                .saturating_add(earlier_offset.saturating_sub(later_offset));
+            days = days.saturating_add(clock.div_euclid(86_400));
+            let clock = clock.rem_euclid(86_400);
+            hours = clock / 3_600;
+            minutes = (clock / 60) % 60;
+            seconds = clock % 60;
+        }
+        let (mut borrow_year, mut borrow_month) = if inverted {
+            (ey, em)
+        } else {
+            let previous_month = lm - 1;
+            (
+                ly + (previous_month - 1).div_euclid(12),
+                (previous_month - 1).rem_euclid(12) + 1,
+            )
+        };
+        while days < 0 {
+            months -= 1;
+            days += super::super::days_in_month(borrow_year, borrow_month);
+            let previous_month = borrow_month - 1;
+            borrow_year += (previous_month - 1).div_euclid(12);
+            borrow_month = (previous_month - 1).rem_euclid(12) + 1;
+        }
+        if months < 0 {
+            months += 12;
+            years -= 1;
+        }
     }
-    if months < 0 {
-        months += 12;
-        years -= 1;
+    let earlier_day = super::super::parts_to_unix(ey, em, ed, 0, 0, 0).div_euclid(86_400);
+    let later_day = super::super::parts_to_unix(ly, lm, ld, 0, 0, 0).div_euclid(86_400);
+    let mut total_days = later_day.saturating_sub(earlier_day).unsigned_abs() as i64;
+    let earlier_clock = (eh, ei, es, earlier.microsecond);
+    let later_clock = (lh, li, ls, later.microsecond);
+    if total_days != 0 && later_clock < earlier_clock {
+        total_days -= 1;
     }
-    let base_micros = i128::from(base.timestamp) * 1_000_000 + i128::from(base.microsecond);
-    let target_micros = i128::from(target.timestamp) * 1_000_000 + i128::from(target.microsecond);
-    let total_days = ((target_micros - base_micros).unsigned_abs() / 86_400_000_000) as i64;
     DateIntervalState {
         y: years,
         m: months,

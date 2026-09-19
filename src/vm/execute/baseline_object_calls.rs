@@ -4934,6 +4934,16 @@ fn op_assign_obj_prop_inner<'a>(
             format!("Cannot create dynamic property Closure::${name}"),
         )?);
     }
+    if obj
+        .as_object()
+        .is_some_and(|object| eg.class_is_a(object.class_name.as_ref(), "DateInterval"))
+        && crate::stdlib::write_date_interval_virtual_property(obj, &name, &assigned)
+    {
+        if opline._pad & ASSIGN_PROP_RESULT_VALUE != 0 {
+            publish_property_assignment_result(frame, opline, &assigned);
+        }
+        return Ok(ColdResult::Done);
+    }
     let lazy_receiver_owner = eg.lazy_object_state(obj).map(|_| obj.clone());
     let obj = lazy_receiver_owner.as_ref().unwrap_or(obj);
 

@@ -16,6 +16,9 @@ $c = $b->sub($i);
 echo $b->format('Y-m-d H:i:s.u'), '|', $c->format('Y-m-d H:i:s.u'), "\n";
 $d = $a->diff(new DateTimeImmutable('2001-03-04 04:05:06.750000 UTC'));
 echo $d->format('%R%y/%m/%d %h:%i:%s.%F %a'), "\n";
+$mutable = new DateInterval('P7D');
+var_dump($mutable->invert = true, $mutable->invert);
+echo (new DateTimeImmutable('2009-01-14 UTC'))->add($mutable)->format('Y-m-d'), "\n";
 var_dump(DateInterval::createFromDateString('2 weeks 3 days 4 hours')->__serialize());
 "#,
         ),
@@ -23,10 +26,52 @@ var_dump(DateInterval::createFromDateString('2 weeks 3 days 4 hours')->__seriali
             "+01-02-03 04:05:06.000000 (unknown)\n",
             "2001-03-04 04:05:06.500000|2000-01-01 00:00:00.500000\n",
             "+1/2/3 4:5:6.250000 428\n",
+            "bool(true)\nint(1)\n",
+            "2009-01-07\n",
             "array(2) {\n",
             "  [\"from_string\"]=>\n  bool(true)\n",
             "  [\"date_string\"]=>\n  string(22) \"2 weeks 3 days 4 hours\"\n",
             "}\n",
+        )
+    );
+}
+
+#[test]
+fn iso_interval_time_components_cross_dst_as_elapsed_time() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('America/New_York');
+foreach ([
+    ['2006-04-02 01:30:00', 'PT2H'],
+    ['2006-04-01 23:00:00', 'P1DT4H'],
+    ['2006-10-29 00:30:00', 'PT1H'],
+    ['2006-10-29 00:30:00', 'PT2H'],
+    ['2006-10-29 00:30:00', 'PT3H'],
+] as [$start, $interval]) {
+    $date = new DateTime($start);
+    $date->add(new DateInterval($interval));
+    echo $date->format('Y-m-d H:i:s T U'), "\n";
+}
+$date = new DateTime('2006-04-02 04:00:00');
+while ($date > new DateTime('2006-04-02 01:00:00')) {
+    $date->sub(new DateInterval('PT1H'));
+    echo $date->format('Y-m-d H:i T'), "\n";
+}
+$before = new DateTime('2010-11-07 01:59:59 EDT');
+$after = new DateTime('2010-11-07 01:00:00 EST');
+echo $before->diff($after)->format('%R%yY%mM%dDT%hH%iM%sS'), "\n";
+"#,
+        ),
+        concat!(
+            "2006-04-02 04:30:00 EDT 1143966600\n",
+            "2006-04-03 03:00:00 EDT 1144047600\n",
+            "2006-10-29 01:30:00 EDT 1162099800\n",
+            "2006-10-29 01:30:00 EST 1162103400\n",
+            "2006-10-29 02:30:00 EST 1162107000\n",
+            "2006-04-02 03:00 EDT\n",
+            "2006-04-02 01:00 EST\n",
+            "+0Y0M0DT0H0M1S\n",
         )
     );
 }

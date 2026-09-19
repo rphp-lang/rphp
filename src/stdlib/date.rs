@@ -119,6 +119,14 @@ pub(crate) fn date_interval_virtual_property(value: &Value, name: &str) -> Optio
     interval::virtual_property(value, name)
 }
 
+pub(crate) fn write_date_interval_virtual_property(
+    value: &Value,
+    name: &str,
+    supplied: &Value,
+) -> bool {
+    interval::write_virtual_property(value, name, supplied)
+}
+
 pub(crate) fn timezone_comparison(
     left: &Value,
     right: &Value,

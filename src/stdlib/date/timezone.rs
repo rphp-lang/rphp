@@ -37,6 +37,47 @@ struct AbbreviationRecord {
     timezone_id: Option<&'static str>,
 }
 
+/// timelib gives common ambiguous abbreviations a stable primary meaning
+/// rather than selecting the lexicographically first IANA history entry.
+/// Keep those public parse defaults explicit; the complete record inventory
+/// still comes from the independently generated IANA database below.
+fn preferred_abbreviation_state(name: &str) -> Option<(i32, bool)> {
+    Some(match name.to_ascii_lowercase().as_str() {
+        "acdt" => (37_800, true),
+        "acst" => (34_200, false),
+        "adt" => (-10_800, true),
+        "aedt" => (39_600, true),
+        "aest" => (36_000, false),
+        "akdt" => (-28_800, true),
+        "akst" => (-32_400, false),
+        "ast" => (-14_400, false),
+        "bst" => (3_600, true),
+        "cdt" => (-18_000, true),
+        "cest" => (7_200, true),
+        "cet" => (3_600, false),
+        "cst" => (-21_600, false),
+        "edt" => (-14_400, true),
+        "eest" => (10_800, true),
+        "eet" => (7_200, false),
+        "est" => (-18_000, false),
+        "gmt" | "uct" | "utc" | "z" => (0, false),
+        "hdt" => (-32_400, true),
+        "hst" => (-36_000, false),
+        "ist" => (7_200, false),
+        "jst" => (32_400, false),
+        "mdt" => (-21_600, true),
+        "mst" => (-25_200, false),
+        "msk" => (10_800, false),
+        "nzdt" => (46_800, true),
+        "nzst" => (43_200, false),
+        "pdt" => (-25_200, true),
+        "pst" => (-28_800, false),
+        "west" => (3_600, true),
+        "wet" => (0, false),
+        _ => return None,
+    })
+}
+
 #[derive(Clone, Debug)]
 pub(super) struct TimezoneDescription {
     pub(super) kind: i64,
@@ -231,7 +272,17 @@ fn abbreviations() -> &'static BTreeMap<String, Vec<AbbreviationRecord>> {
         }
         result
             .into_iter()
-            .map(|(key, values)| (key, values.into_iter().collect()))
+            .map(|(key, values)| {
+                let mut values: Vec<_> = values.into_iter().collect();
+                if let Some((offset, dst)) = preferred_abbreviation_state(&key)
+                    && let Some(index) = values
+                        .iter()
+                        .position(|record| record.offset == offset && record.dst == dst)
+                {
+                    values.swap(0, index);
+                }
+                (key, values)
+            })
             .collect()
     })
 }
@@ -406,13 +457,17 @@ pub(super) fn description_state(
             )
         }
         2 => {
-            let record = abbreviations()
-                .get(&description.name.to_ascii_lowercase())
-                .and_then(|records| records.first());
+            let preferred = preferred_abbreviation_state(&description.name);
+            let record = preferred.or_else(|| {
+                abbreviations()
+                    .get(&description.name.to_ascii_lowercase())
+                    .and_then(|records| records.first())
+                    .map(|record| (record.offset, record.dst))
+            });
             (
                 description.name.clone(),
-                record.map_or(0, |record| i64::from(record.offset)),
-                record.is_some_and(|record| record.dst),
+                record.map_or(0, |record| i64::from(record.0)),
+                record.is_some_and(|record| record.1),
             )
         }
         _ if matches!(description.name.as_str(), "UTC" | "Etc/UTC") => {
