@@ -40,8 +40,9 @@ use crate::vm::execute::{
     call_object_property_magic_isset, called_class_name_for_internal_call, check_type_hint,
     displayed_function_name, explicit_float_conversion, explicit_long_conversion,
     explicit_numeric_cast_warning, lexical_class_name_for_internal_call, php_is_numeric_string,
-    php_numeric_string_to_float, prepare_call_argument, prepare_scalar_long_callback,
-    prepare_scalar_long_reference_mutation_callback, try_execute_scalar_long_callback,
+    php_numeric_string_to_float, prepare_call_argument, prepare_replaced_value_release,
+    prepare_scalar_long_callback, prepare_scalar_long_reference_mutation_callback,
+    run_prepared_value_destructors_from_internal, try_execute_scalar_long_callback,
     value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
@@ -251,18 +252,31 @@ pub(crate) use builtin_classes::{
     uses_native_iterator_protocol, validate_recursive_iterator_start,
 };
 
-pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
+/// Read a raw internal-call CV without following a PHP reference.
+///
+/// Keeping the borrow inside the callback bounds it to the handler's live
+/// activation while still allowing reference metadata inspection without
+/// spreading raw frame access across individual builtins.
+pub(super) fn with_raw_argument<R>(
+    ed: *mut ExecuteData,
+    index: u32,
+    inspect: impl FnOnce(&Value) -> R,
+) -> R {
     // SAFETY: internal handlers receive a live ExecuteData frame and their
-    // registered arity guarantees this CV index. Reference payloads remain
-    // live for the request; cloning detaches the returned owned Value.
-    unsafe {
-        let value = (*ed).cv(index);
+    // registered arity guarantees this CV index for the handler call.
+    unsafe { inspect((*ed).cv(index)) }
+}
+
+pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
+    with_raw_argument(ed, index, |value| {
         if value.is_reference() {
-            (&*value.as_ref_ptr()).clone()
+            // The raw argument callback keeps the reference cell live for
+            // this handler; cloning its target detaches the owned Value.
+            arg!(ed, index).clone()
         } else {
             value.clone()
         }
-    }
+    })
 }
 
 struct InternalUserCallerSnapshot {
@@ -18096,15 +18110,16 @@ pub(crate) unsafe fn collect_debug_backtrace(
                             })
                     })
                 });
-                let argument = if scoped_argument.is_some() {
-                    scoped_argument
-                } else if index as usize >= common.sig.param_names.len()
-                    && let Some(saved) = eg.function_arguments_for(frame as usize)
-                {
+                let saved_argument = eg.function_arguments_for(frame as usize).and_then(|saved| {
                     index
                         .checked_sub(saved.first)
                         .and_then(|offset| saved.values.get(offset as usize))
                         .cloned()
+                });
+                let argument = if scoped_argument.is_some() {
+                    scoped_argument
+                } else if saved_argument.is_some() {
+                    saved_argument
                 } else if common.sig.is_variadic && index >= common.sig.public_arity() {
                     let offset = index - common.sig.public_arity();
                     (*frame)
@@ -18150,6 +18165,23 @@ pub(crate) unsafe fn collect_debug_backtrace(
     trace
 }
 
+/// Collect a trace from a synchronously live internal activation.
+///
+/// Internal handlers and destructor writeback keep this frame and its
+/// predecessor chain alive until the call returns, so callers do not need to
+/// repeat the raw-frame proof at every use site.
+pub(crate) fn collect_live_debug_backtrace(
+    ed: *mut ExecuteData,
+    options: i64,
+    limit: usize,
+    eg: &ExecutorGlobals,
+    include_creation_frame: bool,
+) -> PhpArray {
+    // SAFETY: this wrapper is used only while `ed` is the synchronously live
+    // internal activation (or its explicitly requested creation frame).
+    unsafe { collect_debug_backtrace(ed, options, limit, eg, include_creation_frame) }
+}
+
 fn fn_debug_backtrace(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -18160,11 +18192,7 @@ fn fn_debug_backtrace(
         .map(Value::to_long_val)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(0);
-    // SAFETY: internal handlers receive their currently active call frame and
-    // the VM keeps its entire synchronous predecessor chain alive.
-    // SAFETY: the internal debug_backtrace activation and its synchronous
-    // predecessor chain stay live until this handler returns.
-    let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
+    let trace = collect_live_debug_backtrace(ed, options, limit, eg, false);
     ret!(rv, Value::array(trace));
 }
 
@@ -18178,9 +18206,7 @@ fn fn_debug_print_backtrace(
         .map(Value::to_long_val)
         .and_then(|value| usize::try_from(value).ok())
         .unwrap_or(0);
-    // SAFETY: the internal activation and its synchronous predecessor chain
-    // remain live until this handler returns.
-    let trace = unsafe { collect_debug_backtrace(ed, options, limit, eg, false) };
+    let trace = collect_live_debug_backtrace(ed, options, limit, eg, false);
     let output = crate::vm::trace::format_debug_print_backtrace(
         &trace,
         exception_string_param_max_len(eg),
@@ -30671,12 +30697,57 @@ fn fn_headers_sent(
     let has_line = arg_opt!(ed, 1).is_some();
     if has_file || has_line {
         let (file, line) = eg.header_output_origin();
+        let file_preserves_replacement = has_file
+            && with_raw_argument(ed, 0, |value| {
+                !value.reference_property_constraints().is_empty()
+            });
+        let line_preserves_replacement = has_line
+            && with_raw_argument(ed, 1, |value| {
+                !value.reference_property_constraints().is_empty()
+            });
+        let file_release = has_file
+            .then(|| prepare_replaced_value_release(eg, arg!(ed, 0)))
+            .flatten();
+        let line_release = has_line
+            .then(|| prepare_replaced_value_release(eg, arg!(ed, 1)))
+            .flatten();
         if has_file {
             arg_mut!(ed, 0, Value::string(file));
         }
         if has_line {
             arg_mut!(ed, 1, Value::long(line as i64));
         }
+        let replacement_trace = |index: usize, preserve: bool| {
+            let mut values = Vec::with_capacity(usize::from(has_file) + usize::from(has_line));
+            if has_file {
+                values.push(if index == 0 && !preserve {
+                    Value::null()
+                } else {
+                    arg!(ed, 0).clone()
+                });
+            }
+            if has_line {
+                values.push(if index == 1 && !preserve {
+                    Value::null()
+                } else {
+                    arg!(ed, 1).clone()
+                });
+            }
+            crate::runtime::FunctionArgumentSnapshot { first: 0, values }
+        };
+        let line_trace = line_release
+            .is_some()
+            .then(|| replacement_trace(1, line_preserves_replacement));
+        let file_trace = file_release
+            .is_some()
+            .then(|| replacement_trace(0, file_preserves_replacement));
+        with_internal_trace_origin(ed, eg, |eg| {
+            run_prepared_value_destructors_from_internal(
+                eg,
+                ed,
+                [(line_release, line_trace), (file_release, file_trace)],
+            )
+        })?;
     }
     ret!(rv, Value::bool(sent));
 }

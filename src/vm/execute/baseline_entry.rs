@@ -862,6 +862,41 @@ where
     Ok(return_value)
 }
 
+/// Invoke a callback whose real internal caller is synchronously live, but do
+/// not publish the detached-caller shortcut while the callback runs. If it
+/// throws, cleanup reconnects the callback frame to the internal activation
+/// and snapshots both frames; ordinary callback global synchronization still
+/// starts from the active user frame rather than interpreting an internal
+/// descriptor as an OpArray.
+fn call_function_iter_from_live_internal_caller<'a, I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = &'a Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false>(
+        eg,
+        func_ptr,
+        num_args,
+        args.cloned(),
+        0,
+        None,
+        None,
+        0,
+        None,
+        None,
+        logical_caller,
+        false,
+        false,
+        None,
+    )?;
+    Ok(return_value)
+}
+
 /// Enter a user callback dispatched by the active source instruction. Magic
 /// property operations use this detached boundary: their body must return to
 /// the opcode helper, while live/stored traces still expose the source-level

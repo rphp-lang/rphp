@@ -5097,8 +5097,10 @@ impl PhpArray {
         }
     }
 
-    /// Remove an element by key and return its former ordered position.
-    pub(crate) fn remove_with_position(&mut self, key: &ArrayKey) -> Option<usize> {
+    /// Detach an element by key and return its former ordered position and
+    /// value. VM release boundaries keep the returned owner alive until PHP
+    /// destructors have observed the completed structural mutation.
+    pub(crate) fn take_with_position(&mut self, key: &ArrayKey) -> Option<(usize, Value)> {
         // Remove breaks packed invariant
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
@@ -5109,11 +5111,9 @@ impl PhpArray {
                 ArrayKey::String(key) => small.find_str(key),
             };
             if let Some(position) = position {
-                let removed = small.remove_at(position).is_some();
-                if removed {
-                    self.adjust_cursor_after_remove(position);
-                    return Some(position);
-                }
+                let (_, value) = small.remove_at(position)?;
+                self.adjust_cursor_after_remove(position);
+                return Some((position, value));
             }
             return None;
         }
@@ -5123,10 +5123,10 @@ impl PhpArray {
                 ArrayKey::String(key) => linear.find_str_for_update(key),
             };
             if let Some(position) = position {
-                linear.entries.remove(position);
+                let (_, value) = linear.entries.remove(position);
                 linear.invalidate_index();
                 self.adjust_cursor_after_remove(position);
-                return Some(position);
+                return Some((position, value));
             }
             return None;
         }
@@ -5144,17 +5144,22 @@ impl PhpArray {
                 ArrayKey::String(s) => str_index.get(s.as_str()).copied(),
             };
             if let Some(idx) = found_idx {
-                let (removed_key, _) = entries.remove(idx);
+                let (removed_key, value) = entries.remove(idx);
                 if let ArrayEntryKey::String(s) = removed_key {
                     str_index.remove(s.as_ref());
                 }
                 *verified_int_prefix = rebuild_int_index(entries, int_index, 0);
                 Self::reindex_string_entries(entries, str_index, idx);
                 self.adjust_cursor_after_remove(idx);
-                return Some(idx);
+                return Some((idx, value));
             }
         }
         None
+    }
+
+    /// Remove an element by key and return its former ordered position.
+    pub(crate) fn remove_with_position(&mut self, key: &ArrayKey) -> Option<usize> {
+        self.take_with_position(key).map(|(position, _)| position)
     }
 
     /// Remove element by key.

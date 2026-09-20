@@ -7,36 +7,40 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `mutable-iteration-contracts` checkpoint over `620fc1c0` adds **10 exact
-PHP 8.5 passes without loss**, reducing measured supported failures from **123
-to 113**. By-reference array iteration now follows live splice/unset movement
-through direct calls, functions, includes and eval; ordinary object iteration
-observes live declared and dynamic property mutation. Traversable argument
-unpack canonicalizes decimal-string keys, callback reference warnings retain
-PHP order, and scalar/nullsafe/enum diagnostics preserve value-specific names.
+The `runtime-finalization-lifetimes` checkpoint over `d88357ba` adds **3 exact
+PHP 8.5 passes without loss**. Array unset now detaches the removed bucket
+before invoking its final destructor, including nested writeback and aliased
+reference cases. Internal by-reference output replacement commits every
+`headers_sent()` result before destroying displaced values, preserves reverse
+release order, and exposes the live builtin frame and PHP-compatible arguments
+when a destructor throws.
 
-The 8,258-case supported ledger is **7,672 pass / 113 fail / 194 skip / 276
-unsupported / three XFAIL**. The stable 7,174-case core is **6,674 pass / 108
-fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
-**5,204/100/115/180**, exact **+10/-0**; strings/array remains byte-identical at
-**1,470/8/67/30**. Five Cargo configurations and all-targets, exact no-loss,
-Composer/Symfony S0--S3, formatting and the unchanged unsafe ceiling pass.
-Network-dependent tests run outside the restricted development sandbox.
-Performance remains deferred to the aggregate correctness-sweep boundary.
+The stable 7,174-case core is **6,678 pass / 104 fail / 182 skip / 210
+unsupported**, with no timeout or crash. Zend/lang reaches
+**5,208/96/115/180**, exact **+3/-0**; strings/array remains byte-identical at
+**1,470/8/67/30**. The five Cargo configurations/all-targets, exact no-loss,
+Composer/Symfony S0--S3, formatting and unsafe policy are green. Production
+unsafe inventory decreases to **1,625 blocks / 288 functions**. Network tests
+run outside the restricted development sandbox. Performance remains deferred
+to the aggregate correctness-sweep boundary.
 
 SHA-256 evidence: candidate
-`6d230225a04a4816a5a659a755a373800a64233b96fadcd2c5e254610e54af49`;
-Zend/lang manifest/pass set
-`61fb3a48ad478dccc487694bc1c6f73925b62a2d548f874a03d5b0fd1057416d` /
-`d3dcbca9ec09ffb3681cffae9118842c5ab74625cc66cc1e386514df00cc4e6a`;
-strings/array manifest/pass set
-`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
-`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+`ed451474e999a62f10fdad330a6e30a8e8909661571c737c59e738d99a80779c`;
+stable-core manifest/pass set
+`ddfc910029c705694238ac9e92621eaf9461071c78379820842ad4e888fb4e87` /
+`551885eecfd521b7d0120241cd538582f91de1cb61d22baf98964d7657a206a1`.
 
-Generator object-handle publication, cyclic by-reference iteration and
-destructor/GC ordering remain separate lifetime boundaries. Tokenizer, lexer,
-parser, AST and other PHPStan front-end work are explicitly owned by another
-stream and were not changed here.
+GC cycle ordering and Fiber continuation architecture remain separate lifetime
+boundaries. Date/DateTime and tokenizer/PHPStan front-end work remain outside
+this stream.
+
+### Preceding mutable-iteration checkpoint
+
+The `mutable-iteration-contracts` checkpoint over `620fc1c0` added 10 exact
+PHP 8.5 passes without loss and reduced supported failure debt from 123 to 113.
+It preserved live by-reference array cursors across mutation and logical calls,
+exposed live ordinary-object mutation, canonicalized Traversable unpack keys,
+and aligned callback and value-specific diagnostics.
 
 ### Preceding Fiber/Generator continuation checkpoint
 

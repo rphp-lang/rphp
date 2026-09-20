@@ -9089,12 +9089,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             };
                             &mut *live_arr_ptr
                         };
+                        let mut removed_value = None;
                         if live_arr.array_identity() == Some(original_array_identity) {
                             let array = live_arr
                                 .as_array_mut()
                                 .expect("matching array identity retains array storage");
                             key = array.normalize_string_key(key, idx_val);
-                            if let Some(position) = array.remove_with_position(&key) {
+                            // Removing a bucket is a PHP release boundary. Keep
+                            // its former value as a detached root until after
+                            // the structural mutation, so re-entrant
+                            // destructors observe the already-updated array.
+                            if let Some((position, value)) = array.take_with_position(&key) {
                                 adjust_live_foreach_reference_positions_for_direct_splice(
                                     eg,
                                     frame,
@@ -9104,7 +9109,37 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                     1,
                                     0,
                                 );
+                                removed_value = Some(value);
                             }
+                        }
+                        let release_boundary = removed_value
+                            .as_ref()
+                            .is_some_and(|value| !value.owned_reference_is_aliased());
+                        if opline.result_type == OpType::Tmp {
+                            if let Some(removed_value) = removed_value {
+                                // Nested unsets rebuild every detached child
+                                // into its parent after this opcode. Retain the
+                                // removed bucket in a compiler-owned TMP; the
+                                // following ReleaseTemps marker dispatches its
+                                // destructor only after all writebacks commit.
+                                let destination = (frame as *mut Value)
+                                    .wrapping_add(CALL_FRAME_SLOTS + opline.result as usize);
+                                // `result` is the compiler-allocated TMP paired
+                                // with this UnsetDim and remains live through
+                                // the following ReleaseTemps.
+                                write_fetch_dim_result(frame, destination, removed_value);
+                            }
+                        } else if release_boundary {
+                            run_value_destructors(
+                                eg,
+                                std::slice::from_ref(
+                                    removed_value
+                                        .as_ref()
+                                        .expect("release boundary retains removed value"),
+                                ),
+                                frame,
+                            )?;
+                            resume_pending_exception!();
                         }
                     }
                     ValueType::Undef | ValueType::Null => {

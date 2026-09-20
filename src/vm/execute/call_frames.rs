@@ -702,6 +702,7 @@ fn run_final_object_destructor_tree(
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
+    live_internal_caller: bool,
 ) -> Result<bool, VmError> {
     stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
         run_final_object_destructor_tree_inner(
@@ -713,6 +714,7 @@ fn run_final_object_destructor_tree(
             logical_caller,
             internal_trace_origin,
             logical_caller_at_current_site,
+            live_internal_caller,
         )
     })
 }
@@ -726,6 +728,7 @@ fn run_final_object_destructor_tree_inner(
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
+    live_internal_caller: bool,
 ) -> Result<bool, VmError> {
     if owner.vm_release_strong_count() != Some(expected_references) {
         return Ok(false);
@@ -810,6 +813,7 @@ fn run_final_object_destructor_tree_inner(
                 logical_caller,
                 internal_trace_origin,
                 logical_caller_at_current_site,
+                live_internal_caller,
             )?;
             if eg.exception.is_some() {
                 if detach_lazy_state {
@@ -827,15 +831,27 @@ fn run_final_object_destructor_tree_inner(
             {
                 #[cfg(feature = "resource-lifetime")]
                 let _resource_release_scope = crate::resource_handle::ResourceReleaseScope::new(false);
-                let _ = call_magic_method_from_logical_caller(
-                    eg,
-                    logical_caller,
-                    internal_trace_origin,
-                    logical_caller_at_current_site,
-                    &owner,
-                    "__destruct",
-                    &[],
-                )?;
+                let _ = if live_internal_caller {
+                    let result = call_magic_method_from_live_internal_caller(
+                        eg,
+                        logical_caller,
+                        &owner,
+                        "__destruct",
+                        &[],
+                    )?;
+                    restore_live_internal_destructor_trace(eg, logical_caller, &owner);
+                    result
+                } else {
+                    call_magic_method_from_logical_caller(
+                        eg,
+                        logical_caller,
+                        internal_trace_origin,
+                        logical_caller_at_current_site,
+                        &owner,
+                        "__destruct",
+                        &[],
+                    )?
+                };
                 ran_destructor = true;
                 if eg.exception.is_some() {
                     if detach_lazy_state {
@@ -873,6 +889,7 @@ fn run_final_object_destructor_tree_inner(
                 logical_caller,
                 internal_trace_origin,
                 logical_caller_at_current_site,
+                live_internal_caller,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -981,6 +998,7 @@ fn run_final_object_destructor_tree_inner(
             logical_caller,
             internal_trace_origin,
             logical_caller_at_current_site,
+            live_internal_caller,
         )?;
         if eg.exception.is_some() {
             break;
@@ -995,6 +1013,65 @@ fn run_final_object_destructor_tree_inner(
     Ok(ran_destructor)
 }
 
+/// A callback entered beneath a detached internal activation snapshots its
+/// physical builtin caller, but the compact trace collector intentionally
+/// skips the detached callback frame. PHP exposes a destructor invoked by an
+/// internal output write as `[internal function]`; restore that one frame
+/// before the already-captured builtin/user suffix.
+#[cold]
+fn restore_live_internal_destructor_trace(
+    eg: &ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    owner: &Value,
+) {
+    let Some(exception) = eg.exception.as_ref() else {
+        return;
+    };
+    let Some(class_name) = owner
+        .as_object()
+        .map(|object| object.class_name.to_string())
+    else {
+        return;
+    };
+    let Some((trace_key, trace_value)) = exception.as_object().and_then(|object| {
+        let key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+        object.get_property(&key).cloned().map(|trace| (key, trace))
+    }) else {
+        return;
+    };
+    let Some(trace) = trace_value.as_array() else {
+        return;
+    };
+    let destructor = trace
+        .get_value_at(0)
+        .filter(|frame| {
+            frame
+                .as_array()
+                .and_then(|frame| frame.get_str("function"))
+                .and_then(Value::as_str)
+                == Some("__destruct")
+        })
+        .cloned()
+        .unwrap_or_else(|| {
+            let mut destructor = PhpArray::with_hash_capacity(3);
+            destructor.set_str("function", Value::string("__destruct"));
+            destructor.set_str("class", Value::string(class_name));
+            destructor.set_str("type", Value::string("->"));
+            Value::array(destructor)
+        });
+    // Rebuild the immutable suffix from the still-live internal activation
+    // after the destructor callback has unwound.
+    let suffix = crate::stdlib::collect_live_debug_backtrace(logical_caller, 0, 0, eg, true);
+    let mut restored = PhpArray::with_packed_capacity(suffix.len() + 1);
+    restored.push(destructor);
+    for frame in suffix.values() {
+        restored.push(frame.clone());
+    }
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property(&trace_key, Value::array(restored));
+    }
+}
+
 /// Run the PHP destructor phase for a detached set of request-owned roots.
 /// Roots remain alive throughout dispatch, so grouped reference counts can
 /// distinguish a final owner from an object that is still retained elsewhere.
@@ -1004,7 +1081,7 @@ pub(crate) fn run_value_destructors(
     roots: &[Value],
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    run_value_destructors_inner(eg, roots, logical_caller, false, true, false).map(|_| ())
+    run_value_destructors_inner(eg, roots, logical_caller, false, true, false, false).map(|_| ())
 }
 
 #[cold]
@@ -1015,6 +1092,7 @@ fn run_value_destructors_inner(
     canonical_direct_roots_retained: bool,
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
+    live_internal_caller: bool,
 ) -> Result<bool, VmError> {
     let mut candidates = Vec::<(usize, usize, Value)>::new();
     let mut seen_arrays = std::collections::HashSet::new();
@@ -1052,6 +1130,7 @@ fn run_value_destructors_inner(
         logical_caller,
         internal_trace_origin,
         logical_caller_at_current_site,
+        live_internal_caller,
     )
 }
 
@@ -1062,6 +1141,7 @@ fn run_collected_value_destructors(
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
+    live_internal_caller: bool,
 ) -> Result<bool, VmError> {
     if candidates.is_empty() {
         return Ok(false);
@@ -1090,6 +1170,7 @@ fn run_collected_value_destructors(
                 logical_caller,
                 internal_trace_origin,
                 logical_caller_at_current_site,
+                live_internal_caller,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -1147,6 +1228,7 @@ pub(crate) fn run_request_static_destructors(
             true,
             true,
             false,
+            false,
         )?;
         drop(constant_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
@@ -1159,6 +1241,7 @@ pub(crate) fn run_request_static_destructors(
             true,
             true,
             false,
+            false,
         )?;
         drop(class_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
@@ -1170,6 +1253,7 @@ pub(crate) fn run_request_static_destructors(
             logical_caller,
             true,
             true,
+            false,
             false,
         )?;
         drop(function_values);
@@ -1398,6 +1482,7 @@ fn run_frame_destructors_filtered(
                     logical_caller,
                     false,
                     false,
+                    false,
                 )?;
                 // Private consumers cannot escape or resurrect. Commit each
                 // retired edge now, so a later consumer sees the actual last
@@ -1624,7 +1709,7 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
 }
 
 #[cold]
-fn prepare_replaced_value_release(
+pub(crate) fn prepare_replaced_value_release(
     eg: &ExecutorGlobals,
     value: &Value,
 ) -> Option<PreparedValueDestructor> {
@@ -1698,6 +1783,73 @@ pub(crate) fn run_prepared_value_destructor(
     run_prepared_value_destructor_with_trace_site(eg, release, false, None)
 }
 
+/// Retire replaced internal by-reference arguments while the physical
+/// internal activation is still the logical caller. Frame-free internal
+/// handlers intentionally leave `current_execute_data` on the user frame, so
+/// the explicit activation is required for PHP's `[internal function]` trace
+/// entry and the following user callsite. Multiple outputs are committed
+/// before their former values unwind from last to first; replacement
+/// exceptions retain their ordinary chain.
+#[cold]
+pub(crate) fn run_prepared_value_destructors_from_internal(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    releases: impl IntoIterator<
+        Item = (
+            Option<PreparedValueDestructor>,
+            Option<crate::runtime::FunctionArgumentSnapshot>,
+        ),
+    >,
+) -> Result<(), VmError> {
+    // `logical_caller` is the still-live physical internal activation, not a
+    // synthesized shutdown boundary. Linking the destructor beneath it keeps
+    // both the user `__destruct` frame and the builtin frame in the trace.
+    run_prepared_value_destructors_at_boundary(eg, releases, logical_caller, false, true)
+}
+
+#[cold]
+fn run_prepared_value_destructors_at_boundary(
+    eg: &mut ExecutorGlobals,
+    releases: impl IntoIterator<
+        Item = (
+            Option<PreparedValueDestructor>,
+            Option<crate::runtime::FunctionArgumentSnapshot>,
+        ),
+    >,
+    logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
+    live_internal_caller: bool,
+) -> Result<(), VmError> {
+    let mut pending = eg.exception.take();
+    for (release, trace_arguments) in releases {
+        let publish_trace_arguments = trace_arguments.is_some();
+        if let Some(trace_arguments) = trace_arguments {
+            eg.publish_function_arguments(logical_caller as usize, trace_arguments);
+        }
+        let result = run_prepared_value_destructor_with_context(
+            eg,
+            release,
+            logical_caller,
+            internal_trace_origin,
+            false,
+            live_internal_caller,
+            None,
+        );
+        if publish_trace_arguments {
+            eg.take_function_arguments(logical_caller as usize);
+        }
+        result?;
+        let Some(replacement) = eg.exception.take() else {
+            continue;
+        };
+        if let Some(displaced) = pending.replace(replacement.clone()) {
+            append_replaced_exception(&replacement, &displaced, eg);
+        }
+    }
+    eg.exception = pending;
+    Ok(())
+}
+
 #[cold]
 fn run_prepared_value_destructor_from_current_site(
     eg: &mut ExecutorGlobals,
@@ -1720,10 +1872,30 @@ fn run_prepared_value_destructor_with_trace_site(
     logical_caller_at_current_site: bool,
     trace_site: Option<(&crate::compiler::OpArray, usize)>,
 ) -> Result<(), VmError> {
+    run_prepared_value_destructor_with_context(
+        eg,
+        release,
+        eg.current_execute_data.get(),
+        false,
+        logical_caller_at_current_site,
+        false,
+        trace_site,
+    )
+}
+
+#[cold]
+fn run_prepared_value_destructor_with_context(
+    eg: &mut ExecutorGlobals,
+    release: Option<PreparedValueDestructor>,
+    logical_caller: *mut ExecuteData,
+    internal_trace_origin: bool,
+    logical_caller_at_current_site: bool,
+    live_internal_caller: bool,
+    trace_site: Option<(&crate::compiler::OpArray, usize)>,
+) -> Result<(), VmError> {
     let Some(release) = release else {
         return Ok(());
     };
-    let logical_caller = eg.current_execute_data.get();
     match release {
         PreparedValueDestructor::Direct {
             owner,
@@ -1743,8 +1915,9 @@ fn run_prepared_value_destructor_with_trace_site(
                 None,
                 true,
                 logical_caller,
-                false,
+                internal_trace_origin,
                 logical_caller_at_current_site,
+                live_internal_caller,
             )?;
             replace_pending_destructor_trace_site(eg, trace_site);
         }
@@ -1756,8 +1929,9 @@ fn run_prepared_value_destructor_with_trace_site(
                     std::slice::from_ref(&owner),
                     logical_caller,
                     false,
-                    false,
+                    internal_trace_origin,
                     logical_caller_at_current_site,
+                    live_internal_caller,
                 )?;
                 replace_pending_destructor_trace_site(eg, trace_site);
                 let Some(replacement) = eg.exception.take() else {
@@ -1937,6 +2111,7 @@ fn release_statement_temps(
                     frame,
                     false,
                     logical_caller_at_current_site,
+                    false,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -2003,6 +2178,7 @@ fn release_statement_temps(
                 frame,
                 false,
                 logical_caller_at_current_site,
+                false,
             )?;
             if eg.exception.is_some() {
                 return Ok(());
@@ -2099,6 +2275,7 @@ fn release_statement_temps(
                     frame,
                     false,
                     logical_caller_at_current_site,
+                    false,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -2846,6 +3023,39 @@ fn call_magic_method_from_logical_caller(
         call_args.iter(),
     )?;
     Ok(Some(result))
+}
+
+/// Invoke a destructor beneath a still-live internal activation. Unlike
+/// shutdown's synthesized internal origin, this temporarily publishes the
+/// real internal frame as current and lets the ordinary detached callback
+/// cleanup reconstruct the complete `__destruct` -> builtin -> user trace.
+fn call_magic_method_from_live_internal_caller(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    obj_val: &Value,
+    method_name: &str,
+    args: &[Value],
+) -> Result<Option<Value>, VmError> {
+    let class_name = {
+        let obj = obj_val.as_object().unwrap();
+        obj.class_name.clone()
+    };
+    let full_name = format!("{}::{}", class_name.to_lowercase(), method_name);
+    let func_ptr = match eg.find_function(&full_name) {
+        Some(ptr) => ptr,
+        None => return Ok(None),
+    };
+
+    let mut call_args = Vec::with_capacity(args.len() + 1);
+    call_args.push(obj_val.clone());
+    call_args.extend_from_slice(args);
+    Ok(Some(call_function_iter_from_live_internal_caller(
+        eg,
+        logical_caller,
+        func_ptr,
+        call_args.len(),
+        call_args.iter(),
+    )?))
 }
 
 fn call_magic_method_with_trace_site(

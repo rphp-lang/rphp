@@ -4659,10 +4659,20 @@ impl Compiler {
                             unset.op2_type = key_type;
                             if path.containers.len() > 1 {
                                 unset._pad |= UNSET_DIM_NESTED;
+                                unset.result = self.alloc_tmp();
+                                unset.result_type = OpType::Tmp;
                             }
                             self.push_instruction_at_line(unset, *line);
                             self.rebuild_mutable_array_path_after_unset(&path, *line);
                             self.write_back_mutable_array_root(&path);
+                            if unset.result_type == OpType::Tmp {
+                                let mut release = Instruction::new(OpCode::ReleaseTemps);
+                                release.op1 = unset.result;
+                                release.op1_type = OpType::Tmp;
+                                release.op2 = unset.result + 1;
+                                release.op2_type = OpType::Tmp;
+                                self.push_instruction_at_line(release, *line);
+                            }
                         }
                         Expr::PropertyAccess {
                             object,

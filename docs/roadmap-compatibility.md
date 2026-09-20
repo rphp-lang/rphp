@@ -36,26 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `mutable-iteration-contracts` checkpoint over `620fc1c0` reduces supported
-failure debt from **123 to 113**, exact **+10/-0**. The 8,258-case supported
-ledger is **7,672/113/194/276 with three XFAIL**. The 7,174-case stable core is
-**6,674/108/182/210**; Zend/lang reaches **5,204/100/115/180**, while
+The `runtime-finalization-lifetimes` checkpoint over `d88357ba` adds **3 exact
+PHP 8.5 passes without loss**. The 7,174-case stable core is
+**6,678/104/182/210**; Zend/lang reaches **5,208/96/115/180**, while
 strings/array preserves its exact 1,470-pass set at **1,470/8/67/30**.
 
-The shared runtime/VM slice preserves live by-reference array cursors across
-mutation and logical call frames, exposes live ordinary-object property
-mutation, canonicalizes Traversable unpack keys and aligns callback and
-value-specific diagnostics. Five Cargo configurations/all-targets, exact
-no-loss families, Composer/Symfony S0--S3, formatting and the unchanged unsafe
-ceiling are green.
+The shared compiler/value/VM slice detaches unset buckets before final
+destruction, delays nested unset destruction until every parent writeback is
+committed, and keeps internal by-reference output activations live through
+displaced-value destruction. Destructor traces, argument projection, typed
+property constraints, reverse release order and catchable exceptions now match
+PHP. Five Cargo configurations/all-targets, exact no-loss families,
+Composer/Symfony S0--S3, formatting and unsafe policy are green; production
+unsafe inventory decreases to 1,625 blocks / 288 functions.
 
-Continue the shared-cause supported-failure sweep from **113 to zero**. Keep
-the complete Date/DateTime surface and all tokenizer, lexer, parser, AST and
-other PHPStan front-end work out of this stream. Prefer a remaining runtime
-cluster with at least ten expected passes; generator handle publication,
-cyclic reference iteration and destructor/GC ordering are named lifetime
-holdouts. Preserve the exact 5,204 and 1,470 parent pass sets, and keep
-aggregate performance optimization deferred by user direction.
+Continue the shared-cause stable-core sweep from **104 to zero**. Keep the
+complete Date/DateTime surface and tokenizer/PHPStan front-end work out of this
+stream. Prefer a remaining runtime cluster with at least ten expected passes;
+GC-cycle release and Fiber continuation architecture remain named lifetime
+holdouts. Preserve the exact 5,208 and 1,470 parent pass sets. Aggregate
+performance optimization stays deferred by user direction.
+
+### Preceding mutable-iteration checkpoint
+
+The `mutable-iteration-contracts` checkpoint over `620fc1c0` reduced supported
+failure debt from 123 to 113, exact +10/-0. It preserved live by-reference
+array cursors across mutation and logical calls, exposed live ordinary-object
+mutation, canonicalized Traversable unpack keys and aligned callback and
+value-specific diagnostics.
 
 ### Preceding Fiber/Generator continuation checkpoint
 
