@@ -36,24 +36,33 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `fiber-generator-continuation` checkpoint over `ebd4ed4f` reduces supported
-failure debt from **150 to 123**, exact **+27/-0**. The 8,258-case supported
-ledger is **7,662/123/194/276 with three XFAIL**. The 7,174-case stable core is
-**6,664/118/182/210**; Zend/lang reaches **5,194/110/115/180**, while
+The `mutable-iteration-contracts` checkpoint over `620fc1c0` reduces supported
+failure debt from **123 to 113**, exact **+10/-0**. The 8,258-case supported
+ledger is **7,672/113/194/276 with three XFAIL**. The 7,174-case stable core is
+**6,674/108/182/210**; Zend/lang reaches **5,204/100/115/180**, while
 strings/array preserves its exact 1,470-pass set at **1,470/8/67/30**.
 
-The shared runtime/VM slice resumes Fibers through direct and delegated
-Generator activations, preserves value/throw/force-close state without stale
-frames and collects cycles exposed only after root-slot cleanup. Five Cargo
-configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
-formatting and the unchanged unsafe ceiling are green.
+The shared runtime/VM slice preserves live by-reference array cursors across
+mutation and logical call frames, exposes live ordinary-object property
+mutation, canonicalizes Traversable unpack keys and aligns callback and
+value-specific diagnostics. Five Cargo configurations/all-targets, exact
+no-loss families, Composer/Symfony S0--S3, formatting and the unchanged unsafe
+ceiling are green.
 
-Continue the shared-cause supported-failure sweep from **123 to zero**. Keep
+Continue the shared-cause supported-failure sweep from **113 to zero**. Keep
 the complete Date/DateTime surface and all tokenizer, lexer, parser, AST and
-other PHPStan front-end work out of this stream. Prefer the remaining
-internal-callback/destructor/tick Fiber cluster, preserve the exact 5,194 and
-1,470 parent pass sets, and keep aggregate performance optimization deferred
-by user direction.
+other PHPStan front-end work out of this stream. Prefer a remaining runtime
+cluster with at least ten expected passes; generator handle publication,
+cyclic reference iteration and destructor/GC ordering are named lifetime
+holdouts. Preserve the exact 5,204 and 1,470 parent pass sets, and keep
+aggregate performance optimization deferred by user direction.
+
+### Preceding Fiber/Generator continuation checkpoint
+
+The `fiber-generator-continuation` checkpoint over `ebd4ed4f` reduced
+supported failure debt from 150 to 123, exact +27/-0. It resumed Fibers through
+direct and delegated Generator activations and collected cycles exposed only
+after root-slot cleanup.
 
 ### Preceding native Fiber-cycle checkpoint
 

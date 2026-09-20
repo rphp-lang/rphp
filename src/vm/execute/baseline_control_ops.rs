@@ -1896,6 +1896,13 @@ fn op_throw<'a>(
         let string_max_len = crate::stdlib::exception_string_param_max_len(eg);
         let detail = if ignore_arguments {
             format!("of type {}", value.diagnostic_type_name())
+        } else if let Some(object) = value.as_object()
+            && eg
+                .class_by_id(object.class_id)
+                .is_some_and(|class| class.is_enum)
+            && let Some(case) = object.get_property("name").and_then(Value::as_str)
+        {
+            format!("{}::{case}", object.class_name)
         } else {
             match value.value_type() {
                 ValueType::Null | ValueType::Undef => "NULL".to_string(),

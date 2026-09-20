@@ -9096,8 +9096,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             key = array.normalize_string_key(key, idx_val);
                             if let Some(position) = array.remove_with_position(&key) {
                                 adjust_live_foreach_reference_positions_for_direct_splice(
+                                    eg,
                                     frame,
                                     array_reference,
+                                    Some(original_array_identity),
                                     position,
                                     1,
                                     0,

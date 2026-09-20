@@ -257,7 +257,17 @@ fn traversable_unpack_key(
     if let Some(key) = value.as_long() {
         Ok((ArrayKey::Int(key), false))
     } else if let Some(key) = value.as_str() {
-        Ok((ArrayKey::String(key.to_string()), value.is_binary_string()))
+        // Traversable keys do not pass through PhpArray::set(), so apply the
+        // same canonical decimal-key rule explicitly before array/call unpack.
+        // PHP treats a Generator key such as "100" as a positional argument,
+        // while a non-canonical decimal spelling remains a named key.
+        Ok(match canonical_decimal_array_key(key) {
+            Some(key) => (ArrayKey::Int(key), false),
+            None => (
+                ArrayKey::String(key.to_string()),
+                value.is_binary_string(),
+            ),
+        })
     } else {
         Err(kind.key_error().to_string())
     }
@@ -774,6 +784,15 @@ fn clone_foreach_value<const BY_REFERENCE_LOOP: bool>(value: &Value) -> Value {
 }
 
 #[inline]
+fn foreach_diagnostic_type_name(value: &Value) -> std::borrow::Cow<'_, str> {
+    match value.dereferenced().value_type() {
+        ValueType::True => std::borrow::Cow::Borrowed("true"),
+        ValueType::False => std::borrow::Cow::Borrowed("false"),
+        _ => value.dereferenced().diagnostic_type_name(),
+    }
+}
+
+#[inline]
 fn materialize_foreach_array_key(key: ArrayKey, external_byte_keys: bool) -> Value {
     match key {
         ArrayKey::Int(key) => Value::long(key),
@@ -792,17 +811,8 @@ fn set_foreach_object_entry(array: &mut PhpArray, name: &str, value: Value) {
 }
 
 #[inline]
-fn object_uses_direct_property_iteration(value: &Value, eg: &ExecutorGlobals) -> bool {
-    value.as_object().is_some_and(|object| {
-        object.is_dynamic_std_class()
-            || object.has_detached_property_table()
-            || eg.class_by_id(object.class_id).is_some_and(|class| {
-                class
-                    .properties
-                    .iter()
-                    .any(|property| property.has_get_hook || property.has_set_hook)
-            })
-    })
+fn object_uses_direct_property_iteration(value: &Value, _eg: &ExecutorGlobals) -> bool {
+    value.as_object().is_some()
 }
 
 fn materialize_foreach_object(
@@ -944,8 +954,10 @@ fn set_foreach_iteration_state(
 /// mutated reference cell. `frame` is the first user frame whose loops may be
 /// live; callers reached through an internal array mutator start at its parent.
 fn adjust_live_foreach_reference_positions(
+    eg: &ExecutorGlobals,
     mut frame: *mut ExecuteData,
-    target_reference: usize,
+    target_reference: Option<usize>,
+    target_array: Option<usize>,
     start: usize,
     removed: usize,
     inserted: usize,
@@ -960,66 +972,72 @@ fn adjust_live_foreach_reference_positions(
             if !function.is_null() && (*function).fn_type == FunctionType::User {
                 let user = &*(function as *const UserFunction);
                 let op_array = &user.op_array;
-                if !(*function).plan.has_reference_foreach() {
-                    frame = (*frame).prev_execute_data;
-                    continue;
-                }
-                let current = (*frame)
-                    .opline
-                    .offset_from(op_array.instructions.as_ptr()) as usize;
-                for (init_index, init) in op_array.instructions.iter().enumerate() {
-                    if init.opcode != OpCode::ForeachInit {
-                        continue;
+                if (*function).plan.has_reference_foreach() {
+                    let current = (*frame)
+                        .opline
+                        .offset_from(op_array.instructions.as_ptr())
+                        as usize;
+                    for (init_index, init) in op_array.instructions.iter().enumerate() {
+                        if init.opcode != OpCode::ForeachInit {
+                            continue;
+                        }
+                        let Some(next) = op_array.instructions.get(init_index + 1) else {
+                            continue;
+                        };
+                        let Some(exit) = op_array.instructions.get(init_index + 2) else {
+                            continue;
+                        };
+                        if next.opcode != OpCode::ForeachNextRef
+                            || exit.opcode != OpCode::JmpZ
+                            || current <= init_index + 2
+                            || current >= exit.op2 as usize
+                        {
+                            continue;
+                        }
+                        let iteration_state = &*(*frame).get_op_ptr(
+                            next.op1 as u32,
+                            next.op1_type,
+                            op_array,
+                        );
+                        if iteration_state.reference_identity() != target_reference
+                            && iteration_state.dereferenced().array_identity() != target_array
+                        {
+                            continue;
+                        }
+                        let position = &*(*frame).get_op_ptr(
+                            next.op2 as u32,
+                            next.op2_type,
+                            op_array,
+                        );
+                        let Some(position) = position
+                            .as_long()
+                            .and_then(|position| usize::try_from(position).ok())
+                        else {
+                            continue;
+                        };
+                        if start >= position {
+                            continue;
+                        }
+                        let removed_before_position = removed_end.min(position) - start;
+                        let adjusted = position
+                            .saturating_sub(removed_before_position)
+                            .saturating_add(inserted);
+                        let position_slot =
+                            (*frame).get_op_mut(next.op2 as u32, next.op2_type);
+                        frame_tmp_set_long(
+                            frame,
+                            position_slot,
+                            i64::try_from(adjusted).unwrap_or(i64::MAX),
+                        );
                     }
-                    let Some(next) = op_array.instructions.get(init_index + 1) else {
-                        continue;
-                    };
-                    let Some(exit) = op_array.instructions.get(init_index + 2) else {
-                        continue;
-                    };
-                    if next.opcode != OpCode::ForeachNextRef
-                        || exit.opcode != OpCode::JmpZ
-                        || current <= init_index + 2
-                        || current >= exit.op2 as usize
-                    {
-                        continue;
-                    }
-                    let iteration_state = &*(*frame).get_op_ptr(
-                        next.op1 as u32,
-                        next.op1_type,
-                        op_array,
-                    );
-                    if iteration_state.reference_identity() != Some(target_reference) {
-                        continue;
-                    }
-                    let position = &*(*frame).get_op_ptr(
-                        next.op2 as u32,
-                        next.op2_type,
-                        op_array,
-                    );
-                    let Some(position) = position
-                        .as_long()
-                        .and_then(|position| usize::try_from(position).ok())
-                    else {
-                        continue;
-                    };
-                    if start >= position {
-                        continue;
-                    }
-                    let removed_before_position = removed_end.min(position) - start;
-                    let adjusted = position
-                        .saturating_sub(removed_before_position)
-                        .saturating_add(inserted);
-                    let position_slot =
-                        (*frame).get_op_mut(next.op2 as u32, next.op2_type);
-                    frame_tmp_set_long(
-                        frame,
-                        position_slot,
-                        i64::try_from(adjusted).unwrap_or(i64::MAX),
-                    );
                 }
             }
-            frame = (*frame).prev_execute_data;
+            let physical = (*frame).prev_execute_data;
+            let caller = eg.trace_caller(frame as usize, physical);
+            if caller == frame {
+                break;
+            }
+            frame = caller;
         }
     }
 }
@@ -1027,6 +1045,7 @@ fn adjust_live_foreach_reference_positions(
 /// Keep the next-position counter of every active by-reference foreach stable
 /// across an array splice performed by an internal function.
 pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
+    eg: &ExecutorGlobals,
     internal_frame: *mut ExecuteData,
     argument_index: u32,
     start: usize,
@@ -1040,15 +1059,16 @@ pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
     // complete synchronous call.
     unsafe {
         let argument = (*internal_frame).cv(argument_index);
-        if argument.owned_reference_handle_count() < 3 {
+        let target_reference = argument.reference_identity();
+        let target_array = argument.dereferenced().array_identity();
+        if target_reference.is_none() && target_array.is_none() {
             return;
         }
-        let Some(target_reference) = argument.reference_identity() else {
-            return;
-        };
         adjust_live_foreach_reference_positions(
+            eg,
             (*internal_frame).prev_execute_data,
             target_reference,
+            target_array,
             start,
             removed,
             inserted,
@@ -1060,16 +1080,20 @@ pub(crate) fn adjust_live_foreach_reference_positions_for_splice(
 /// user frame, including every independently nested loop over the same cell.
 #[inline]
 fn adjust_live_foreach_reference_positions_for_direct_splice(
+    eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
     target_reference: Option<usize>,
+    target_array: Option<usize>,
     start: usize,
     removed: usize,
     inserted: usize,
 ) {
-    if let Some(target_reference) = target_reference {
+    if target_reference.is_some() || target_array.is_some() {
         adjust_live_foreach_reference_positions(
+            eg,
             frame,
             target_reference,
+            target_array,
             start,
             removed,
             inserted,
@@ -1519,14 +1543,7 @@ fn op_foreach_init<'a>(
             None if iterable.value_type() == ValueType::Object => false,
             None if iterable.value_type() == ValueType::Closure => true,
             None => {
-                let type_name = match arr_val.value_type() {
-                    ValueType::Null => "null",
-                    ValueType::True | ValueType::False => "bool",
-                    ValueType::Long => "int",
-                    ValueType::Double => "float",
-                    ValueType::String => "string",
-                    _ => "unknown",
-                };
+                let type_name = foreach_diagnostic_type_name(arr_val);
                 report_php_warning(
                     eg,
                     frame,
@@ -1985,16 +2002,13 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 }
             };
             let slots = compact_slot_count.is_none().then(|| {
-                let object = arr_val.as_object().unwrap();
                 eg.visible_instance_property_slots(class_id, caller_class.as_deref())
                     .into_iter()
                     .filter(|slot| {
                         let definition = eg.instance_property_definition(class_id, *slot);
-                        (!object.property_values[*slot].is_undef()
-                            || definition.is_some_and(|definition| definition.has_get_hook))
-                            && definition.is_none_or(|definition| {
-                                !definition.is_virtual_hook_property() || definition.has_get_hook
-                            })
+                        definition.is_none_or(|definition| {
+                            !definition.is_virtual_hook_property() || definition.has_get_hook
+                        })
                     })
                     .collect::<Vec<_>>()
             });
@@ -2045,9 +2059,35 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 },
                 Vec::len,
             );
-            if pos < declared_len + dynamic_len {
-                let slot = (pos < declared_len).then(|| {
-                    slots.as_ref().map_or(pos, |slots| slots[pos])
+            // Declared property slots are stable even after unset(). Keep the
+            // foreach cursor in that stable coordinate space and skip empty
+            // slots instead of compacting them out of the live view. This is
+            // what lets removing a prior/current property preserve the next
+            // property while removing a future property hides it.
+            let mut iteration_position = pos;
+            while iteration_position < declared_len {
+                let slot = slots
+                    .as_ref()
+                    .map_or(iteration_position, |slots| slots[iteration_position]);
+                let readable = {
+                    let definition = eg.instance_property_definition(class_id, slot);
+                    !arr_val
+                        .as_object()
+                        .expect("foreach source remains an object")
+                        .property_values[slot]
+                        .is_undef()
+                        || definition.is_some_and(|definition| definition.has_get_hook)
+                };
+                if readable {
+                    break;
+                }
+                iteration_position += 1;
+            }
+            if iteration_position < declared_len + dynamic_len {
+                let slot = (iteration_position < declared_len).then(|| {
+                    slots
+                        .as_ref()
+                        .map_or(iteration_position, |slots| slots[iteration_position])
                 });
                 let name = if let Some(slot) = slot {
                     eg.instance_property_definition(class_id, slot)
@@ -2055,7 +2095,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                         .name
                         .clone()
                 } else {
-                    let dynamic_position = pos - declared_len;
+                    let dynamic_position = iteration_position - declared_len;
                     dynamic_names.as_ref().map_or_else(
                         || {
                             arr_val
@@ -2238,7 +2278,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                         frame,
                         pos_ptr,
                         opline.op2_type,
-                        Value::long((pos + 1) as i64),
+                        Value::long((iteration_position + 1) as i64),
                     )
                 };
                 true
@@ -2246,6 +2286,22 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 false
             }
         } else {
+            if BY_REFERENCE_LOOP && iteration_state.is_reference() {
+                let type_name = foreach_diagnostic_type_name(arr_val);
+                report_php_warning(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &format!(
+                        "foreach() argument must be of type array|object, {type_name} given"
+                    ),
+                    false,
+                )?;
+                if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
+                    return Ok(control);
+                }
+            }
             false
         }
     };

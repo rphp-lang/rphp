@@ -7,36 +7,43 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `fiber-generator-continuation` checkpoint over `ebd4ed4f` adds **27 exact
-PHP 8.5 passes without loss**, reducing measured supported failures from **150
-to 123**. A Fiber may now suspend through direct and delegated Generator
-activations, resume with values or exceptions, retain canonical Generator
-re-entrancy state, and force-close request-shutdown cycles without retaining
-stale VM-frame pointers. Root-slot cleanup also exposes newly unreachable
-Fiber/Generator cycles to a final shutdown collection pass.
+The `mutable-iteration-contracts` checkpoint over `620fc1c0` adds **10 exact
+PHP 8.5 passes without loss**, reducing measured supported failures from **123
+to 113**. By-reference array iteration now follows live splice/unset movement
+through direct calls, functions, includes and eval; ordinary object iteration
+observes live declared and dynamic property mutation. Traversable argument
+unpack canonicalizes decimal-string keys, callback reference warnings retain
+PHP order, and scalar/nullsafe/enum diagnostics preserve value-specific names.
 
-The 8,258-case supported ledger is **7,662 pass / 123 fail / 194 skip / 276
-unsupported / three XFAIL**. The stable 7,174-case core is **6,664 pass / 118
+The 8,258-case supported ledger is **7,672 pass / 113 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,674 pass / 108
 fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
-**5,194/110/115/180**, exact **+27/-0**; strings/array remains byte-identical at
+**5,204/100/115/180**, exact **+10/-0**; strings/array remains byte-identical at
 **1,470/8/67/30**. Five Cargo configurations and all-targets, exact no-loss,
 Composer/Symfony S0--S3, formatting and the unchanged unsafe ceiling pass.
 Network-dependent tests run outside the restricted development sandbox.
 Performance remains deferred to the aggregate correctness-sweep boundary.
 
 SHA-256 evidence: candidate
-`59ee38fb351f5a93c4eb66f458992dd278110a406279757e1a32927b484d959a`;
+`6d230225a04a4816a5a659a755a373800a64233b96fadcd2c5e254610e54af49`;
 Zend/lang manifest/pass set
-`3111f237fae9964b12fa71f62b9d354a1d8e64ad15177acd41721592fe709eb8` /
-`8de9f7db0e6a2e7d9d2b4732ab9af70be98a2d3a573f19e70e9564a8ab55ef62`;
+`61fb3a48ad478dccc487694bc1c6f73925b62a2d548f874a03d5b0fd1057416d` /
+`d3dcbca9ec09ffb3681cffae9118842c5ab74625cc66cc1e386514df00cc4e6a`;
 strings/array manifest/pass set
-`78454ba1ec2d1726a1704a3c492b613e24f32c9341f41e13461c721fdaf7962e` /
+`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
 
-The remaining Fiber failures require continuation through internal callbacks,
-destructors, ticks or custom Iterators and remain a separate runtime boundary.
-Tokenizer, lexer, parser, AST and other PHPStan front-end work are explicitly
-owned by another stream and were not changed here.
+Generator object-handle publication, cyclic by-reference iteration and
+destructor/GC ordering remain separate lifetime boundaries. Tokenizer, lexer,
+parser, AST and other PHPStan front-end work are explicitly owned by another
+stream and were not changed here.
+
+### Preceding Fiber/Generator continuation checkpoint
+
+The `fiber-generator-continuation` checkpoint over `ebd4ed4f` added 27 exact
+PHP 8.5 passes without loss and reduced supported failure debt from 150 to 123.
+It resumed Fibers through direct and delegated Generator activations and
+collected cycles exposed only after root-slot cleanup.
 
 ### Preceding native Fiber-cycle checkpoint
 

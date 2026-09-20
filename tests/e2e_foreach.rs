@@ -711,7 +711,7 @@ fn test_e2e_foreach_string_warns() {
 fn test_e2e_foreach_bool_warns() {
     assert_eq!(
         run_php("<?php foreach (true as $v) { echo $v; } echo 'after';"),
-        "\nWarning: foreach() argument must be of type array|object, bool given in <main> on line 1\nafter"
+        "\nWarning: foreach() argument must be of type array|object, true given in <main> on line 1\nafter"
     );
 }
 

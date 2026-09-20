@@ -1171,7 +1171,7 @@ fn fn_array_shift(
         .map(|value| value.dereferenced().clone())
         .unwrap_or_else(Value::null);
     if had_value {
-        crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(ed, 0, 0, 1, 0);
+        crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(eg, ed, 0, 0, 1, 0);
     }
     array.cursor_rewind();
     write_array_mutator_return(ed, rv, eg, value)
@@ -1252,7 +1252,7 @@ fn array_unshift_values(
     *arr = Value::array(result);
     if inserted != 0 {
         crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
-            ed, 0, 0, 0, inserted,
+            eg, ed, 0, 0, 0, inserted,
         );
     }
     ret!(rv, Value::long(total as i64));
@@ -4698,6 +4698,7 @@ fn fn_array_splice(
 
     *target = Value::array(result);
     crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
+        eg,
         ed,
         0,
         start,
@@ -26992,8 +26993,15 @@ fn fn_array_reduce(
     if let Some(arr) = arr_val.as_array() {
         let items: Vec<Value> = arr.values().cloned().collect();
         let resolved = resolve_callback_or_fatal(eg, &callback, ed)?;
+        let reference_warning_name = callback_has_hard_reference_parameters(&resolved)
+            .then(|| callable_display_name(&callback, eg));
         let mut carry = initial;
         for item in items {
+            if let Some(display_name) = reference_warning_name.as_deref()
+                && !report_two_value_callback_reference_warnings(ed, eg, &resolved, display_name)?
+            {
+                return Ok(());
+            }
             if resolved.prepend_args.is_empty()
                 && resolved.use_vars.is_empty()
                 && !resolved.has_context()
@@ -27103,7 +27111,7 @@ impl UserSortCallbackState {
     }
 }
 
-fn report_user_sort_reference_warnings(
+fn report_two_value_callback_reference_warnings(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
@@ -27145,7 +27153,7 @@ fn call_user_sort_callback_once(
     right: &Value,
 ) -> Result<Option<Value>, VmError> {
     if let Some(display_name) = state.reference_warning_name.as_deref()
-        && !report_user_sort_reference_warnings(ed, eg, resolved, display_name)?
+        && !report_two_value_callback_reference_warnings(ed, eg, resolved, display_name)?
     {
         return Ok(None);
     }

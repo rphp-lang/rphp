@@ -307,7 +307,7 @@ foreach ([false, [], 0, 0.0, ''] as $value) {
     assert_eq!(
         out,
         concat!(
-            "Call to a member function missing() on bool|4\n",
+            "Call to a member function missing() on false|4\n",
             "Call to a member function missing() on array|4\n",
             "Call to a member function missing() on int|4\n",
             "Call to a member function missing() on float|4\n",

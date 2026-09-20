@@ -38,7 +38,11 @@ fn op_nullsafe_check<'a>(
                 "Error",
                 &format!(
                     "Call to a member function {method}() on {}",
-                    receiver.type_name()
+                    match receiver.value_type() {
+                        ValueType::True => "true",
+                        ValueType::False => "false",
+                        _ => receiver.type_name(),
+                    }
                 ),
             );
             let instruction_index = (opline as *const Instruction)
