@@ -1456,7 +1456,7 @@ impl<'a> Parser<'a> {
         let serialized_name = match serialized_name {
             Ok(serialized_name) => serialized_name,
             Err(()) => {
-                return self.reject_enum(None, self.position.saturating_sub(1));
+                return self.reject_enum(None, self.position);
             }
         };
         let Some((input_class, case_name)) = serialized_name.split_once(':') else {
