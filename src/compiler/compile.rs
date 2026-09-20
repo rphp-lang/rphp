@@ -3839,6 +3839,16 @@ impl Compiler {
         self
     }
 
+    /// Share an already built constant table: an include-heavy request
+    /// compiles thousands of units against the same declarations.
+    pub(crate) fn with_shared_known_constants(
+        mut self,
+        constants: Rc<HashMap<String, Value>>,
+    ) -> Self {
+        self.known_constants = constants;
+        self
+    }
+
     pub(crate) fn with_lexical_class_scope(
         mut self,
         class: Option<String>,

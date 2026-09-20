@@ -2305,16 +2305,10 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 .is_some_and(Value::is_explicitly_unset_property);
         let dynamic_property = obj.get_dynamic_property_with_position(&key).is_some();
         let class_name = obj.class_name.clone();
+        let object_class_id = obj.class_id;
         drop(obj);
-        let has_magic_get = eg
-            .find_function(&format!("{}::__get", class_name.to_ascii_lowercase()))
-            .is_some();
-        let has_magic_isset = eg
-            .find_function(&format!(
-                "{}::__isset",
-                class_name.to_ascii_lowercase()
-            ))
-            .is_some();
+        let (has_magic_get, has_magic_isset) =
+            eg.class_magic_get_isset(object_class_id, &class_name);
         let magic_get_can_handle = (!declared_property || explicitly_unset_declared)
             && !dynamic_property
             && ((has_magic_get
@@ -2425,33 +2419,23 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         let declared_slot = (!force_dynamic && property_accessible)
             .then(|| obj.property_slot(&key))
             .flatten();
+        // Read the immutable declaration in place: only hook owners need an
+        // owned class name, and the typed-property diagnostic re-reads the
+        // declaration on its rare uninitialized path.
         let definition = declared_slot
-            .and_then(|slot| eg.instance_property_definition(obj.class_id, slot))
-            .cloned();
-        let has_get_hook = definition
-            .as_ref()
-            .is_some_and(|definition| definition.has_get_hook);
+            .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
+        let has_get_hook = definition.is_some_and(|definition| definition.has_get_hook);
         let get_hook_declaring_class = definition
-            .as_ref()
             .filter(|definition| definition.has_get_hook)
             .map(|definition| definition.declaring_class.clone());
         let has_property_hook = definition
-            .as_ref()
             .is_some_and(|definition| definition.has_get_hook || definition.has_set_hook);
-        let write_only_property = definition
-            .as_ref()
-            .is_some_and(|definition| {
-                definition.has_set_hook
-                    && !definition.has_get_hook
-                    && !definition.set_hook_is_backed
-            });
-        let typed_property_definition = definition
-            .as_ref()
+        let write_only_property = definition.is_some_and(|definition| {
+            definition.has_set_hook && !definition.has_get_hook && !definition.set_hook_is_backed
+        });
+        let typed_property_slot = definition
             .filter(|definition| definition.is_typed())
-            .cloned();
-        let typed_property = typed_property_definition
-            .as_ref()
-            .map(|definition| (definition.type_scope.clone(), definition.name.clone()));
+            .and(declared_slot);
         let explicitly_unset_declared = declared_slot.is_some()
             && obj
                 .get_property(&key)
@@ -2480,7 +2464,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
         }
         drop(obj); // Release borrow before potential magic method call
         let explicitly_unset_uses_missing_path = explicitly_unset_declared
-            && (typed_property.is_none()
+            && (typed_property_slot.is_none()
                 || (has_magic_get
                     && !property_guard_active(
                         eg,
@@ -2610,6 +2594,10 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 val.dereferenced().value_type(),
                 ValueType::Object | ValueType::Closure
             );
+            // Re-read the immutable declaration: the earlier borrow ended
+            // before the hook and magic calls above took `eg` mutably.
+            let definition = declared_slot
+                .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
             if indirect_modify
                 && !identity_preserving_object
                 && !(val.is_undef() && opline._pad & FETCH_OBJ_COMPOUND_RECEIVER != 0)
@@ -2666,17 +2654,20 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                     },
                 )?);
             }
-            if val.is_undef() && typed_property.is_some() {
+            if val.is_undef() && typed_property_slot.is_some() {
                 if opline._pad & FETCH_OBJ_SILENT != 0 {
                     set_result(Value::null());
                     return Ok(ColdResult::Done);
                 }
-                let (type_scope, property_name) = typed_property.as_ref().unwrap();
+                let (type_scope, property_name) = typed_property_slot
+                    .and_then(|slot| eg.instance_property_definition(object_class_id, slot))
+                    .map(|definition| (definition.type_scope.clone(), definition.name.clone()))
+                    .expect("typed property declaration is immutable after publication");
                 let error = make_error_value(
                     "Error",
                     &format!(
                         "Typed property {}::${} must not be accessed before initialization",
-                        property_diagnostic_class_name(type_scope),
+                        property_diagnostic_class_name(&type_scope),
                         property_name
                     ),
                 );
@@ -2846,9 +2837,16 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 return Ok(result);
             }
             if let Some(mut result) = magic_value {
-                if explicitly_unset_declared
-                    && let Some(definition) = typed_property_definition.as_ref()
-                {
+                // Only an unset typed property served by __get needs the
+                // declaration again; clone it on this rare path alone.
+                let typed_property_definition = explicitly_unset_declared
+                    .then(|| {
+                        typed_property_slot
+                            .and_then(|slot| eg.instance_property_definition(object_class_id, slot))
+                            .cloned()
+                    })
+                    .flatten();
+                if let Some(definition) = typed_property_definition.as_ref() {
                     let original = result.dereferenced().clone();
                     let original_type = property_assignment_type_name(&original).to_string();
                     let prepared = match prepare_property_assignment(
@@ -4219,7 +4217,7 @@ fn op_bind_obj_prop_ref<'a>(
                 };
                 previous.and_then(|value| {
                     (!value.owned_reference_is_aliased())
-                        .then(|| prepare_replaced_value_destructor(eg, value))
+                        .then(|| prepare_replaced_value_release(eg, value))
                         .flatten()
                 })
             };
@@ -4988,12 +4986,8 @@ fn op_assign_obj_prop_inner<'a>(
                             drop(php_obj);
                             return Ok(object_property_throw(eg, frame, "Error", message)?);
                         }
-                        let has_setter = eg
-                            .find_function(&format!(
-                                "{}::__set",
-                                php_obj.class_name.to_ascii_lowercase()
-                            ))
-                            .is_some();
+                        let has_setter =
+                            eg.class_magic_set(php_obj.class_id, &php_obj.class_name);
                         let asymmetric = eg.property_has_asymmetric_set_visibility(
                             &php_obj.class_name,
                             &name,
@@ -5088,12 +5082,7 @@ fn op_assign_obj_prop_inner<'a>(
             || lazy_declared_explicitly_unset)
             && !lazy_dynamic_property
             && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET)
-            && eg
-                .find_function(&format!(
-                    "{}::__set",
-                    lazy_class_name.to_ascii_lowercase()
-                ))
-                .is_some();
+            && eg.class_magic_set(0, &lazy_class_name);
         if let Some(declaring_class) = lazy_set_hook_declaring_class.as_deref()
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
             && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_HOOK_SET)
@@ -5140,15 +5129,7 @@ fn op_assign_obj_prop_inner<'a>(
                         .get_property(&lazy_key)
                         .is_some_and(Value::is_explicitly_unset_property)
             });
-        if explicitly_unset_declared
-            && !setter_guarded
-            && eg
-                .find_function(&format!(
-                    "{}::__set",
-                    lazy_class_name.to_ascii_lowercase()
-                ))
-                .is_some()
-        {
+        if explicitly_unset_declared && !setter_guarded && eg.class_magic_set(0, &lazy_class_name) {
             let magic = call_guarded_property_magic_method(
                 eg,
                 magic_receiver,
@@ -5174,13 +5155,7 @@ fn op_assign_obj_prop_inner<'a>(
         // __set on its next assignment. Keep that pay-for-use class family on
         // the canonical handler instead of charging every ordinary cached
         // property write for a per-instance unset-state guard.
-        if eg
-            .find_function(&format!(
-                "{}::__set",
-                php_obj.class_name
-            ))
-            .is_some()
-        {
+        if eg.class_magic_set(php_obj.class_id, &php_obj.class_name) {
             prop_is_writable = false;
         }
         if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {

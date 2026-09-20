@@ -884,3 +884,36 @@ fn braced_and_bare_g_escapes_are_backreferences() {
         assert!(!re.is_match("ab"), "{pattern}");
     }
 }
+
+// ── Bounded lookbehind window ────────────────────────────────────────────
+
+#[test]
+fn lookbehind_only_tries_starts_within_its_length_range() {
+    let flags = RegexFlags::default();
+    let mixed = Regex::new("(?<=ab|c)x", flags).unwrap();
+    assert!(mixed.is_match("abx"));
+    assert!(mixed.is_match("cx"));
+    assert!(!mixed.is_match("bx"));
+    let negative = Regex::new("(?<![\"'])[:-]\\w", flags).unwrap();
+    assert!(negative.is_match("key:v"));
+    assert!(!negative.is_match("\"key\":v".trim_start_matches("\"key")));
+    assert!(!Regex::new("(?<!\"):x", flags).unwrap().is_match("\":x"));
+    // A lookbehind at the subject start sees nothing before it.
+    assert!(!Regex::new("(?<=a)x", flags).unwrap().is_match("x"));
+    assert!(Regex::new("(?<!a)x", flags).unwrap().is_match("x"));
+    // Quantified and grouped bodies keep their full range.
+    assert!(Regex::new("(?<=a{2,3})x", flags).unwrap().is_match("aaax"));
+    assert!(!Regex::new("(?<=a{2,3})x", flags).unwrap().is_match("ax"));
+    assert!(Regex::new("(?<=(?:ab)+)x", flags).map_or(true, |re| re.is_match("ababx")));
+}
+
+#[test]
+fn lookbehind_cost_does_not_grow_with_subject_position() {
+    // 20,000 tokens with a lookbehind at each: quadratic scanning would take
+    // seconds, the bounded window finishes far below the assertion budget.
+    let subject = "key:v ".repeat(20_000);
+    let re = Regex::new("(?<![\"'])[:-][^\\s]", RegexFlags::default()).unwrap();
+    let started = std::time::Instant::now();
+    assert_eq!(re.captures_iter(&subject).len(), 20_000);
+    assert!(started.elapsed() < std::time::Duration::from_secs(5));
+}

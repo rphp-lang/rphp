@@ -515,7 +515,22 @@ fn unavailable_class_constant_owner(error: &str) -> Option<&str> {
     remainder.split_once("::").map(|(owner, _)| owner)
 }
 
-fn compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
+/// Constant table for compiling one source unit. Rebuilding it per include
+/// made a 2,500-file bootstrap format and insert millions of entries, so the
+/// table is cached until a constant or class is registered.
+fn compilation_constants(eg: &ExecutorGlobals) -> std::rc::Rc<HashMap<String, Value>> {
+    let key = (eg.constant_table.borrow().len(), eg.class_table.len());
+    if let Some((cached_key, table)) = eg.compilation_constants_cache.borrow().as_ref()
+        && *cached_key == key
+    {
+        return std::rc::Rc::clone(table);
+    }
+    let table = std::rc::Rc::new(build_compilation_constants(eg));
+    *eg.compilation_constants_cache.borrow_mut() = Some((key, std::rc::Rc::clone(&table)));
+    table
+}
+
+fn build_compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
     let mut known: HashMap<String, Value> = eg
         .constant_table
         .borrow()
@@ -776,7 +791,7 @@ fn execute_source_unit_inner(
             .with_source_path(canonical.clone())
             .with_implicit_return_value(implicit_return.clone())
             .with_lexical_class_scope(caller_class.clone(), caller_parent.clone())
-            .with_known_constants(compilation_constants(eg));
+            .with_shared_known_constants(compilation_constants(eg));
         match compiler.compile(&stmts) {
             Ok(result) => break result,
             Err(error) if compile_attempts < 16 => {

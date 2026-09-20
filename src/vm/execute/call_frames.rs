@@ -550,6 +550,7 @@ fn collect_destructor_children(
     seen_references: &mut std::collections::HashSet<usize>,
     seen_closures: &mut std::collections::HashSet<usize>,
     seen_generators: &mut std::collections::HashSet<usize>,
+    child_index: &mut HashMap<usize, usize>,
 ) {
     stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
         collect_destructor_children_inner(
@@ -560,6 +561,7 @@ fn collect_destructor_children(
             seen_references,
             seen_closures,
             seen_generators,
+            child_index,
         )
     });
 }
@@ -572,6 +574,7 @@ fn collect_destructor_children_inner(
     seen_references: &mut std::collections::HashSet<usize>,
     seen_closures: &mut std::collections::HashSet<usize>,
     seen_generators: &mut std::collections::HashSet<usize>,
+    child_index: &mut HashMap<usize, usize>,
 ) {
     if let Some(identity) = value.reference_identity()
         && !seen_references.insert(identity)
@@ -601,18 +604,20 @@ fn collect_destructor_children_inner(
                 seen_references,
                 seen_closures,
                 seen_generators,
+                child_index,
             );
         }
         return;
     }
     if let Some(identity) = destructor_identity(eg, value) {
-        if let Some((_, references, _)) = children
-            .iter_mut()
-            .find(|(candidate, _, _)| *candidate == identity)
-        {
-            *references += 1;
-        } else {
-            children.push((identity, 1, value.clone()));
+        // Aliases of one child are grouped by identity; the side index keeps
+        // this O(1) for containers holding thousands of distinct objects.
+        match child_index.entry(identity) {
+            std::collections::hash_map::Entry::Occupied(slot) => children[*slot.get()].1 += 1,
+            std::collections::hash_map::Entry::Vacant(slot) => {
+                slot.insert(children.len());
+                children.push((identity, 1, value.clone()));
+            }
         }
         return;
     }
@@ -633,6 +638,7 @@ fn collect_destructor_children_inner(
                     seen_references,
                     seen_closures,
                     seen_generators,
+                    child_index,
                 );
             }
             for capture in &closure.captures {
@@ -644,6 +650,7 @@ fn collect_destructor_children_inner(
                     seen_references,
                     seen_closures,
                     seen_generators,
+                    child_index,
                 );
             }
             if let Some(static_vars) = &closure.static_vars {
@@ -656,6 +663,7 @@ fn collect_destructor_children_inner(
                         seen_references,
                         seen_closures,
                         seen_generators,
+                        child_index,
                     );
                 }
             }
@@ -678,6 +686,7 @@ fn collect_destructor_children_inner(
                 seen_references,
                 seen_closures,
                 seen_generators,
+                child_index,
             );
         }
     }
@@ -906,6 +915,7 @@ fn run_final_object_destructor_tree_inner(
     let mut seen_references = std::collections::HashSet::new();
     let mut seen_closures = std::collections::HashSet::new();
     let mut seen_generators = std::collections::HashSet::new();
+    let mut child_index = HashMap::<usize, usize>::new();
     if let Some(object) = owner.as_object() {
         object.for_each_owned_value(|property| {
             collect_destructor_children(
@@ -916,6 +926,7 @@ fn run_final_object_destructor_tree_inner(
                 &mut seen_references,
                 &mut seen_closures,
                 &mut seen_generators,
+                &mut child_index,
             );
         });
         if let Some(generator) = &object.generator {
@@ -934,6 +945,7 @@ fn run_final_object_destructor_tree_inner(
                         &mut seen_references,
                         &mut seen_closures,
                         &mut seen_generators,
+                        &mut child_index,
                     );
                 });
         }
@@ -951,6 +963,7 @@ fn run_final_object_destructor_tree_inner(
                 &mut seen_references,
                 &mut seen_closures,
                 &mut seen_generators,
+                &mut child_index,
             );
         }
         for capture in &closure.captures {
@@ -962,6 +975,7 @@ fn run_final_object_destructor_tree_inner(
                 &mut seen_references,
                 &mut seen_closures,
                 &mut seen_generators,
+                &mut child_index,
             );
         }
         if let Some(static_vars) = &closure.static_vars {
@@ -974,6 +988,7 @@ fn run_final_object_destructor_tree_inner(
                     &mut seen_references,
                     &mut seen_closures,
                     &mut seen_generators,
+                    &mut child_index,
                 );
             }
         }
@@ -1099,6 +1114,7 @@ fn run_value_destructors_inner(
     let mut seen_references = std::collections::HashSet::new();
     let mut seen_closures = std::collections::HashSet::new();
     let mut seen_generators = std::collections::HashSet::new();
+    let mut child_index = HashMap::<usize, usize>::new();
     for root in roots {
         collect_destructor_children(
             eg,
@@ -1108,6 +1124,7 @@ fn run_value_destructors_inner(
             &mut seen_references,
             &mut seen_closures,
             &mut seen_generators,
+            &mut child_index,
         );
     }
     if canonical_direct_roots_retained {
@@ -2131,8 +2148,36 @@ fn release_statement_temps(
             if !has_owned {
                 return Ok(());
             }
+            // A failure while evaluating a later operand abandons the
+            // still-pending frameless activation. Drop its argument copies
+            // first so the ownership proofs below see only PHP owners. On the
+            // ordinary post-call path the pending chain is already empty, so
+            // this is a no-op.
+            cleanup_pending_calls(eg, frame);
+            // A container that another PHP owner still holds (for example a
+            // foreach source that is also a property) loses no child when
+            // this range releases its handles, so it needs no release graph.
+            let shared_outside_range = |index: usize| {
+                let value = (&*base.add(index)).dereferenced();
+                if !matches!(value.value_type(), ValueType::Array | ValueType::Object) {
+                    return false;
+                }
+                let Some(count) = value.cycle_strong_count() else {
+                    return false;
+                };
+                let identity = value.cycle_node().map(|(identity, _)| identity);
+                let in_range = (first..end)
+                    .filter(|other| is_owned(*other))
+                    .filter(|other| {
+                        (&*base.add(*other)).dereferenced().cycle_node().map(|(identity, _)| identity) == identity
+                    })
+                    .count();
+                count > in_range
+            };
             if (first..end).all(|index| {
-                !is_owned(index) || value_is_shallow_plain_drop(eg, &*base.add(index))
+                !is_owned(index)
+                    || shared_outside_range(index)
+                    || value_is_shallow_plain_drop(eg, &*base.add(index))
             }) {
                 for index in first..end {
                     if !is_owned(index) {
@@ -2147,17 +2192,12 @@ fn release_statement_temps(
                 }
                 return Ok(());
             }
-            // A failure while evaluating a later operand abandons the
-            // still-pending frameless activation. Drop its argument copies
-            // before proving which caller temporaries are on their final
-            // reference. On the ordinary post-call path the pending chain is
-            // already empty, so this is a no-op.
-            cleanup_pending_calls(eg, frame);
             let mut candidates = Vec::<(usize, usize, Value)>::new();
             let mut seen_arrays = std::collections::HashSet::new();
             let mut seen_references = std::collections::HashSet::new();
             let mut seen_closures = std::collections::HashSet::new();
             let mut seen_generators = std::collections::HashSet::new();
+    let mut child_index = HashMap::<usize, usize>::new();
             for index in first..end {
                 if !is_owned(index) {
                     continue;
@@ -2170,6 +2210,7 @@ fn release_statement_temps(
                     &mut seen_references,
                     &mut seen_closures,
                     &mut seen_generators,
+                    &mut child_index,
                 );
             }
             let _ = run_collected_value_destructors(

@@ -9455,7 +9455,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 as *mut Value;
                             cloned = prepare_constrained_write!(@slot &*property, cloned);
                             publish_property_assignment_result(frame, opline, &cloned);
-                            let destructor = prepare_replaced_value_destructor(eg, &*property);
+                            let destructor = prepare_replaced_value_release(eg, &*property);
                             let destructor_ran = destructor.is_some();
                             assignment_slot_set(&mut *property, cloned);
                             run_prepared_value_destructor(eg, destructor)?;

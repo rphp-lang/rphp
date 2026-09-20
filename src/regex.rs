@@ -942,6 +942,48 @@ struct MatchCtx<'a> {
 // `match_seq_from(node, rest, pos, ctx)` tries to match `node` followed by
 // all nodes in `rest` starting at `pos`.  Returns Some(final_pos) on success.
 
+/// Inclusive range of subject characters a node can consume, or `None` when
+/// it is unbounded (backreferences, `\R`, `\X`, open-ended quantifiers).
+fn node_length_range(node: &Node) -> Option<(usize, usize)> {
+    match node {
+        Node::Literal(_) | Node::AnyChar | Node::CharClass { .. } | Node::Shorthand(_) => {
+            Some((1, 1))
+        }
+        Node::Anchor(_)
+        | Node::WordBoundary(_)
+        | Node::Lookahead { .. }
+        | Node::Lookbehind { .. }
+        | Node::Mark(_) => Some((0, 0)),
+        Node::Group { inner, .. } | Node::Atomic(inner) => node_length_range(inner),
+        Node::Sequence(nodes) => nodes.iter().try_fold((0usize, 0usize), |(min, max), node| {
+            let (lo, hi) = node_length_range(node)?;
+            Some((min + lo, max.checked_add(hi)?))
+        }),
+        Node::Alternation(branches) => {
+            let mut range: Option<(usize, usize)> = None;
+            for branch in branches {
+                let (lo, hi) = node_length_range(branch)?;
+                range = Some(range.map_or((lo, hi), |(min, max)| (min.min(lo), max.max(hi))));
+            }
+            range
+        }
+        Node::Quantifier {
+            inner,
+            min,
+            max: Some(max),
+            ..
+        } => {
+            let (lo, hi) = node_length_range(inner)?;
+            Some((lo.checked_mul(*min)?, hi.checked_mul(*max)?))
+        }
+        Node::Quantifier { max: None, .. }
+        | Node::Backreference(_)
+        | Node::NamedBackreference(_)
+        | Node::GraphemeCluster
+        | Node::Linebreak => None,
+    }
+}
+
 fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
     match node {
         Node::Sequence(nodes) => {
@@ -1117,19 +1159,25 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             }
         }
         Node::Lookbehind { positive, inner } => {
-            // Try matching inner ending at `pos`.
-            let found = (0..=pos).rev().any(|start| {
-                let saved = ctx.groups.clone();
-                let saved_mark = ctx.mark.clone();
-                let result = match_seq_from(inner, &[], start, ctx);
-                if result == Some(pos) {
-                    true
-                } else {
-                    *ctx.groups = saved;
-                    *ctx.mark = saved_mark;
-                    false
-                }
-            });
+            // Try matching inner ending at `pos`. PCRE lookbehinds have a
+            // bounded length, so only starts within that window can succeed;
+            // scanning back to the subject start made every lookbehind O(n).
+            let (shortest, longest) = node_length_range(inner).unwrap_or((0, pos));
+            let earliest = pos.saturating_sub(longest);
+            let latest = pos.saturating_sub(shortest);
+            let found = earliest <= latest
+                && (earliest..=latest).rev().any(|start| {
+                    let saved = ctx.groups.clone();
+                    let saved_mark = ctx.mark.clone();
+                    let result = match_seq_from(inner, &[], start, ctx);
+                    if result == Some(pos) {
+                        true
+                    } else {
+                        *ctx.groups = saved;
+                        *ctx.mark = saved_mark;
+                        false
+                    }
+                });
             if found == *positive {
                 match_rest(rest, pos, ctx)
             } else {

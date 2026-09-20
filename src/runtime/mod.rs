@@ -1073,6 +1073,14 @@ pub struct ExecutorGlobals {
     /// and other final-root boundaries may query the same Throwable class in
     /// hot loops; method inheritance resolution is paid only once per class.
     class_destructor_flags: std::cell::RefCell<Vec<u8>>,
+    /// Per-class memo of `__get`/`__isset` availability: bit 0 resolved,
+    /// bit 1 has `__get`, bit 2 has `__isset`.
+    class_magic_accessor_flags: std::cell::RefCell<Vec<u8>>,
+    /// Compile-time constant table shared across included units, keyed by
+    /// the constant and class counts it was built from. Declarations are
+    /// immutable once registered, so equal counts prove the same contents.
+    pub(crate) compilation_constants_cache:
+        std::cell::RefCell<Option<((usize, usize), Rc<HashMap<String, Value>>)>>,
     /// LIFO binding sidecar used only by explicit reified calls.
     #[cfg(feature = "php-generics-reified")]
     pub reified_bindings: Vec<ReifiedBinding>,
@@ -2110,6 +2118,8 @@ impl ExecutorGlobals {
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
+            class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
+            compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
             request_static_values_may_retain_objects: false,
@@ -2246,6 +2256,8 @@ impl ExecutorGlobals {
             internal_class_id_limit: 0,
             class_by_id: vec![std::ptr::null()],
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
+            class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
+            compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
             request_static_values_may_retain_objects: false,
@@ -8590,6 +8602,70 @@ impl ExecutorGlobals {
             flags[class_id as usize] = if has_destructor { 2 } else { 1 };
         }
         has_destructor
+    }
+
+    /// Whether `class_name` declares or inherits `__set`, memoized per class
+    /// id (bit 3 resolved, bit 4 present) beside the getter flags.
+    pub(crate) fn class_magic_set(&self, class_id: u32, class_name: &str) -> bool {
+        let class_id = if class_id == 0 {
+            self.class_table
+                .get(class_name)
+                .map_or(0, |class| class.class_id)
+        } else {
+            class_id
+        };
+        if class_id != 0
+            && let Some(flag) = self
+                .class_magic_accessor_flags
+                .borrow()
+                .get(class_id as usize)
+                .copied()
+            && flag & 8 != 0
+        {
+            return flag & 16 != 0;
+        }
+        let has_set = self.find_method_info(class_name, "__set").is_some();
+        if class_id != 0 {
+            let mut flags = self.class_magic_accessor_flags.borrow_mut();
+            if flags.len() <= class_id as usize {
+                flags.resize(class_id as usize + 1, 0);
+            }
+            flags[class_id as usize] |= 8 | (u8::from(has_set) << 4);
+        }
+        has_set
+    }
+
+    /// Whether `class_name` declares or inherits `__get` and `__isset`,
+    /// memoized per class id so a slow property read does not format and
+    /// resolve two method names every time.
+    pub(crate) fn class_magic_get_isset(&self, class_id: u32, class_name: &str) -> (bool, bool) {
+        let class_id = if class_id == 0 {
+            self.class_table
+                .get(class_name)
+                .map_or(0, |class| class.class_id)
+        } else {
+            class_id
+        };
+        if class_id != 0
+            && let Some(flag) = self
+                .class_magic_accessor_flags
+                .borrow()
+                .get(class_id as usize)
+                .copied()
+            && flag & 1 != 0
+        {
+            return (flag & 2 != 0, flag & 4 != 0);
+        }
+        let has_get = self.find_method_info(class_name, "__get").is_some();
+        let has_isset = self.find_method_info(class_name, "__isset").is_some();
+        if class_id != 0 {
+            let mut flags = self.class_magic_accessor_flags.borrow_mut();
+            if flags.len() <= class_id as usize {
+                flags.resize(class_id as usize + 1, 0);
+            }
+            flags[class_id as usize] |= 1 | (u8::from(has_get) << 1) | (u8::from(has_isset) << 2);
+        }
+        (has_get, has_isset)
     }
 
     /// Declaration metadata for one object-layout slot. Class definitions are

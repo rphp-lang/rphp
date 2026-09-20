@@ -1267,7 +1267,7 @@ struct CycleRootState {
     destructor_time: std::time::Duration,
     free_time: std::time::Duration,
     candidates: Vec<CycleCandidate>,
-    indices: HashMap<usize, usize>,
+    indices: HashMap<usize, usize, BuildHasherDefault<IntKeyHasher>>,
 }
 
 fn register_cycle_candidate(candidate: CycleCandidate) {
@@ -2660,6 +2660,11 @@ impl Hasher for IntKeyHasher {
     #[inline(always)]
     fn write_u64(&mut self, value: u64) {
         self.hash = Self::mix(value);
+    }
+
+    #[inline(always)]
+    fn write_usize(&mut self, value: usize) {
+        self.hash = Self::mix(value as u64);
     }
 }
 

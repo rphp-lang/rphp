@@ -26545,10 +26545,29 @@ calls, closure captures under `array_walk()`'s surplus key argument, user
 parameter default values through `ReflectionParameter::getDefaultValue()`,
 about thirty Reflection accessors Nette's generator reads, and a variadic
 all-`int` method no longer tripping the compact-call receiver contract. The
-cold build takes about 51 s and 600 MB under RPHP against 1.8 s and 150 MB
-for reference PHP; the warm analysis stays at about 4 s. That gap is ordinary
-compile, reflection and code-generation cost in Nette's container compiler
-and is deferred.
+first cold build took about 51 s under RPHP; the `container-build` perf
+checkpoint brings it to about 10 s and 600 MB against 1.7 s and 150 MB for
+reference PHP, with the warm analysis at about 4 s. Four costs were
+super-linear rather than interpreter overhead: releasing a statement
+temporary that held a shared array (every `foreach` over `$this->definitions`)
+planned destructors for all 2,000 elements with a linear-search dedupe, so
+Nette's `addDefinition()` scan was O(n²) per call; every lookbehind scanned
+back to the subject start, making the Neon lexer quadratic; every slow-path
+property read and write formatted and resolved `__get`/`__isset`/`__set`
+names and cloned the property declaration; and every included file rebuilt
+the compile-time constant table from all registered constants and class
+constants. Now a container another PHP owner still holds is dropped without a
+release graph, child dedupe is indexed, lookbehind only tries starts inside
+the inner pattern's length range, magic-accessor presence is memoized per
+class, and the constant table is cached until a constant or class is
+registered. Dropping the premature release also exposed that an array
+displaced from an object property never ran its members' destructors; the
+property write paths now plan them like a displaced local array, so
+`$this->items = []` destroys the objects the old array owned exactly when PHP
+does (`tests/e2e_container_build_performance.rs`). The remaining cold gap is
+Nette's container compiler running as ordinary PHP (about 1.9 s of
+`resolve`/`complete`/code generation, 1 s of Neon parsing) plus PHPStan's own
+first-run caches, and stays deferred.
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

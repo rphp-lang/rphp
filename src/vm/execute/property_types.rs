@@ -22,7 +22,9 @@ fn commit_existing_object_property(
         } else {
             object.get_property(key)
         };
-        property.and_then(|value| prepare_replaced_value_destructor(eg, value))
+        // A displaced array must plan the destructors of its own members
+        // (the tree preparer), not only a displaced object's.
+        property.and_then(|value| prepare_replaced_value_release(eg, value))
     };
     {
         let mut object = target.as_object_mut().expect("property receiver");
