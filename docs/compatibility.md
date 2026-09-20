@@ -360,6 +360,40 @@ exact PHP 8.5 passes without loss and reduced supported failure debt from 107
 to 104. Array unset and internal by-reference output replacement now preserve
 PHP destructor ordering and live call state.
 
+### Parallel PCRE recursive-construct checkpoint
+
+The independently implemented Rust PCRE engine now supports request-local
+execution limits, ungreedy mode, recursive and named subroutine calls,
+`(?(DEFINE)...)`, capture/recursion conditionals, apostrophe group names, and
+PHP-compatible POSIX classes in UTF-8 mode. It does not link to or delegate to
+PCRE2.
+
+Against the exact `aaf4aa4b` parent, the complete `ext/pcre` corpus moves from
+**113 pass / 33 fail / 15 skip / 2 unsupported / 2 timeout** to **130 pass /
+20 fail / 12 skip / 2 unsupported / 1 timeout**, exact **+17/-0** with no
+crash. Regex unit tests are **77/77**, the extension E2E is **8/8**, and the
+five Cargo configurations plus all-targets are green.
+
+The fixed-parent 32-pair CPU-2 medians are startup **-0.823%**, ordinary
+**+0.712%**, existing `preg_match` **-1.506%**, existing `preg_replace`
+**-4.755%**, and the recursive-subroutine lane versus PHP 8.5 **-62.434%**.
+`preg_filter` and `preg_grep` remain materially slower than PHP, and duplicate
+names/`J`, `\K`, replacement grammar and the remaining resource-exhaustion
+timeout are explicit follow-up boundaries. This checkpoint is not a claim of
+complete PCRE compatibility.
+
+SHA-256 evidence: candidate
+`8d266cb9cb5a07567194c4cf9c0f231e4b1a52aa6d7c079a4d42b9bd68d96479`;
+candidate manifest/pass set
+`396fc64a50d049f124c43b6021da17971897d7b5e2e8b770549118cf9e5e065e` /
+`1fb595e5a8f3849ddba5a3b6a8ebe4e1c10567b3d3ae9906059975f56efd069a`;
+parent manifest/pass set
+`16ce5ddacc750e12242736e7a45a24c7da8533e8548077f190c788849ed3803a` /
+`7047beca67aff6e46fccb2d3853cd944d9f00e62349b15ed7d94ccbc3197db45`;
+matrix/performance summaries
+`ea2b26f73fbf4ba1eb9fab253ecd11f46cb9125676833b7dd778234aea3d1fd7` /
+`e51860ce305b5900bac289ed9447354b37abae931844e37ebb1045815bb4cf99`.
+
 ### Preceding mutable-iteration checkpoint
 
 The `mutable-iteration-contracts` checkpoint over `620fc1c0` added 10 exact

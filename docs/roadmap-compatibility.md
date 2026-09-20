@@ -229,6 +229,32 @@ supported failure debt from 107 to 104, exact +3/-0. It aligned array unset and
 internal by-reference output replacement with PHP destructor ordering and live
 call-state semantics.
 
+### Parallel PCRE recursive-construct checkpoint
+
+The repository-owned Rust regex engine advances the complete `ext/pcre`
+corpus from **113/33/15/2 plus two timeouts** to **130/20/12/2 plus one
+timeout**, exact **+17/-0**. Request-local execution limits, ungreedy mode,
+recursive/named subroutines, define blocks, capture/recursion conditionals,
+apostrophe names and UTF-8 POSIX classes now follow the PHP 8.5 oracle. No
+external PCRE2 engine is linked or invoked.
+
+The checkpoint has **77/77** regex units, **8/8** extension E2E cases, a green
+five-configuration/all-targets matrix and guarded 32-pair performance evidence.
+Common lanes remain bounded (startup **-0.823%**, ordinary **+0.712%**) and
+existing `preg_match`/`preg_replace` improve by **1.506%/4.755%**. Continue the
+same extension stream with duplicate names and `J`, `\K`, replacement-string
+grammar/projections, and the remaining resource-exhaustion timeout. Keep
+`extension_loaded('pcre')` false until the admitted public surface is complete.
+
+SHA-256 evidence: candidate
+`8d266cb9cb5a07567194c4cf9c0f231e4b1a52aa6d7c079a4d42b9bd68d96479`;
+candidate manifest/pass set
+`396fc64a50d049f124c43b6021da17971897d7b5e2e8b770549118cf9e5e065e` /
+`1fb595e5a8f3849ddba5a3b6a8ebe4e1c10567b3d3ae9906059975f56efd069a`;
+matrix/performance summaries
+`ea2b26f73fbf4ba1eb9fab253ecd11f46cb9125676833b7dd778234aea3d1fd7` /
+`e51860ce305b5900bac289ed9447354b37abae931844e37ebb1045815bb4cf99`.
+
 ### Preceding mutable-iteration checkpoint
 
 The `mutable-iteration-contracts` checkpoint over `620fc1c0` reduced supported
