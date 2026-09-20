@@ -20,6 +20,10 @@ use std::os::raw::{c_char, c_int, c_ulong};
 unsafe extern "C" {
     #[link_name = "setlocale"]
     fn native_setlocale(category: c_int, locale: *const c_char) -> *mut c_char;
+    #[link_name = "nl_langinfo"]
+    fn native_nl_langinfo(item: c_int) -> *mut c_char;
+    #[link_name = "strcoll"]
+    fn native_strcoll(left: *const c_char, right: *const c_char) -> c_int;
     #[link_name = "textdomain"]
     fn native_textdomain(domain: *const c_char) -> *mut c_char;
     #[link_name = "gettext"]
@@ -115,6 +119,14 @@ pub(super) enum NativeCall<'a> {
     SetLocale {
         category: c_int,
         locale: Option<&'a NativeInput<'a>>,
+    },
+    #[cfg(target_os = "linux")]
+    NlLangInfo(c_int),
+    #[cfg(target_os = "linux")]
+    StrColl {
+        left: &'a NativeInput<'a>,
+        right: &'a NativeInput<'a>,
+        result: &'a Cell<c_int>,
     },
     #[cfg(target_os = "linux")]
     TextDomain(Option<&'a NativeInput<'a>>),
@@ -276,6 +288,15 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     output.truncate(written);
                     return Some(output);
                 }
+                if let NativeCall::StrColl {
+                    left,
+                    right,
+                    result,
+                } = call
+                {
+                    result.set(native_strcoll(left.as_ptr(), right.as_ptr()));
+                    return Some(Vec::new());
+                }
                 let (result, first_fallback, second_fallback) = match call {
                     NativeCall::SetLocale { category, locale } => (
                         native_setlocale(
@@ -285,6 +306,7 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                         None,
                         None,
                     ),
+                    NativeCall::NlLangInfo(item) => (native_nl_langinfo(item), None, None),
                     NativeCall::TextDomain(domain) => (
                         native_textdomain(domain.map_or(std::ptr::null(), NativeInput::as_ptr)),
                         None,
@@ -347,6 +369,7 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     ),
                     NativeCall::Iconv { .. } => unreachable!(),
                     NativeCall::IconvVersion => unreachable!(),
+                    NativeCall::StrColl { .. } => unreachable!(),
                     NativeCall::SetEnvironment(..) => unreachable!(),
                 };
                 if result.is_null() {
@@ -404,6 +427,27 @@ pub(super) fn set_process_locale(category: i64, locale: Option<&[u8]>) -> Option
         category: category as c_int,
         locale: locale.as_ref(),
     })
+}
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+pub(super) fn locale_info(item: i64) -> Option<Vec<u8>> {
+    let item = c_int::try_from(item).ok()?;
+    invoke_native(NativeCall::NlLangInfo(item))
+}
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+pub(super) fn compare_locale_strings(left: &[u8], right: &[u8]) -> i64 {
+    let left = NativeInput::new(left);
+    let right = NativeInput::new(right);
+    let result = Cell::new(0);
+    let _ = invoke_native(NativeCall::StrColl {
+        left: &left,
+        right: &right,
+        result: &result,
+    });
+    i64::from(result.get())
 }
 
 #[cfg(test)]

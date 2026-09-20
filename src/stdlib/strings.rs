@@ -109,13 +109,17 @@ fn resolve_html_translation_encoding(
     name: &str,
 ) -> Result<Option<HtmlTranslationEncoding>, VmError> {
     // PHP's charset lookup consumes a C-style name. An explicit empty name,
-    // or bytes after the first NUL, therefore select the request default. The
-    // admitted default remains UTF-8; configurable default_charset handling is
-    // a separate INI contract.
+    // or bytes after the first NUL, therefore select the request-local default.
     let name = name.split('\0').next().unwrap_or_default();
-    if name.is_empty() {
-        return Ok(Some(HtmlTranslationEncoding::Utf8));
-    }
+    let configured;
+    let name = if name.is_empty() {
+        configured = super::ini_default(eg, "default_charset")
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "UTF-8".to_string());
+        configured.as_str()
+    } else {
+        name
+    };
     if let Some(encoding) = HtmlTranslationEncoding::parse(name) {
         return Ok(Some(encoding));
     }
@@ -337,11 +341,11 @@ fn html_encoding_argument(
     function: &str,
 ) -> Result<Option<String>, VmError> {
     if arg_opt!(ed, 2).is_none() {
-        return Ok(Some("UTF-8".to_string()));
+        return Ok(Some(String::new()));
     }
     let argument = owned_argument(ed, 2);
     if matches!(argument.dereferenced().value_type(), ValueType::Null) {
-        return Ok(Some("UTF-8".to_string()));
+        return Ok(Some(String::new()));
     }
     typed_internal_string_argument_expected(ed, eg, function, 2, "encoding", "?string")
 }
@@ -383,7 +387,7 @@ fn html_translation_encoding_argument(
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<String>, VmError> {
     if arg_opt!(ed, 2).is_none() {
-        return Ok(Some("UTF-8".to_string()));
+        return Ok(Some(String::new()));
     }
     typed_internal_string_argument_expected(
         ed,
@@ -1006,6 +1010,15 @@ pub(super) fn fn_html_entity_decode(
     };
     let Some(encoding_name) = html_encoding_argument(ed, eg, "html_entity_decode")? else {
         return Ok(());
+    };
+    let configured;
+    let encoding_name = if encoding_name.is_empty() {
+        configured = super::ini_default(eg, "default_charset")
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "UTF-8".to_string());
+        configured.as_str()
+    } else {
+        encoding_name.as_str()
     };
     let encoding = if encoding_name.eq_ignore_ascii_case("UTF-8") {
         HtmlEntityOutputEncoding::Utf8

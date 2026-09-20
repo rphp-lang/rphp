@@ -393,6 +393,30 @@ pub(super) fn fn_shell_exec(
     ret!(rv, php_byte_result(output.stdout, false));
 }
 
+pub(super) fn fn_system(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(command) = validate_command(ed, eg, "system")? else {
+        return Ok(());
+    };
+    let output = match execute_shell(&command) {
+        Ok(output) => output,
+        Err(_) => {
+            process_failure(ed, eg, "system", &command)?;
+            ret!(rv, Value::bool(false));
+        }
+    };
+    eg.write_output(&output.stdout);
+    if arg_opt!(ed, 1).is_some() {
+        arg_mut!(ed, 1, Value::long(exit_code(output.status)));
+    }
+    let lines = split_exec_output(&output.stdout);
+    let last_line = lines.last().map_or(&[][..], Vec::as_slice);
+    ret!(rv, php_byte_result(last_line.to_vec(), false));
+}
+
 #[cfg(test)]
 mod tests {
     use super::{escape_shell_arg_bytes, escape_shell_command_bytes, split_exec_output};

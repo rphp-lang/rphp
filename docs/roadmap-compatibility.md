@@ -36,26 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `runtime-finalization-lifetimes` checkpoint over `d88357ba` adds **3 exact
-PHP 8.5 passes without loss**. The 7,174-case stable core is
-**6,678/104/182/210**; Zend/lang reaches **5,208/96/115/180**, while
-strings/array preserves its exact 1,470-pass set at **1,470/8/67/30**.
+The `core-stdlib-remainder` checkpoint over `aaf4aa4b` adds **10 exact PHP 8.5
+passes without loss**. The 7,174-case stable core is **6,688/94/182/210**;
+Zend/lang reaches **5,210/94/115/180**, while strings/array reaches
+**1,478/0/67/30**.
 
-The shared compiler/value/VM slice detaches unset buckets before final
-destruction, delays nested unset destruction until every parent writeback is
-committed, and keeps internal by-reference output activations live through
-displaced-value destruction. Destructor traces, argument projection, typed
-property constraints, reverse release order and catchable exceptions now match
-PHP. Five Cargo configurations/all-targets, exact no-loss families,
-Composer/Symfony S0--S3, formatting and unsafe policy are green; production
-unsafe inventory decreases to 1,625 blocks / 288 functions.
+The standard-library slice aligns numeric formatting, binary string projection,
+request-local HTML charset selection, locale introspection/collation, streamed
+process output, live resources, extension function introspection and allocation
+failure diagnostics. Default Cargo tests, all five focused feature
+configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
+formatting, PHPT runner and unsafe policy are green.
 
-Continue the shared-cause stable-core sweep from **104 to zero**. Keep the
+Continue the shared-cause stable-core sweep from **94 to zero**. Keep the
 complete Date/DateTime surface and tokenizer/PHPStan front-end work out of this
 stream. Prefer a remaining runtime cluster with at least ten expected passes;
 GC-cycle release and Fiber continuation architecture remain named lifetime
-holdouts. Preserve the exact 5,208 and 1,470 parent pass sets. Aggregate
+holdouts. Preserve the exact 5,210 and 1,478 parent pass sets. Aggregate
 performance optimization stays deferred by user direction.
+
+### Preceding runtime-finalization checkpoint
+
+The `runtime-finalization-lifetimes` checkpoint over `d88357ba` reduced
+supported failure debt from 107 to 104, exact +3/-0. It aligned array unset and
+internal by-reference output replacement with PHP destructor ordering and live
+call-state semantics.
 
 ### Preceding mutable-iteration checkpoint
 

@@ -8,7 +8,6 @@ use super::stream::PhpStream;
 #[cfg(feature = "resource-lifetime")]
 use crate::resource_handle::ResourceHandle;
 use crate::runtime::ExecutorGlobals;
-#[cfg(feature = "resource-lifetime")]
 use crate::value::Value;
 #[cfg(feature = "resource-lifetime")]
 use std::rc::{Rc, Weak};
@@ -187,6 +186,32 @@ impl ResourceEntries {
                 .ok()
                 .map(|index| &entries[index].1),
             Self::Large(entries) => entries.get(id),
+        }
+    }
+
+    #[cold]
+    fn for_each(&self, mut operation: impl FnMut(i64, &ResourceEntry)) {
+        match self {
+            Self::Small { entries, overflow } => {
+                for (index, entry) in entries.iter().enumerate() {
+                    if let Some(entry) = entry {
+                        operation(index as i64 + 1, entry);
+                    }
+                }
+                if let Some(Some((id, entry))) = overflow.as_deref() {
+                    operation(*id, entry);
+                }
+            }
+            Self::Compact(entries) => {
+                for (id, entry) in entries {
+                    operation(*id, entry);
+                }
+            }
+            Self::Large(entries) => {
+                for (id, entry) in entries {
+                    operation(*id, entry);
+                }
+            }
         }
     }
 
@@ -441,6 +466,24 @@ impl ResourceRegistry {
         self.entries
             .get(&id)
             .map_or("Unknown", |entry| entry.resource_type)
+    }
+
+    #[cold]
+    fn live_values(&self, resource_type: Option<&str>) -> Vec<(i64, Value)> {
+        let mut values = Vec::new();
+        self.entries.for_each(|id, entry| {
+            if resource_type.is_some_and(|expected| expected != entry.resource_type) {
+                return;
+            }
+            #[cfg(feature = "resource-lifetime")]
+            if let Some(owner) = entry.owner.upgrade() {
+                values.push((id, Value::resource_owner(owner)));
+            }
+            #[cfg(not(feature = "resource-lifetime"))]
+            values.push((id, Value::resource(id)));
+        });
+        values.sort_unstable_by_key(|(id, _)| *id);
+        values
     }
 
     // Payload projection is the steady-state native I/O path, not a cold
@@ -875,6 +918,23 @@ pub(crate) fn is_open_for_request(eg: &ExecutorGlobals, id: i64) -> bool {
 #[cold]
 pub(crate) fn type_for_request(eg: &ExecutorGlobals, id: i64) -> &'static str {
     resource_type(request_scope(eg), id)
+}
+
+#[cold]
+pub(crate) fn live_values_for_request(
+    eg: &ExecutorGlobals,
+    resource_type: Option<&str>,
+) -> Vec<(i64, Value)> {
+    let scope = request_scope(eg);
+    if scope == 0 {
+        return Vec::new();
+    }
+    REQUEST_RESOURCES.with(|registries| {
+        registries
+            .borrow()
+            .get(&scope)
+            .map_or_else(Vec::new, |registry| registry.live_values(resource_type))
+    })
 }
 
 impl Drop for ExecutorGlobals {

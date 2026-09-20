@@ -7,32 +7,40 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `runtime-finalization-lifetimes` checkpoint over `d88357ba` adds **3 exact
-PHP 8.5 passes without loss**. Array unset now detaches the removed bucket
-before invoking its final destructor, including nested writeback and aliased
-reference cases. Internal by-reference output replacement commits every
-`headers_sent()` result before destroying displaced values, preserves reverse
-release order, and exposes the live builtin frame and PHP-compatible arguments
-when a destructor throws.
+The `core-stdlib-remainder` checkpoint over `aaf4aa4b` adds **10 exact PHP
+8.5 passes without loss**. It completes the measured `number_format()`, binary
+`strval()`, request-local default-charset, locale collation/introspection,
+`system()`, resource/extension introspection and oversized `str_pad()`
+boundaries. The changes preserve binary provenance, active locale and live
+request resource state instead of substituting fixture-specific output.
 
-The stable 7,174-case core is **6,678 pass / 104 fail / 182 skip / 210
+The stable 7,174-case core is **6,688 pass / 94 fail / 182 skip / 210
 unsupported**, with no timeout or crash. Zend/lang reaches
-**5,208/96/115/180**, exact **+3/-0**; strings/array remains byte-identical at
-**1,470/8/67/30**. The five Cargo configurations/all-targets, exact no-loss,
-Composer/Symfony S0--S3, formatting and unsafe policy are green. Production
-unsafe inventory decreases to **1,625 blocks / 288 functions**. Network tests
-run outside the restricted development sandbox. Performance remains deferred
-to the aggregate correctness-sweep boundary.
+**5,210/94/115/180** and strings/array reaches **1,478/0/67/30**, exact
+**+10/-0** overall. Default Cargo tests, the focused contract across all five
+feature configurations/all-targets, exact no-loss, Composer/Symfony S0--S3,
+formatting, PHPT-runner and unsafe policy are green. Production unsafe
+inventory is **1,626 blocks / 288 functions**. Network tests run outside the
+restricted development sandbox. Performance remains deferred to the aggregate
+correctness-sweep boundary.
 
 SHA-256 evidence: candidate
-`ed451474e999a62f10fdad330a6e30a8e8909661571c737c59e738d99a80779c`;
-stable-core manifest/pass set
-`ddfc910029c705694238ac9e92621eaf9461071c78379820842ad4e888fb4e87` /
-`551885eecfd521b7d0120241cd538582f91de1cb61d22baf98964d7657a206a1`.
+`080c7c3f1dfaeea19d75224c756d0e315ca6380cb030f8200a8e701514fb8686`;
+stable-core pass set
+`179685a9632dd5d74e66bfcd4f222e5e7273b700c0ab933915c6468c2f8113f5`;
+release focused manifest
+`297d8bb5385381ff6b3e4bcef1a8151e601a231c29a9209e1db4ce59a9c64bf7`.
 
 GC cycle ordering and Fiber continuation architecture remain separate lifetime
 boundaries. Date/DateTime and tokenizer/PHPStan front-end work remain outside
 this stream.
+
+### Preceding runtime-finalization checkpoint
+
+The `runtime-finalization-lifetimes` checkpoint over `d88357ba` added three
+exact PHP 8.5 passes without loss and reduced supported failure debt from 107
+to 104. Array unset and internal by-reference output replacement now preserve
+PHP destructor ordering and live call state.
 
 ### Preceding mutable-iteration checkpoint
 

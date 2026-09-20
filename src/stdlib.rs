@@ -10027,9 +10027,10 @@ fn fn_str_pad(
     let right_length = padding_length - left_length;
     let mut output = Vec::new();
     if output.try_reserve_exact(target_length).is_err() {
-        return Err(VmError::Fatal(
-            "str_pad(): requested string length is too large".to_string(),
-        ));
+        let (file, line) = internal_call_source(ed);
+        return Err(VmError::Fatal(format!(
+            "Allowed memory size of 134217728 bytes exhausted (tried to allocate {target_length} bytes) in {file} on line {line}"
+        )));
     }
     append_repeated_padding(&mut output, &pad_bytes, left_length);
     output.extend_from_slice(&input_bytes);
@@ -11193,8 +11194,11 @@ fn fn_number_format(
         }
     };
 
-    let decimal_position = if decimals > 0 && !dec_point.is_empty() {
-        result.find(dec_point)
+    let decimal_position = if decimals > 0 {
+        let precision = usize::try_from(decimals).unwrap_or(usize::MAX).min(100_000);
+        result
+            .len()
+            .checked_sub(precision.saturating_add(dec_point.len()))
     } else {
         None
     };
@@ -12728,10 +12732,10 @@ fn fn_strval(
             return Ok(());
         }
     }
-    let Some(rendered) = internal_value_to_string(ed, eg, value)? else {
+    let Some(rendered) = internal_value_to_string_value(ed, eg, value)? else {
         return Ok(());
     };
-    ret!(rv, Value::string(rendered));
+    ret!(rv, rendered);
 }
 
 fn fn_floatval(
@@ -13834,6 +13838,92 @@ fn fn_get_declared_traits(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     ret!(rv, declared_names_value(eg.declared_trait_names()));
+}
+
+fn fn_get_resources(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let resource_type = match arg_opt!(ed, 0).map(Value::dereferenced) {
+        None => None,
+        Some(value) if value.value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(value) = typed_internal_string_argument(ed, eg, "get_resources", 0, "type")?
+            else {
+                return Ok(());
+            };
+            Some(value)
+        }
+    };
+    let values = resource::live_values_for_request(eg, resource_type.as_deref());
+    let mut result = PhpArray::new();
+    for (id, value) in values {
+        result.set_int(id, value);
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn fn_get_extension_funcs(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(extension) =
+        typed_internal_string_argument(ed, eg, "get_extension_funcs", 0, "extension")?
+    else {
+        return Ok(());
+    };
+    let requested = if extension.eq_ignore_ascii_case("zend") {
+        "Core"
+    } else {
+        extension.as_str()
+    };
+    let known = requested.eq_ignore_ascii_case("Core")
+        || requested.eq_ignore_ascii_case("standard")
+        || LOADED_EXTENSION_NAMES
+            .iter()
+            .any(|name| requested.eq_ignore_ascii_case(name));
+    if !known {
+        ret!(rv, Value::bool(false));
+    }
+
+    let mut names = Vec::new();
+    for (name, &function) in &eg.function_table {
+        if name.contains("::") || name.starts_with("__closure_") {
+            continue;
+        }
+        // SAFETY: function-table entries are stable descriptors owned for the
+        // complete request, matching get_defined_functions()'s projection.
+        if unsafe { Function::from_common_ptr(function) }.fn_type() != FunctionType::Internal {
+            continue;
+        }
+        let declared = eg.internal_function_extension(function);
+        let matches = if requested.eq_ignore_ascii_case("Core") {
+            declared.is_some_and(|extension| extension.eq_ignore_ascii_case("Core"))
+                || matches!(
+                    name.as_str(),
+                    "clone"
+                        | "exit"
+                        | "die"
+                        | "zend_version"
+                        | "func_num_args"
+                        | "func_get_arg"
+                        | "func_get_args"
+                        | "strlen"
+                )
+        } else if requested.eq_ignore_ascii_case("standard") {
+            declared.is_none()
+                || declared.is_some_and(|extension| extension.eq_ignore_ascii_case("standard"))
+        } else {
+            declared.is_some_and(|extension| extension.eq_ignore_ascii_case(requested))
+        };
+        if matches {
+            names.push(name.clone());
+        }
+    }
+    names.sort_unstable();
+    ret!(rv, declared_names_value(names));
 }
 
 fn fn_method_exists(
@@ -30596,6 +30686,73 @@ fn fn_setlocale(
         }
     }
     ret!(rv, Value::bool(false));
+}
+
+fn fn_strcoll(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(left) =
+        typed_internal_string_value_argument_expected(ed, eg, "strcoll", 0, "string1", "string")?
+    else {
+        return Ok(());
+    };
+    let Some(right) =
+        typed_internal_string_value_argument_expected(ed, eg, "strcoll", 1, "string2", "string")?
+    else {
+        return Ok(());
+    };
+    let left = left.php_string_bytes().unwrap_or_default();
+    let right = right.php_string_bytes().unwrap_or_default();
+    #[cfg(target_os = "linux")]
+    let result = native_process::compare_locale_strings(&left, &right);
+    #[cfg(not(target_os = "linux"))]
+    let result = match left.as_ref().cmp(right.as_ref()) {
+        std::cmp::Ordering::Less => -1,
+        std::cmp::Ordering::Equal => 0,
+        std::cmp::Ordering::Greater => 1,
+    };
+    ret!(rv, Value::long(result));
+}
+
+fn fn_nl_langinfo(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(item) = typed_internal_int_argument(ed, eg, "nl_langinfo", 0, "item")? else {
+        return Ok(());
+    };
+    let supported = matches!(item, 65_536 | 131_073 | 131_082 | 131_092 | 131_101);
+    if !supported {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("nl_langinfo(): Item '{item}' is not valid"),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    }
+    #[cfg(target_os = "linux")]
+    let result = native_process::locale_info(item).map(|bytes| php_byte_result(bytes, false));
+    #[cfg(not(target_os = "linux"))]
+    let result = Some(Value::string(match item {
+        65_536 => ".",
+        131_073 => "Mon",
+        131_082 => "Wednesday",
+        131_092 => "Jul",
+        131_101 => "April",
+        _ => unreachable!("supported nl_langinfo item"),
+    }));
+    match result {
+        Some(result) => ret!(rv, result),
+        None => ret!(rv, Value::bool(false)),
+    }
 }
 
 const LOADED_EXTENSION_NAMES: &[&str] = &[

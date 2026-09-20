@@ -646,6 +646,35 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_function("pack", pointer).unwrap();
         funcs.push(function);
     }
+    reg_typed!(
+        "strcoll",
+        fn_strcoll,
+        2,
+        2,
+        ["string1", "string2"],
+        [ParamTypeHint::String, ParamTypeHint::String],
+        ParamTypeHint::Int
+    );
+    let strcoll = eg
+        .find_function("strcoll")
+        .expect("strcoll was just registered");
+    eg.register_internal_function_extension(strcoll, "standard");
+    reg_typed!(
+        "nl_langinfo",
+        fn_nl_langinfo,
+        1,
+        1,
+        ["item"],
+        [ParamTypeHint::Int],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let nl_langinfo = eg
+        .find_function("nl_langinfo")
+        .expect("nl_langinfo was just registered");
+    eg.register_internal_function_extension(nl_langinfo, "standard");
     {
         let mut function = Box::new(make_internal_function(
             fn_unpack,
@@ -1346,6 +1375,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "result_code"
     );
     reg!("shell_exec", fn_shell_exec, 1, 1, "command");
+    reg_ref!("system", fn_system, 2, 1, 0b10, "command", "result_code");
 
     // --- Regex functions ---
     reg_typed_ref!(
@@ -1520,6 +1550,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("get_declared_classes", fn_get_declared_classes, 0, 0);
     reg!("get_declared_interfaces", fn_get_declared_interfaces, 0, 0);
     reg!("get_declared_traits", fn_get_declared_traits, 0, 0);
+    reg_typed!(
+        "get_resources",
+        fn_get_resources,
+        1,
+        0,
+        ["type"],
+        [ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))],
+        ParamTypeHint::Array
+    );
+    let get_resources = eg
+        .find_function("get_resources")
+        .expect("get_resources was just registered");
+    eg.register_internal_function_reflection_metadata(
+        get_resources,
+        vec![Some(Value::null())],
+        "standard",
+    );
     reg_typed!(
         "class_exists",
         autoload::fn_class_exists,
@@ -3673,6 +3720,22 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         vec![Some(Value::bool(false))],
         "Core",
     );
+    reg_typed!(
+        "get_extension_funcs",
+        fn_get_extension_funcs,
+        1,
+        1,
+        ["extension"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let get_extension_funcs = eg
+        .find_function("get_extension_funcs")
+        .expect("get_extension_funcs was just registered");
+    eg.register_internal_function_extension(get_extension_funcs, "Core");
     {
         let mut function = Box::new(make_internal_function_ref(
             fn_headers_sent,
