@@ -16232,20 +16232,43 @@ pub(crate) fn dispatch_php_error(
     let handler_generation = eg.error_handler_generation;
     let previous_active_generation = eg.active_error_handler_generation;
     eg.active_error_handler_generation = handler_generation;
-    let result = call_resolved_with_values_from(
-        eg,
-        &resolved,
-        &[
-            Value::long(level),
-            Value::string(message.to_string()),
-            Value::string(file.to_string()),
-            Value::long(line as i64),
-        ],
-        ed,
-        file,
-        line,
-        false,
-    );
+    let arguments = [
+        Value::long(level),
+        Value::string(message.to_string()),
+        Value::string(file.to_string()),
+        Value::long(line as i64),
+    ];
+    let internal_trace_boundary = if ed.is_null() {
+        false
+    } else {
+        // SAFETY: diagnostics receive the live active frame. Only callbacks
+        // entered by these engine trampoline APIs expose PHP's synthetic
+        // `[internal function]` boundary; ordinary internal methods report
+        // their user call site directly.
+        (unsafe { (*(*ed).func).fn_type == FunctionType::Internal })
+            && matches!(
+                crate::vm::execute::displayed_frame_function_name(eg, ed)
+                    .to_ascii_lowercase()
+                    .as_str(),
+                "call_user_func"
+                    | "call_user_func_array"
+                    | "ob_clean"
+                    | "ob_end_clean"
+                    | "ob_flush"
+                    | "ob_end_flush"
+                    | "ob_get_clean"
+                    | "ob_get_flush"
+            )
+    };
+    let result = if internal_trace_boundary {
+        let (origin_file, origin_line) = internal_call_source(ed);
+        eg.publish_detached_trace_origin(ed as usize, origin_file, origin_line);
+        let result = call_resolved_with_values_from_internal(ed, eg, &resolved, &arguments, true);
+        eg.discard_detached_trace_origin(ed as usize);
+        result
+    } else {
+        call_resolved_with_values_from(eg, &resolved, &arguments, ed, file, line, false)
+    };
     eg.active_error_handler_generation = previous_active_generation;
     if eg.error_handler.is_none() {
         eg.error_handler = Some(suspended);
@@ -16288,7 +16311,8 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         0,
         false,
     );
-    if eg.exception_handler.is_none()
+    if eg.exception.is_none()
+        && eg.exception_handler.is_none()
         && let Some(handler) = eg.exception_handler_stack.pop()
     {
         eg.exception_handler = handler;
@@ -16298,6 +16322,34 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         Ok(_) => Ok(false),
         Err(error) => Err(error),
     }
+}
+
+/// Route a replacement throwable through a handler installed by the previous
+/// uncaught-exception callback. The callback that threw is inactive and must
+/// not receive its own exception again; only an explicitly installed or
+/// restored replacement handler is eligible for the next iteration.
+pub(crate) fn dispatch_pending_uncaught_exception_handlers(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    while eg.exception.is_some() && eg.exception_handler.is_some() {
+        let exception = eg
+            .exception
+            .take()
+            .expect("pending exception handler dispatch requires a throwable");
+        match dispatch_uncaught_exception_handler(eg, caller, &exception)? {
+            true => {}
+            false => {
+                if eg.exception.is_none() {
+                    eg.exception = Some(exception);
+                }
+                if eg.exception_handler.is_none() {
+                    break;
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
@@ -16546,21 +16598,16 @@ pub fn run_shutdown_functions(
             let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(error);
         }
-        if let Some(exception) = eg.exception.take() {
-            match dispatch_uncaught_exception_handler(eg, logical_caller, &exception) {
-                Ok(true) => continue,
-                Ok(false) => {
-                    if eg.exception.is_none() {
-                        eg.exception = Some(exception);
-                    }
-                }
-                Err(error) => {
-                    drain_pending_roots(eg, &mut release_roots);
-                    crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
-                    #[cfg(feature = "stream-registry")]
-                    let _ = streams::user_wrapper::shutdown_open_streams(eg);
-                    return Err(error);
-                }
+        if eg.exception.is_some() {
+            if let Err(error) = dispatch_pending_uncaught_exception_handlers(eg, logical_caller) {
+                drain_pending_roots(eg, &mut release_roots);
+                crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+                #[cfg(feature = "stream-registry")]
+                let _ = streams::user_wrapper::shutdown_open_streams(eg);
+                return Err(error);
+            }
+            if eg.exception.is_none() {
+                continue;
             }
             let exception = eg
                 .exception
@@ -16655,11 +16702,9 @@ fn fn_ob_start(
         return Ok(());
     }
     reject_output_buffer_reentry(eg, ed, "ob_start")?;
-    // Keep accepting PHP's chunk-size argument. Automatic chunk flushing is
-    // deliberately deferred; explicit operations and request teardown are exact.
-    let _chunk_size = arg_opt!(ed, 1).map_or(0, Value::to_long_val);
+    let chunk_size = arg_opt!(ed, 1).map_or(0, Value::to_long_val).max(0) as usize;
     let flags = arg_opt!(ed, 2).map_or(OUTPUT_HANDLER_DEFAULT_FLAGS, Value::to_long_val);
-    eg.push_output_buffer(handler, flags);
+    eg.push_output_buffer(handler, chunk_size, flags);
     ret!(rv, Value::bool(true));
 }
 
@@ -16700,6 +16745,9 @@ fn transform_output_buffer(
     caller: Option<*mut ExecuteData>,
 ) -> Result<Vec<u8>, VmError> {
     let raw = std::mem::take(&mut buffer.data);
+    if buffer.disabled {
+        return Ok(raw);
+    }
     let mode = operation
         | if buffer.started {
             0
@@ -16725,9 +16773,25 @@ fn transform_output_buffer(
     };
     let arguments = [callback_input, Value::long(mode)];
     let previous_handler_depth = eg.enter_output_handler();
-    let transformed = call_resolved_with_values(eg, &resolved, &arguments);
+    let transformed = if let Some(ed) = caller
+        && !ed.is_null()
+        // SAFETY: every callback origin passed by an internal handler is a
+        // live ExecuteData activation for the duration of this synchronous
+        // display-handler call.
+        && unsafe { (*(*ed).func).fn_type == FunctionType::Internal }
+    {
+        call_resolved_with_values_from_internal(ed, eg, &resolved, &arguments, true)
+    } else {
+        call_resolved_with_values(eg, &resolved, &arguments)
+    };
     eg.leave_output_handler(previous_handler_depth);
     let transformed = transformed?;
+    // A throwing display handler does not consume the bytes it was asked to
+    // transform. Final request flushing passes the original payload through;
+    // explicit clean operations still discard it through their phase policy.
+    if eg.exception.is_some() {
+        return Ok(raw);
+    }
     if transformed.value_type() == ValueType::False {
         Ok(raw)
     } else if let Some(bytes) = transformed.php_string_bytes() {
@@ -16735,6 +16799,51 @@ fn transform_output_buffer(
     } else {
         Ok(transformed.echo_to_string().into_bytes())
     }
+}
+
+/// Run every top-level chunk threshold crossed by a PHP-visible write. The
+/// active buffer is detached while its callback runs, so callback output goes
+/// to the parent buffer (or the request sink) and cannot recursively enter the
+/// same handler. A throwing handler remains present but permanently bypassed,
+/// matching PHP's observable ob_get_level()/ob_get_contents() state.
+#[cold]
+#[inline(never)]
+pub(crate) fn flush_ready_output_buffers(
+    eg: &mut ExecutorGlobals,
+    caller: Option<*mut ExecuteData>,
+) -> Result<(), VmError> {
+    while eg.output_buffer_chunk_ready() {
+        let mut buffer = eg
+            .pop_output_buffer()
+            .expect("a ready output buffer must remain present");
+        let output = transform_output_buffer(eg, &mut buffer, 0, caller)?;
+        if eg.exception.is_some() {
+            buffer.disabled = true;
+            eg.restore_output_buffer(buffer);
+            eg.write_output(&output);
+            return Ok(());
+        }
+
+        // First let a parent threshold consume this transformed chunk, then
+        // restore the emptied child at its original nesting level.
+        eg.write_output(&output);
+        flush_ready_output_buffers(eg, caller)?;
+        eg.restore_output_buffer(buffer);
+    }
+    Ok(())
+}
+
+#[inline]
+pub(crate) fn write_php_output(
+    eg: &mut ExecutorGlobals,
+    data: &[u8],
+    caller: Option<*mut ExecuteData>,
+) -> Result<(), VmError> {
+    eg.write_output(data);
+    if eg.output_buffer_chunk_ready() {
+        flush_ready_output_buffers(eg, caller)?;
+    }
+    Ok(())
 }
 
 #[cold]
@@ -26700,7 +26809,10 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
         ValueType::Long => Err(VmError::Exit(status.as_long().unwrap_or(0) as i32)),
         ValueType::String => {
             let bytes = status.php_string_bytes().unwrap_or_default();
-            eg.write_output(&bytes);
+            write_php_output(eg, &bytes, Some(ed))?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             Err(VmError::Exit(0))
         }
         ValueType::Null if !strict => {
@@ -26752,7 +26864,10 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 }
             }
             let rendered = status.echo_to_string_with_precision(eg.precision);
-            eg.write_output(rendered.as_bytes());
+            write_php_output(eg, rendered.as_bytes(), Some(ed))?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             Err(VmError::Exit(0))
         }
         ValueType::Object if !strict => {
@@ -26771,7 +26886,10 @@ fn fn_exit(ed: *mut ExecuteData, _rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 ));
                 return Ok(());
             };
-            eg.write_output(&rendered);
+            write_php_output(eg, &rendered, Some(ed))?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
             Err(VmError::Exit(0))
         }
         _ => reject(eg),
@@ -30178,11 +30296,26 @@ fn fn_libxml_disable_entity_loader(
 }
 
 fn fn_header(
-    _ed: *mut ExecuteData,
-    _rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    Ok(())
+    if eg.headers_sent() {
+        let (file, line) = eg.header_output_origin();
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!(
+                "Cannot modify header information - headers already sent by (output started at {file}:{line})"
+            ),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    ret!(rv, Value::null());
 }
 
 /// Resolve the last startup value exactly once before compiling the request.

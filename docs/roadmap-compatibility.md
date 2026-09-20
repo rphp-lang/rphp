@@ -36,24 +36,31 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `class-constant-resolution-contracts` checkpoint over `fc249c6c` reduces
-supported failure debt from **175 to 165**, exact **+10/-0**. The 8,258-case
-supported ledger is **7,620/165/194/276 with three XFAIL**. The 7,174-case
-stable core is **6,622/160/182/210**; Zend/lang reaches
-**5,152/152/115/180**, while strings/array preserves its exact 1,470-pass set
+The `exception-handler-finalization` checkpoint over `df1f54f8` reduces
+supported failure debt from **165 to 155**, exact **+10/-0**. The 8,258-case
+supported ledger is **7,630/155/194/276 with three XFAIL**. The 7,174-case
+stable core is **6,632/150/182/210**; Zend/lang reaches
+**5,162/142/115/180**, while strings/array preserves its exact 1,470-pass set
 at **1,470/8/67/30**.
 
-The shared parser/compiler/VM slice aligns dynamic class-constant owner
-validation, source-aware catchable errors, relative class scope, constant
-initializer magic names, once-only inherited diagnostics and declaration
-placement. Five Cargo configurations/all-targets, exact no-loss families,
-Composer/Symfony S0--S3, formatting, tooling and unsafe gates are green.
+The shared runtime/VM slice aligns chained exception handlers, fatal shutdown
+state, generator-versus-object finalization order, chunked output handlers,
+internal callback traces and headers-sent diagnostics. Five Cargo
+configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
+formatting, tooling, HTML data and unsafe gates are green.
 
-Continue the shared-cause supported-failure sweep from **165 to zero**. Keep
-the complete Date/DateTime surface out of this stream. Select another 10--30
-case non-Date cluster from the current 152 Zend/lang failures, preserve the
-exact 5,152 and 1,470 parent pass sets, and keep aggregate performance
-optimization deferred by user direction.
+Continue the shared-cause supported-failure sweep from **155 to zero**. Keep
+the complete Date/DateTime surface and tokenizer/parser front-end work out of
+this stream. Select another 10--30 case runtime/VM/stdlib cluster from the
+current 142 Zend/lang failures, preserve the exact 5,162 and 1,470 parent pass
+sets, and keep aggregate performance optimization deferred by user direction.
+
+### Preceding class-constant checkpoint
+
+The `class-constant-resolution-contracts` checkpoint over `fc249c6c` reduced
+supported failure debt from 175 to 165, exact +10/-0. It aligned dynamic
+class-constant owner evaluation, relative scope, initializer magic names,
+inherited diagnostics and declaration placement.
 
 ### Preceding type-declaration checkpoint
 

@@ -7664,6 +7664,17 @@ fn invoke_reflected_method(
         }
     }
 
+    let called_scope_class_id = receiver_class
+        .map(|(class_id, _)| class_id)
+        .or_else(|| {
+            with_reflected_property(ed, "__reflection_method_class", |value| {
+                value
+                    .and_then(Value::as_str)
+                    .and_then(|class| eg.find_class(class).map(|class| class.class_id))
+            })
+        })
+        .unwrap_or(0);
+
     if let ReflectedMethodArguments::Raw(supplied_num_args) = arguments_source
         && function.sig.ref_args == 0
     {
@@ -7678,23 +7689,24 @@ fn invoke_reflected_method(
             arguments[length] = with_argument(ed, 2, Clone::clone);
             length += 1;
         }
-        let result = crate::vm::execute::call_function(eg, function, &arguments[..length])?;
+        let result = crate::vm::execute::call_function_owned_iter_with_context_from_mode(
+            eg,
+            ed,
+            function,
+            length,
+            arguments[..length].iter().cloned(),
+            called_scope_class_id,
+            None,
+            (!is_static).then_some(receiver.clone()),
+            0,
+            None,
+            true,
+        )?;
         if eg.exception.is_some() {
             return Ok(());
         }
         return return_value(rv, result);
     }
-
-    let called_scope_class_id = receiver_class
-        .map(|(class_id, _)| class_id)
-        .or_else(|| {
-            with_reflected_property(ed, "__reflection_method_class", |value| {
-                value
-                    .and_then(Value::as_str)
-                    .and_then(|class| eg.find_class(class).map(|class| class.class_id))
-            })
-        })
-        .unwrap_or(0);
 
     let call_receiver = if is_static {
         Value::null()

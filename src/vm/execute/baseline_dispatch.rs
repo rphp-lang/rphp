@@ -3334,20 +3334,24 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 op_array.source_file.as_str()
                             };
                             if eg.error_reporting & 2 != 0 {
-                                eg.write_output(
+                                crate::stdlib::write_php_output(
+                                    eg,
                                     format!(
                                         "\nWarning: Undefined variable ${name} in {file} on line {}\n",
                                         opline.extended_value
                                     )
                                     .as_bytes(),
-                                );
+                                    Some(frame),
+                                )?;
+                                resume_pending_exception!();
                             }
                         }
                     }
                 } else if val.value_type() == ValueType::String {
                     // Fast path: string → write bytes directly, no allocation
                     let bytes = val.php_string_bytes().unwrap();
-                    eg.write_output(bytes.as_ref());
+                    crate::stdlib::write_php_output(eg, bytes.as_ref(), Some(frame))?;
+                    resume_pending_exception!();
                 } else if val.value_type() == ValueType::Long {
                     // Fast path: integer → stack-local write, no heap allocation
                     use std::io::Write;
@@ -3357,7 +3361,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         write!(cursor, "{}", unsafe { val.raw_long() }).unwrap();
                         cursor.position() as usize
                     };
-                    eg.write_output(&buf[..s]);
+                    crate::stdlib::write_php_output(eg, &buf[..s], Some(frame))?;
+                    resume_pending_exception!();
                 } else if matches!(val.value_type(), ValueType::Object | ValueType::Closure) {
                     let class_name = if val.value_type() == ValueType::Closure {
                         "Closure".to_string()
@@ -3376,7 +3381,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let output = result
                             .php_string_bytes()
                             .expect("canonical object string conversion returns String");
-                        eg.write_output(output.as_ref());
+                        crate::stdlib::write_php_output(eg, output.as_ref(), Some(frame))?;
+                        resume_pending_exception!();
                     } else {
                         throw_operator!(
                             "Error",
@@ -3385,7 +3391,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                 } else {
                     let output = val.echo_to_string_with_precision(eg.precision);
-                    eg.write_output(output.as_bytes());
+                    crate::stdlib::write_php_output(eg, output.as_bytes(), Some(frame))?;
+                    resume_pending_exception!();
                 }
             }
 
@@ -3395,7 +3402,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 };
                 debug_assert_eq!(value.value_type(), ValueType::String);
                 let string = unsafe { value.as_str().unwrap_unchecked() };
-                eg.write_output(string.as_bytes());
+                crate::stdlib::write_php_output(eg, string.as_bytes(), Some(frame))?;
+                resume_pending_exception!();
             }
 
             OpCode::Echo_Long => {
@@ -3410,7 +3418,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     write!(cursor, "{}", unsafe { value.raw_long() }).unwrap();
                     cursor.position() as usize
                 };
-                eg.write_output(&buffer[..length]);
+                crate::stdlib::write_php_output(eg, &buffer[..length], Some(frame))?;
+                resume_pending_exception!();
             }
 
             // ── Specialized arithmetic opcodes ──────────────────────────

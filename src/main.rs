@@ -132,6 +132,7 @@ fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
 }
 
 fn exit_after_pending_shutdown(eg: &mut ExecutorGlobals, default_code: i32) -> ! {
+    eg.flush_post_fatal_output();
     let logical_caller = eg.current_execute_data.get();
     match stdlib::run_shutdown_functions(eg, logical_caller) {
         Ok(()) => std::process::exit(default_code),

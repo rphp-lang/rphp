@@ -20,9 +20,19 @@ fn finish_request_shutdown(
         crate::value::end_object_handle_request();
         return Err(error);
     }
+    shutdown_error.map_or(Ok(()), Err)
+}
+
+#[cold]
+#[inline(never)]
+fn finish_request_handler_shutdown(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
     // Active handlers must remain callable while class/function statics are
-    // released: their destructors may still throw. Retire handler-owned
-    // generators and objects only after that final dispatch boundary.
+    // released and while final output-buffer callbacks run: either phase may
+    // still throw. Retire handler-owned generators and objects only after both
+    // final dispatch boundaries.
     let mut handler_roots = Vec::new();
     handler_roots.extend(eg.error_handler.take());
     for (handler, _) in eg.error_handler_stack.drain(..) {
@@ -35,7 +45,7 @@ fn finish_request_shutdown(
     run_value_destructors(eg, &handler_roots, frame)?;
     drop(handler_roots);
     pop_vm_call_frame(eg, frame);
-    shutdown_error.map_or(Ok(()), Err)
+    Ok(())
 }
 
 #[cold]
@@ -148,22 +158,14 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         && eg.exception.is_some()
         && eg.exception_handler.is_some()
     {
-        let exception = eg
-            .exception
-            .take()
-            .expect("uncaught exception handler requires a pending exception");
         // The root frame stays live until the engine callback returns: PHP
         // runs the handler before main-scope destructors, and detached callback
         // traces still terminate at the synthetic `{main}` frame.
         eg.current_execute_data.set(frame);
-        match crate::stdlib::dispatch_uncaught_exception_handler(eg, frame, &exception) {
-            Ok(true) => {}
-            Ok(false) => {
-                if eg.exception.is_none() {
-                    eg.exception = Some(exception);
-                }
-            }
-            Err(error) => execution = Err(error),
+        if let Err(error) =
+            crate::stdlib::dispatch_pending_uncaught_exception_handlers(eg, frame)
+        {
+            execution = Err(error);
         }
     }
     let mut prepared_uncaught = None;
@@ -265,22 +267,83 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         }
         eg.exception = Some(effective);
     }
+    if eg.exception.is_some() {
+        run_exception_frame_generator_destructors(eg, frame)?;
+    }
+    if let Some(exception) = eg.exception.as_ref().cloned() {
+        let parse_error = exception.as_object().is_some_and(|object| {
+            object.class_name.as_ref().eq_ignore_ascii_case("ParseError")
+        });
+        if !parse_error {
+            let rendered = prepared_uncaught
+                .as_ref()
+                .filter(|(identity, _)| exception.object_identity() == Some(*identity))
+                .map(|(_, rendered)| rendered.clone())
+                .unwrap_or_else(|| format_uncaught_throwable(eg, &exception));
+            let (file, line) = exception.as_object().map_or_else(
+                || ("Unknown".to_string(), 0),
+                |object| {
+                    (
+                        object
+                            .get_property("file")
+                            .and_then(Value::as_str)
+                            .filter(|file| !file.is_empty())
+                            .unwrap_or("Unknown")
+                            .to_string(),
+                        object
+                            .get_property("line")
+                            .and_then(Value::as_long)
+                            .unwrap_or(0)
+                            .max(0) as usize,
+                    )
+                },
+            );
+            let last_error_suffix = format!(" in {file} on line {line}");
+            let last_error_message = rendered
+                .strip_suffix(&last_error_suffix)
+                .unwrap_or(&rendered);
+            eg.record_last_error(1, last_error_message, &file, line);
+        }
+        // Request-final callbacks and resource close hooks run before the CLI
+        // publishes either exception class, but their output follows the
+        // already prepared fatal diagnostic in PHP's observable byte order.
+        eg.begin_post_fatal_output();
+    }
+    let pending_uncaught = eg.exception.take();
+    let pending_uncaught_identity = pending_uncaught.as_ref().and_then(Value::object_identity);
     let mut shutdown_error = None;
-    if execution.is_ok() && eg.exception.is_none() && eg.shutdown_functions.is_some() {
+    if execution.is_ok() && eg.shutdown_functions.is_some() {
         shutdown_error = crate::stdlib::run_shutdown_functions(eg, frame).err();
+    }
+    if eg.exception.is_none() {
+        eg.exception = pending_uncaught;
     }
     if let Err(error) = execution {
         crate::value::end_object_handle_request();
         return Err(error);
     }
     if let Err(error) = finish_request_shutdown(eg, frame, shutdown_error) {
+        let _ = finish_request_handler_shutdown(eg, frame);
         crate::value::end_object_handle_request();
         return Err(error);
     }
 
     let output_result = crate::stdlib::flush_all_output_buffers(eg);
+    let handler_dispatch_result = if output_result.is_ok()
+        && eg.exception.is_some()
+        && eg.exception_handler.is_some()
+        && eg.exception.as_ref().and_then(Value::object_identity) != pending_uncaught_identity
+    {
+        eg.current_execute_data.set(frame);
+        crate::stdlib::dispatch_pending_uncaught_exception_handlers(eg, frame)
+    } else {
+        Ok(())
+    };
+    let handler_shutdown_result = finish_request_handler_shutdown(eg, frame);
     crate::value::end_object_handle_request();
     output_result?;
+    handler_dispatch_result?;
+    handler_shutdown_result?;
 
     // Check for uncaught exception that propagated through execute_ex.
     if let Some(exc) = eg.exception.take() {

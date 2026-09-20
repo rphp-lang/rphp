@@ -1196,9 +1196,10 @@ pub(crate) fn run_cycle_object_destructor(
 /// path remains allocation-free; object counts are built only for frames that
 /// actually own heap values.
 #[cold]
-fn run_frame_destructors(
+fn run_frame_destructors_filtered(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
+    live_generators_only: bool,
 ) -> Result<(), VmError> {
     // SAFETY: `frame` is the live activation being released. Its compiler-sized
     // CV/TMP range remains allocated until destructor dispatch completes.
@@ -1297,6 +1298,19 @@ fn run_frame_destructors(
                     continue;
                 };
                 let representative = &*base.add(index);
+                if live_generators_only {
+                    let live_generator = representative
+                        .dereferenced()
+                        .as_object()
+                        .and_then(|object| object.generator.clone())
+                        .is_some_and(|generator| {
+                            generator.borrow().state
+                                != crate::vm::generator::GeneratorState::Completed
+                        });
+                    if !live_generator {
+                        continue;
+                    }
+                }
                 if representative.vm_release_strong_count() != Some(frame_references) {
                     deferred.push(identity);
                     continue;
@@ -1337,6 +1351,47 @@ fn run_frame_destructors(
         }
     }
     Ok(())
+}
+
+#[inline]
+fn run_frame_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
+    run_frame_destructors_filtered(eg, frame, false)
+}
+
+/// Close suspended generators while an uncaught exception is still unwinding
+/// the root frame. Their `finally` output precedes the fatal diagnostic; plain
+/// object destructors remain in the later request-shutdown phase.
+#[cold]
+pub(crate) fn run_exception_frame_generator_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let mut pending = eg.exception.take();
+    loop {
+        run_frame_destructors_filtered(eg, frame, true)?;
+        let Some(replacement) = eg.exception.take() else {
+            eg.exception = pending;
+            return Ok(());
+        };
+        if let Some(displaced) = pending.take() {
+            append_replaced_exception(&replacement, &displaced, eg);
+        }
+        match crate::stdlib::dispatch_uncaught_exception_handler(eg, frame, &replacement) {
+            Ok(true) => {}
+            Ok(false) => {
+                let effective = eg.exception.take().unwrap_or_else(|| replacement.clone());
+                if effective.object_identity() != replacement.object_identity() {
+                    append_replaced_exception(&effective, &replacement, eg);
+                }
+                eg.exception = Some(effective);
+                return Ok(());
+            }
+            Err(error) => return Err(error),
+        }
+    }
 }
 
 /// Complete the root-frame destructor pass after independently handled

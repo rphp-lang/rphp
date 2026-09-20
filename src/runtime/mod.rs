@@ -565,8 +565,15 @@ impl ActiveRuntimeClassRelation {
 pub(crate) struct OutputBuffer {
     pub(crate) data: Vec<u8>,
     pub(crate) handler: Option<Value>,
+    /// A positive threshold asks PHP to pass the accumulated chunk through
+    /// the display handler synchronously. Zero keeps the buffer until an
+    /// explicit operation or request shutdown.
+    pub(crate) chunk_size: usize,
     pub(crate) flags: i64,
     pub(crate) started: bool,
+    /// A handler which threw remains visible to ob_get_level(), but PHP
+    /// bypasses it for subsequent writes and request-final flushing.
+    pub(crate) disabled: bool,
 }
 
 /// Minimal ExecutorGlobals for vertical slice.
@@ -924,6 +931,11 @@ pub struct ExecutorGlobals {
     /// Output buffer — collected output for testing, or stdout
     output: std::cell::RefCell<Box<dyn Write>>,
     output_buffers: std::cell::RefCell<Vec<OutputBuffer>>,
+    /// Bytes produced by shutdown callbacks, destructors and final output
+    /// handlers after an uncaught fatal has been established. The CLI emits
+    /// the fatal diagnostic first and drains this sparse buffer afterwards,
+    /// matching PHP's request-finalization order.
+    post_fatal_output: std::cell::RefCell<Option<Vec<u8>>>,
     /// Whether at least one non-empty byte reached the underlying request
     /// sink. Buffered and empty writes do not publish headers in PHP.
     headers_sent: Cell<bool>,
@@ -2034,6 +2046,7 @@ impl ExecutorGlobals {
 
             output: std::cell::RefCell::new(Box::new(std::io::stdout())),
             output_buffers: std::cell::RefCell::new(Vec::new()),
+            post_fatal_output: std::cell::RefCell::new(None),
             headers_sent: Cell::new(false),
             header_output_origin: std::cell::RefCell::new(None),
             libxml_entity_loader_disabled: Cell::new(false),
@@ -2166,6 +2179,7 @@ impl ExecutorGlobals {
 
             output: std::cell::RefCell::new(output),
             output_buffers: std::cell::RefCell::new(Vec::new()),
+            post_fatal_output: std::cell::RefCell::new(None),
             headers_sent: Cell::new(false),
             header_output_origin: std::cell::RefCell::new(None),
             libxml_entity_loader_disabled: Cell::new(false),
@@ -11170,14 +11184,47 @@ impl ExecutorGlobals {
     }
 
     pub fn write_output(&self, data: &[u8]) {
-        if let Some(buffer) = self.output_buffers.borrow_mut().last_mut() {
+        if let Some(buffer) = self
+            .output_buffers
+            .borrow_mut()
+            .iter_mut()
+            .rev()
+            .find(|buffer| !buffer.disabled)
+        {
             buffer.data.extend_from_slice(data);
+            return;
+        }
+        if let Some(output) = self.post_fatal_output.borrow_mut().as_mut() {
+            output.extend_from_slice(data);
             return;
         }
         if !data.is_empty() && !self.headers_sent.get() {
             self.record_first_output();
         }
         self.output.borrow_mut().write_all(data).unwrap();
+    }
+
+    pub(crate) fn begin_post_fatal_output(&self) {
+        let mut output = self.post_fatal_output.borrow_mut();
+        if output.is_none() {
+            *output = Some(Vec::new());
+        }
+    }
+
+    /// Drain request-final output only after the caller has published the
+    /// already prepared fatal diagnostic. This deliberately bypasses user
+    /// buffers: execute() has finalized them before returning the fatal.
+    pub fn flush_post_fatal_output(&self) {
+        let output = self.post_fatal_output.borrow_mut().take();
+        let Some(output) = output else {
+            return;
+        };
+        if !output.is_empty() && !self.headers_sent.get() {
+            self.record_first_output();
+        }
+        let mut sink = self.output.borrow_mut();
+        sink.write_all(&output).unwrap();
+        let _ = sink.flush();
     }
 
     /// Flush the active request output sink. PHP's `flush()` does not bypass
@@ -11187,13 +11234,21 @@ impl ExecutorGlobals {
         let _ = self.output.borrow_mut().flush();
     }
 
-    pub(crate) fn push_output_buffer(&self, handler: Option<Value>, flags: i64) {
+    pub(crate) fn push_output_buffer(&self, handler: Option<Value>, chunk_size: usize, flags: i64) {
         self.output_buffers.borrow_mut().push(OutputBuffer {
             data: Vec::new(),
             handler,
+            chunk_size,
             flags,
             started: false,
+            disabled: false,
         });
+    }
+
+    pub(crate) fn output_buffer_chunk_ready(&self) -> bool {
+        self.output_buffers.borrow().last().is_some_and(|buffer| {
+            !buffer.disabled && buffer.chunk_size != 0 && buffer.data.len() >= buffer.chunk_size
+        })
     }
 
     pub(crate) fn pop_output_buffer(&self) -> Option<OutputBuffer> {
