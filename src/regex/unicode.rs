@@ -21,6 +21,14 @@ pub(super) fn general_category(c: char) -> u8 {
     }
 }
 
+pub(super) fn category_is(c: char, name: &str) -> bool {
+    CATEGORY_NAMES[usize::from(general_category(c))] == name
+}
+
+pub(super) fn category_has_initial(c: char, initial: char) -> bool {
+    CATEGORY_NAMES[usize::from(general_category(c))].starts_with(initial)
+}
+
 fn category_index(name: &str) -> Option<u8> {
     CATEGORY_NAMES
         .iter()

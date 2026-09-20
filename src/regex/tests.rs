@@ -835,6 +835,60 @@ fn nested_lazy_repetitions_deduplicate_paths_and_keep_the_last_capture() {
     assert!(captures.get(4).is_none());
 }
 
+#[test]
+fn capture_conditionals_select_the_participating_branch() {
+    let re = Regex::new("^(a)?(?(1)b|c)$", RegexFlags::default()).unwrap();
+    assert!(re.is_match("ab"));
+    assert!(re.is_match("c"));
+    assert!(!re.is_match("ac"));
+    assert!(!re.is_match("b"));
+}
+
+#[test]
+fn symbolic_subroutines_support_forward_definitions_and_recursion() {
+    let re = Regex::new(
+        r"(?(DEFINE)(?<value>\d+|(?&pair))(?<pair>\((?&value),(?&value)\)))(?&pair)",
+        RegexFlags::default(),
+    )
+    .unwrap();
+    assert!(re.is_match("(1,(2,3))"));
+    assert!(!re.is_match("(1,(x,3))"));
+
+    let left_recursive = Regex::new("((?1)?z)", RegexFlags::default()).unwrap();
+    assert_eq!(
+        left_recursive.is_match_with_limits("", MatchLimits::default()),
+        Ok(false)
+    );
+}
+
+#[test]
+fn branching_quantifiers_try_the_preferred_partition_before_collecting_fallbacks() {
+    let quoted = php_regex(r#"/^"([^"\\]*|\\.)*"$/"#);
+    let subject = format!("\"{}\\\"tail\"", "value".repeat(128));
+    assert!(quoted.is_match(&subject));
+
+    // The preferred branch can still be rejected by the continuation; the
+    // exhaustive fallback must then find a shorter inner alternative.
+    assert!(php_regex("/^(?:ab|a)*b$/").is_match("ab"));
+}
+
+#[test]
+fn posix_classes_and_apostrophe_named_groups_follow_unicode_mode() {
+    let hexadecimal = php_regex("/^[[:xdigit:]]+$/");
+    assert!(hexadecimal.is_match("19aF"));
+    assert!(!hexadecimal.is_match("19g"));
+
+    let unicode_word = php_regex("/^[[:alpha:]][[:alnum:]_]*$/u");
+    assert!(unicode_word.is_match("Žluťoučký2"));
+    assert!(!unicode_word.is_match("2Žluťoučký"));
+    assert!(php_regex("/^[[:^digit:]]+$/u").is_match("abc"));
+    assert!(!php_regex("/^[[:^digit:]]+$/u").is_match("٣"));
+
+    let named = php_regex("/^(?'word'[[:alpha:]]+)\\k'word'$/u");
+    let captures = named.captures("ahaaha").unwrap();
+    assert_eq!(captures.get_named("word").unwrap().as_str("ahaaha"), "aha");
+}
+
 // ── P2: Named backreferences ───────────────────────────────────────────
 
 #[test]
@@ -957,6 +1011,19 @@ fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
             &"a".repeat(64),
             MatchLimits {
                 backtrack: 8,
+                recursion: 100,
+                jit: false,
+            },
+        ),
+        Err(MatchLimitError::Backtrack)
+    );
+
+    let branching = Regex::new(r"^(?:\D+|<\d+>)*[!?]$", RegexFlags::default()).unwrap();
+    assert_eq!(
+        branching.is_match_with_limits(
+            "foobar foobar foobar",
+            MatchLimits {
+                backtrack: 1,
                 recursion: 100,
                 jit: false,
             },

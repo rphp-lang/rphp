@@ -13,6 +13,7 @@
 //!
 //! Flags: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended/comments), `U` (ungreedy), `u` (UTF-8), `S` (study hint)
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
@@ -74,6 +75,39 @@ enum Node {
     GraphemeCluster,
     /// `\R`: one newline sequence, with `\r\n` consumed atomically.
     Linebreak,
+    /// Recursive/subroutine call resolved against the immutable compiled
+    /// pattern registry. Keeping the reference symbolic permits self and
+    /// forward references without constructing a cyclic Rust AST.
+    Subroutine(SubroutineTarget),
+    /// PCRE conditional selected from capture participation or recursive
+    /// subroutine state.
+    Conditional {
+        condition: CaptureCondition,
+        yes: Box<Node>,
+        no: Option<Box<Node>>,
+    },
+    /// Runtime-only zero-width continuation inserted after a capturing group.
+    /// It publishes the group end before the following AST node is evaluated,
+    /// so ordinary continuation matching can drive backtracking without first
+    /// materializing every possible inner state.
+    CaptureEnd {
+        index: usize,
+        start: usize,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+enum SubroutineTarget {
+    WholePattern,
+    Group(usize),
+    Name(String),
+}
+
+#[derive(Debug, Clone)]
+enum CaptureCondition {
+    Group(usize),
+    Name(String),
+    Recursion,
 }
 
 #[derive(Debug, Clone)]
@@ -88,6 +122,138 @@ enum ClassItem {
     Literal(char),
     Range(char, char),
     Shorthand(Shorthand),
+    Posix { class: PosixClass, negated: bool },
+}
+
+#[derive(Debug, Clone, Copy)]
+enum PosixClass {
+    Alnum,
+    Alpha,
+    Ascii,
+    Blank,
+    Cntrl,
+    Digit,
+    Graph,
+    Lower,
+    Print,
+    Punct,
+    Space,
+    Upper,
+    Word,
+    Xdigit,
+}
+
+impl PosixClass {
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn parse(name: &str) -> Option<Self> {
+        Some(match name {
+            "alnum" => Self::Alnum,
+            "alpha" => Self::Alpha,
+            "ascii" => Self::Ascii,
+            "blank" => Self::Blank,
+            "cntrl" => Self::Cntrl,
+            "digit" => Self::Digit,
+            "graph" => Self::Graph,
+            "lower" => Self::Lower,
+            "print" => Self::Print,
+            "punct" => Self::Punct,
+            "space" => Self::Space,
+            "upper" => Self::Upper,
+            "word" => Self::Word,
+            "xdigit" => Self::Xdigit,
+            _ => return None,
+        })
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn matches(self, c: char, unicode: bool) -> bool {
+        let is_letter = || unicode::category_has_initial(c, 'L');
+        let is_number = || unicode::category_has_initial(c, 'N');
+        let is_decimal = || unicode::category_is(c, "Nd");
+        let is_space = || {
+            if unicode {
+                c.is_whitespace()
+            } else {
+                c.is_ascii_whitespace()
+            }
+        };
+        let is_blank = || {
+            if unicode {
+                c == '\t' || unicode::category_is(c, "Zs")
+            } else {
+                matches!(c, '\t' | ' ')
+            }
+        };
+        let is_control = || {
+            if unicode {
+                unicode::category_is(c, "Cc")
+            } else {
+                c.is_ascii_control()
+            }
+        };
+        match self {
+            Self::Alnum => {
+                if unicode {
+                    is_letter() || is_number()
+                } else {
+                    c.is_ascii_alphanumeric()
+                }
+            }
+            Self::Alpha => {
+                if unicode {
+                    is_letter()
+                } else {
+                    c.is_ascii_alphabetic()
+                }
+            }
+            Self::Ascii => c.is_ascii(),
+            Self::Blank => is_blank(),
+            Self::Cntrl => is_control(),
+            Self::Digit => {
+                if unicode {
+                    is_decimal()
+                } else {
+                    c.is_ascii_digit()
+                }
+            }
+            Self::Graph => !is_space() && !is_control(),
+            Self::Lower => {
+                if unicode {
+                    unicode::category_is(c, "Ll")
+                } else {
+                    c.is_ascii_lowercase()
+                }
+            }
+            Self::Print => (!is_space() && !is_control()) || is_blank(),
+            Self::Punct => {
+                if unicode {
+                    unicode::category_has_initial(c, 'P')
+                } else {
+                    c.is_ascii_punctuation()
+                }
+            }
+            Self::Space => is_space(),
+            Self::Upper => {
+                if unicode {
+                    unicode::category_is(c, "Lu")
+                } else {
+                    c.is_ascii_uppercase()
+                }
+            }
+            Self::Word => {
+                if unicode {
+                    is_letter() || is_number() || c == '_'
+                } else {
+                    c.is_ascii_alphanumeric() || c == '_'
+                }
+            }
+            Self::Xdigit => c.is_ascii_hexdigit(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -185,14 +351,41 @@ pub struct Regex {
     ast: Node,
     flags: RegexFlags,
     num_groups: usize,
-    /// Named group name → group index
-    named_groups: HashMap<String, usize>,
+    symbols: PatternSymbols,
     /// Literal that every match must start with, when it can be proven from
     /// the AST. Used to skip impossible start positions before backtracking.
     start_literal: Option<char>,
     /// Whether boolean matching must retain capture contents for a later
     /// numeric or named backreference in the pattern.
     uses_backreferences: bool,
+}
+
+#[derive(Debug)]
+struct SubroutineRegistry {
+    root: Rc<Node>,
+    by_index: HashMap<usize, Rc<Node>>,
+    by_name: HashMap<String, Rc<Node>>,
+    active_calls: RefCell<Vec<(SubroutineTarget, usize)>>,
+}
+
+#[derive(Debug)]
+struct PatternSymbols {
+    /// Named group name → group index.
+    named_groups: HashMap<String, usize>,
+    /// Allocated only for patterns that actually contain a subroutine call.
+    subroutines: Option<Rc<SubroutineRegistry>>,
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn make_subroutine_registry(ast: &Node, parser: &mut Parser) -> Rc<SubroutineRegistry> {
+    Rc::new(SubroutineRegistry {
+        root: Rc::new(ast.clone()),
+        by_index: std::mem::take(&mut parser.subpatterns_by_index),
+        by_name: std::mem::take(&mut parser.subpatterns_by_name),
+        active_calls: RefCell::new(Vec::new()),
+    })
 }
 
 /// Per-executor cache of parsed and compiled PHP regular expressions.
@@ -367,7 +560,7 @@ impl Regex {
     }
 
     pub(crate) fn capture_names(&self) -> &HashMap<String, usize> {
-        &self.named_groups
+        &self.symbols.named_groups
     }
 
     /// Compile a regex pattern with given flags.
@@ -375,12 +568,22 @@ impl Regex {
         let mut parser = Parser::new(pattern, flags);
         let ast = parser.parse()?;
         let start_literal = required_start_literal(&ast);
-        let uses_backreferences = contains_backreference(&ast);
+        let uses_backreferences = contains_backreference(&ast)
+            || parser
+                .subpatterns_by_index
+                .values()
+                .any(|node| contains_backreference(node));
+        let subroutines = parser
+            .saw_subroutine
+            .then(|| make_subroutine_registry(&ast, &mut parser));
         Ok(Self {
             ast,
             flags,
             num_groups: parser.group_count,
-            named_groups: parser.named_groups,
+            symbols: PatternSymbols {
+                named_groups: parser.named_groups,
+                subroutines,
+            },
             start_literal,
             uses_backreferences,
         })
@@ -439,14 +642,14 @@ impl Regex {
                 metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
-                named_groups: &self.named_groups,
+                symbols: &self.symbols,
                 mark: &mut mark,
                 budget: &mut budget,
             };
             if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
                 return Ok(true);
             }
-            if let Some(error) = budget.error {
+            if let Some(error) = budget.error() {
                 return Err(error);
             }
             if self.flags.anchored {
@@ -496,7 +699,7 @@ impl Regex {
                     metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
-                    named_groups: &self.named_groups,
+                    symbols: &self.symbols,
                     mark: &mut mark,
                     budget: &mut budget,
                 };
@@ -509,11 +712,11 @@ impl Regex {
                 });
                 return Ok(Some(Captures {
                     groups,
-                    named_groups: self.named_groups.clone(),
+                    named_groups: self.symbols.named_groups.clone(),
                     mark,
                 }));
             }
-            if let Some(error) = budget.error {
+            if let Some(error) = budget.error() {
                 return Err(error);
             }
         }
@@ -549,7 +752,7 @@ impl Regex {
                 metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
-                named_groups: &self.named_groups,
+                symbols: &self.symbols,
                 mark: &mut mark,
                 budget: &mut budget,
             };
@@ -674,13 +877,13 @@ impl Regex {
                     metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
-                    named_groups: &self.named_groups,
+                    symbols: &self.symbols,
                     mark: &mut mark,
                     budget: &mut budget,
                 };
                 match_seq_from(&self.ast, &[], pos, &mut ctx)
             };
-            if let Some(error) = budget.error {
+            if let Some(error) = budget.error() {
                 return Err(error);
             }
             if let Some(end) = end {
@@ -691,7 +894,7 @@ impl Regex {
                 count += 1;
                 if !visitor(CaptureView {
                     groups: &groups,
-                    named_groups: &self.named_groups,
+                    named_groups: &self.symbols.named_groups,
                     mark: mark.as_deref(),
                 }) {
                     break;
@@ -743,7 +946,7 @@ impl Regex {
                     metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
-                    named_groups: &self.named_groups,
+                    symbols: &self.symbols,
                     mark: &mut mark,
                     budget: &mut budget,
                 };
@@ -759,7 +962,7 @@ impl Regex {
                 count += 1;
                 let keep_scanning = visitor(CaptureView {
                     groups: &groups,
-                    named_groups: &self.named_groups,
+                    named_groups: &self.symbols.named_groups,
                     mark: mark.as_deref(),
                 })?;
                 if !keep_scanning {
@@ -826,7 +1029,7 @@ impl Regex {
                     metadata: &metadata,
                     flags: self.flags,
                     groups: &mut groups,
-                    named_groups: &self.named_groups,
+                    symbols: &self.symbols,
                     mark: &mut mark,
                     budget: &mut budget,
                 };
@@ -878,7 +1081,7 @@ impl Regex {
                 metadata: &metadata,
                 flags: self.flags,
                 groups: &mut groups,
-                named_groups: &self.named_groups,
+                symbols: &self.symbols,
                 mark: &mut mark,
                 budget: &mut budget,
             };
@@ -893,7 +1096,7 @@ impl Regex {
                 result.push_str(&subject[byte_offsets.get(pos)..match_start]);
                 let caps = Captures {
                     groups: groups.clone(),
-                    named_groups: self.named_groups.clone(),
+                    named_groups: self.symbols.named_groups.clone(),
                     mark: mark.clone(),
                 };
                 result.push_str(&replacer(&caps, subject));
@@ -934,7 +1137,8 @@ fn required_start_literal(node: &Node) -> Option<char> {
                     | Node::WordBoundary(_)
                     | Node::Lookahead { .. }
                     | Node::Lookbehind { .. }
-                    | Node::Mark(_) => continue,
+                    | Node::Mark(_)
+                    | Node::CaptureEnd { .. } => continue,
                     _ => return required_start_literal(node),
                 }
             }
@@ -965,6 +1169,14 @@ fn contains_backreference(node: &Node) -> bool {
         Node::Alternation(nodes) | Node::Sequence(nodes) => {
             nodes.iter().any(contains_backreference)
         }
+        Node::Conditional {
+            condition, yes, no, ..
+        } => {
+            !matches!(condition, CaptureCondition::Recursion)
+                || contains_backreference(yes)
+                || no.as_deref().is_some_and(contains_backreference)
+        }
+        Node::CaptureEnd { .. } => false,
         _ => false,
     }
 }
@@ -1108,12 +1320,27 @@ impl MatchBudget {
     }
 
     #[inline]
+    fn error(&self) -> Option<MatchLimitError> {
+        self.error
+    }
+
+    #[inline]
+    fn has_error(&self) -> bool {
+        self.error().is_some()
+    }
+
+    #[inline]
+    fn set_error(&mut self, error: MatchLimitError) {
+        self.error = Some(error);
+    }
+
+    #[inline]
     fn enter_recursion(&mut self) -> bool {
-        if self.error.is_some() {
+        if self.has_error() {
             return false;
         }
         if self.recursion_depth >= self.recursion_limit {
-            self.error = Some(MatchLimitError::Recursion);
+            self.set_error(MatchLimitError::Recursion);
             return false;
         }
         self.recursion_depth += 1;
@@ -1127,12 +1354,12 @@ impl MatchBudget {
 
     #[inline]
     fn retain_quantifier_continuation(&mut self) -> bool {
-        if self.error.is_some() {
+        if self.has_error() {
             return false;
         }
         if self.jit {
             if self.jit_steps_remaining == 0 {
-                self.error = Some(MatchLimitError::JitStack);
+                self.set_error(MatchLimitError::JitStack);
                 return false;
             }
             self.jit_steps_remaining -= 1;
@@ -1142,11 +1369,11 @@ impl MatchBudget {
 
     #[inline]
     fn consume_backtrack(&mut self) -> bool {
-        if self.error.is_some() {
+        if self.has_error() {
             return false;
         }
         if self.backtracks_remaining == 0 {
-            self.error = Some(MatchLimitError::Backtrack);
+            self.set_error(MatchLimitError::Backtrack);
             return false;
         }
         self.backtracks_remaining -= 1;
@@ -1164,9 +1391,130 @@ struct MatchCtx<'a> {
     metadata: &'a MatchMetadata<'a>,
     flags: RegexFlags,
     groups: &'a mut Vec<Option<Match>>,
-    named_groups: &'a HashMap<String, usize>,
+    symbols: &'a PatternSymbols,
     mark: &'a mut Option<String>,
     budget: &'a mut MatchBudget,
+}
+
+fn resolve_subroutine(target: &SubroutineTarget, ctx: &MatchCtx<'_>) -> Option<Rc<Node>> {
+    let registry = ctx.symbols.subroutines.as_deref()?;
+    match target {
+        SubroutineTarget::WholePattern => Some(Rc::clone(&registry.root)),
+        SubroutineTarget::Group(index) => registry.by_index.get(index).cloned(),
+        SubroutineTarget::Name(name) => registry.by_name.get(name).cloned(),
+    }
+}
+
+fn capture_condition_matches(
+    condition: &CaptureCondition,
+    groups: &[Option<Match>],
+    named_groups: &HashMap<String, usize>,
+    in_subroutine: bool,
+) -> bool {
+    match condition {
+        CaptureCondition::Group(index) => groups.get(*index).is_some_and(Option::is_some),
+        CaptureCondition::Name(name) => named_groups
+            .get(name)
+            .and_then(|index| groups.get(*index))
+            .is_some_and(Option::is_some),
+        CaptureCondition::Recursion => in_subroutine,
+    }
+}
+
+#[inline]
+fn in_subroutine(ctx: &MatchCtx<'_>) -> bool {
+    ctx.symbols
+        .subroutines
+        .as_deref()
+        .is_some_and(|registry| !registry.active_calls.borrow().is_empty())
+}
+
+#[inline]
+fn subroutine_call_is_active(ctx: &MatchCtx<'_>, target: &SubroutineTarget, pos: usize) -> bool {
+    ctx.symbols.subroutines.as_deref().is_some_and(|registry| {
+        registry
+            .active_calls
+            .borrow()
+            .iter()
+            .any(|(active, active_pos)| active == target && *active_pos == pos)
+    })
+}
+
+#[inline]
+fn push_subroutine_call(ctx: &mut MatchCtx<'_>, target: SubroutineTarget, pos: usize) {
+    ctx.symbols
+        .subroutines
+        .as_deref()
+        .expect("subroutine registry initializes cold match state")
+        .active_calls
+        .borrow_mut()
+        .push((target, pos));
+}
+
+#[inline]
+fn pop_subroutine_call(ctx: &mut MatchCtx<'_>) {
+    if let Some(registry) = ctx.symbols.subroutines.as_deref() {
+        registry.active_calls.borrow_mut().pop();
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn match_subroutine(
+    target: &SubroutineTarget,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx<'_>,
+) -> Option<usize> {
+    if subroutine_call_is_active(ctx, target, pos) || !ctx.budget.enter_recursion() {
+        return None;
+    }
+    let target_kind = target.clone();
+    let target = resolve_subroutine(target, ctx);
+    push_subroutine_call(ctx, target_kind, pos);
+    let saved_groups = ctx.groups.clone();
+    let saved_mark = ctx.mark.clone();
+    let result = target.as_ref().and_then(|target| {
+        match_seq_from(target, &[], pos, ctx).and_then(|end| match_rest(rest, end, ctx))
+    });
+    let result = if result.is_none() && !ctx.budget.has_error() {
+        *ctx.groups = saved_groups;
+        *ctx.mark = saved_mark;
+        target.and_then(|target| match_seq_from(&target, rest, pos, ctx))
+    } else {
+        result
+    };
+    pop_subroutine_call(ctx);
+    ctx.budget.leave_recursion();
+    result
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn match_conditional(
+    condition: &CaptureCondition,
+    yes: &Node,
+    no: Option<&Node>,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx<'_>,
+) -> Option<usize> {
+    let selected = if capture_condition_matches(
+        condition,
+        ctx.groups,
+        &ctx.symbols.named_groups,
+        in_subroutine(ctx),
+    ) {
+        Some(yes)
+    } else {
+        no
+    };
+    match selected {
+        Some(selected) => match_seq_from(selected, rest, pos, ctx),
+        None => match_rest(rest, pos, ctx),
+    }
 }
 
 // ── Core matching (backtracking with continuation) ──────────────────────────
@@ -1221,7 +1569,7 @@ fn node_length_range(node: &Node) -> Option<(usize, usize)> {
 }
 
 fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
-    if ctx.budget.error.is_some() {
+    if ctx.budget.has_error() {
         return None;
     }
     match node {
@@ -1381,7 +1729,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
         }
         Node::Backreference(n) => match_backref_by_index(*n, rest, pos, ctx),
         Node::NamedBackreference(name) => {
-            if let Some(&idx) = ctx.named_groups.get(name.as_str()) {
+            if let Some(&idx) = ctx.symbols.named_groups.get(name.as_str()) {
                 match_backref_by_index(idx, rest, pos, ctx)
             } else {
                 None
@@ -1467,7 +1815,36 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             }
             result
         }
+        Node::Subroutine(target) => match_subroutine(target, rest, pos, ctx),
+        Node::Conditional { condition, yes, no } => {
+            match_conditional(condition, yes, no.as_deref(), rest, pos, ctx)
+        }
+        Node::CaptureEnd { index, start } => match_capture_end(*index, *start, rest, pos, ctx),
     }
+}
+
+#[inline(never)]
+fn match_capture_end(
+    index: usize,
+    start: usize,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx<'_>,
+) -> Option<usize> {
+    let previous = ctx.groups.get(index).cloned().unwrap_or(None);
+    if let Some(slot) = ctx.groups.get_mut(index) {
+        *slot = Some(Match {
+            start,
+            end: ctx.metadata.byte_offsets.get(pos),
+        });
+    }
+    let result = match_rest(rest, pos, ctx);
+    if result.is_none()
+        && let Some(slot) = ctx.groups.get_mut(index)
+    {
+        *slot = previous;
+    }
+    result
 }
 
 /// Helper: match a group node, setting the group capture after the inner match succeeds
@@ -1494,23 +1871,32 @@ fn match_seq_from_with_group(
         return Some(end);
     }
 
-    let (initial, states) = collect_match_states(inner, pos, ctx);
-    for state in states {
-        let end = state.end;
-        state.install(ctx);
-        if let Some(idx) = group_idx {
-            let end_offset = ctx.metadata.byte_offsets.get(end);
-            ctx.groups[idx] = Some(Match {
+    let Some(index) = group_idx else {
+        return match_seq_from(inner, rest, pos, ctx);
+    };
+    if !capture_needs_streaming_continuation(inner) {
+        let (initial, states) = collect_match_states(inner, pos, ctx);
+        for state in states {
+            let end = state.end;
+            state.install(ctx);
+            ctx.groups[index] = Some(Match {
                 start: start_offset,
-                end: end_offset,
+                end: ctx.metadata.byte_offsets.get(end),
             });
+            if let Some(final_pos) = match_rest(rest, end, ctx) {
+                return Some(final_pos);
+            }
         }
-        if let Some(final_pos) = match_rest(rest, end, ctx) {
-            return Some(final_pos);
-        }
+        initial.install(ctx);
+        return None;
     }
-    initial.install(ctx);
-    None
+    let mut continuation = Vec::with_capacity(rest.len() + 1);
+    continuation.push(Node::CaptureEnd {
+        index,
+        start: start_offset,
+    });
+    continuation.extend_from_slice(rest);
+    match_seq_from(inner, &continuation, pos, ctx)
 }
 
 /// One possible matcher continuation. Capture registers and the last MARK are
@@ -1538,9 +1924,6 @@ impl BacktrackState {
     }
 }
 
-/// Collect every possible continuation for a node and return the caller's
-/// initial state separately. Group and quantified alternatives consume these
-/// immutable snapshots in PCRE backtracking order.
 fn collect_match_states(
     node: &Node,
     pos: usize,
@@ -1551,12 +1934,29 @@ fn collect_match_states(
     (initial, states)
 }
 
+fn capture_needs_streaming_continuation(node: &Node) -> bool {
+    match node {
+        Node::Sequence(nodes) | Node::Alternation(nodes) => {
+            nodes.iter().any(capture_needs_streaming_continuation)
+        }
+        Node::Quantifier { inner, .. } => {
+            match_states_can_branch(inner) || capture_needs_streaming_continuation(inner)
+        }
+        Node::Group { inner, .. }
+        | Node::Lookahead { inner, .. }
+        | Node::Lookbehind { inner, .. }
+        | Node::Atomic(inner) => capture_needs_streaming_continuation(inner),
+        Node::Subroutine(_) | Node::Conditional { .. } => true,
+        _ => false,
+    }
+}
+
 fn collect_match_states_from(
     node: &Node,
     state: BacktrackState,
     ctx: &mut MatchCtx,
 ) -> Vec<BacktrackState> {
-    if ctx.budget.error.is_some() {
+    if ctx.budget.has_error() {
         return Vec::new();
     }
     match node {
@@ -1649,6 +2049,10 @@ fn collect_match_states_from(
             ctx.budget.leave_recursion();
             states
         }
+        Node::Subroutine(target) => collect_subroutine_states(target, state, ctx),
+        Node::Conditional { condition, yes, no } => {
+            collect_conditional_states(condition, yes, no.as_deref(), state, ctx)
+        }
         // For simple nodes, delegate to match_seq_from with empty rest
         _ => {
             let pos = state.end;
@@ -1659,6 +2063,55 @@ fn collect_match_states_from(
                 Vec::new()
             }
         }
+    }
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn collect_subroutine_states(
+    target: &SubroutineTarget,
+    state: BacktrackState,
+    ctx: &mut MatchCtx<'_>,
+) -> Vec<BacktrackState> {
+    let start = state.end;
+    if subroutine_call_is_active(ctx, target, start) || !ctx.budget.enter_recursion() {
+        return Vec::new();
+    }
+    let target_kind = target.clone();
+    let target = resolve_subroutine(target, ctx);
+    push_subroutine_call(ctx, target_kind, start);
+    let states = target.map_or_else(Vec::new, |target| {
+        collect_match_states_from(&target, state, ctx)
+    });
+    pop_subroutine_call(ctx);
+    ctx.budget.leave_recursion();
+    states
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn collect_conditional_states(
+    condition: &CaptureCondition,
+    yes: &Node,
+    no: Option<&Node>,
+    state: BacktrackState,
+    ctx: &mut MatchCtx<'_>,
+) -> Vec<BacktrackState> {
+    let selected = if capture_condition_matches(
+        condition,
+        &state.groups,
+        &ctx.symbols.named_groups,
+        in_subroutine(ctx),
+    ) {
+        Some(yes)
+    } else {
+        no
+    };
+    match selected {
+        Some(selected) => collect_match_states_from(selected, state, ctx),
+        None => vec![state],
     }
 }
 
@@ -1673,6 +2126,7 @@ fn match_states_can_branch(node: &Node) -> bool {
         }
         Node::Quantifier { .. } => true,
         Node::Group { inner, .. } => match_states_can_branch(inner),
+        Node::Subroutine(_) | Node::Conditional { .. } => true,
         _ => false,
     }
 }
@@ -1722,6 +2176,7 @@ fn collect_single_path_quantifier_states(
 /// position, captures and MARK agree, every future decision is identical.
 #[cold]
 #[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn collect_branching_quantifier_states(
     inner: &Node,
     min: usize,
@@ -1751,8 +2206,14 @@ fn collect_branching_quantifier_states(
             if next.end == current_end {
                 continue;
             }
-            let continuation = (current_reps + 1, next);
-            if seen.insert(continuation.clone()) {
+            let next_reps = current_reps + 1;
+            let equivalent_reps = if max.is_none() && next_reps >= min {
+                min
+            } else {
+                next_reps
+            };
+            let continuation = (next_reps, next);
+            if seen.insert((equivalent_reps, continuation.1.clone())) {
                 pending.push(continuation);
             }
         }
@@ -1858,7 +2319,7 @@ fn match_quantifier(
         }
 
         if repetitions >= min {
-            if ctx.budget.error.is_some() {
+            if ctx.budget.has_error() {
                 return None;
             }
             return Some(current_pos);
@@ -1866,6 +2327,58 @@ fn match_quantifier(
         if let Some(initial_groups) = initial_groups {
             *ctx.groups = initial_groups;
         }
+        return None;
+    }
+
+    // Compound atoms usually have one preferred result at each token. Follow
+    // that PCRE-order lane first so deterministic strings such as JSON do not
+    // materialize every partition of `([^"\\]*|\\.)*`. If the continuation
+    // rejects it, the exhaustive collector below still provides full
+    // backtracking semantics.
+    let inner_can_branch = match inner {
+        Node::Sequence(_)
+        | Node::Alternation(_)
+        | Node::Quantifier { .. }
+        | Node::Group { .. }
+        | Node::Subroutine(_)
+        | Node::Conditional { .. } => match_states_can_branch(inner),
+        _ => false,
+    };
+    if inner_can_branch
+        && let Some(end) =
+            match_quantifier_preferred_path(inner, min, max, greedy, possessive, rest, pos, ctx)
+    {
+        return Some(end);
+    }
+    if ctx.budget.has_error() {
+        return None;
+    }
+
+    // A quantified compound atom can have several valid outcomes for the
+    // same repetition count. The continuation must be allowed to reject the
+    // preferred inner path and resume inside that atom (for example an
+    // optional header whose later conditional inspects one of its captures).
+    // Keep this stateful collector behind the existing branching proof so
+    // ordinary literal/class quantifiers retain the allocation-free loop.
+    if inner_can_branch {
+        let initial = BacktrackState::take(pos, ctx);
+        let states = collect_branching_quantifier_states(
+            inner,
+            min,
+            max,
+            greedy,
+            possessive,
+            initial.clone(),
+            ctx,
+        );
+        for state in states {
+            let end = state.end;
+            state.install(ctx);
+            if let Some(final_pos) = match_rest(rest, end, ctx) {
+                return Some(final_pos);
+            }
+        }
+        initial.install(ctx);
         return None;
     }
 
@@ -1907,7 +2420,7 @@ fn match_quantifier(
         }
     }
 
-    if ctx.budget.error.is_some() {
+    if ctx.budget.has_error() {
         return None;
     }
 
@@ -1945,6 +2458,99 @@ fn match_quantifier(
             }
         }
     }
+    None
+}
+
+#[cold]
+#[inline(never)]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+fn match_quantifier_preferred_path(
+    inner: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    possessive: bool,
+    rest: &[Node],
+    pos: usize,
+    ctx: &mut MatchCtx,
+) -> Option<usize> {
+    let initial_groups = ctx.groups.clone();
+    let initial_mark = ctx.mark.clone();
+    let tracks_captures = ctx.groups.len() > 1;
+    let limit = max.unwrap_or(usize::MAX);
+    let mut states = Vec::new();
+    let mut current_pos = pos;
+    let mut current_reps = 0usize;
+
+    loop {
+        if current_reps >= min {
+            if !greedy {
+                let saved_groups = tracks_captures.then(|| ctx.groups.clone());
+                let saved_mark = ctx.mark.clone();
+                if !ctx.budget.consume_backtrack() {
+                    *ctx.groups = initial_groups;
+                    *ctx.mark = initial_mark;
+                    return None;
+                }
+                if let Some(end) = match_rest(rest, current_pos, ctx) {
+                    return Some(end);
+                }
+                if let Some(saved_groups) = saved_groups {
+                    *ctx.groups = saved_groups;
+                }
+                *ctx.mark = saved_mark;
+            }
+            states.push((
+                current_pos,
+                tracks_captures.then(|| ctx.groups.clone()),
+                ctx.mark.clone(),
+            ));
+        }
+        if current_reps >= limit || !ctx.budget.retain_quantifier_continuation() {
+            break;
+        }
+        let saved_groups = tracks_captures.then(|| ctx.groups.clone());
+        let saved_mark = ctx.mark.clone();
+        match match_seq_from(inner, &[], current_pos, ctx) {
+            Some(next_pos) if next_pos != current_pos => {
+                current_pos = next_pos;
+                current_reps += 1;
+            }
+            _ => {
+                if let Some(saved_groups) = saved_groups {
+                    *ctx.groups = saved_groups;
+                }
+                *ctx.mark = saved_mark;
+                break;
+            }
+        }
+    }
+
+    if !greedy {
+        *ctx.groups = initial_groups;
+        *ctx.mark = initial_mark;
+        return None;
+    }
+    states.reverse();
+    if possessive {
+        states.truncate(1);
+    }
+    for (end, groups, mark) in states {
+        if !ctx.budget.consume_backtrack() {
+            *ctx.groups = initial_groups;
+            *ctx.mark = initial_mark;
+            return None;
+        }
+        if let Some(groups) = groups {
+            *ctx.groups = groups;
+        }
+        *ctx.mark = mark;
+        if let Some(final_pos) = match_rest(rest, end, ctx) {
+            return Some(final_pos);
+        }
+    }
+    *ctx.groups = initial_groups;
+    *ctx.mark = initial_mark;
     None
 }
 
@@ -2014,6 +2620,7 @@ fn match_class_item(item: &ClassItem, c: char, flags: RegexFlags) -> bool {
             }
         }
         ClassItem::Shorthand(sh) => match_shorthand(*sh, c, flags.unicode),
+        ClassItem::Posix { class, negated } => class.matches(c, flags.unicode) != *negated,
     }
 }
 
@@ -2024,56 +2631,10 @@ struct Parser {
     pos: usize,
     group_count: usize,
     named_groups: HashMap<String, usize>,
-    defined_subpatterns: HashMap<String, Node>,
-    /// Bodies of the capture groups parsed so far, by index, for inlining
-    /// later subroutine calls to them.
-    completed_groups: HashMap<usize, Node>,
+    subpatterns_by_index: HashMap<usize, Rc<Node>>,
+    subpatterns_by_name: HashMap<String, Rc<Node>>,
+    saw_subroutine: bool,
     flags: RegexFlags,
-}
-
-/// Drop capture wrappers from a subroutine body: PCRE restores every capture
-/// set inside a call once it returns, so an inlined copy must not publish
-/// them.
-fn strip_captures(node: Node) -> Node {
-    match node {
-        Node::Group {
-            index: Some(_),
-            inner,
-            ..
-        } => strip_captures(*inner),
-        Node::Group { index, name, inner } => Node::Group {
-            index,
-            name,
-            inner: Box::new(strip_captures(*inner)),
-        },
-        Node::Alternation(branches) => {
-            Node::Alternation(branches.into_iter().map(strip_captures).collect())
-        }
-        Node::Sequence(items) => Node::Sequence(items.into_iter().map(strip_captures).collect()),
-        Node::Quantifier {
-            inner,
-            min,
-            max,
-            greedy,
-            possessive,
-        } => Node::Quantifier {
-            inner: Box::new(strip_captures(*inner)),
-            min,
-            max,
-            greedy,
-            possessive,
-        },
-        Node::Lookahead { positive, inner } => Node::Lookahead {
-            positive,
-            inner: Box::new(strip_captures(*inner)),
-        },
-        Node::Lookbehind { positive, inner } => Node::Lookbehind {
-            positive,
-            inner: Box::new(strip_captures(*inner)),
-        },
-        Node::Atomic(inner) => Node::Atomic(Box::new(strip_captures(*inner))),
-        other => other,
-    }
 }
 
 impl Parser {
@@ -2083,90 +2644,28 @@ impl Parser {
             pos: 0,
             group_count: 0,
             named_groups: HashMap::new(),
-            defined_subpatterns: HashMap::new(),
-            completed_groups: HashMap::new(),
+            subpatterns_by_index: HashMap::new(),
+            subpatterns_by_name: HashMap::new(),
+            saw_subroutine: false,
             flags,
         }
     }
 
-    /// Inline a subroutine call to capture group `index`. Only a group that
-    /// is already complete can be copied; recursion into an open group and
-    /// forward calls stay engine non-claims.
-    fn subroutine_call(&self, index: usize) -> Result<Node, String> {
-        match self.completed_groups.get(&index) {
-            Some(inner) => Ok(strip_captures(inner.clone())),
-            None if index == 0 || index <= self.group_count => {
-                Err("Unsupported PCRE recursive subroutine call".into())
-            }
-            None => Err("Unsupported PCRE forward subroutine call".into()),
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn capture_group(&mut self, index: usize, name: Option<String>, inner: Node) -> Node {
+        let group = Node::Group {
+            index: Some(index),
+            name: name.clone(),
+            inner: Box::new(inner),
+        };
+        let shared = Rc::new(group.clone());
+        self.subpatterns_by_index.insert(index, Rc::clone(&shared));
+        if let Some(name) = name {
+            self.subpatterns_by_name.insert(name, shared);
         }
-    }
-
-    fn named_subroutine_call(&self, name: &str) -> Result<Node, String> {
-        if let Some(definition) = self.defined_subpatterns.get(name) {
-            return Ok(definition.clone());
-        }
-        match self.named_groups.get(name) {
-            Some(&index) => self.subroutine_call(index),
-            None => Err(format!("Unknown PCRE subpattern '{name}'")),
-        }
-    }
-
-    /// Read a group name or number up to `close`, then resolve it as a
-    /// subroutine call.
-    fn parse_subroutine_reference(&mut self, close: char) -> Result<Node, String> {
-        let mut reference = String::new();
-        while let Some(c) = self.peek() {
-            self.advance();
-            if c == close {
-                return self.resolve_subroutine_reference(&reference);
-            }
-            reference.push(c);
-        }
-        Err("Unterminated PCRE subroutine call".into())
-    }
-
-    fn resolve_subroutine_reference(&self, reference: &str) -> Result<Node, String> {
-        if reference == "R" {
-            return self.subroutine_call(0);
-        }
-        if let Some(relative) = reference.strip_prefix('-') {
-            let back: usize = relative
-                .parse()
-                .map_err(|_| "Malformed relative PCRE subroutine call".to_string())?;
-            return match (back > 0).then(|| self.group_count.checked_sub(back - 1)) {
-                Some(Some(index)) if index > 0 => self.subroutine_call(index),
-                _ => Err("reference to non-existent subpattern".into()),
-            };
-        }
-        if let Some(forward) = reference.strip_prefix('+') {
-            let ahead: usize = forward
-                .parse()
-                .map_err(|_| "Malformed relative PCRE subroutine call".to_string())?;
-            return self.subroutine_call(self.group_count + ahead);
-        }
-        match reference.parse::<usize>() {
-            Ok(index) => self.subroutine_call(index),
-            Err(_) => self.named_subroutine_call(reference),
-        }
-    }
-
-    /// Resolve the `\g{...}` / `\gn` backreference spellings.
-    fn backreference_by_reference(&self, reference: &str) -> Result<Node, String> {
-        if let Some(relative) = reference.strip_prefix('-') {
-            let back: usize = relative
-                .parse()
-                .map_err(|_| "Malformed relative PCRE backreference".to_string())?;
-            return match (back > 0).then(|| self.group_count.checked_sub(back - 1)) {
-                Some(Some(index)) if index > 0 => Ok(Node::Backreference(index)),
-                _ => Err("reference to non-existent subpattern".into()),
-            };
-        }
-        match reference.parse::<usize>() {
-            Ok(index) if index > 0 => Ok(Node::Backreference(index)),
-            Ok(_) => Err("a numbered reference must not be zero".into()),
-            Err(_) => Ok(Node::NamedBackreference(reference.to_string())),
-        }
+        group
     }
 
     fn peek(&self) -> Option<char> {
@@ -2477,7 +2976,31 @@ impl Parser {
                 return Ok(Node::CharClass { negated, items });
             }
             self.advance();
-            let item = if c == '\\' {
+            let item = if c == '[' && self.peek() == Some(':') {
+                self.advance(); // consume ':'
+                let negated = if self.peek() == Some('^') {
+                    self.advance();
+                    true
+                } else {
+                    false
+                };
+                let mut name = String::new();
+                while let Some(c) = self.peek() {
+                    if c == ':' && self.chars.get(self.pos + 1) == Some(&']') {
+                        self.advance();
+                        self.advance();
+                        break;
+                    }
+                    if c == ']' {
+                        return Err("invalid POSIX character class".into());
+                    }
+                    name.push(c);
+                    self.advance();
+                }
+                let class = PosixClass::parse(&name)
+                    .ok_or_else(|| format!("unknown POSIX class name '{name}'"))?;
+                ClassItem::Posix { class, negated }
+            } else if c == '\\' {
                 self.parse_class_escape()?
             } else {
                 ClassItem::Literal(c)
@@ -2546,20 +3069,20 @@ impl Parser {
             self.advance(); // consume '?'
             if self.chars[self.pos..].starts_with(&['(', 'D', 'E', 'F', 'I', 'N', 'E', ')']) {
                 self.pos += 8;
-                while self.peek() != Some(')') {
+                loop {
+                    self.skip_extended_spacing();
+                    if self.peek() == Some(')') {
+                        self.advance();
+                        break;
+                    }
                     if self.peek().is_none() {
                         return Err("Unterminated PCRE DEFINE block".into());
                     }
                     let definition = self.parse_group()?;
-                    let Node::Group {
-                        name: Some(name), ..
-                    } = &definition
-                    else {
+                    let Node::Group { name: Some(_), .. } = &definition else {
                         return Err("PCRE DEFINE entries must be named groups".into());
                     };
-                    self.defined_subpatterns.insert(name.clone(), definition);
                 }
-                self.advance();
                 return Ok(Node::Sequence(Vec::new()));
             }
 
@@ -2627,16 +3150,53 @@ impl Parser {
             self.pos = option_start;
 
             match self.peek() {
+                Some('(') => self.parse_conditional(),
                 Some('&') => {
-                    // Named subroutine call (?&name). DEFINE blocks and
-                    // completed groups publish immutable AST fragments, so
-                    // expansion here keeps the matcher free of an extra
-                    // runtime dispatch variant.
+                    // Keep calls symbolic so DEFINE blocks can reference a
+                    // group declared later in the block.
                     self.advance();
-                    self.parse_subroutine_reference(')')
+                    self.saw_subroutine = true;
+                    let mut name = String::new();
+                    while let Some(c) = self.peek() {
+                        if c == ')' {
+                            self.advance();
+                            return Ok(Node::Subroutine(SubroutineTarget::Name(name)));
+                        }
+                        name.push(c);
+                        self.advance();
+                    }
+                    Err("Unterminated named PCRE subroutine".into())
                 }
-                Some('R' | '+' | '-') => self.parse_subroutine_reference(')'),
-                Some(c) if c.is_ascii_digit() => self.parse_subroutine_reference(')'),
+                Some('R') => {
+                    self.advance();
+                    self.saw_subroutine = true;
+                    if self.advance() != Some(')') {
+                        return Err("Unterminated recursive PCRE subroutine".into());
+                    }
+                    Ok(Node::Subroutine(SubroutineTarget::WholePattern))
+                }
+                Some(c) if c.is_ascii_digit() => {
+                    self.saw_subroutine = true;
+                    let mut number = 0usize;
+                    while let Some(c) = self.peek() {
+                        let Some(digit) = c.to_digit(10) else {
+                            break;
+                        };
+                        number = number
+                            .checked_mul(10)
+                            .and_then(|number| number.checked_add(digit as usize))
+                            .ok_or("PCRE subroutine number is too large")?;
+                        self.advance();
+                    }
+                    if self.advance() != Some(')') {
+                        return Err("Unterminated numeric PCRE subroutine".into());
+                    }
+                    Ok(Node::Subroutine(if number == 0 {
+                        SubroutineTarget::WholePattern
+                    } else {
+                        SubroutineTarget::Group(number)
+                    }))
+                }
                 Some('|') => {
                     // Branch-reset group (?|...): capture numbering restarts
                     // at the same base for every alternative and continues
@@ -2754,14 +3314,36 @@ impl Parser {
                             if self.advance() != Some(')') {
                                 return Err("Unterminated named group".into());
                             }
-                            self.completed_groups.insert(idx, inner.clone());
-                            Ok(Node::Group {
-                                index: Some(idx),
-                                name: Some(name),
-                                inner: Box::new(inner),
-                            })
+                            Ok(self.capture_group(idx, Some(name), inner))
                         }
                     }
+                }
+                Some('\'') => {
+                    // Perl-compatible apostrophe spelling: (?'name'...).
+                    self.advance();
+                    if self.peek().is_some_and(|c| c.is_ascii_digit()) {
+                        return Err(format!(
+                            "subpattern name must start with a non-digit at offset {}",
+                            self.pos
+                        ));
+                    }
+                    let mut name = String::new();
+                    while let Some(c) = self.peek() {
+                        if c == '\'' {
+                            self.advance();
+                            break;
+                        }
+                        self.advance();
+                        name.push(c);
+                    }
+                    self.group_count += 1;
+                    let idx = self.group_count;
+                    self.named_groups.insert(name.clone(), idx);
+                    let inner = self.parse_alternation()?;
+                    if self.advance() != Some(')') {
+                        return Err("Unterminated named group".into());
+                    }
+                    Ok(self.capture_group(idx, Some(name), inner))
                 }
                 Some('P') => {
                     self.advance(); // consume 'P'
@@ -2812,12 +3394,7 @@ impl Parser {
                     if self.advance() != Some(')') {
                         return Err("Unterminated named group".into());
                     }
-                    self.completed_groups.insert(idx, inner.clone());
-                    Ok(Node::Group {
-                        index: Some(idx),
-                        name: Some(name),
-                        inner: Box::new(inner),
-                    })
+                    Ok(self.capture_group(idx, Some(name), inner))
                 }
                 _ => Err(format!(
                     "Unknown group modifier '?{}'",
@@ -2832,12 +3409,107 @@ impl Parser {
             if self.advance() != Some(')') {
                 return Err("Unterminated capturing group".into());
             }
-            self.completed_groups.insert(idx, inner.clone());
-            Ok(Node::Group {
-                index: Some(idx),
-                name: None,
-                inner: Box::new(inner),
-            })
+            Ok(self.capture_group(idx, None, inner))
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+    fn parse_conditional(&mut self) -> Result<Node, String> {
+        self.advance(); // consume the condition's '('
+        let condition = match self.peek() {
+            Some('R') => {
+                self.advance();
+                CaptureCondition::Recursion
+            }
+            Some(c) if c.is_ascii_digit() => {
+                let mut index = 0usize;
+                while let Some(c) = self.peek() {
+                    let Some(digit) = c.to_digit(10) else {
+                        break;
+                    };
+                    index = index
+                        .checked_mul(10)
+                        .and_then(|index| index.checked_add(digit as usize))
+                        .ok_or("PCRE condition number is too large")?;
+                    self.advance();
+                }
+                CaptureCondition::Group(index)
+            }
+            Some('<') | Some('\'') => {
+                let delimiter = self.advance().unwrap();
+                let closing = if delimiter == '<' { '>' } else { '\'' };
+                let mut name = String::new();
+                while let Some(c) = self.peek() {
+                    self.advance();
+                    if c == closing {
+                        break;
+                    }
+                    name.push(c);
+                }
+                CaptureCondition::Name(name)
+            }
+            Some('?') => {
+                // PCRE reports the position immediately after the invalid
+                // callout condition `(?(?C)`, not the leading question mark.
+                if self.chars.get(self.pos..self.pos + 3) == Some(&['?', 'C', ')']) {
+                    self.pos += 3;
+                }
+                return Err(format!(
+                    "assertion expected after (?( or (?(?C) at offset {}",
+                    self.pos
+                ));
+            }
+            Some(_) => {
+                let mut name = String::new();
+                while let Some(c) = self.peek() {
+                    if c == ')' {
+                        break;
+                    }
+                    name.push(c);
+                    self.advance();
+                }
+                CaptureCondition::Name(name)
+            }
+            None => return Err("Unterminated PCRE condition".into()),
+        };
+        if self.advance() != Some(')') {
+            return Err("Unterminated PCRE condition".into());
+        }
+        let yes = self.parse_sequence()?;
+        let no = if self.peek() == Some('|') {
+            self.advance();
+            Some(Box::new(self.parse_sequence()?))
+        } else {
+            None
+        };
+        if self.advance() != Some(')') {
+            return Err("Unterminated PCRE conditional group".into());
+        }
+        Ok(Node::Conditional {
+            condition,
+            yes: Box::new(yes),
+            no,
+        })
+    }
+
+    fn skip_extended_spacing(&mut self) {
+        if !self.flags.extended {
+            return;
+        }
+        loop {
+            while self.peek().is_some_and(|c| c.is_ascii_whitespace()) {
+                self.advance();
+            }
+            if self.peek() != Some('#') {
+                break;
+            }
+            while let Some(c) = self.advance() {
+                if c == '\n' {
+                    break;
+                }
+            }
         }
     }
 

@@ -110,7 +110,7 @@ where
             count += 1;
             if !visitor(CaptureView {
                 groups: &groups,
-                named_groups: &regex.named_groups,
+                named_groups: &regex.symbols.named_groups,
                 mark: None,
             })? {
                 break;
