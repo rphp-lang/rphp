@@ -128,6 +128,9 @@ pub struct Generator {
     pub delegate: Option<YieldFromDelegate>,
     /// TMP slot index for writing `yield from` result when delegate completes
     pub yield_from_result_slot: u32,
+    /// Relative TMP index retaining the active yield-from source. A sentinel
+    /// marks CV/constant sources that stay live through ordinary frame rules.
+    pub(crate) yield_from_source_tmp: u32,
     /// Reified call context detached from the short-lived creation frame.
     /// A fresh execution frame receives this context on every resume.
     #[cfg(feature = "php-generics-reified")]
@@ -195,6 +198,7 @@ impl Generator {
             owner_object: None,
             delegate: None,
             yield_from_result_slot: 0,
+            yield_from_source_tmp: u32::MAX,
             #[cfg(feature = "php-generics-reified")]
             reified_context: None,
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

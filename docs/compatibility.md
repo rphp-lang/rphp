@@ -7,6 +7,38 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `exception-unwind-remainder` crash-safety checkpoint over `bce76888`
+adds **5 exact PHP 8.5 passes without loss**. Internal Throwable constructors
+now commit hook-visible fields in PHP order, and abandoning an array or
+Iterator `yield from` delegate runs PHP destructors before injecting the
+pending exception. A destructor exception replaces that input, retains it as
+`previous`, and exposes the suspended generator frame at the correct source
+site. Detached Fiber shutdown keeps its independently proven trace boundary.
+
+After the integrated Date extension uplift, the stable 7,174-case core is
+**6,709 pass / 73 fail / 182 skip / 210 unsupported**, with no timeout or
+crash. Zend/lang is **5,231/73/115/180** and strings/array remains
+**1,478/0/67/30**. The focused upstream packet is 5/5 and the adjacent Fiber
+no-loss guard is exact. All 5,220 previously accepted Zend/lang pass paths and
+all 1,478 strings/array pass paths remain exact; default library tests are
+804 pass / 0 fail / 1 intentionally ignored stress case. Performance remains
+deferred to the aggregate correctness-sweep boundary.
+
+SHA-256 evidence: focused manifest
+`eda5e86fe73e45afc5170eb244c60bffa0828076be8d1f3e9f8e248ed41563ec`;
+current Zend/lang pass set
+`b430a27d2b18e8c4172f904bccb2b17740e9cb3dcfafdab7ae27e23440d80015`;
+no-loss Zend/lang manifest concatenation
+`90885fea9774dbaf60427bb0f27553b5f935f78da42262a3e287fbeff2625b50`;
+strings/array pass set
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
+
+Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
+integrated in `main`; the continuing compatibility sweep owns the remaining
+core-language behavior.
+
+### Preceding core-language checkpoint
+
 The `core-language-remainder` checkpoint over `6857e056` adds **10 exact PHP
 8.5 passes without loss**. It aligns deferred `never` arrow validation,
 decimal numeric-string comparison, recursive-array sorting identity, malformed
@@ -37,8 +69,7 @@ focused manifest
 `f0bcf3b8bc3f22e554893b83d9afe0bb25af193b8fcdd36a1164f06795966934`.
 
 GC cycle ordering and Fiber continuation architecture remain separate lifetime
-boundaries. Phar and PCRE remain owned by their separate workstreams;
-Date/DateTime is available to the continuing core sweep.
+boundaries.
 
 ### Preceding core standard-library checkpoint
 

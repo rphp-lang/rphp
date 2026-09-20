@@ -651,7 +651,7 @@ impl FiberRuntime {
                 (*context).owned_object_references = owned_references;
             }
             let cleanup = if (*context).suspension.is_none() {
-                cleanup_detached_frame_chain(eg, boundary, true)
+                cleanup_detached_frame_chain(eg, boundary, true, false)
             } else {
                 Ok(())
             };

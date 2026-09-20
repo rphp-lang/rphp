@@ -43,7 +43,6 @@ fn commit_existing_object_property(
 /// This admits private storage, but does not bypass readonly, hooks, type
 /// validation, shared-reference constraints, or displaced-value cleanup.
 #[cold]
-#[cfg(feature = "stream-registry")]
 pub(crate) fn assign_internal_object_property(
     eg: &mut ExecutorGlobals,
     target: &Value,

@@ -23,7 +23,11 @@ fn return_value(rv: *mut Value, value: Value) -> Result<(), VmError> {
 /// established trace shape.
 #[cold]
 #[inline(never)]
-fn project_unserialize_hook_trace(eg: &ExecutorGlobals, source_frame: *mut ExecuteData) {
+fn project_unserialize_hook_trace(
+    eg: &ExecutorGlobals,
+    source_frame: *mut ExecuteData,
+    source_num_args: u32,
+) {
     let Some(exception) = eg.exception.as_ref() else {
         return;
     };
@@ -67,15 +71,8 @@ fn project_unserialize_hook_trace(eg: &ExecutorGlobals, source_frame: *mut Execu
     public.set_str("line", line);
     public.set_str("function", Value::string("unserialize"));
     if first.get_str("args").is_some() {
-        let count = if source_frame.is_null() {
-            0
-        } else {
-            // SAFETY: parsing and hook dispatch are synchronous beneath the
-            // still-live native unserialize activation supplied to Parser.
-            unsafe { (*source_frame).num_args }
-        };
-        let mut arguments = PhpArray::with_packed_capacity(count as usize);
-        for index in 0..count {
+        let mut arguments = PhpArray::with_packed_capacity(source_num_args as usize);
+        for index in 0..source_num_args {
             arguments.push(argument(source_frame, index));
         }
         public.set_str("args", Value::array(arguments));
@@ -627,6 +624,7 @@ struct Parser<'a> {
     // Native C: parsing stays in this graph instead of opening a second
     // parser. Retain the public call's source for cold method diagnostics.
     source_frame: *mut ExecuteData,
+    source_num_args: u32,
     position: usize,
     last_value_start: usize,
     next_reference: usize,
@@ -1013,7 +1011,7 @@ impl<'a> Parser<'a> {
         crate::stdlib::call_resolved_object_method(eg, &resolved, std::slice::from_ref(serialized))
             .map_err(|_| ())?;
         if eg.exception.is_some() {
-            project_unserialize_hook_trace(eg, self.source_frame);
+            project_unserialize_hook_trace(eg, self.source_frame, self.source_num_args);
             return Err(());
         }
         Ok(())
@@ -2005,6 +2003,7 @@ pub(super) fn unserialize_deque(
     let mut parser = Parser {
         input,
         source_frame: ed,
+        source_num_args: 1,
         position: 0,
         last_value_start: 0,
         next_reference: 1,
@@ -2033,6 +2032,7 @@ pub(super) fn unserialize_array_wrapper(
     let mut parser = Parser {
         input,
         source_frame: ed,
+        source_num_args: 1,
         position: 0,
         last_value_start: 0,
         next_reference: 1,
@@ -2117,6 +2117,11 @@ pub(super) fn unserialize(
         return return_value(rv, Value::bool(false));
     };
     let options = argument(ed, 1);
+    let source_num_args = if options.value_type() == ValueType::Undef {
+        1
+    } else {
+        2
+    };
     let allowed_classes = options
         .as_array()
         .and_then(|options| options.get_str("allowed_classes"))
@@ -2136,6 +2141,7 @@ pub(super) fn unserialize(
     let mut parser = Parser {
         input: input_bytes.as_ref(),
         source_frame: ed,
+        source_num_args,
         position: 0,
         last_value_start: 0,
         next_reference: 1,

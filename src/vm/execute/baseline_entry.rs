@@ -2078,6 +2078,66 @@ enum GeneratorFrameInput {
     FiberResume(crate::vm::generator::GeneratorFiberInput),
 }
 
+#[cold]
+fn release_yield_from_values(
+    eg: &mut ExecutorGlobals,
+    values: Vec<Value>,
+    input: GeneratorFrameInput,
+    logical_caller: *mut ExecuteData,
+) -> Result<GeneratorFrameInput, VmError> {
+    let displaced = match &input {
+        GeneratorFrameInput::Throw(exception)
+        | GeneratorFrameInput::SyntheticThrow(exception)
+        | GeneratorFrameInput::Propagate(exception) => exception.clone(),
+        GeneratorFrameInput::Send(_)
+        | GeneratorFrameInput::YieldFromReturn(_)
+        | GeneratorFrameInput::FiberResume(_) => return Ok(input),
+    };
+    let saved_exception = eg.exception.take();
+    let release_result = run_value_destructors_inner(
+        eg,
+        &values,
+        logical_caller,
+        false,
+        false,
+        true,
+        false,
+    )
+    .map(|_| ());
+    let replacement = eg.exception.take();
+    eg.exception = saved_exception;
+    release_result?;
+    drop(values);
+
+    let Some(replacement) = replacement else {
+        return Ok(input);
+    };
+    append_replaced_exception(&replacement, &displaced, eg);
+    Ok(match input {
+        GeneratorFrameInput::Throw(_) => GeneratorFrameInput::Throw(replacement),
+        GeneratorFrameInput::SyntheticThrow(_) => {
+            GeneratorFrameInput::SyntheticThrow(replacement)
+        }
+        GeneratorFrameInput::Propagate(_) => GeneratorFrameInput::Propagate(replacement),
+        GeneratorFrameInput::Send(_)
+        | GeneratorFrameInput::YieldFromReturn(_)
+        | GeneratorFrameInput::FiberResume(_) => unreachable!("checked exception input"),
+    })
+}
+
+#[cold]
+fn take_yield_from_temporary_source(
+    gen_ref: &crate::vm::generator::GeneratorRef,
+) -> Option<Value> {
+    let mut generator = gen_ref.borrow_mut();
+    let index = std::mem::replace(&mut generator.yield_from_source_tmp, u32::MAX);
+    if index == u32::MAX {
+        return None;
+    }
+    let source = generator.tmp_values.get_mut(index as usize)?;
+    Some(std::mem::replace(source, Value::undef()))
+}
+
 enum GeneratorPropagation {
     Yielded,
     Completed,
@@ -2627,6 +2687,7 @@ fn resume_generator_delegation(
                             &current,
                             GeneratorFrameInput::SyntheticThrow(error),
                             &parents,
+                            None,
                         )? {
                             GeneratorFrameOutcome::Advanced => {
                                 fresh_execution = true;
@@ -2734,7 +2795,13 @@ fn resume_generator_delegation(
                         &mut input,
                         GeneratorFrameInput::Send(Value::null()),
                     );
-                    match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
+                    match execute_generator_frame_input(
+                        eg,
+                        &current,
+                        frame_input,
+                        &parents,
+                        None,
+                    )? {
                         GeneratorFrameOutcome::Advanced => fresh_execution = true,
                         GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                             propagation = Some(GeneratorPropagation::Threw(
@@ -2780,8 +2847,18 @@ fn resume_generator_delegation(
                 frame_input @ (GeneratorFrameInput::Throw(_)
                 | GeneratorFrameInput::SyntheticThrow(_)
                 | GeneratorFrameInput::Propagate(_)) => {
-                    drop(entries);
-                    match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
+                    let mut values = entries
+                        .into_iter()
+                        .map(|(_, value)| value)
+                        .collect::<Vec<_>>();
+                    values.extend(take_yield_from_temporary_source(&current));
+                    match execute_generator_frame_input(
+                        eg,
+                        &current,
+                        frame_input,
+                        &parents,
+                        Some(values),
+                    )? {
                         GeneratorFrameOutcome::Advanced => fresh_execution = true,
                         GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                             propagation = Some(GeneratorPropagation::Threw(
@@ -2801,6 +2878,7 @@ fn resume_generator_delegation(
                             &current,
                             GeneratorFrameInput::YieldFromReturn(Value::null()),
                             &parents,
+                            None,
                         )? {
                             GeneratorFrameOutcome::Advanced => fresh_execution = true,
                             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
@@ -2864,7 +2942,15 @@ fn resume_generator_delegation(
                 frame_input @ (GeneratorFrameInput::Throw(_)
                 | GeneratorFrameInput::SyntheticThrow(_)
                 | GeneratorFrameInput::Propagate(_)) => {
-                    match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
+                    let mut values = vec![iterator];
+                    values.extend(take_yield_from_temporary_source(&current));
+                    match execute_generator_frame_input(
+                        eg,
+                        &current,
+                        frame_input,
+                        &parents,
+                        Some(values),
+                    )? {
                         GeneratorFrameOutcome::Advanced => fresh_execution = true,
                         GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                             propagation = Some(GeneratorPropagation::Threw(
@@ -2884,6 +2970,7 @@ fn resume_generator_delegation(
                             &current,
                             GeneratorFrameInput::Propagate(exception),
                             &parents,
+                            None,
                         )? {
                             GeneratorFrameOutcome::Advanced => fresh_execution = true,
                             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
@@ -2913,6 +3000,7 @@ fn resume_generator_delegation(
                             &current,
                             GeneratorFrameInput::YieldFromReturn(Value::null()),
                             &parents,
+                            None,
                         )? {
                             GeneratorFrameOutcome::Advanced => fresh_execution = true,
                             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
@@ -2932,7 +3020,7 @@ fn resume_generator_delegation(
             &mut input,
             GeneratorFrameInput::Send(Value::null()),
         );
-        match execute_generator_frame_input(eg, &current, frame_input, &parents)? {
+        match execute_generator_frame_input(eg, &current, frame_input, &parents, None)? {
             GeneratorFrameOutcome::Advanced => fresh_execution = true,
             GeneratorFrameOutcome::Threw(exception, extend_trace) => {
                 propagation = Some(GeneratorPropagation::Threw(exception, extend_trace));
@@ -2948,13 +3036,21 @@ fn generator_identity(generator: &crate::vm::generator::GeneratorRef) -> usize {
 fn execute_generator_frame_input(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
-    input: GeneratorFrameInput,
+    mut input: GeneratorFrameInput,
     trace_parents: &[crate::vm::generator::GeneratorRef],
+    release_values: Option<Vec<Value>>,
 ) -> Result<GeneratorFrameOutcome, VmError> {
+    let saved_execute_data = eg.current_execute_data.get();
+    let trace_frames = materialize_generator_trace_frames(eg, trace_parents, saved_execute_data);
+    let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
+    if let Some(parent) = trace_frames.last() {
+        eg.publish_detached_trace_caller_at_current_site(frame as usize, *parent as usize);
+    }
+    if let Some(values) = release_values {
+        input = release_yield_from_values(eg, values, input, frame)?;
+    }
     let escaped_same_input_extends = match &input {
-        GeneratorFrameInput::Throw(exception) => {
-            Some((exception.object_identity(), false))
-        }
+        GeneratorFrameInput::Throw(exception) => Some((exception.object_identity(), false)),
         GeneratorFrameInput::SyntheticThrow(exception)
         | GeneratorFrameInput::Propagate(exception) => {
             Some((exception.object_identity(), true))
@@ -2963,12 +3059,6 @@ fn execute_generator_frame_input(
         | GeneratorFrameInput::YieldFromReturn(_)
         | GeneratorFrameInput::FiberResume(_) => None,
     };
-    let saved_execute_data = eg.current_execute_data.get();
-    let trace_frames = materialize_generator_trace_frames(eg, trace_parents, saved_execute_data);
-    let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
-    if let Some(parent) = trace_frames.last() {
-        eg.publish_detached_trace_caller_at_current_site(frame as usize, *parent as usize);
-    }
     let (injected_exception, seed_injected_trace, extend_injected_trace) = match input {
         GeneratorFrameInput::Send(value) => {
             restore_generator_resume_value(frame, gen_ref, None, value);
@@ -3583,7 +3673,26 @@ fn execute_resumed_generator_frame(
         generator.state = crate::vm::generator::GeneratorState::Running;
     }
 
-    cleanup_detached_frame_chain(eg, frame, false)?;
+    let closing_after_exception = escaped_exception.is_some() && !fiber_suspended;
+    if closing_after_exception {
+        // The materialized frame and the suspended Generator snapshot own the
+        // same PHP values. Retire the snapshot first so frame cleanup observes
+        // the real last owners and can run user destructors while the escaping
+        // exception is still available for replacement chaining.
+        close_failed_generator(gen_ref);
+        eg.exception = escaped_exception.clone();
+    }
+    cleanup_detached_frame_chain(
+        eg,
+        frame,
+        closing_after_exception,
+        closing_after_exception,
+    )?;
+    let escaped_exception = if closing_after_exception {
+        eg.exception.take()
+    } else {
+        escaped_exception
+    };
     eg.current_execute_data.set(saved_execute_data);
     eg.active_generator = saved_active;
     if let Err(error) = result {
@@ -3595,7 +3704,6 @@ fn execute_resumed_generator_frame(
         return Err(error);
     }
     if let Some(exception) = escaped_exception {
-        close_failed_generator(gen_ref);
         return Ok(GeneratorResumeOutcome::Threw(exception));
     }
     let generator = gen_ref.borrow();
@@ -3635,6 +3743,7 @@ fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
     generator.value = Value::null();
     generator.key = Value::null();
     generator.delegate = None;
+    generator.yield_from_source_tmp = u32::MAX;
     generator.cv_values.clear();
     generator.tmp_values.clear();
     generator.pending_finally_exceptions.clear();
@@ -3656,6 +3765,7 @@ pub(crate) fn cleanup_detached_frame_chain(
     eg: &mut ExecutorGlobals,
     root: *mut ExecuteData,
     run_destructors: bool,
+    detached_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     let mut pending_exception = eg.exception.take();
     let mut cleanup_error = None;
@@ -3664,7 +3774,12 @@ pub(crate) fn cleanup_detached_frame_chain(
         let previous = unsafe { (*frame).prev_execute_data };
         if run_destructors {
             loop {
-                if let Err(error) = run_frame_destructors(eg, frame) {
+                let destructor_result = if detached_caller_at_current_site {
+                    run_detached_frame_destructors(eg, frame)
+                } else {
+                    run_frame_destructors(eg, frame)
+                };
+                if let Err(error) = destructor_result {
                     cleanup_error = Some(error);
                 }
                 let Some(exception) = eg.exception.take() else {

@@ -351,21 +351,34 @@ fn fn_throwable_construct(
     ) {
         return Ok(());
     }
+    let message = match message {
+        PreparedThrowableArgument::Value(value) => value,
+        PreparedThrowableArgument::Missing => Value::string(""),
+        PreparedThrowableArgument::Invalid => unreachable!(),
+    };
+    let code = match code {
+        PreparedThrowableArgument::Value(value) => value,
+        PreparedThrowableArgument::Missing => Value::long(0),
+        PreparedThrowableArgument::Invalid => unreachable!(),
+    };
+    if !crate::vm::execute::assign_internal_object_property(
+        eg,
+        this_val,
+        "message",
+        message,
+        false,
+        ("[internal function]", 0),
+    )? || !crate::vm::execute::assign_internal_object_property(
+        eg,
+        this_val,
+        "code",
+        code,
+        false,
+        ("[internal function]", 0),
+    )? {
+        return Ok(());
+    }
     if let Some(mut obj) = this_val.as_object_mut() {
-        let msg = match message {
-            PreparedThrowableArgument::Value(value) => value,
-            PreparedThrowableArgument::Missing => Value::string(""),
-            PreparedThrowableArgument::Invalid => unreachable!(),
-        };
-        obj.set_property("message", msg);
-        obj.set_property(
-            "code",
-            match code {
-                PreparedThrowableArgument::Value(value) => value,
-                PreparedThrowableArgument::Missing => Value::long(0),
-                PreparedThrowableArgument::Invalid => unreachable!(),
-            },
-        );
         let previous_key = throwable_property_key(eg, &obj, "previous");
         obj.set_property(
             &previous_key,
@@ -448,32 +461,35 @@ fn fn_error_exception_construct(
     {
         return Ok(());
     }
-    if let Some(mut object) = this_val.as_object_mut() {
-        object.set_property(
-            "message",
-            match message {
-                PreparedThrowableArgument::Value(value) => value,
-                PreparedThrowableArgument::Missing => Value::string(""),
-                PreparedThrowableArgument::Invalid => unreachable!(),
-            },
-        );
-        object.set_property(
-            "code",
-            match code {
-                PreparedThrowableArgument::Value(value) => value,
-                PreparedThrowableArgument::Missing => Value::long(0),
-                PreparedThrowableArgument::Invalid => unreachable!(),
-            },
-        );
-        object.set_property(
-            "severity",
-            match severity {
-                PreparedThrowableArgument::Value(value) => value,
-                PreparedThrowableArgument::Missing => Value::long(1),
-                PreparedThrowableArgument::Invalid => unreachable!(),
-            },
-        );
+    let message = match message {
+        PreparedThrowableArgument::Value(value) => value,
+        PreparedThrowableArgument::Missing => Value::string(""),
+        PreparedThrowableArgument::Invalid => unreachable!(),
+    };
+    let code = match code {
+        PreparedThrowableArgument::Value(value) => value,
+        PreparedThrowableArgument::Missing => Value::long(0),
+        PreparedThrowableArgument::Invalid => unreachable!(),
+    };
+    let severity = match severity {
+        PreparedThrowableArgument::Value(value) => value,
+        PreparedThrowableArgument::Missing => Value::long(1),
+        PreparedThrowableArgument::Invalid => unreachable!(),
+    };
+    for (name, value) in [("message", message), ("code", code), ("severity", severity)] {
+        if !crate::vm::execute::assign_internal_object_property(
+            eg,
+            this_val,
+            name,
+            value,
+            false,
+            ("[internal function]", 0),
+        )? {
+            return Ok(());
+        }
+    }
 
+    if let Some(mut object) = this_val.as_object_mut() {
         if let PreparedThrowableArgument::Value(filename) = filename
             && filename.value_type() != ValueType::Null
         {

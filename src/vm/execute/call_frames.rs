@@ -1372,6 +1372,7 @@ fn run_frame_destructors_filtered(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     live_generators_only: bool,
+    detached_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     // SAFETY: `frame` is the live activation being released. Its compiler-sized
     // CV/TMP range remains allocated until destructor dispatch completes.
@@ -1414,7 +1415,7 @@ fn run_frame_destructors_filtered(
         let op_array = (*frame).op_array();
         let root_frame = (*frame).prev_execute_data.is_null()
             && (op_array.name == "<main>" || op_array.name == *op_array.source_file);
-        let logical_caller = if root_frame {
+        let logical_caller = if root_frame || detached_caller_at_current_site {
             frame
         } else {
             eg.trace_caller(frame as usize, (*frame).prev_execute_data)
@@ -1498,7 +1499,7 @@ fn run_frame_destructors_filtered(
                     false,
                     logical_caller,
                     false,
-                    false,
+                    detached_caller_at_current_site,
                     false,
                 )?;
                 // Private consumers cannot escape or resurrect. Commit each
@@ -1531,7 +1532,15 @@ fn run_frame_destructors(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    run_frame_destructors_filtered(eg, frame, false)
+    run_frame_destructors_filtered(eg, frame, false, false)
+}
+
+#[inline]
+fn run_detached_frame_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
+    run_frame_destructors_filtered(eg, frame, false, true)
 }
 
 /// Close suspended generators while an uncaught exception is still unwinding
@@ -1544,7 +1553,7 @@ pub(crate) fn run_exception_frame_generator_destructors(
 ) -> Result<(), VmError> {
     let mut pending = eg.exception.take();
     loop {
-        run_frame_destructors_filtered(eg, frame, true)?;
+        run_frame_destructors_filtered(eg, frame, true, false)?;
         let Some(replacement) = eg.exception.take() else {
             eg.exception = pending;
             return Ok(());

@@ -5680,6 +5680,11 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
+Current AMD64 stable-core status is 6,709 pass / 73 fail / 182 skip / 210
+unsupported. Date/DateTime is integrated; separate workstreams own Phar and
+PCRE. The core sweep continues from the remaining failure manifest, with
+performance intentionally deferred to the final aggregate pass.
+
 ## Cross-roadmap integration
 
 Compatibility owns observable PHP behavior and baseline semantics. The

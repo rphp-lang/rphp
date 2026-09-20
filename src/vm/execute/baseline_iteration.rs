@@ -2753,6 +2753,13 @@ fn suspend_yield_from<'a>(
         let mut data = generator.borrow_mut();
         data.delegate = Some(delegate);
         data.yield_from_result_slot = opline.result as u32;
+        data.yield_from_source_tmp = if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+            u32::from(opline.op1)
+                .checked_sub(op_array.num_cvs)
+                .unwrap_or(u32::MAX)
+        } else {
+            u32::MAX
+        };
         data.value = value;
         data.key = key;
         data.last_yielded_value = data.value.clone_closure_capture();
