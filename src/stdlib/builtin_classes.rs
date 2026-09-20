@@ -3103,6 +3103,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     .unwrap();
     funcs.extend(super::weak::register(eg));
     funcs.extend(super::tokenizer::register_classes(eg));
+    funcs.extend(super::phar::register_classes(eg));
     for (name, traversal_interface) in [
         ("ArrayIterator", "SeekableIterator"),
         ("ArrayObject", "IteratorAggregate"),

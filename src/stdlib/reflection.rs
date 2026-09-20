@@ -115,19 +115,60 @@ fn named_reflected_type(name: &str) -> Value {
     )
 }
 
+/// PHP renders and enumerates union members with class-like members first in
+/// declaration order, then built-ins in a fixed sequence.
+fn canonical_union_members(parts: &[ParamTypeHint]) -> Vec<&ParamTypeHint> {
+    let rank = |part: &ParamTypeHint| match part {
+        ParamTypeHint::Callable => 5,
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("object") => 10,
+        ParamTypeHint::Array => 20,
+        ParamTypeHint::String => 30,
+        ParamTypeHint::Int => 40,
+        ParamTypeHint::Float => 50,
+        ParamTypeHint::Bool => 60,
+        ParamTypeHint::ClassName(name)
+            if name.eq_ignore_ascii_case("false") || name.eq_ignore_ascii_case("true") =>
+        {
+            65
+        }
+        ParamTypeHint::Void => 66,
+        ParamTypeHint::Never => 67,
+        ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::None) => 70,
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("null") => 70,
+        _ => 0,
+    };
+    let mut ordered = parts.iter().enumerate().collect::<Vec<_>>();
+    ordered.sort_by_key(|(index, part)| (rank(part), *index));
+    ordered.into_iter().map(|(_, part)| part).collect()
+}
+
 fn reflected_signature_type(hint: &ParamTypeHint) -> Value {
     match hint {
+        ParamTypeHint::Nullable(inner)
+            if matches!(inner.as_ref(), ParamTypeHint::Intersection(_)) =>
+        {
+            // `(A&B)|null` is a union of the intersection and null.
+            let parts = vec![
+                inner.as_ref().clone(),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+            ];
+            reflected_signature_type(&ParamTypeHint::Union(parts))
+        }
         ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
             let mut types = PhpArray::with_packed_capacity(parts.len());
             let union = matches!(hint, ParamTypeHint::Union(_));
+            let ordered = if union {
+                canonical_union_members(parts)
+            } else {
+                parts.iter().collect()
+            };
             let mut display = String::new();
-            for part in parts {
+            for part in ordered {
                 if !display.is_empty() {
                     display.push(if union { '|' } else { '&' });
                 }
-                // Reflection follows signature order, not property-error
-                // canonicalization (which also reorders singleton types).
                 if matches!(part, ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::None))
+                    || matches!(part, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("null"))
                 {
                     display.push_str("null");
                 } else {
@@ -3436,6 +3477,7 @@ fn hint_metadata(hint: &ParamTypeHint) -> (&'static str, String, bool) {
             hint.display_name(),
             parts.iter().any(|part| {
                 matches!(part, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("null"))
+                    || matches!(part, ParamTypeHint::Nullable(_) | ParamTypeHint::Mixed)
             }),
         ),
         ParamTypeHint::Intersection(_) => ("intersection", hint.display_name(), false),
@@ -4501,6 +4543,21 @@ fn parameter_get_type(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let property_metadata = reflection_property_metadata(ed, eg);
+    if property_metadata.is_none()
+        && let Some(function) = reflected_function(ed)
+        && let Some(position) = reflected_property(ed, "__reflection_position")
+            .and_then(|value| value.as_long())
+            .and_then(|position| usize::try_from(position).ok())
+        && let Some(hint) = function.sig.param_type_hints.get(position)
+        && (matches!(
+            hint,
+            ParamTypeHint::Union(_) | ParamTypeHint::Intersection(_)
+        ) || matches!(hint, ParamTypeHint::Nullable(inner) if matches!(inner.as_ref(), ParamTypeHint::Intersection(_))))
+    {
+        // Compound hints publish their member types; the record's flattened
+        // strings only describe named types.
+        return return_value(rv, reflected_signature_type(hint));
+    }
     let has_type = property_metadata.map_or_else(
         || parameter_property_bool(ed, "__reflection_has_type"),
         |metadata| metadata.has_type,
@@ -4722,6 +4779,59 @@ fn parameter_get_default_value(
     let position = reflected_property(ed, "__reflection_position")
         .and_then(|value| value.as_long())
         .and_then(|position| usize::try_from(position).ok());
+    if let Some(default) = reflected_user_function(ed)
+        .zip(position)
+        .and_then(|(function, position)| function.parameter_defaults.as_deref()?.get(position))
+        .and_then(Option::as_ref)
+    {
+        // Evaluate the retained source expression in its lexical scope, as
+        // PHP does when the default is first observed.
+        let value = match evaluate_deferred_attribute_expression(
+            &default.expression,
+            &default.evaluation_scope,
+            &default.source_file,
+            eg,
+        ) {
+            Ok(value) => value,
+            Err(DeferredAttributeError::Message(error)) => {
+                if eg.exception.is_none() {
+                    eg.exception = Some(make_error_value("Error", &error));
+                }
+                return Ok(());
+            }
+            Err(
+                DeferredAttributeError::LocatedMessage {
+                    message,
+                    source_file,
+                    line,
+                }
+                | DeferredAttributeError::LocatedTypeError {
+                    message,
+                    source_file,
+                    line,
+                },
+            ) => {
+                if eg.exception.is_none() {
+                    let error = make_error_value("Error", &message);
+                    if let Some(mut object) = error.as_object_mut() {
+                        object.set_property("file", Value::string(source_file));
+                        object.set_property("line", Value::long(line as i64));
+                    }
+                    eg.exception = Some(error);
+                }
+                return Ok(());
+            }
+            Err(DeferredAttributeError::TypedClassConstant(error)) => {
+                if eg.exception.is_none() {
+                    eg.exception = Some(make_error_value("TypeError", &error));
+                }
+                return Ok(());
+            }
+            Err(DeferredAttributeError::PendingException) => return Ok(()),
+            Err(DeferredAttributeError::Vm(error)) => return Err(error),
+        };
+        return return_value(rv, value);
+    }
     let default = function
         .zip(position)
         .and_then(|(function, position)| eg.internal_function_parameter_default(function, position))
@@ -6941,7 +7051,9 @@ fn collect_reflected_methods(
         return;
     };
     for (name, visibility, is_static, is_final, function) in &class.methods {
-        if class.method_is_abstract(name) || !seen.insert(name.to_ascii_lowercase()) {
+        // `$property::get`/`$property::set` are synthetic accessor entries,
+        // not methods PHP would list.
+        if name.starts_with('$') || !seen.insert(name.to_ascii_lowercase()) {
             continue;
         }
         methods.push((
@@ -6987,10 +7099,10 @@ fn collect_reflected_methods(
     if let Some(parent) = class.parent.clone() {
         collect_reflected_methods(eg, &parent, methods, seen);
     }
-    if class.is_interface {
-        for interface in &class.implements {
-            collect_reflected_methods(eg, interface, methods, seen);
-        }
+    // Interface methods a class has not implemented are inherited as
+    // abstract declarations, so PHP lists them after the class hierarchy.
+    for interface in &class.implements {
+        collect_reflected_methods(eg, interface, methods, seen);
     }
 }
 
@@ -10116,4 +10228,556 @@ fn generic_arguments(
         PhpArray::new()
     };
     return_value(rv, Value::array(arguments))
+}
+
+// ── Container-build reflection surface ──────────────────────────────────
+//
+// Accessors Nette DI's compiler, schema and PHP generator call while building
+// a container from scratch.
+
+fn parameter_get_position(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__reflection_position").unwrap_or_else(|| Value::long(0)),
+    )
+}
+
+fn parameter_can_be_passed_by_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        Value::bool(!parameter_property_bool(
+            ed,
+            "__reflection_passed_by_reference",
+        )),
+    )
+}
+
+/// Constructor promotion is not retained past compilation, so a constructor
+/// parameter counts as promoted when its declaring class declares an
+/// instance property of the same name.
+fn parameter_is_promoted(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let declaring_class = reflected_property(ed, "__reflection_declaring_class")
+        .and_then(|value| value.as_str().map(str::to_owned));
+    let function = reflected_function(ed).map(|function| function as *const FunctionCommon);
+    let promoted = match (
+        function,
+        declaring_class.and_then(|class| eg.find_class(&class)),
+    ) {
+        (Some(function), Some(class)) => {
+            class.methods.iter().any(|(method, _, _, _, user)| {
+                method.eq_ignore_ascii_case("__construct") && std::ptr::eq(&user.common, function)
+            }) && class
+                .properties
+                .iter()
+                .any(|property| property.name == name)
+        }
+        _ => false,
+    };
+    return_value(rv, Value::bool(promoted))
+}
+
+fn function_is_variadic(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        Value::bool(reflected_function(ed).is_some_and(|function| function.sig.is_variadic)),
+    )
+}
+
+fn function_is_internal(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        Value::bool(
+            reflected_function(ed)
+                .is_some_and(|function| function.fn_type == FunctionType::Internal),
+        ),
+    )
+}
+
+fn function_is_user_defined(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        Value::bool(
+            reflected_function(ed)
+                .is_some_and(|function| function.fn_type != FunctionType::Internal),
+        ),
+    )
+}
+
+fn function_is_generator(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        Value::bool(
+            reflected_user_function(ed).is_some_and(|function| function.op_array.is_generator),
+        ),
+    )
+}
+
+fn split_class_namespace(name: &str) -> (&str, &str) {
+    match name.rsplit_once('\\') {
+        Some((namespace, short)) => (namespace, short),
+        None => ("", name),
+    }
+}
+
+fn class_get_short_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    return_value(rv, Value::string(split_class_namespace(&name).1))
+}
+
+fn class_get_namespace_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    return_value(rv, Value::string(split_class_namespace(&name).0))
+}
+
+fn class_in_namespace(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    return_value(rv, Value::bool(!split_class_namespace(&name).0.is_empty()))
+}
+
+fn class_is_anonymous(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_kind_predicate(ed, rv, eg, |class| class.is_anonymous())
+}
+
+fn class_is_enum(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_kind_predicate(ed, rv, eg, |class| class.is_enum)
+}
+
+fn class_is_cloneable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_kind_predicate(ed, rv, eg, |class| {
+        !(class.is_interface || class.is_trait || class.is_abstract || class.is_enum)
+            && class
+                .methods
+                .iter()
+                .find(|(name, ..)| name.eq_ignore_ascii_case("__clone"))
+                .is_none_or(|(_, visibility, ..)| *visibility == Visibility::Public)
+    })
+}
+
+fn class_is_iterable(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    let concrete = eg
+        .find_class(&owner)
+        .is_some_and(|class| !(class.is_interface || class.is_trait || class.is_abstract));
+    return_value(
+        rv,
+        Value::bool(concrete && eg.class_is_a(&owner, "Traversable")),
+    )
+}
+
+fn class_get_modifiers(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::long(0));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::long(0));
+    }
+    let modifiers = eg.find_class(&owner).map_or(0, |class| {
+        let explicit_abstract = class.is_abstract && !class.is_interface;
+        let implicit_abstract =
+            !class.is_abstract && !class.is_interface && !class.abstract_methods.is_empty();
+        (if explicit_abstract { 64 } else { 0 })
+            | (if implicit_abstract { 16 } else { 0 })
+            | (if class.is_final { 32 } else { 0 })
+            | (if class.is_readonly { 65536 } else { 0 })
+    });
+    return_value(rv, Value::long(modifiers))
+}
+
+fn class_has_constant(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    let name = argument_string(ed, 1);
+    let mut current = Some(owner);
+    let mut seen = HashSet::new();
+    while let Some(class_name) = current {
+        if !seen.insert(class_name.to_ascii_lowercase()) {
+            break;
+        }
+        let Some(class) = eg.find_class(&class_name) else {
+            break;
+        };
+        if class.constants.iter().any(|constant| constant.name == name)
+            || (class.is_enum && class.static_properties.iter().any(|case| case.name == name))
+        {
+            return return_value(rv, Value::bool(true));
+        }
+        for interface in &class.implements {
+            if eg.find_class(interface).is_some_and(|interface| {
+                interface
+                    .constants
+                    .iter()
+                    .any(|constant| constant.name == name)
+            }) {
+                return return_value(rv, Value::bool(true));
+            }
+        }
+        current = class.parent.clone();
+    }
+    return_value(rv, Value::bool(false))
+}
+
+/// Static property slots visible from `owner`, nearest declaration first.
+fn visible_static_properties(eg: &ExecutorGlobals, owner: &str) -> Vec<(String, Value)> {
+    let mut found = Vec::new();
+    let mut seen = HashSet::new();
+    let mut current = Some(owner.to_string());
+    while let Some(class_name) = current {
+        if !seen.insert(class_name.to_ascii_lowercase()) {
+            break;
+        }
+        let Some(class) = eg.find_class(&class_name) else {
+            break;
+        };
+        if !class.is_enum {
+            for (index, property) in class.static_properties.iter().enumerate() {
+                if found.iter().any(|(name, _)| *name == property.name) {
+                    continue;
+                }
+                if let Some(value) = eg
+                    .static_property_storage_slot(class.class_id, index)
+                    .and_then(|slot| eg.static_property_value(slot))
+                {
+                    found.push((property.name.clone(), value.clone()));
+                }
+            }
+        }
+        current = class.parent.clone();
+    }
+    found
+}
+
+fn class_get_static_properties(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::array(PhpArray::new()));
+    }
+    let mut result = PhpArray::new();
+    for (name, value) in visible_static_properties(eg, &owner) {
+        result.set_str(&name, value);
+    }
+    return_value(rv, Value::array(result))
+}
+
+fn class_get_static_property_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::null());
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::null());
+    }
+    let name = argument_string(ed, 1);
+    if let Some((_, value)) = visible_static_properties(eg, &owner)
+        .into_iter()
+        .find(|(candidate, _)| *candidate == name)
+    {
+        return return_value(rv, value);
+    }
+    let default = with_argument(ed, 2, Clone::clone);
+    if !default.is_undef() {
+        return return_value(rv, default);
+    }
+    reflection_exception(eg, format!("Property {owner}::${name} does not exist"));
+    Ok(())
+}
+
+fn class_is_instance(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    let object_class = with_argument(ed, 1, |value| {
+        value
+            .as_object()
+            .map(|object| object.class_name.to_string())
+    });
+    let Some(object_class) = object_class else {
+        crate::stdlib::typed_internal_argument_error(
+            eg,
+            "ReflectionClass::isInstance",
+            &with_argument(ed, 1, Clone::clone),
+            1,
+            "object",
+            "object",
+        );
+        return Ok(());
+    };
+    return_value(rv, Value::bool(eg.class_is_a(&object_class, &owner)))
+}
+
+fn class_get_extension_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    if !eg.class_is_internal(&owner) {
+        return return_value(rv, Value::bool(false));
+    }
+    let lowered = owner.to_ascii_lowercase();
+    let extension = if lowered.starts_with("reflection") || lowered == "reflector" {
+        "Reflection"
+    } else if lowered.starts_with("date") {
+        "date"
+    } else if lowered == "phar" || lowered == "pharexception" {
+        "Phar"
+    } else if lowered == "phptoken" {
+        "tokenizer"
+    } else if lowered.starts_with("spl")
+        || lowered.starts_with("array")
+        || lowered.ends_with("iterator")
+        || lowered == "countable"
+        || lowered.ends_with("exception") && lowered != "exception" && lowered != "errorexception"
+    {
+        "SPL"
+    } else {
+        "Core"
+    };
+    return_value(rv, Value::string(extension))
+}
+
+fn property_get_declaring_class(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let declaring = reflection_property_definition(ed, eg)
+        .map(|(property, _)| property.declaring_class.clone())
+        .or_else(|| {
+            reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned))
+        })
+        .unwrap_or_default();
+    let name = eg
+        .find_class(&declaring)
+        .map_or(declaring, |class| class.name.clone());
+    return_value(
+        rv,
+        object_value(
+            "ReflectionClass",
+            [
+                ("__generic_kind", Value::string("class")),
+                ("__generic_owner", Value::string(name.clone())),
+                ("name", Value::string(name)),
+            ],
+        ),
+    )
+}
+
+/// Mirrors `parameter_is_promoted`: an instance property whose declaring
+/// class constructor takes a parameter of the same name.
+fn property_is_promoted(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some((property, is_static)) = reflection_property_definition(ed, eg) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if is_static {
+        return return_value(rv, Value::bool(false));
+    }
+    let name = property.name.clone();
+    let declaring = property.declaring_class.clone();
+    let promoted = eg
+        .find_class(&declaring)
+        .and_then(|class| {
+            class
+                .methods
+                .iter()
+                .find(|(method, ..)| method.eq_ignore_ascii_case("__construct"))
+        })
+        .is_some_and(|(_, _, _, _, constructor)| {
+            constructor
+                .common
+                .sig
+                .param_names
+                .iter()
+                .any(|parameter| parameter.as_ref() == name.as_str())
+        });
+    return_value(rv, Value::bool(promoted))
+}
+
+fn class_constant_modifiers(ed: *mut ExecuteData) -> i64 {
+    reflected_property(ed, "__reflection_modifiers")
+        .and_then(|value| value.as_long())
+        .unwrap_or(1)
+}
+
+fn class_constant_get_value(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_property(ed, "__reflection_value").unwrap_or_else(Value::null),
+    )
+}
+
+fn class_constant_get_modifiers(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::long(class_constant_modifiers(ed)))
+}
+
+fn class_constant_is_public(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::bool(class_constant_modifiers(ed) & 1 != 0))
+}
+
+fn class_constant_is_protected(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::bool(class_constant_modifiers(ed) & 2 != 0))
+}
+
+fn class_constant_is_private(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::bool(class_constant_modifiers(ed) & 4 != 0))
+}
+
+fn class_constant_is_final(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::bool(class_constant_modifiers(ed) & 32 != 0))
+}
+
+fn class_constant_is_enum_case(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let name = reflected_property(ed, "name")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let class = reflected_property(ed, "class")
+        .and_then(|value| value.as_str().map(str::to_owned))
+        .unwrap_or_default();
+    let is_case = eg.find_class(&class).is_some_and(|class| {
+        class.is_enum && class.static_properties.iter().any(|case| case.name == name)
+    });
+    return_value(rv, Value::bool(is_case))
 }

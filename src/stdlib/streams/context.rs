@@ -190,7 +190,7 @@ pub(super) fn fn_fopen(
         }
         super::user_wrapper::OpenResult::NotRegistered => {}
     }
-    let opened = PhpStream::open(open_path, mode.as_ref());
+    let opened = super::super::phar::open_or_native(eg, open_path, mode.as_ref());
     if opened.as_ref().is_ok_and(PhpStream::is_plain_file) {
         super::super::filesystem::clear_filesystem_stat_cache(eg);
     }

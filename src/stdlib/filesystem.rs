@@ -73,6 +73,24 @@ pub(super) fn fn_file_get_contents(
             }
         }
     }
+    if let Some(result) = super::phar::read_url(eg, path.as_ref()) {
+        match result {
+            Ok((bytes, _)) => ret!(rv, php_byte_result(bytes, false)),
+            Err(reason) => {
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!("file_get_contents({path}): Failed to open stream: {reason}"),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                ret!(rv, Value::bool(false));
+            }
+        }
+    }
     match std::fs::File::open(path.as_ref()) {
         Ok(mut file) => {
             clear_filesystem_stat_cache(eg);
@@ -764,6 +782,13 @@ fn filesystem_stat_value_at(
         return Ok(value);
     }
 
+    if let Some(value) = super::phar::stat_url(eg, path) {
+        if value.value_type() == ValueType::Array {
+            cache_stat_value(eg, query, path, &value);
+        }
+        return Ok(value);
+    }
+
     #[cfg(feature = "stream-registry")]
     if let Some(value) = super::user_wrapper::url_stat_value(eg, path, query.wrapper_flags())? {
         if eg.exception.is_some() {
@@ -873,6 +898,12 @@ pub(super) fn file_info_access(
         1 => FileAccessKind::Write,
         _ => FileAccessKind::Execute,
     };
+    if let Ok(text) = std::str::from_utf8(path)
+        && super::phar::is_phar_url(text)
+    {
+        let value = filesystem_stat_value(_eg, text, FilesystemStatQuery::Quiet)?;
+        return Ok(stat_access_allowed(&value, access));
+    }
     #[cfg(feature = "stream-registry")]
     if let Ok(text) = std::str::from_utf8(path)
         && super::user_wrapper::definition_for_url(_eg, text).is_some()
@@ -1218,9 +1249,10 @@ pub(super) fn fn_file_exists(
     };
     let path = path.as_str().unwrap_or_default();
     #[cfg(feature = "stream-registry")]
-    let is_user_wrapper = super::user_wrapper::definition_for_url(eg, path).is_some();
+    let is_user_wrapper = super::user_wrapper::definition_for_url(eg, path).is_some()
+        || super::phar::is_phar_url(path);
     #[cfg(not(feature = "stream-registry"))]
-    let is_user_wrapper = false;
+    let is_user_wrapper = super::phar::is_phar_url(path);
     if !is_user_wrapper {
         let Some(local) = local_filesystem_path(path) else {
             ret!(rv, Value::bool(false));
@@ -1431,9 +1463,10 @@ fn file_access_predicate(
     };
     let path = path.as_str().unwrap_or_default();
     #[cfg(feature = "stream-registry")]
-    let is_user_wrapper = super::user_wrapper::definition_for_url(eg, path).is_some();
+    let is_user_wrapper = super::user_wrapper::definition_for_url(eg, path).is_some()
+        || super::phar::is_phar_url(path);
     #[cfg(not(feature = "stream-registry"))]
-    let is_user_wrapper = false;
+    let is_user_wrapper = super::phar::is_phar_url(path);
     let local = local_filesystem_path(path);
     if !is_user_wrapper {
         let Some(local) = local else {
@@ -1724,6 +1757,30 @@ pub(in crate::stdlib) fn return_default_file_lines(
             result.push(php_byte_result(line.to_vec(), false));
         }
         ret!(rv, Value::array(result));
+    }
+    if let Some(result) = super::phar::read_url(eg, path) {
+        match result {
+            Ok((bytes, _)) => {
+                let mut arr = PhpArray::new();
+                for line in bytes.split_inclusive(|byte| *byte == b'\n') {
+                    arr.push(php_byte_result(line.to_vec(), false));
+                }
+                ret!(rv, Value::array(arr));
+            }
+            Err(reason) => {
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!("file({path}): Failed to open stream: {reason}"),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                ret!(rv, Value::bool(false));
+            }
+        }
     }
     match std::fs::File::open(path) {
         Ok(mut file) => {

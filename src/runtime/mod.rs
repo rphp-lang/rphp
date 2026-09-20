@@ -994,6 +994,8 @@ pub struct ExecutorGlobals {
     /// `$_ENV` and `$_REQUEST` join the symbol table only once a compiled unit
     /// or `global` statement names them.
     pub jit_auto_globals: HashMap<String, crate::value::Value>,
+    /// Parsed `phar://` archives and their aliases for this request.
+    pub phar_runtime: crate::stdlib::phar::PharRuntime,
     /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
     /// slot. Keep those rare entries in a frame-keyed cold symbol table while
     /// statically known names continue to live directly in their CVs.
@@ -2085,6 +2087,7 @@ impl ExecutorGlobals {
             fiber_runtime: None,
             globals: HashMap::new(),
             jit_auto_globals: HashMap::new(),
+            phar_runtime: Default::default(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
@@ -2220,6 +2223,7 @@ impl ExecutorGlobals {
             fiber_runtime: None,
             globals: HashMap::new(),
             jit_auto_globals: HashMap::new(),
+            phar_runtime: Default::default(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,

@@ -1221,7 +1221,6 @@ pub(crate) fn execute_included_file(
     )
 }
 
-#[cfg(feature = "stream-registry")]
 #[cold]
 fn execute_included_user_source(
     eg: &mut ExecutorGlobals,
@@ -1467,21 +1466,31 @@ fn report_include_warning(
     Ok(())
 }
 
+/// Why an include could not open its source, for the diagnostic it reports.
+enum IncludeReason {
+    Missing,
+    #[cfg(feature = "stream-registry")]
+    WrapperDeclined(String),
+    Message(String),
+}
+
 fn include_failure<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
     path: &str,
-    class: Option<&str>,
+    reason: IncludeReason,
     is_require: bool,
     is_once: bool,
 ) -> Result<ColdResult<'a>, VmError> {
     let function = include_call_name(is_require, is_once);
-    let reason = class.map_or_else(
-        || "No such file or directory".to_string(),
-        |class| format!("\"{class}::stream_open\" call failed"),
-    );
+    let reason = match reason {
+        IncludeReason::Missing => "No such file or directory".to_string(),
+        #[cfg(feature = "stream-registry")]
+        IncludeReason::WrapperDeclined(class) => format!("\"{class}::stream_open\" call failed"),
+        IncludeReason::Message(message) => message,
+    };
     report_include_warning(
         eg,
         frame,
@@ -1629,6 +1638,49 @@ fn op_include<'a>(
     let is_require = (opline.extended_value & 1) != 0;
     let is_once = (opline.extended_value & 2) != 0;
 
+    let phar_source = crate::stdlib::phar::include_source(eg, &path_str);
+    if let Some(Err(reason)) = phar_source {
+        return include_failure(
+            eg,
+            frame,
+            op_array,
+            opline,
+            &path_str,
+            IncludeReason::Message(reason),
+            is_require,
+            is_once,
+        );
+    }
+    if let Some(Ok((source, canonical))) = phar_source {
+        let outcome = execute_included_user_source(
+            eg,
+            source,
+            &canonical,
+            canonical.clone(),
+            is_once,
+            Some((frame, op_array)),
+        )?;
+        return match outcome {
+            IncludeFileOutcome::Executed(value) => {
+                write_include_result(frame, opline, value);
+                Ok(ColdResult::Done)
+            }
+            IncludeFileOutcome::AlreadyIncluded => {
+                write_include_result(frame, opline, Value::bool(true));
+                Ok(ColdResult::Done)
+            }
+            IncludeFileOutcome::Thrown(exception) => Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            }),
+            IncludeFileOutcome::Missing(_) => {
+                unreachable!("phar source is already materialized before compilation")
+            }
+        };
+    }
+
     #[cfg(feature = "stream-registry")]
     let mut wrapper_candidate = crate::stdlib::user_wrapper::definition_for_url(
         eg,
@@ -1725,7 +1777,7 @@ fn op_include<'a>(
                     op_array,
                     opline,
                     &path_str,
-                    Some(&class),
+                    IncludeReason::WrapperDeclined(class),
                     is_require,
                     is_once,
                 );
@@ -1763,7 +1815,7 @@ fn op_include<'a>(
             op_array,
             opline,
             &path_str,
-            None,
+            IncludeReason::Missing,
             is_require,
             is_once,
         );
@@ -1793,7 +1845,7 @@ fn op_include<'a>(
                 op_array,
                 opline,
                 &path_str,
-                None,
+                IncludeReason::Missing,
                 is_require,
                 is_once,
             )

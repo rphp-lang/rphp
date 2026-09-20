@@ -241,7 +241,7 @@ fn open_native(
     path: &[u8],
     mode: &str,
 ) -> Option<Backend> {
-    match PhpStream::open(resolved, mode) {
+    match crate::stdlib::phar::open_or_native(eg, resolved, mode) {
         Ok(stream) => {
             if stream.is_plain_file() {
                 filesystem::clear_filesystem_stat_cache(eg);

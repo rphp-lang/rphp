@@ -824,3 +824,63 @@ fn test_named_backref_p_equals_syntax() {
     assert!(re.captures("aa").is_some());
     assert!(re.captures("ab").is_none());
 }
+
+// ── Subroutine calls to completed groups ─────────────────────────────────
+
+#[test]
+fn subroutine_calls_inline_completed_groups_without_publishing_captures() {
+    let re = Regex::new("(?<a>x(?<b>y))(?&a)", RegexFlags::default()).unwrap();
+    let caps = re.captures("xyxy").unwrap();
+    assert_eq!(caps.get(0).unwrap().as_str("xyxy"), "xyxy");
+    assert_eq!(caps.get_named("a").unwrap().as_str("xyxy"), "xy");
+    assert_eq!(caps.get_named("b").unwrap().as_str("xyxy"), "y");
+    for (pattern, subject) in [
+        ("(x)(?1)", "xx"),
+        ("(?<a>x)(?P>a)", "xx"),
+        ("(?<a>x)\\g<a>", "xx"),
+        ("(?<a>x)\\g'a'", "xx"),
+        ("(a)(b)(?-2)(?-1)", "abab"),
+        ("(?<n>[0-9]+)-(?&n)", "12-345"),
+    ] {
+        assert!(
+            Regex::new(pattern, RegexFlags::default())
+                .unwrap()
+                .is_match(subject),
+            "{pattern}"
+        );
+    }
+    assert!(
+        !Regex::new("(?<n>[0-9]+)-(?&n)", RegexFlags::default())
+            .unwrap()
+            .is_match("12-x")
+    );
+}
+
+#[test]
+fn recursive_and_forward_subroutine_calls_remain_engine_non_claims() {
+    assert_eq!(
+        Regex::new("(?<a>x(?&a)?)", RegexFlags::default()).unwrap_err(),
+        "Unsupported PCRE recursive subroutine call"
+    );
+    assert_eq!(
+        Regex::new("(?1)(x)", RegexFlags::default()).unwrap_err(),
+        "Unsupported PCRE forward subroutine call"
+    );
+    assert_eq!(
+        Regex::new("(?R)?x", RegexFlags::default()).unwrap_err(),
+        "Unsupported PCRE recursive subroutine call"
+    );
+    assert_eq!(
+        Regex::new("(?<a>x)(?&nope)", RegexFlags::default()).unwrap_err(),
+        "Unknown PCRE subpattern 'nope'"
+    );
+}
+
+#[test]
+fn braced_and_bare_g_escapes_are_backreferences() {
+    for pattern in ["(a)\\g{1}", "(a)\\g1", "(a)\\g{-1}", "(?<q>a)\\g{q}"] {
+        let re = Regex::new(pattern, RegexFlags::default()).unwrap();
+        assert!(re.is_match("aa"), "{pattern}");
+        assert!(!re.is_match("ab"), "{pattern}");
+    }
+}

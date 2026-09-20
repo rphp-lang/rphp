@@ -730,7 +730,7 @@ fn fn_fopen(
         }
         user_wrapper::OpenResult::NotRegistered => {}
     }
-    let opened = PhpStream::open(path.as_ref(), mode.as_ref());
+    let opened = super::phar::open_or_native(eg, path.as_ref(), mode.as_ref());
     // Inspect the owner in its result slot before moving it into the registry.
     // This keeps a second full stream copy out of the cache-clear boundary.
     if opened.as_ref().is_ok_and(PhpStream::is_plain_file) {

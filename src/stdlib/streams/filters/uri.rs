@@ -98,7 +98,7 @@ fn open(
         )?;
         return Ok(None);
     }
-    let backend = match PhpStream::open(underlying, mode) {
+    let backend = match stdlib::phar::open_or_native(eg, underlying, mode) {
         Ok(backend) => backend,
         Err(error) => {
             let reason = if !layers.is_empty() && underlying.starts_with("data:") {

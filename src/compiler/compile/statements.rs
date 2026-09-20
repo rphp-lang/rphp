@@ -3499,6 +3499,8 @@ impl Compiler {
                 );
                 user_func.parameter_default_diagnostics =
                     self.method_parameter_default_diagnostics(params, None);
+                user_func.parameter_defaults =
+                    self.method_parameter_defaults(params, None);
                 user_func.set_attributes(self.compile_attributes(attributes, 2));
                 user_func.parameter_attributes = params
                     .iter()
@@ -5909,6 +5911,11 @@ impl Compiler {
                             &method.params,
                             Some(&resolved_class),
                         );
+                    user_func.parameter_defaults =
+                        self.method_parameter_defaults(
+                            &method.params,
+                            Some(&resolved_class),
+                        );
                     user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -6709,6 +6716,11 @@ impl Compiler {
                             &method.params,
                             Some(&resolved_iface),
                         );
+                    user_func.parameter_defaults =
+                        self.method_parameter_defaults(
+                            &method.params,
+                            Some(&resolved_iface),
+                        );
                     user_func.set_attributes(self.compile_attributes_in_scope_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -7089,6 +7101,8 @@ impl Compiler {
                     );
                     user_func.parameter_default_diagnostics =
                         self.method_parameter_default_diagnostics(&method.params, None);
+                    user_func.parameter_defaults =
+                        self.method_parameter_defaults(&method.params, None);
                     user_func.set_attributes(self.compile_attributes_in_scope_mode_with_property(
                         &method.attributes,
                         attribute_method_target(&method.name),
@@ -8126,6 +8140,11 @@ impl Compiler {
                     );
                     user_func.parameter_default_diagnostics =
                         self.method_parameter_default_diagnostics(
+                            &method.params,
+                            Some(&resolved_enum),
+                        );
+                    user_func.parameter_defaults =
+                        self.method_parameter_defaults(
                             &method.params,
                             Some(&resolved_enum),
                         );

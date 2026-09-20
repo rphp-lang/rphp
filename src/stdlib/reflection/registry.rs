@@ -17,15 +17,21 @@ use super::generic_parameters::{
 use super::{
     attribute_construct, attribute_get_arguments, attribute_get_name, attribute_get_target,
     attribute_is_repeated, attribute_new_instance, attribute_to_string, class_constant_construct,
-    class_constant_to_string, class_construct, class_debug_info, class_end_line, class_file_name,
-    class_get_attributes, class_get_constant, class_get_constants, class_get_constructor,
-    class_get_default_properties, class_get_interface_names, class_get_interfaces,
-    class_get_lazy_initializer, class_get_method, class_get_methods, class_get_name,
+    class_constant_get_modifiers, class_constant_get_value, class_constant_is_enum_case,
+    class_constant_is_final, class_constant_is_private, class_constant_is_protected,
+    class_constant_is_public, class_constant_to_string, class_construct, class_debug_info,
+    class_end_line, class_file_name, class_get_attributes, class_get_constant, class_get_constants,
+    class_get_constructor, class_get_default_properties, class_get_extension_name,
+    class_get_interface_names, class_get_interfaces, class_get_lazy_initializer, class_get_method,
+    class_get_methods, class_get_modifiers, class_get_name, class_get_namespace_name,
     class_get_parent, class_get_properties, class_get_property, class_get_reflection_constant,
-    class_get_reflection_constants, class_get_trait_aliases, class_get_trait_names,
-    class_get_traits, class_has_method, class_has_property, class_implements_interface,
-    class_initialize_lazy_object, class_is_abstract, class_is_final, class_is_instantiable,
-    class_is_interface, class_is_internal, class_is_readonly, class_is_subclass_of, class_is_trait,
+    class_get_reflection_constants, class_get_short_name, class_get_static_properties,
+    class_get_static_property_value, class_get_trait_aliases, class_get_trait_names,
+    class_get_traits, class_has_constant, class_has_method, class_has_property,
+    class_implements_interface, class_in_namespace, class_initialize_lazy_object,
+    class_is_abstract, class_is_anonymous, class_is_cloneable, class_is_enum, class_is_final,
+    class_is_instance, class_is_instantiable, class_is_interface, class_is_internal,
+    class_is_iterable, class_is_readonly, class_is_subclass_of, class_is_trait,
     class_is_uninitialized_lazy_object, class_is_user_defined,
     class_mark_lazy_object_as_initialized, class_new_instance, class_new_instance_args,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
@@ -41,23 +47,26 @@ use super::{
     function_get_tentative_return_type, function_has_return_type,
     function_has_tentative_return_type, function_in_namespace, function_invoke,
     function_invoke_args, function_is_anonymous, function_is_closure, function_is_deprecated,
+    function_is_generator, function_is_internal, function_is_user_defined, function_is_variadic,
     function_returns_reference, function_to_string, generic_arguments, generic_runtime_modes,
     method_construct, method_create_from_method_name, method_file_name, method_get_closure,
     method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
     method_invoke_args, method_invoke_raw, method_is_abstract, method_is_constructor,
     method_is_destructor, method_is_final, method_is_private, method_is_protected,
     method_is_public, method_is_static, method_to_string, no_discard_construct, object_construct,
-    override_construct, parameter_allows_null, parameter_construct, parameter_get_attributes,
-    parameter_get_class, parameter_get_declaring_class, parameter_get_declaring_function,
-    parameter_get_default_value, parameter_get_default_value_constant_name, parameter_get_name,
+    override_construct, parameter_allows_null, parameter_can_be_passed_by_value,
+    parameter_construct, parameter_get_attributes, parameter_get_class,
+    parameter_get_declaring_class, parameter_get_declaring_function, parameter_get_default_value,
+    parameter_get_default_value_constant_name, parameter_get_name, parameter_get_position,
     parameter_get_type, parameter_has_type, parameter_is_array, parameter_is_callable,
     parameter_is_default_available, parameter_is_default_value_constant, parameter_is_optional,
-    parameter_is_passed_by_reference, parameter_is_variadic, parameter_to_string,
-    property_construct, property_get_default_value, property_get_hook, property_get_hooks,
-    property_get_modifiers, property_get_raw_value, property_get_value, property_has_default_value,
-    property_has_hook, property_hook_type_cases, property_hook_type_from,
-    property_hook_type_try_from, property_is_abstract, property_is_default, property_is_final,
-    property_is_initialized, property_is_lazy, property_is_private, property_is_protected,
+    parameter_is_passed_by_reference, parameter_is_promoted, parameter_is_variadic,
+    parameter_to_string, property_construct, property_get_declaring_class,
+    property_get_default_value, property_get_hook, property_get_hooks, property_get_modifiers,
+    property_get_raw_value, property_get_value, property_has_default_value, property_has_hook,
+    property_hook_type_cases, property_hook_type_from, property_hook_type_try_from,
+    property_is_abstract, property_is_default, property_is_final, property_is_initialized,
+    property_is_lazy, property_is_private, property_is_promoted, property_is_protected,
     property_is_public, property_is_readonly, property_is_static, property_is_virtual,
     property_set_raw_value, property_set_raw_value_without_lazy_initialization, property_set_value,
     property_skip_lazy_initialization, property_to_string, reflection_compound_types,
@@ -1820,6 +1829,214 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     for class in ["ReflectionClass", "ReflectionObject"] {
         register_method!(class, "__tostring", class_to_string, 1, 0, []);
     }
+    register_method!(
+        "ReflectionClass",
+        "getshortname",
+        class_get_short_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "getnamespacename",
+        class_get_namespace_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "innamespace",
+        class_in_namespace,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "isanonymous",
+        class_is_anonymous,
+        1,
+        0,
+        []
+    );
+    register_method!("ReflectionClass", "isenum", class_is_enum, 1, 0, []);
+    register_method!(
+        "ReflectionClass",
+        "iscloneable",
+        class_is_cloneable,
+        1,
+        0,
+        []
+    );
+    register_method!("ReflectionClass", "isiterable", class_is_iterable, 1, 0, []);
+    register_method!(
+        "ReflectionClass",
+        "isiterateable",
+        class_is_iterable,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "getmodifiers",
+        class_get_modifiers,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "hasconstant",
+        class_has_constant,
+        2,
+        1,
+        ["name"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "getstaticproperties",
+        class_get_static_properties,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClass",
+        "getstaticpropertyvalue",
+        class_get_static_property_value,
+        3,
+        1,
+        ["name", "default"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "isinstance",
+        class_is_instance,
+        2,
+        1,
+        ["object"]
+    );
+    register_method!(
+        "ReflectionClass",
+        "getextensionname",
+        class_get_extension_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "getposition",
+        parameter_get_position,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "canbepassedbyvalue",
+        parameter_can_be_passed_by_value,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionParameter",
+        "ispromoted",
+        parameter_is_promoted,
+        1,
+        0,
+        []
+    );
+    for class in ["ReflectionFunction", "ReflectionMethod"] {
+        register_method!(class, "isvariadic", function_is_variadic, 1, 0, []);
+        register_method!(class, "isinternal", function_is_internal, 1, 0, []);
+        register_method!(class, "isuserdefined", function_is_user_defined, 1, 0, []);
+        register_method!(class, "isgenerator", function_is_generator, 1, 0, []);
+    }
+    register_method!(
+        "ReflectionMethod",
+        "getclosurethis",
+        function_get_closure_this,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "getdeclaringclass",
+        property_get_declaring_class,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionProperty",
+        "ispromoted",
+        property_is_promoted,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "getvalue",
+        class_constant_get_value,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "getmodifiers",
+        class_constant_get_modifiers,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "ispublic",
+        class_constant_is_public,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "isprotected",
+        class_constant_is_protected,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "isprivate",
+        class_constant_is_private,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "isfinal",
+        class_constant_is_final,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionClassConstant",
+        "isenumcase",
+        class_constant_is_enum_case,
+        1,
+        0,
+        []
+    );
     register_method!(
         "ReflectionClass",
         "getdoccomment",

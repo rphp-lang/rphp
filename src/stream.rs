@@ -163,6 +163,9 @@ pub struct PhpStream {
     read_buffer: Option<Box<ReadBuffer>>,
     plain_file_io: bool,
     memory_append_after_truncate: bool,
+    /// Report EOF as soon as the memory cursor reaches the end, as PHP's
+    /// phar stream does, instead of waiting for an empty read.
+    eager_eof: bool,
     #[cfg(feature = "stream-context")]
     context: Option<Box<StreamContext>>,
 }
@@ -287,6 +290,7 @@ impl PhpStream {
             read_buffer: None,
             plain_file_io: false,
             memory_append_after_truncate: false,
+            eager_eof: false,
             #[cfg(feature = "stream-context")]
             context: None,
         }
@@ -313,6 +317,7 @@ impl PhpStream {
                 read_buffer: None,
                 plain_file_io: false,
                 memory_append_after_truncate: false,
+                eager_eof: false,
                 #[cfg(feature = "stream-context")]
                 context: None,
             });
@@ -328,6 +333,7 @@ impl PhpStream {
                 read_buffer: None,
                 plain_file_io: false,
                 memory_append_after_truncate: false,
+                eager_eof: false,
                 #[cfg(feature = "stream-context")]
                 context: None,
             });
@@ -375,6 +381,7 @@ impl PhpStream {
             read_buffer: None,
             plain_file_io: false,
             memory_append_after_truncate: false,
+            eager_eof: false,
             #[cfg(feature = "stream-context")]
             context: None,
         })
@@ -382,6 +389,15 @@ impl PhpStream {
 
     /// A decoded data wrapper owns immutable input with the same seek/read
     /// backend as memory streams, without a temporary write or extra copy.
+    /// A read-only in-memory stream over bytes served by a wrapper such as
+    /// `phar://`, reporting `uri` and the requested mode.
+    #[cold]
+    pub(crate) fn readonly_bytes(bytes: Vec<u8>, uri: &str, reported_mode: &str) -> Self {
+        let mut stream = Self::decoded_input(bytes, uri, reported_mode);
+        stream.eager_eof = true;
+        stream
+    }
+
     #[cold]
     fn decoded_input(bytes: Vec<u8>, uri: &str, reported_mode: &str) -> Self {
         Self {
@@ -395,6 +411,7 @@ impl PhpStream {
             read_buffer: None,
             plain_file_io: false,
             memory_append_after_truncate: false,
+            eager_eof: false,
             #[cfg(feature = "stream-context")]
             context: None,
         }
@@ -441,6 +458,10 @@ impl PhpStream {
     pub fn is_eof(&self) -> bool {
         self.eof
             || matches!(&self.backend, StreamBackend::Temp(temp) if temp.is_eof() && self.unread_len() == 0)
+            || (self.eager_eof
+                && self.unread_len() == 0
+                && matches!(&self.backend, StreamBackend::Memory(memory)
+                    if memory.position() >= memory.get_ref().len() as u64))
     }
 
     fn read_backend(&mut self, buffer: &mut [u8]) -> io::Result<usize> {

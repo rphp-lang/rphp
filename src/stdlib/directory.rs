@@ -72,9 +72,19 @@ impl OwnedDirectoryCursor {
     }
 }
 
+enum DirectoryEntries {
+    Native(std::fs::ReadDir),
+    /// A precomputed listing, such as the members of a `phar://` directory,
+    /// which PHP serves without dot entries.
+    Listed {
+        entries: Vec<String>,
+        position: usize,
+    },
+}
+
 struct DirectoryStream {
     path: PathBuf,
-    entries: std::fs::ReadDir,
+    entries: DirectoryEntries,
     synthetic_entry: u8,
 }
 
@@ -82,9 +92,20 @@ impl DirectoryStream {
     fn open(path: &Path) -> io::Result<Self> {
         Ok(Self {
             path: path.to_path_buf(),
-            entries: std::fs::read_dir(path)?,
+            entries: DirectoryEntries::Native(std::fs::read_dir(path)?),
             synthetic_entry: 0,
         })
+    }
+
+    fn listed(path: &str, entries: Vec<String>) -> Self {
+        Self {
+            path: PathBuf::from(path),
+            entries: DirectoryEntries::Listed {
+                entries,
+                position: 0,
+            },
+            synthetic_entry: 2,
+        }
     }
 
     fn next_entry(&mut self) -> io::Result<Option<String>> {
@@ -97,16 +118,30 @@ impl DirectoryStream {
             self.synthetic_entry += 1;
             return Ok(Some(entry.to_string()));
         }
-        match self.entries.next() {
-            Some(Ok(entry)) => Ok(Some(os_filename_to_php_string(&entry.file_name()))),
-            Some(Err(error)) => Err(error),
-            None => Ok(None),
+        match &mut self.entries {
+            DirectoryEntries::Native(entries) => match entries.next() {
+                Some(Ok(entry)) => Ok(Some(os_filename_to_php_string(&entry.file_name()))),
+                Some(Err(error)) => Err(error),
+                None => Ok(None),
+            },
+            DirectoryEntries::Listed { entries, position } => {
+                let entry = entries.get(*position).cloned();
+                if entry.is_some() {
+                    *position += 1;
+                }
+                Ok(entry)
+            }
         }
     }
 
     fn rewind(&mut self) -> io::Result<()> {
-        self.entries = std::fs::read_dir(&self.path)?;
-        self.synthetic_entry = 0;
+        match &mut self.entries {
+            DirectoryEntries::Native(entries) => {
+                *entries = std::fs::read_dir(&self.path)?;
+                self.synthetic_entry = 0;
+            }
+            DirectoryEntries::Listed { position, .. } => *position = 0,
+        }
         Ok(())
     }
 }
@@ -394,6 +429,25 @@ fn open_directory(
     if !super::filesystem::url_open_allowed(ed, eg, directory, function)? {
         return Ok(None);
     }
+    if let Some(listing) = super::phar::directory_listing(eg, directory) {
+        return match listing {
+            Ok(entries) => {
+                let value = insert_directory(eg, DirectoryStream::listed(directory, entries));
+                remember_last_directory(eg, &value);
+                Ok(Some((path, value)))
+            }
+            Err(reason) => {
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!("{function}({directory}): Failed to open directory: {reason}"),
+                )?;
+                Ok(None)
+            }
+        };
+    }
     #[cfg(feature = "stream-registry")]
     match super::streams::user_wrapper::open_directory(eg, directory, 0)? {
         super::streams::user_wrapper::OpenResult::Opened(value) => {
@@ -580,6 +634,45 @@ pub(super) fn fn_scandir(
         return Ok(());
     }
 
+    if let Some(listing) = super::phar::directory_listing(eg, &directory) {
+        match listing {
+            Ok(mut entries) => {
+                match sorting_order {
+                    2 => {}
+                    0 => entries.sort(),
+                    _ => entries.sort_by(|left, right| right.cmp(left)),
+                }
+                let mut result = PhpArray::new();
+                for entry in entries {
+                    result.push(Value::string(entry));
+                }
+                ret!(rv, Value::array(result));
+            }
+            Err(reason) => {
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    &format!("scandir({directory}): Failed to open directory: {reason}"),
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                super::report_internal_diagnostic(
+                    eg,
+                    ed,
+                    2,
+                    "Warning",
+                    "scandir(): (errno 2): No such file or directory",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                ret!(rv, Value::bool(false));
+            }
+        }
+    }
     let mut stream = match DirectoryStream::open(Path::new(&directory)) {
         Ok(stream) => stream,
         Err(error) => {

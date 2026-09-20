@@ -26526,16 +26526,53 @@ repeated-worker isolation remain S4 work.
 ## PHPStan analysis gate
 
 The `phpstan-tokenizer` checkpoint over `5b70cb78` runs the unmodified PHPStan
-2.2.14 distribution under RPHP. Because Phar loading is not claimed, the gate
-uses the phar's extracted file tree: `bin/phpstan --version` and
-`bin/phpstan analyse --no-progress --no-ansi` over a two-error fixture
-(`return.type` and `property.nonObject`) print byte-identical output to
-reference PHP 8.5, including the Nette DI container build and cache, the
+2.2.14 distribution under RPHP, and the `phar-stream` checkpoint over
+`d88357ba` runs it straight from `phpstan.phar`: `rphp phpstan.phar --version`
+and `rphp phpstan.phar analyse --no-progress --no-ansi` over a two-error
+fixture (`return.type` and `property.nonObject`) print byte-identical output
+to reference PHP 8.5 both from a cold temp directory (the Nette DI container
+is compiled and cached by RPHP itself) and from a warm one, including the
 PHP-Parser AST built through `PhpToken`, BetterReflection over the runtime
 Reflection surface, and Symfony Console's wrapped table rows with their
-four-byte emoji identifier markers. This admits the exercised path only; it is
-not a claim that every PHPStan rule, extension, editor URL or larger project
-analyses identically. Bootstrapping PHPStan compiles about 2,350 files; the
+four-byte emoji identifier markers. The extracted-tree invocation keeps
+printing the same output. This admits the exercised path only; it is not a
+claim that every PHPStan rule, extension, editor URL or larger project
+analyses identically. Before the phar checkpoint the cold container build had
+only ever succeeded with a container PHP had generated: building it under
+RPHP needed constructor by-reference binding of property arguments, abstract
+and interface methods in `ReflectionClass::getMethods()`, PCRE subroutine
+calls, closure captures under `array_walk()`'s surplus key argument, user
+parameter default values through `ReflectionParameter::getDefaultValue()`,
+about thirty Reflection accessors Nette's generator reads, and a variadic
+all-`int` method no longer tripping the compact-call receiver contract. The
+cold build takes about 51 s and 600 MB under RPHP against 1.8 s and 150 MB
+for reference PHP; the warm analysis stays at about 4 s. That gap is ordinary
+compile, reflection and code-generation cost in Nette's container compiler
+and is deferred.
+
+The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
+`Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,
+`Phar::canWrite()`/`canCompress()`/`getSupportedSignatures()`, the class
+constants, `PharException`, and the `phar://` wrapper for `include`/`require`
+(also from the executable stub of a phar run as the main script),
+`file_get_contents()`, `file()`, `readfile()`, `fopen()` with and without a
+context, `SplFileObject`, `md5_file()`/`sha1_file()`/`hash_file()`,
+`stat()`-family and `is_*()` predicates, `opendir()`/`readdir()` and
+`scandir()`, with PHP's member modes (`0100444` files, `040555` directories,
+the archive root as a directory), alias resolution only through
+`phar://alias/…`, PHP's warning and `PharException` texts (including the
+`(truncated entry)` versus `(__HALT_COMPILER(); not found)` split of PHP's
+1024-byte token scan) and MD5/SHA-1/SHA-256/SHA-512 signature verification
+(SHA-512 hashing is new to `hash()`/`hash_file()` as well). The fixture
+`tests/fixtures/phar/hello.phar` is built by reference PHP from
+`tests/fixtures/phar/build.php`; `tests/e2e_phar_extension.rs`,
+`tests/cli_phar_main_script.rs` and
+`tests/e2e_phpstan_container_build_contracts.rs` hold the original coverage.
+Not claimed for phar: compressed members, OpenSSL signatures (accepted
+without verification), writing or creating archives, `new Phar()`
+iteration, `PharData`, `PharFileInfo`, `Phar::webPhar()`, and `feof()`
+after seeking a phar member to its end (RPHP reports EOF once the cursor is
+at the end, PHP only after a read). Bootstrapping PHPStan compiles about 2,350 files; the
 first checkpoint spent 17 s and 1 GB on it because the lexer validated the
 remaining source per string character and recounted lines from the file
 start per token, every basic block carried an inline loop plan, and every
@@ -26619,14 +26656,23 @@ coverage lives in `tests/e2e_tokenizer_extension.rs`,
 `tests/e2e_phpstan_runtime_contracts.rs`, `tests/e2e_string_byte_identity.rs`
 and `tests/cli_request_globals.rs`.
 
-Not claimed: Phar loading and the `phar://` wrapper (PHPStan runs from the
-extracted tree), `proc_open()`-based parallel workers, function and method
+Not claimed: `proc_open()`-based parallel workers, function and method
 `getStartLine()`/`getEndLine()`, method and property doc comments, exact
 `TOKEN_PARSE` parse-error messages, compile-time activation of `$_ENV` and
 `$_REQUEST` that are named only inside function bodies (they activate at the
 first `global` binding instead), `$_ENV` population under `variables_order`,
-and O(1) byte-offset recovery for non-`u` matches on non-ASCII subjects
-(currently O(n) per capture).
+O(1) byte-offset recovery for non-`u` matches on non-ASCII subjects
+(currently O(n) per capture), PCRE recursion into an open group and forward
+subroutine calls (`(?R)`, `(?1)` before group 1, `(?&self)`; they still
+compile to `false` silently while calls to completed groups are inlined),
+by-reference constructor binding of an array element of a property
+(`new Foo($this->items['k'])`), `ReflectionMethod::getPrototype()` for
+interface-declared prototypes, `ReflectionClass::getMethods()` on internal
+interfaces, `ReflectionParameter::isPromoted()` and
+`ReflectionProperty::isPromoted()` beyond the name-match approximation
+(promotion is not retained past compilation), `get_defined_vars()` inside a
+callback frame started by an internal function (it also lists globals), and
+the `_SERVER`/`getenv()` ordering PHP's container dump preserves.
 
 ## Retained implementation and PHP 8.4 trend notes
 

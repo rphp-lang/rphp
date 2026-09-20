@@ -1606,7 +1606,55 @@ struct Parser {
     group_count: usize,
     named_groups: HashMap<String, usize>,
     defined_subpatterns: HashMap<String, Node>,
+    /// Bodies of the capture groups parsed so far, by index, for inlining
+    /// later subroutine calls to them.
+    completed_groups: HashMap<usize, Node>,
     flags: RegexFlags,
+}
+
+/// Drop capture wrappers from a subroutine body: PCRE restores every capture
+/// set inside a call once it returns, so an inlined copy must not publish
+/// them.
+fn strip_captures(node: Node) -> Node {
+    match node {
+        Node::Group {
+            index: Some(_),
+            inner,
+            ..
+        } => strip_captures(*inner),
+        Node::Group { index, name, inner } => Node::Group {
+            index,
+            name,
+            inner: Box::new(strip_captures(*inner)),
+        },
+        Node::Alternation(branches) => {
+            Node::Alternation(branches.into_iter().map(strip_captures).collect())
+        }
+        Node::Sequence(items) => Node::Sequence(items.into_iter().map(strip_captures).collect()),
+        Node::Quantifier {
+            inner,
+            min,
+            max,
+            greedy,
+            possessive,
+        } => Node::Quantifier {
+            inner: Box::new(strip_captures(*inner)),
+            min,
+            max,
+            greedy,
+            possessive,
+        },
+        Node::Lookahead { positive, inner } => Node::Lookahead {
+            positive,
+            inner: Box::new(strip_captures(*inner)),
+        },
+        Node::Lookbehind { positive, inner } => Node::Lookbehind {
+            positive,
+            inner: Box::new(strip_captures(*inner)),
+        },
+        Node::Atomic(inner) => Node::Atomic(Box::new(strip_captures(*inner))),
+        other => other,
+    }
 }
 
 impl Parser {
@@ -1617,7 +1665,88 @@ impl Parser {
             group_count: 0,
             named_groups: HashMap::new(),
             defined_subpatterns: HashMap::new(),
+            completed_groups: HashMap::new(),
             flags,
+        }
+    }
+
+    /// Inline a subroutine call to capture group `index`. Only a group that
+    /// is already complete can be copied; recursion into an open group and
+    /// forward calls stay engine non-claims.
+    fn subroutine_call(&self, index: usize) -> Result<Node, String> {
+        match self.completed_groups.get(&index) {
+            Some(inner) => Ok(strip_captures(inner.clone())),
+            None if index == 0 || index <= self.group_count => {
+                Err("Unsupported PCRE recursive subroutine call".into())
+            }
+            None => Err("Unsupported PCRE forward subroutine call".into()),
+        }
+    }
+
+    fn named_subroutine_call(&self, name: &str) -> Result<Node, String> {
+        if let Some(definition) = self.defined_subpatterns.get(name) {
+            return Ok(definition.clone());
+        }
+        match self.named_groups.get(name) {
+            Some(&index) => self.subroutine_call(index),
+            None => Err(format!("Unknown PCRE subpattern '{name}'")),
+        }
+    }
+
+    /// Read a group name or number up to `close`, then resolve it as a
+    /// subroutine call.
+    fn parse_subroutine_reference(&mut self, close: char) -> Result<Node, String> {
+        let mut reference = String::new();
+        while let Some(c) = self.peek() {
+            self.advance();
+            if c == close {
+                return self.resolve_subroutine_reference(&reference);
+            }
+            reference.push(c);
+        }
+        Err("Unterminated PCRE subroutine call".into())
+    }
+
+    fn resolve_subroutine_reference(&self, reference: &str) -> Result<Node, String> {
+        if reference == "R" {
+            return self.subroutine_call(0);
+        }
+        if let Some(relative) = reference.strip_prefix('-') {
+            let back: usize = relative
+                .parse()
+                .map_err(|_| "Malformed relative PCRE subroutine call".to_string())?;
+            return match (back > 0).then(|| self.group_count.checked_sub(back - 1)) {
+                Some(Some(index)) if index > 0 => self.subroutine_call(index),
+                _ => Err("reference to non-existent subpattern".into()),
+            };
+        }
+        if let Some(forward) = reference.strip_prefix('+') {
+            let ahead: usize = forward
+                .parse()
+                .map_err(|_| "Malformed relative PCRE subroutine call".to_string())?;
+            return self.subroutine_call(self.group_count + ahead);
+        }
+        match reference.parse::<usize>() {
+            Ok(index) => self.subroutine_call(index),
+            Err(_) => self.named_subroutine_call(reference),
+        }
+    }
+
+    /// Resolve the `\g{...}` / `\gn` backreference spellings.
+    fn backreference_by_reference(&self, reference: &str) -> Result<Node, String> {
+        if let Some(relative) = reference.strip_prefix('-') {
+            let back: usize = relative
+                .parse()
+                .map_err(|_| "Malformed relative PCRE backreference".to_string())?;
+            return match (back > 0).then(|| self.group_count.checked_sub(back - 1)) {
+                Some(Some(index)) if index > 0 => Ok(Node::Backreference(index)),
+                _ => Err("reference to non-existent subpattern".into()),
+            };
+        }
+        match reference.parse::<usize>() {
+            Ok(index) if index > 0 => Ok(Node::Backreference(index)),
+            Ok(_) => Err("a numbered reference must not be zero".into()),
+            Err(_) => Ok(Node::NamedBackreference(reference.to_string())),
         }
     }
 
@@ -1735,6 +1864,46 @@ impl Parser {
             Some('n') => Ok(Node::Literal('\n')),
             Some('r') => Ok(Node::Literal('\r')),
             Some('t') => Ok(Node::Literal('\t')),
+            Some('g') => {
+                // \g<name>, \g<n> and \g'name' call a subroutine; \g{n},
+                // \g{-n}, \g{name} and \gn are backreferences.
+                match self.peek() {
+                    Some('<') => {
+                        self.advance();
+                        self.parse_subroutine_reference('>')
+                    }
+                    Some('\'') => {
+                        self.advance();
+                        self.parse_subroutine_reference('\'')
+                    }
+                    Some('{') => {
+                        self.advance();
+                        let mut reference = String::new();
+                        while let Some(c) = self.peek() {
+                            self.advance();
+                            if c == '}' {
+                                return self.backreference_by_reference(&reference);
+                            }
+                            reference.push(c);
+                        }
+                        Err("Unterminated \\g{} backreference".into())
+                    }
+                    Some(c) if c.is_ascii_digit() || c == '-' => {
+                        let mut reference = String::new();
+                        reference.push(c);
+                        self.advance();
+                        while let Some(next) = self.peek() {
+                            if !next.is_ascii_digit() {
+                                break;
+                            }
+                            reference.push(next);
+                            self.advance();
+                        }
+                        self.backreference_by_reference(&reference)
+                    }
+                    _ => Err("\\g is not followed by a braced, angle-bracketed, or quoted name/number or by a plain number".into()),
+                }
+            }
             Some('k') => {
                 // \k<name> or \k'name' — named backreference
                 let delim = self.peek();
@@ -2008,25 +2177,15 @@ impl Parser {
 
             match self.peek() {
                 Some('&') => {
-                    // Named subroutine call (?&name). DEFINE blocks above
-                    // publish immutable AST fragments, so expansion here keeps
-                    // the matcher free of an extra runtime dispatch variant.
+                    // Named subroutine call (?&name). DEFINE blocks and
+                    // completed groups publish immutable AST fragments, so
+                    // expansion here keeps the matcher free of an extra
+                    // runtime dispatch variant.
                     self.advance();
-                    let mut name = String::new();
-                    while let Some(c) = self.peek() {
-                        if c == ')' {
-                            self.advance();
-                            return self
-                                .defined_subpatterns
-                                .get(&name)
-                                .cloned()
-                                .ok_or_else(|| format!("Unknown PCRE subpattern '{name}'"));
-                        }
-                        name.push(c);
-                        self.advance();
-                    }
-                    Err("Unterminated named PCRE subroutine".into())
+                    self.parse_subroutine_reference(')')
                 }
+                Some('R' | '+' | '-') => self.parse_subroutine_reference(')'),
+                Some(c) if c.is_ascii_digit() => self.parse_subroutine_reference(')'),
                 Some('|') => {
                     // Branch-reset group (?|...): capture numbering restarts
                     // at the same base for every alternative and continues
@@ -2144,6 +2303,7 @@ impl Parser {
                             if self.advance() != Some(')') {
                                 return Err("Unterminated named group".into());
                             }
+                            self.completed_groups.insert(idx, inner.clone());
                             Ok(Node::Group {
                                 index: Some(idx),
                                 name: Some(name),
@@ -2169,6 +2329,11 @@ impl Parser {
                             return Err("Unterminated named backreference (?P=...)".into());
                         }
                         return Ok(Node::NamedBackreference(name));
+                    }
+                    if self.peek() == Some('>') {
+                        // (?P>name) — named subroutine call
+                        self.advance();
+                        return self.parse_subroutine_reference(')');
                     }
                     // (?P<name>...)
                     if self.advance() != Some('<') {
@@ -2196,6 +2361,7 @@ impl Parser {
                     if self.advance() != Some(')') {
                         return Err("Unterminated named group".into());
                     }
+                    self.completed_groups.insert(idx, inner.clone());
                     Ok(Node::Group {
                         index: Some(idx),
                         name: Some(name),
@@ -2215,6 +2381,7 @@ impl Parser {
             if self.advance() != Some(')') {
                 return Err("Unterminated capturing group".into());
             }
+            self.completed_groups.insert(idx, inner.clone());
             Ok(Node::Group {
                 index: Some(idx),
                 name: None,

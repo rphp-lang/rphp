@@ -224,10 +224,12 @@ mod hebrew;
 mod html_entities;
 mod iterator;
 mod pcre;
+pub(crate) mod phar;
 mod process;
 mod recursive_arrays;
 mod runtime_info;
 mod sha256;
+mod sha512;
 mod source_filters;
 mod strings;
 mod superglobals;
@@ -5930,7 +5932,13 @@ fn digest_file_bytes(
         return Ok(Some(Vec::new()));
     }
     let path = filename.strip_prefix("file://").unwrap_or(filename);
-    match std::fs::read(path) {
+    let contents = match phar::read_url(eg, path) {
+        Some(result) => result
+            .map(|(bytes, _)| bytes)
+            .map_err(std::io::Error::other),
+        None => std::fs::read(path),
+    };
+    match contents {
         Ok(bytes) => Ok(Some(bytes)),
         Err(error) => {
             report_internal_diagnostic(
@@ -6078,7 +6086,9 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
 }
 
 /// Registered `hash()` algorithms, in `hash_algos()` order.
-const HASH_ALGORITHMS: &[&str] = &["md5", "sha1", "sha256", "crc32", "crc32b", "xxh128"];
+const HASH_ALGORITHMS: &[&str] = &[
+    "md5", "sha1", "sha256", "sha512", "crc32", "crc32b", "xxh128",
+];
 
 /// Digest bytes of one registered algorithm; `None` for an unknown name.
 fn hash_algorithm_digest(algorithm: &str, data: &[u8], seed: u64) -> Option<Vec<u8>> {
@@ -6088,6 +6098,8 @@ fn hash_algorithm_digest(algorithm: &str, data: &[u8], seed: u64) -> Option<Vec<
         sha1_digest(data).to_vec()
     } else if algorithm.eq_ignore_ascii_case("sha256") {
         sha256::sha256_digest(data).to_vec()
+    } else if algorithm.eq_ignore_ascii_case("sha512") {
+        sha512::sha512_digest(data).to_vec()
     } else if algorithm.eq_ignore_ascii_case("crc32") {
         php_crc32(data).to_le_bytes().to_vec()
     } else if algorithm.eq_ignore_ascii_case("crc32b") {
@@ -16598,7 +16610,7 @@ pub(crate) fn dispatch_pending_uncaught_exception_handlers(
     Ok(())
 }
 
-fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
+pub(super) fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
     internal_user_caller_snapshot(ed, None)
         .map(|snapshot| (snapshot.file, snapshot.line))
         .unwrap_or_default()
@@ -30761,6 +30773,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "gettext",
     #[cfg(target_os = "linux")]
     "iconv",
+    "Phar",
     "tokenizer",
 ];
 
@@ -30770,7 +30783,7 @@ fn admitted_extension_name(bytes: &[u8]) -> bool {
     // admitted extensions. Actual name comparisons are explicit pay-use work
     // and stay out of the hot caller's instruction footprint.
     let admitted_length = match bytes.len() {
-        8 | 9 => true,
+        4 | 8 | 9 => true,
         #[cfg(target_os = "linux")]
         7 => true,
         #[cfg(target_os = "linux")]

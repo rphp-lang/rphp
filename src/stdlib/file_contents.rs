@@ -225,7 +225,7 @@ pub(super) fn fn_file_get_contents(
     let open_path = resolved_filename.as_str();
     #[cfg(not(feature = "include-path"))]
     let open_path = filename.as_str();
-    let mut stream = match PhpStream::open(open_path, "r") {
+    let mut stream = match super::phar::open_or_native(eg, open_path, "r") {
         Ok(stream) => stream,
         Err(error) => {
             super::filesystem::report_contents_open_error(execute_data, eg, &filename, &error)?;
@@ -330,7 +330,7 @@ pub(super) fn fn_readfile(
         if !super::filesystem::url_open_allowed(ed, eg, &filename, "readfile")? {
             return return_value(rv, Value::bool(false));
         }
-        let Ok(mut stream) = PhpStream::open(&filename, "rb") else {
+        let Ok(mut stream) = super::phar::open_or_native(eg, &filename, "rb") else {
             return return_value(rv, Value::bool(false));
         };
         let mut count = 0i64;

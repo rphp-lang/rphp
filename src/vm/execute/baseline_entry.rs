@@ -1640,18 +1640,21 @@ where
         if let Some(storage) = closure_static_vars.clone() {
             eg.publish_closure_static_vars(frame as usize, storage);
         }
-        initialize_bound_this_frame(frame, func_ptr, bound_this, closure_scope_class_id);
-
-        // Detached callback entry bypasses DoFcall, whose full path normally
-        // materializes the variadic bucket. Internal handlers use the same ABI in
-        // both entry modes, so pack their trailing public arguments here before
-        // dispatching the handler.
+        // Snapshot the trailing captures before the bound receiver lands:
+        // with surplus public arguments a capture can sit in the closure's
+        // `$this` CV, which the receiver write would otherwise clobber.
         let saved_captures = (capture_count != 0).then(|| {
             let start = this_offset + positional_public_num_args;
             (0..capture_count)
                 .map(|index| (*frame).cv((start + index) as u32).clone_closure_capture())
                 .collect::<Vec<_>>()
         });
+        initialize_bound_this_frame(frame, func_ptr, bound_this, closure_scope_class_id);
+
+        // Detached callback entry bypasses DoFcall, whose full path normally
+        // materializes the variadic bucket. Internal handlers use the same ABI in
+        // both entry modes, so pack their trailing public arguments here before
+        // dispatching the handler.
 
         if (*func_ptr).sig.is_variadic {
             let sig = &(*func_ptr).sig;

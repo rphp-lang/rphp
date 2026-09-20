@@ -128,7 +128,7 @@ pub(in crate::stdlib) fn fn_file(
         flags & FILE_USE_INCLUDE_PATH != 0,
         execute_data,
     );
-    let mut stream = match PhpStream::open(&filename, "r") {
+    let mut stream = match super::super::phar::open_or_native(eg, &filename, "r") {
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
     };

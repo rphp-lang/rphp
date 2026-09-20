@@ -650,6 +650,8 @@ struct DeclaredMethodFacts {
     return_type: KnownScalarType,
     parameter_types: Vec<ParamTypeHint>,
     ref_args: u64,
+    /// A variadic method has no fixed arity, so no exact argument ABI.
+    is_variadic: bool,
 }
 
 /// Declaration contracts indexed by receiver class + method. Direct methods,
@@ -668,6 +670,7 @@ fn declared_method_facts(
                     return_type: exact_declared_scalar_type(&method.common.sig.return_type_hint),
                     parameter_types: method.common.sig.param_type_hints.clone(),
                     ref_args: method.common.sig.ref_args,
+                    is_variadic: method.common.sig.is_variadic,
                 },
             );
         }
@@ -1299,6 +1302,7 @@ fn propagate_declared_scalar_types(
                     .filter(|known| *known != KnownScalarType::Unknown);
                 let exact_parameters = declaration
                     .as_ref()
+                    .filter(|facts| !facts.is_variadic)
                     .map(|facts| facts.parameter_types.clone());
                 let exact_ref_args = declaration.as_ref().map(|facts| facts.ref_args);
                 let guarded_return = (!nullsafe && receiver_stable)
@@ -6369,6 +6373,47 @@ pub(crate) fn enum_magic_method_is_forbidden(method: &str) -> bool {
 include!("compile/statements.rs");
 
 impl Compiler {
+    /// Retain every parameter default expression with its lexical scope so
+    /// reflection can evaluate it later without re-running the function
+    /// prologue.
+    fn method_parameter_defaults(
+        &self,
+        parameters: &[Param],
+        class_scope: Option<&str>,
+    ) -> Option<Box<[Option<crate::vm::function::ParameterDefault>]>> {
+        if !parameters
+            .iter()
+            .any(|parameter| parameter.default.is_some())
+        {
+            return None;
+        }
+        let evaluation_scope = std::rc::Rc::new(AttributeEvaluationScope {
+            namespace: self.current_namespace.clone(),
+            class_imports: self.use_map.clone(),
+            function_imports: self.function_use_map.clone(),
+            constant_imports: self.constant_use_map.clone(),
+            lexical_class: class_scope.map(str::to_owned),
+            lexical_parent: class_scope.and(self.lexical_static_parent.clone()),
+            lexical_property: None,
+            source_directory: self.source_directory.clone(),
+        });
+        Some(
+            parameters
+                .iter()
+                .map(|parameter| {
+                    parameter.default.as_ref().map(|default| {
+                        crate::vm::function::ParameterDefault {
+                            expression: Box::new(default.clone()),
+                            evaluation_scope: std::rc::Rc::clone(&evaluation_scope),
+                            source_file: self.source_file.clone(),
+                        }
+                    })
+                })
+                .collect::<Vec<_>>()
+                .into_boxed_slice(),
+        )
+    }
+
     fn method_parameter_default_diagnostics(
         &self,
         parameters: &[Param],
@@ -12785,6 +12830,8 @@ impl Compiler {
                 };
                 user_func.parameter_default_diagnostics =
                     self.method_parameter_default_diagnostics(params, default_class_scope);
+                user_func.parameter_defaults =
+                    self.method_parameter_defaults(params, default_class_scope);
                 let attribute_lexical_class = self.lexical_static_class.clone();
                 let attribute_lexical_parent = self.lexical_static_parent.clone();
                 user_func.set_attributes(self.compile_attributes_in_scope_mode(
@@ -15529,10 +15576,26 @@ impl Compiler {
             self.emit_constructor_argument_release(result + 1, self.next_tmp, call_line);
             return (result, OpType::Tmp);
         }
+        // Property and static-property arguments also need the runtime
+        // FUNC_ARG send: a by-reference constructor parameter binds them as
+        // references, which a plain value read cannot provide.
         let runtime_lvalue_arguments = args.iter().any(|argument| {
             matches!(
                 argument.expr(),
-                Expr::ArrayAccess { .. } | Expr::ArrayAppendArgument { .. }
+                Expr::ArrayAccess { .. }
+                    | Expr::ArrayAppendArgument { .. }
+                    | Expr::PropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::DynamicPropertyAccess {
+                        nullsafe: false,
+                        ..
+                    }
+                    | Expr::StaticProperty { .. }
+                    | Expr::DynamicNamedStaticProperty { .. }
+                    | Expr::DynamicStaticProperty { .. }
+                    | Expr::DynamicVariable { .. }
             )
         }) && known_class
             .is_none_or(|name| self.known_constructor_is_by_value(name) != Some(true));

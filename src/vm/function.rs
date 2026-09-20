@@ -1863,6 +1863,18 @@ pub struct UserFunction {
     /// PHP-compatible default renderings used only by cold declaration
     /// diagnostics. Methods without rendered defaults allocate no sidecar.
     pub(crate) parameter_default_diagnostics: Option<Box<[Option<Box<str>>]>>,
+    /// Default-value expressions retained for `ReflectionParameter::
+    /// getDefaultValue()`; functions without defaults allocate no sidecar.
+    pub(crate) parameter_defaults: Option<Box<[Option<ParameterDefault>]>>,
+}
+
+/// A user parameter's default expression with the lexical scope needed to
+/// evaluate it on demand.
+#[derive(Debug, Clone)]
+pub struct ParameterDefault {
+    pub expression: Box<crate::parser::Expr>,
+    pub evaluation_scope: Rc<AttributeEvaluationScope>,
+    pub source_file: String,
 }
 
 pub(crate) struct TraitClassScopeCache {
