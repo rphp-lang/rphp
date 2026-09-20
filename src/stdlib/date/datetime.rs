@@ -1731,7 +1731,7 @@ pub(crate) fn fn_strtotime(
     if input.trim().is_empty() {
         ret!(rv, Value::bool(false));
     }
-    let base_timestamp = match (unsafe { (*ed).num_args > 1 }).then(|| arg!(ed, 1)) {
+    let base_timestamp = match arg_opt!(ed, 1) {
         None => super::current_timestamp(),
         Some(value) if value.dereferenced().value_type() == ValueType::Null => {
             super::current_timestamp()
