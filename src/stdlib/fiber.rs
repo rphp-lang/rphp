@@ -240,18 +240,6 @@ fn fiber_suspend(
         fiber_error(eg, "Cannot suspend in a force-closed fiber");
         return Ok(());
     }
-    // Generator advancement currently owns a detached VM frame through a
-    // synchronous Rust handler. Letting the Fiber unwind that handler would
-    // retain a pointer to a frame the generator cleanup has already popped.
-    // Reject this explicit follow-up boundary safely until generator
-    // continuations participate in the shared suspended-call protocol.
-    if eg.active_generator.is_some() {
-        fiber_error(
-            eg,
-            "Suspending a fiber through a generator is not supported by this runtime",
-        );
-        return Ok(());
-    }
     let value = argument(execute_data, 1);
     let value = if value.value_type() == ValueType::Undef {
         Value::null()

@@ -47,10 +47,29 @@ pub(crate) enum FiberReturnState {
     Fatal,
 }
 
-struct FiberSuspension {
-    value: Value,
-    frame: *mut ExecuteData,
-    return_value: *mut Value,
+enum FiberSuspension {
+    Direct {
+        value: Value,
+        frame: *mut ExecuteData,
+        return_value: *mut Value,
+    },
+    Generator {
+        value: Value,
+        frame: *mut ExecuteData,
+        generator: Value,
+        function: *const crate::vm::function::FunctionCommon,
+        public_num_args: u32,
+        arguments: Vec<Value>,
+        return_value: *mut Value,
+    },
+}
+
+impl FiberSuspension {
+    fn value(&self) -> &Value {
+        match self {
+            Self::Direct { value, .. } | Self::Generator { value, .. } => value,
+        }
+    }
 }
 
 struct FiberContext {
@@ -182,7 +201,15 @@ impl FiberRuntime {
         }
         push(&context.result);
         if let Some(suspension) = &context.suspension {
-            push(&suspension.value);
+            push(suspension.value());
+            if let FiberSuspension::Generator { generator, .. } = suspension {
+                push(generator);
+            }
+            if let FiberSuspension::Generator { arguments, .. } = suspension {
+                for argument in arguments {
+                    push(argument);
+                }
+            }
         }
         let (state_children, frames) = context.state.cycle_snapshot();
         children.extend(state_children);
@@ -210,6 +237,7 @@ impl FiberRuntime {
     /// empty fatal is an internal unwind sidecar consumed only by `run()`.
     pub(crate) fn suspend(
         runtime: *mut Self,
+        eg: &mut ExecutorGlobals,
         internal_frame: *mut ExecuteData,
         return_value: *mut Value,
         value: Value,
@@ -239,7 +267,125 @@ impl FiberRuntime {
                     "Cannot suspend outside of a fiber".to_string(),
                 ));
             }
-            let mut ancestor = frame;
+            let active_generator = eg.active_generator.clone();
+            let (resume_frame, generator_call) = if let Some(active_generator) = active_generator {
+                let mut generator_method =
+                    eg.trace_caller(frame as usize, (*frame).prev_execute_data);
+                let mut generator_receiver = None;
+                for _ in 0..64 {
+                    if generator_method.is_null() {
+                        break;
+                    }
+                    let function = (*generator_method).func;
+                    if !function.is_null()
+                        && (*function).fn_type == FunctionType::Internal
+                        && let Some(generator) = (*generator_method)
+                            .cv(0)
+                            .as_object()
+                            .and_then(|object| object.generator.clone())
+                    {
+                        generator_receiver = Some(((*generator_method).cv(0).clone(), generator));
+                        break;
+                    }
+                    generator_method = eg.trace_caller(
+                        generator_method as usize,
+                        (*generator_method).prev_execute_data,
+                    );
+                }
+                if generator_method.is_null() || generator_receiver.is_none() {
+                    return Err(VmError::Fatal(
+                        "Suspended generator is missing its internal caller".to_string(),
+                    ));
+                }
+                let resume_frame = eg.trace_caller(
+                    generator_method as usize,
+                    (*generator_method).prev_execute_data,
+                );
+                if resume_frame.is_null() {
+                    return Err(VmError::Fatal(
+                        "Suspended generator is missing its Fiber caller".to_string(),
+                    ));
+                }
+                let (generator, root_generator) =
+                    generator_receiver.expect("checked Generator method receiver");
+                let result_slot = if return_value.is_null() {
+                    None
+                } else {
+                    let slots = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+                    let offset = return_value.offset_from(slots);
+                    let total = ((*frame).num_cvs + (*frame).num_temps) as isize;
+                    if offset < 0 || offset >= total {
+                        return Err(VmError::Fatal(
+                            "Fiber::suspend() result is outside the generator frame".to_string(),
+                        ));
+                    }
+                    Some(offset as u32)
+                };
+                let mut current = Some(root_generator);
+                let mut seen = std::collections::HashSet::new();
+                let mut reached_active = false;
+                while let Some(generator) = current {
+                    let identity = std::rc::Rc::as_ptr(&generator) as usize;
+                    if !seen.insert(identity) {
+                        break;
+                    }
+                    let is_active = std::rc::Rc::ptr_eq(&generator, &active_generator);
+                    let next = {
+                        let mut generator = generator.borrow_mut();
+                        // Every public generator in the delegation chain is
+                        // observably Running until the owning Fiber resumes.
+                        // This preserves the canonical re-entrancy error even
+                        // though only the active leaf owns a materialized
+                        // Fiber::suspend() result slot.
+                        generator.state = crate::vm::generator::GeneratorState::Running;
+                        if is_active {
+                            generator.fiber_suspend_result_slot = result_slot;
+                            generator.fiber_suspended = true;
+                            None
+                        } else {
+                            match generator.delegate.as_ref() {
+                                Some(crate::vm::generator::YieldFromDelegate::Generator(
+                                    delegate,
+                                    _,
+                                )) => Some(delegate.clone()),
+                                Some(crate::vm::generator::YieldFromDelegate::Array(_, _, _))
+                                | Some(crate::vm::generator::YieldFromDelegate::Iterator(_))
+                                | None => None,
+                            }
+                        }
+                    };
+                    if is_active {
+                        reached_active = true;
+                        break;
+                    }
+                    current = next;
+                }
+                if !reached_active {
+                    return Err(VmError::Fatal(
+                        "Suspended generator is outside its public delegation chain".to_string(),
+                    ));
+                }
+                let function = (*generator_method).func;
+                let public_num_args = (*generator_method).num_args;
+                let storage_num_args = (*generator_method).num_cvs;
+                let mut arguments = Vec::with_capacity(storage_num_args as usize);
+                for index in 0..storage_num_args {
+                    arguments.push((*generator_method).cv(index).clone_closure_capture());
+                }
+                (
+                    resume_frame,
+                    Some((
+                        generator,
+                        function,
+                        public_num_args,
+                        arguments,
+                        (*generator_method).return_value,
+                    )),
+                )
+            } else {
+                (frame, None)
+            };
+            let mut ancestor = resume_frame;
             while !ancestor.is_null() && ancestor != context.boundary_execute_data {
                 ancestor = (*ancestor).prev_execute_data;
             }
@@ -251,13 +397,36 @@ impl FiberRuntime {
             }
             assert_eq!(context.status, FiberStatus::Running);
             assert!(context.suspension.is_none());
-            context.suspension = Some(FiberSuspension {
-                value,
-                frame,
-                return_value,
-            });
-            // The internal call is complete from the resumed callback's point
-            // of view. Resume writes its input into the result slot first.
+            context.suspension = Some(
+                if let Some((
+                    generator,
+                    function,
+                    public_num_args,
+                    arguments,
+                    generator_return_value,
+                )) = generator_call
+                {
+                    FiberSuspension::Generator {
+                        value,
+                        frame: resume_frame,
+                        generator,
+                        function,
+                        public_num_args,
+                        arguments,
+                        return_value: generator_return_value,
+                    }
+                } else {
+                    FiberSuspension::Direct {
+                        value,
+                        frame,
+                        return_value,
+                    }
+                },
+            );
+            // The direct call is complete from the resumed callback's point
+            // of view. A generator call instead re-enters its still-pending
+            // internal method, which consumes the Fiber input from its saved
+            // activation before advancing this outer call site.
             (*frame).opline = (*frame).opline.add(1);
             Err(VmError::Fatal(String::new()))
         }
@@ -317,6 +486,7 @@ impl FiberRuntime {
             }
 
             (*context).state.exchange(eg);
+            let mut generator_call = None;
             let entry = if let FiberInput::Start(arguments) = input {
                 let result = &mut (*context).result as *mut Value;
                 let frame = match initialize_suspended_callback_frame(
@@ -352,21 +522,59 @@ impl FiberRuntime {
                     .suspension
                     .take()
                     .expect("resumed Fiber must retain its suspension boundary");
-                match input {
-                    FiberInput::Resume(value) => {
-                        write_coroutine_result(suspension.frame, suspension.return_value, value);
-                        suspension.frame
+                match (suspension, input) {
+                    (
+                        FiberSuspension::Direct {
+                            frame,
+                            return_value,
+                            ..
+                        },
+                        FiberInput::Resume(value),
+                    ) => {
+                        write_coroutine_result(frame, return_value, value);
+                        frame
                     }
-                    FiberInput::Throw(exception) => {
-                        inject_suspended_exception(eg, suspension.frame, exception)?
-                            .unwrap_or(suspension.frame)
+                    (FiberSuspension::Direct { frame, .. }, FiberInput::Throw(exception)) => {
+                        inject_suspended_exception(eg, frame, exception)?.unwrap_or(frame)
                     }
-                    FiberInput::ForceClose(exit) => {
+                    (FiberSuspension::Direct { frame, .. }, FiberInput::ForceClose(exit)) => {
                         (*context).force_closing = true;
-                        inject_suspended_exception(eg, suspension.frame, exit)?
-                            .unwrap_or(suspension.frame)
+                        inject_suspended_exception(eg, frame, exit)?.unwrap_or(frame)
                     }
-                    FiberInput::Start(_) => unreachable!(),
+                    (
+                        FiberSuspension::Generator {
+                            frame,
+                            generator,
+                            function,
+                            public_num_args,
+                            arguments,
+                            return_value,
+                            ..
+                        },
+                        input,
+                    ) => {
+                        let generator = generator
+                            .as_object()
+                            .and_then(|object| object.generator.clone())
+                            .expect("Fiber generator suspension retains its receiver");
+                        let input = match input {
+                            FiberInput::Resume(value) => {
+                                crate::vm::generator::GeneratorFiberInput::Resume(value)
+                            }
+                            FiberInput::Throw(exception) => {
+                                crate::vm::generator::GeneratorFiberInput::Throw(exception)
+                            }
+                            FiberInput::ForceClose(exit) => {
+                                (*context).force_closing = true;
+                                crate::vm::generator::GeneratorFiberInput::ForceClose(exit)
+                            }
+                            FiberInput::Start(_) => unreachable!(),
+                        };
+                        generator.borrow_mut().fiber_resume_input = Some(input);
+                        generator_call = Some((function, public_num_args, arguments, return_value));
+                        frame
+                    }
+                    (_, FiberInput::Start(_)) => unreachable!(),
                 }
             };
 
@@ -380,6 +588,23 @@ impl FiberRuntime {
             (&mut *runtime).active.push(identity);
             let execution = if eg.exception.is_some() {
                 Ok(())
+            } else if let Some((function, public_num_args, arguments, return_value)) =
+                generator_call
+            {
+                match crate::vm::execute::resume_suspended_generator_call(
+                    eg,
+                    entry,
+                    function,
+                    public_num_args,
+                    arguments,
+                    return_value,
+                ) {
+                    Ok(Some(entry)) if eg.exception.is_none() => {
+                        execute_coroutine_frame(eg, entry, boundary)
+                    }
+                    Ok(Some(_)) | Ok(None) => Ok(()),
+                    Err(error) => Err(error),
+                }
             } else {
                 execute_coroutine_frame(eg, entry, boundary)
             };
@@ -391,7 +616,7 @@ impl FiberRuntime {
                 // a self-owned cycle from an unrelated external alias.
                 let mut owned_references =
                     usize::from((*context).suspension.as_ref().is_some_and(|suspension| {
-                        suspension.value.object_identity() == Some(identity)
+                        suspension.value().object_identity() == Some(identity)
                     }));
                 let mut scan_frame = eg.current_execute_data.get();
                 while !scan_frame.is_null() {
@@ -446,7 +671,7 @@ impl FiberRuntime {
                 );
                 (*context).status = FiberStatus::Suspended;
                 return Ok(FiberRunOutcome {
-                    value: suspension.value.clone(),
+                    value: suspension.value().clone(),
                     failure: None,
                 });
             }

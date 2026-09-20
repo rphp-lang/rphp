@@ -2373,7 +2373,7 @@ impl ExecutorGlobals {
         let runtime = self.fiber_runtime_ptr();
         // The active Fiber and its pinned context remain live until the
         // suspension sidecar unwinds to run_fiber().
-        fiber::FiberRuntime::suspend(runtime, frame, return_value, value)
+        fiber::FiberRuntime::suspend(runtime, self, frame, return_value, value)
     }
 
     pub(crate) fn dynamic_scope_owner(&self, frame: usize) -> usize {

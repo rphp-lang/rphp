@@ -2330,16 +2330,22 @@ struct SuspendedGeneratorFrameSnapshot {
 #[inline]
 fn snapshot_suspended_generator_frame(
     frame: *mut ExecuteData,
-    op_array: &crate::compiler::OpArray,
+    known_op_array: Option<&crate::compiler::OpArray>,
     advance_ip: bool,
     mut cv_values: Vec<Value>,
     mut tmp_values: Vec<Value>,
 ) -> SuspendedGeneratorFrameSnapshot {
-    // SAFETY: both callers pass the currently active generator frame and its
-    // owning immutable op-array. CV/TMP bounds are read from that frame, and
-    // its opline remains inside the op-array until the snapshot is complete.
+    // SAFETY: callers pass the currently active generator frame. The ordinary
+    // yield paths also provide its owning immutable op-array; Fiber suspension
+    // recovers the same op-array from the materialized frame. CV/TMP bounds are
+    // read from that frame, and its opline remains inside the op-array until
+    // the snapshot is complete.
     unsafe {
         let frame = &*frame;
+        let op_array = match known_op_array {
+            Some(op_array) => op_array,
+            None => frame.op_array(),
+        };
         cv_values.clear();
         cv_values.extend(
             (0..frame.num_cvs).map(|index| frame.cv(index).clone_closure_capture()),
@@ -2446,7 +2452,7 @@ fn op_yield<'a>(
 
         let snapshot = snapshot_suspended_generator_frame(
             frame,
-            op_array,
+            Some(op_array),
             true,
             std::mem::take(&mut gen_data.cv_values),
             std::mem::take(&mut gen_data.tmp_values),
@@ -2677,7 +2683,7 @@ fn suspend_yield_from<'a>(
         data.last_yielded_key = data.key.clone_closure_capture();
         let snapshot = snapshot_suspended_generator_frame(
             frame,
-            op_array,
+            Some(op_array),
             false,
             std::mem::take(&mut data.cv_values),
             std::mem::take(&mut data.tmp_values),

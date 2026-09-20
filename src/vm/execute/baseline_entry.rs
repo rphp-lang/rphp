@@ -19,6 +19,14 @@ fn finish_request_shutdown(
         return Err(error);
     }
     unsafe { cleanup_frame_slots(frame) };
+    // Releasing the root symbol table may expose a Fiber/Generator cycle that
+    // was still legitimately live during the pre-frame object-store pass.
+    // Close those newly unreachable contexts before static roots are retired,
+    // matching Zend's request-shutdown ordering without requiring an explicit
+    // userland gc_collect_cycles().
+    if let Err(error) = run_request_cycle_destructors(eg, frame) {
+        return Err(error);
+    }
     if let Err(error) = run_request_static_destructors(eg, frame) {
         crate::value::end_object_handle_request();
         return Err(error);
@@ -2013,6 +2021,7 @@ enum GeneratorFrameInput {
     SyntheticThrow(Value),
     Propagate(Value),
     YieldFromReturn(Value),
+    FiberResume(crate::vm::generator::GeneratorFiberInput),
 }
 
 enum GeneratorPropagation {
@@ -2098,6 +2107,65 @@ pub(crate) fn throw_into_generator(
     exception: Value,
 ) -> Result<GeneratorResumeOutcome, VmError> {
     resume_generator_with_input(eg, gen_ref, Value::null(), Some(exception))
+}
+
+/// Resume the generator method that was interrupted when its active leaf
+/// called `Fiber::suspend()`. The public root deliberately remains Running
+/// while the Fiber is suspended, so only the Fiber-owned pending input may
+/// cross this boundary; unrelated user calls retain the re-entrancy error.
+pub(crate) fn resume_generator_from_fiber(
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+    input: crate::vm::generator::GeneratorFiberInput,
+) -> Result<GeneratorResumeOutcome, VmError> {
+    use crate::vm::generator::{GeneratorState, YieldFromDelegate};
+
+    let mut probe = Some(gen_ref.clone());
+    let mut seen_probe = std::collections::HashSet::new();
+    let mut has_suspended_leaf = false;
+    while let Some(generator) = probe {
+        if !seen_probe.insert(generator_identity(&generator)) {
+            break;
+        }
+        let generator = generator.borrow();
+        if generator.fiber_suspended {
+            has_suspended_leaf = true;
+            break;
+        }
+        probe = match generator.delegate.as_ref() {
+            Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate.clone()),
+            Some(YieldFromDelegate::Array(_, _, _))
+            | Some(YieldFromDelegate::Iterator(_))
+            | None => None,
+        };
+    }
+    if !has_suspended_leaf {
+        return Err(VmError::Fatal(
+            "Fiber-owned generator continuation has no suspended activation".into(),
+        ));
+    }
+    if matches!(input, crate::vm::generator::GeneratorFiberInput::ForceClose(_)) {
+        let mut current = Some(gen_ref.clone());
+        let mut seen = std::collections::HashSet::new();
+        while let Some(generator) = current {
+            if !seen.insert(generator_identity(&generator)) {
+                break;
+            }
+            generator.borrow_mut().force_closing = true;
+            current = match generator.borrow().delegate.as_ref() {
+                Some(YieldFromDelegate::Generator(delegate, _)) => Some(delegate.clone()),
+                Some(YieldFromDelegate::Array(_, _, _))
+                | Some(YieldFromDelegate::Iterator(_))
+                | None => None,
+            };
+        }
+    }
+    resume_generator_delegation(
+        eg,
+        gen_ref,
+        GeneratorFrameInput::FiberResume(input),
+        false,
+    )
 }
 
 /// Retire a suspended generator whose last userland owner is being released.
@@ -2352,7 +2420,7 @@ fn resume_generator_with_input(
     }
 
     let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
-    restore_yield_send_value(frame, gen_ref, send_value);
+    restore_generator_resume_value(frame, gen_ref, None, send_value);
     execute_resumed_generator_frame(
         eg,
         gen_ref,
@@ -2379,6 +2447,11 @@ fn resume_generator_delegation(
     let mut parents: Vec<GeneratorRef> = Vec::new();
     let mut active_delegates = ActiveGeneratorChain::new();
     let mut propagation: Option<GeneratorPropagation> = None;
+    // Once a Fiber owns this continuation, every Running parent in the
+    // yield-from chain belongs to the same resume operation. Completion or an
+    // exception replaces the leaf input while propagating upward, but must
+    // not accidentally re-enable the public re-entrancy rejection mid-chain.
+    let fiber_owned_resume = matches!(&input, GeneratorFrameInput::FiberResume(_));
 
     loop {
         if let Some(outcome) = propagation.take() {
@@ -2563,6 +2636,7 @@ fn resume_generator_delegation(
                 propagation = Some(GeneratorPropagation::Completed);
                 continue;
             }
+            GeneratorState::Running if fiber_owned_resume => {}
             GeneratorState::Running => {
                 return Err(VmError::Fatal(
                     "Cannot resume an already running generator".into(),
@@ -2591,7 +2665,9 @@ fn resume_generator_delegation(
                 ));
                 continue;
             }
-            if mode == crate::vm::generator::YieldFromGeneratorMode::Traversable {
+            if mode == crate::vm::generator::YieldFromGeneratorMode::Traversable
+                && !fiber_owned_resume
+            {
                 if matches!(
                     &input,
                     GeneratorFrameInput::Throw(_)
@@ -2661,7 +2737,9 @@ fn resume_generator_delegation(
                         }
                     }
                 }
-                GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => {
+                GeneratorFrameInput::Send(_)
+                | GeneratorFrameInput::YieldFromReturn(_)
+                | GeneratorFrameInput::FiberResume(_) => {
                     if position >= entries.len() {
                         current.borrow_mut().ip_offset += 1;
                         match execute_generator_frame_input(
@@ -2742,7 +2820,9 @@ fn resume_generator_delegation(
                         }
                     }
                 }
-                GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => {
+                GeneratorFrameInput::Send(_)
+                | GeneratorFrameInput::YieldFromReturn(_)
+                | GeneratorFrameInput::FiberResume(_) => {
                     let step = yield_from_iterator_step(eg, &iterator, false)?;
                     if let Some(exception) = eg.exception.take() {
                         match execute_generator_frame_input(
@@ -2825,7 +2905,9 @@ fn execute_generator_frame_input(
         | GeneratorFrameInput::Propagate(exception) => {
             Some((exception.object_identity(), true))
         }
-        GeneratorFrameInput::Send(_) | GeneratorFrameInput::YieldFromReturn(_) => None,
+        GeneratorFrameInput::Send(_)
+        | GeneratorFrameInput::YieldFromReturn(_)
+        | GeneratorFrameInput::FiberResume(_) => None,
     };
     let saved_execute_data = eg.current_execute_data.get();
     let trace_frames = materialize_generator_trace_frames(eg, trace_parents, saved_execute_data);
@@ -2835,7 +2917,7 @@ fn execute_generator_frame_input(
     }
     let (injected_exception, seed_injected_trace, extend_injected_trace) = match input {
         GeneratorFrameInput::Send(value) => {
-            restore_yield_send_value(frame, gen_ref, value);
+            restore_generator_resume_value(frame, gen_ref, None, value);
             (None, false, false)
         }
         GeneratorFrameInput::Throw(exception) => (Some(exception), false, false),
@@ -2844,6 +2926,30 @@ fn execute_generator_frame_input(
         GeneratorFrameInput::YieldFromReturn(value) => {
             restore_yield_from_result(frame, gen_ref, value);
             (None, false, false)
+        }
+        GeneratorFrameInput::FiberResume(input) => {
+            let result_slot = {
+                let mut generator = gen_ref.borrow_mut();
+                generator.fiber_suspended = false;
+                generator.fiber_suspend_result_slot.take()
+            };
+            match input {
+                crate::vm::generator::GeneratorFiberInput::Resume(value) => {
+                    if let Some(result_slot) = result_slot {
+                        restore_generator_resume_value(
+                            frame,
+                            gen_ref,
+                            Some(result_slot),
+                            value,
+                        );
+                    }
+                    (None, false, false)
+                }
+                crate::vm::generator::GeneratorFiberInput::Throw(exception)
+                | crate::vm::generator::GeneratorFiberInput::ForceClose(exception) => {
+                    (Some(exception), false, false)
+                }
+            }
         }
     };
     let outcome = execute_resumed_generator_frame(
@@ -3067,19 +3173,25 @@ fn materialize_generator_frame(
 }
 
 #[inline(always)]
-fn restore_yield_send_value(
+fn restore_generator_resume_value(
     frame: *mut ExecuteData,
     gen_ref: &crate::vm::generator::GeneratorRef,
+    fiber_result_slot: Option<u32>,
     send_value: Value,
 ) {
     let gen_data = gen_ref.borrow();
-    if gen_data.ip_offset == 0 {
+    if fiber_result_slot.is_none() && gen_data.ip_offset == 0 {
         return;
     }
-    // SAFETY: materialize_generator_frame created this live frame from the
-    // same retained function and ip_offset snapshot. A yielding result slot
-    // is therefore inside its compiler-sized TMP envelope.
+    // SAFETY: materialize_generator_frame created this live frame from the same
+    // retained function and snapshot. The Fiber result slot was recorded from
+    // that exact activation; otherwise the immutable preceding Yield provides
+    // a compiler-sized result slot in the same TMP envelope.
     unsafe {
+        if let Some(result_slot) = fiber_result_slot {
+            frame_slot_set(frame, (*frame).slot_mut(result_slot), send_value);
+            return;
+        }
         let user = &*(gen_data.func as *const UserFunction);
         let yield_instruction = &user.op_array.instructions[gen_data.ip_offset - 1];
         if yield_instruction.opcode == crate::vm::opcode::OpCode::Yield
@@ -3368,6 +3480,8 @@ fn execute_resumed_generator_frame(
     } else {
         execute_ex(eg, frame)
     };
+    let fiber_suspended = matches!(&result, Err(VmError::Fatal(message)) if message.is_empty())
+        && gen_ref.borrow().fiber_suspended;
     let escaped_exception = eg.exception.take();
     if let Some(exception) = escaped_exception.as_ref()
         && exception.object_identity() != injected_exception_identity
@@ -3386,10 +3500,43 @@ fn execute_resumed_generator_frame(
         );
     }
 
+    if fiber_suspended {
+        let (cv_values, tmp_values) = {
+            let mut generator = gen_ref.borrow_mut();
+            (
+                std::mem::take(&mut generator.cv_values),
+                std::mem::take(&mut generator.tmp_values),
+            )
+        };
+        let snapshot = snapshot_suspended_generator_frame(
+            frame,
+            None,
+            false,
+            cv_values,
+            tmp_values,
+        );
+        let pending_finally_exceptions = eg
+            .finally_exceptions
+            .remove(&(frame as usize))
+            .unwrap_or_default();
+        let mut generator = gen_ref.borrow_mut();
+        generator.cv_values = snapshot.cv_values;
+        generator.tmp_values = snapshot.tmp_values;
+        generator.ip_offset = snapshot.ip_offset;
+        generator.pending_return_after_finally = snapshot.pending_return_after_finally;
+        generator.pending_finally_exceptions = pending_finally_exceptions;
+        // Running remains observable while the owning Fiber is suspended.
+        generator.state = crate::vm::generator::GeneratorState::Running;
+    }
+
     cleanup_detached_frame_chain(eg, frame, false)?;
     eg.current_execute_data.set(saved_execute_data);
     eg.active_generator = saved_active;
     if let Err(error) = result {
+        if fiber_suspended {
+            eg.exception = saved_exception;
+            return Err(error);
+        }
         close_failed_generator(gen_ref);
         return Err(error);
     }
@@ -3437,6 +3584,9 @@ fn close_failed_generator(gen_ref: &crate::vm::generator::GeneratorRef) {
     generator.cv_values.clear();
     generator.tmp_values.clear();
     generator.pending_finally_exceptions.clear();
+    generator.fiber_suspended = false;
+    generator.fiber_suspend_result_slot = None;
+    generator.fiber_resume_input = None;
 }
 
 /// A detached generator owns every frame above and including `root`. Normal
@@ -3564,6 +3714,78 @@ pub(crate) unsafe fn write_coroutine_result(
     if !return_value.is_null() {
         assert!(!frame.is_null());
         unsafe { frame_slot_set(frame, return_value, value) };
+    }
+}
+
+/// Recreate the Generator internal-method frame that was retired while a
+/// Fiber suspension unwound the synchronous Rust handler. The caller frame
+/// and its DoFcall stay live on the Fiber stack; rebuilding only the small
+/// internal frame lets the canonical handler finish its result/exception
+/// contract without re-running Init/Send opcodes or retaining stale pointers.
+pub(crate) fn resume_suspended_generator_call(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    function: *const FunctionCommon,
+    public_num_args: u32,
+    arguments: Vec<Value>,
+    return_value: *mut Value,
+) -> Result<Option<*mut ExecuteData>, VmError> {
+    // SAFETY: the suspension owns a stable registered Generator method and a
+    // still-live caller frame on the inactive Fiber stack. The captured slots
+    // were cloned before the original internal frame was retired.
+    unsafe {
+        let common = &*function;
+        if common.fn_type != FunctionType::Internal {
+            return Err(VmError::Fatal(
+                "Suspended Generator call is not an internal method".into(),
+            ));
+        }
+        let call = eg.vm_stack.push_call_frame(
+            function,
+            arguments.len() as u32,
+            public_num_args,
+            frame,
+            std::ptr::null_mut(),
+        );
+        (*call).return_value = return_value;
+        for (index, argument) in arguments.into_iter().enumerate() {
+            frame_slot_init(call, (*call).cv_mut(index as u32), argument);
+        }
+
+        let result_type = if return_value.is_null() {
+            OpType::Unused
+        } else {
+            (*(*frame).opline).result_type
+        };
+        if !return_value.is_null() {
+            frame_result_prepare_external_write(frame, return_value, result_type);
+        }
+        eg.current_execute_data.set(frame);
+        let internal = &*(function as *const super::function::InternalFunction);
+        let handler_result = (internal.handler)(call, return_value, eg);
+        eg.current_execute_data.set(frame);
+        if !return_value.is_null() {
+            frame_result_finish_external_write(frame, return_value, result_type);
+        }
+        let internal_exception = eg.exception.take();
+        if let Some(exception) = internal_exception.as_ref() {
+            attach_internal_call_trace_if_missing(exception, call, frame, eg);
+        }
+        cleanup_frame_slots(call);
+        pop_vm_call_frame(eg, call);
+
+        if let Some(exception) = internal_exception {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, _) => Some(new_frame),
+                ThrowResult::Unhandled(exception) => {
+                    eg.exception = Some(exception);
+                    None
+                }
+            });
+        }
+        handler_result?;
+        (*frame).opline = (*frame).opline.add(1);
+        Ok(Some(frame))
     }
 }
 

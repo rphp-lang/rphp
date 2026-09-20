@@ -22395,7 +22395,9 @@ fn resume_generator_method(
     send_value: Value,
 ) -> Result<(), VmError> {
     let saved_execute_data = eg.current_execute_data.replace(ed);
+    eg.publish_detached_trace_caller(ed as usize, saved_execute_data as usize);
     let outcome = crate::vm::execute::resume_generator(eg, gen_ref, send_value);
+    eg.discard_detached_trace_caller(ed as usize);
     eg.current_execute_data.set(saved_execute_data);
     match outcome? {
         crate::vm::execute::GeneratorResumeOutcome::Advanced => Ok(()),
@@ -22404,6 +22406,32 @@ fn resume_generator_method(
             Ok(())
         }
     }
+}
+
+/// Continue the one Generator internal method call that was left pending by
+/// a Fiber suspension. The Fiber runtime publishes input only on that method's
+/// receiver, so ordinary calls observing the same Running generator cannot
+/// consume or bypass the re-entrancy guard.
+fn resume_generator_fiber_continuation(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    gen_ref: &crate::vm::generator::GeneratorRef,
+) -> Result<bool, VmError> {
+    let Some(input) = gen_ref.borrow_mut().fiber_resume_input.take() else {
+        return Ok(false);
+    };
+    let saved_execute_data = eg.current_execute_data.replace(ed);
+    eg.publish_detached_trace_caller(ed as usize, saved_execute_data as usize);
+    let outcome = crate::vm::execute::resume_generator_from_fiber(eg, gen_ref, input);
+    eg.discard_detached_trace_caller(ed as usize);
+    eg.current_execute_data.set(saved_execute_data);
+    match outcome? {
+        crate::vm::execute::GeneratorResumeOutcome::Advanced => {}
+        crate::vm::execute::GeneratorResumeOutcome::Threw(exception) => {
+            eg.exception = Some(exception);
+        }
+    }
+    Ok(true)
 }
 
 #[cold]
@@ -22421,7 +22449,12 @@ fn fn_generator_current(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(ed, &gen_ref, eg)?;
+        if !resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            ensure_generator_started(ed, &gen_ref, eg)?;
+        }
+        if eg.exception.is_some() {
+            ret!(rv, Value::null());
+        }
         synchronize_aborted_generator_delegate(ed, &gen_ref, eg)?;
         let visible = visible_generator_delegate(&gen_ref);
         let val = visible.borrow().value.clone();
@@ -22436,7 +22469,12 @@ fn fn_generator_key(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(ed, &gen_ref, eg)?;
+        if !resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            ensure_generator_started(ed, &gen_ref, eg)?;
+        }
+        if eg.exception.is_some() {
+            ret!(rv, Value::null());
+        }
         synchronize_aborted_generator_delegate(ed, &gen_ref, eg)?;
         if has_completed_generator_delegate(&gen_ref) {
             ret!(rv, Value::null());
@@ -22459,6 +22497,9 @@ fn fn_generator_next(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
+        if resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            ret!(rv, Value::null());
+        }
         ensure_generator_started(ed, &gen_ref, eg)?;
         // Advance past current yield
         let state = gen_ref.borrow().state;
@@ -22488,7 +22529,12 @@ fn fn_generator_valid(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(ed, &gen_ref, eg)?;
+        if !resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            ensure_generator_started(ed, &gen_ref, eg)?;
+        }
+        if eg.exception.is_some() {
+            ret!(rv, Value::bool(false));
+        }
         synchronize_aborted_generator_delegate(ed, &gen_ref, eg)?;
         let is_valid = gen_ref.borrow().state != crate::vm::generator::GeneratorState::Completed;
         ret!(rv, Value::bool(is_valid));
@@ -22602,6 +22648,9 @@ fn fn_generator_rewind(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
+        if resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            ret!(rv, Value::null());
+        }
         let state = gen_ref.borrow().state;
         if state == crate::vm::generator::GeneratorState::Created {
             ensure_generator_started(ed, &gen_ref, eg)?;
@@ -22622,6 +22671,13 @@ fn fn_generator_send(
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
         let send_val = arg!(ed, 1).clone();
+
+        if resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            if eg.exception.is_some() {
+                ret!(rv, Value::null());
+            }
+            ret!(rv, gen_ref.borrow().value.clone());
+        }
 
         // PHP semantics: ensure_initialized first, then inject send value.
         // If Created: start generator (runs to first yield), THEN resume with send value.
@@ -22658,7 +22714,9 @@ fn fn_generator_get_return(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     if let Some(gen_ref) = get_generator_ref(ed) {
-        ensure_generator_started(ed, &gen_ref, eg)?;
+        if !resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            ensure_generator_started(ed, &gen_ref, eg)?;
+        }
         if eg.exception.is_some() {
             ret!(rv, Value::null());
         }
@@ -22699,6 +22757,12 @@ fn fn_generator_throw(
     }
 
     if let Some(gen_ref) = get_generator_ref(ed) {
+        if resume_generator_fiber_continuation(ed, eg, &gen_ref)? {
+            if eg.exception.is_some() {
+                ret!(rv, Value::null());
+            }
+            ret!(rv, gen_ref.borrow().value.clone());
+        }
         if gen_ref.borrow().state == crate::vm::generator::GeneratorState::Created {
             resume_generator_method(ed, eg, &gen_ref, Value::null())?;
             if eg.exception.is_some() {

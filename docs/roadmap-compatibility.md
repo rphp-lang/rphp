@@ -36,25 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The safety-bounded `fiber-native-cycle-finalization` checkpoint over
-`2d68171e` reduces supported failure debt from **155 to 150**, exact **+5/-0**.
-The 8,258-case supported ledger is **7,635/150/194/276 with three XFAIL**. The
-7,174-case stable core is **6,637/145/182/210**; Zend/lang reaches
-**5,167/137/115/180**, while strings/array preserves its exact 1,470-pass set
-at **1,470/8/67/30**.
+The `fiber-generator-continuation` checkpoint over `ebd4ed4f` reduces supported
+failure debt from **150 to 123**, exact **+27/-0**. The 8,258-case supported
+ledger is **7,662/123/194/276 with three XFAIL**. The 7,174-case stable core is
+**6,664/118/182/210**; Zend/lang reaches **5,194/110/115/180**, while
+strings/array preserves its exact 1,470-pass set at **1,470/8/67/30**.
 
-The shared runtime/GC slice traces native Fiber sidecars, force-closes
-unreachable Fiber cycles before destructor dispatch, preserves reference-owned
-destructor candidates and runs shutdown cycle destructors to a fixed point.
-Five Cargo configurations/all-targets, exact no-loss families,
-Composer/Symfony S0--S3, formatting, tooling, HTML data and unsafe gates are
-green.
+The shared runtime/VM slice resumes Fibers through direct and delegated
+Generator activations, preserves value/throw/force-close state without stale
+frames and collects cycles exposed only after root-slot cleanup. Five Cargo
+configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
+formatting and the unchanged unsafe ceiling are green.
 
-Continue the shared-cause supported-failure sweep from **150 to zero**. Keep
-the complete Date/DateTime surface and tokenizer/parser front-end work out of
-this stream. Select another 10--30 case runtime/VM/stdlib cluster from the
-current 137 Zend/lang failures, preserve the exact 5,167 and 1,470 parent pass
-sets, and keep aggregate performance optimization deferred by user direction.
+Continue the shared-cause supported-failure sweep from **123 to zero**. Keep
+the complete Date/DateTime surface and all tokenizer, lexer, parser, AST and
+other PHPStan front-end work out of this stream. Prefer the remaining
+internal-callback/destructor/tick Fiber cluster, preserve the exact 5,194 and
+1,470 parent pass sets, and keep aggregate performance optimization deferred
+by user direction.
+
+### Preceding native Fiber-cycle checkpoint
+
+The `fiber-native-cycle-finalization` checkpoint over `2d68171e` reduced
+supported failure debt from 155 to 150, exact +5/-0, by tracing Fiber-native
+sidecars and force-closing unreachable cycles in request-shutdown order.
 
 ### Preceding exception-handler checkpoint
 

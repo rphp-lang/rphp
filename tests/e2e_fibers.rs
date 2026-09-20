@@ -113,29 +113,140 @@ try {
 }
 
 #[test]
-fn generator_crossing_is_rejected_without_retaining_a_popped_frame() {
+fn generator_crossing_resumes_values_exceptions_and_force_close_without_stale_frames() {
     assert_eq!(
         run_php(
             r#"<?php
-$generator = (function () {
-    yield from (function () {
-        echo "generator\n";
-        Fiber::suspend();
+$generator = (function (): Generator {
+    $value = Fiber::suspend('value-ready');
+    echo "resumed:", $value, "\n";
+    yield 'value-done';
+})();
+$fiber = new Fiber(function () use ($generator): void {
+    var_dump($generator->current());
+    echo "value-callback\n";
+});
+var_dump($fiber->start());
+try { $generator->next(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+var_dump($fiber->resume('input'));
+
+$generator = (function (): Generator {
+    try {
+        Fiber::suspend('throw-ready');
+    } catch (RuntimeException $error) {
+        echo "caught:", $error->getMessage(), "\n";
+    }
+    yield 'throw-done';
+})();
+$fiber = new Fiber(function () use ($generator): void {
+    var_dump($generator->current());
+    echo "throw-callback\n";
+});
+var_dump($fiber->start());
+var_dump($fiber->throw(new RuntimeException('injected')));
+
+$generator = (function (): Generator {
+    try {
+        yield from (function (): Generator {
+            try {
+                Fiber::suspend('close-ready');
+                yield;
+            } finally {
+                echo "inner-finally\n";
+            }
+        })();
+    } finally {
+        echo "outer-finally\n";
+    }
+})();
+$fiber = new Fiber(function () use ($generator): void {
+    try {
+        $generator->current();
+    } finally {
+        echo "fiber-finally\n";
+    }
+});
+var_dump($fiber->start());
+unset($fiber);
+echo "done\n";
+"#,
+        ),
+        concat!(
+            "string(11) \"value-ready\"\n",
+            "Cannot resume an already running generator\n",
+            "resumed:input\n",
+            "string(10) \"value-done\"\n",
+            "value-callback\n",
+            "NULL\n",
+            "string(11) \"throw-ready\"\n",
+            "caught:injected\n",
+            "string(10) \"throw-done\"\n",
+            "throw-callback\n",
+            "NULL\n",
+            "string(11) \"close-ready\"\n",
+            "inner-finally\n",
+            "outer-finally\n",
+            "fiber-finally\n",
+            "done\n",
+        )
+    );
+}
+
+#[test]
+fn generator_fiber_continuation_crosses_traversable_delegates() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FiberIteratorAggregate implements IteratorAggregate {
+    public function getIterator(): Generator {
+        yield 'initial';
+        $input = Fiber::suspend('delegate-ready');
+        echo "delegate-resumed:$input\n";
+    }
+}
+function delegatedFiberGenerator(): Generator {
+    yield from new FiberIteratorAggregate();
+}
+$generator = delegatedFiberGenerator();
+$generator->rewind();
+$fiber = new Fiber(function () use ($generator): void {
+    $generator->next();
+});
+var_dump($fiber->start());
+try { $generator->next(); } catch (Error $error) { echo $error->getMessage(), "\n"; }
+var_dump($fiber->resume('delegate-input'));
+"#,
+        ),
+        concat!(
+            "string(14) \"delegate-ready\"\n",
+            "Cannot resume an already running generator\n",
+            "delegate-resumed:delegate-input\n",
+            "NULL\n",
+        )
+    );
+}
+
+#[test]
+fn request_shutdown_force_closes_a_fiber_suspended_in_a_generator() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$generator = (function (): Generator {
+    try {
+        Fiber::suspend('ready');
         yield;
-    })();
+    } finally {
+        echo "generator-finally\n";
+    }
 })();
 $fiber = new Fiber(function () use ($generator): void {
     $generator->current();
 });
-try {
-    $fiber->start();
-} catch (FiberError $error) {
-    echo get_class($error), "\n";
-}
-echo $fiber->isTerminated() ? "terminated\n" : "live\n";
+var_dump($fiber->start());
+echo "body-done\n";
 "#,
         ),
-        "generator\nFiberError\nterminated\n"
+        "string(5) \"ready\"\nbody-done\ngenerator-finally\n"
     );
 }
 

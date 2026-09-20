@@ -7,37 +7,43 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The safety-bounded `fiber-native-cycle-finalization` checkpoint over
-`2d68171e` adds **5 exact PHP 8.5 passes without loss**, reducing measured
-supported failures from **155 to 150**. Cycle collection now traces callback,
-result, suspended-stack, argument, generator and dynamic-variable values held
-by a Fiber's native sidecar. Unreachable Fibers are force-closed before user
-destructors, singleton request references preserve destructor reachability,
-and request shutdown reaches cyclic garbage created by another cycle
-destructor without losing the active global scope.
+The `fiber-generator-continuation` checkpoint over `ebd4ed4f` adds **27 exact
+PHP 8.5 passes without loss**, reducing measured supported failures from **150
+to 123**. A Fiber may now suspend through direct and delegated Generator
+activations, resume with values or exceptions, retain canonical Generator
+re-entrancy state, and force-close request-shutdown cycles without retaining
+stale VM-frame pointers. Root-slot cleanup also exposes newly unreachable
+Fiber/Generator cycles to a final shutdown collection pass.
 
-The 8,258-case supported ledger is **7,635 pass / 150 fail / 194 skip / 276
-unsupported / three XFAIL**. The stable 7,174-case core is **6,637 pass / 145
+The 8,258-case supported ledger is **7,662 pass / 123 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,664 pass / 118
 fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
-**5,167/137/115/180**, exact **+5/-0**; strings/array remains byte-identical at
+**5,194/110/115/180**, exact **+27/-0**; strings/array remains byte-identical at
 **1,470/8/67/30**. Five Cargo configurations and all-targets, exact no-loss,
-Composer/Symfony S0--S3, formatting, HTML data, PHPT runner tooling and the
-unsafe ratchet pass. Network-dependent tests run outside the restricted
-development sandbox. Performance remains deferred to the aggregate
-correctness-sweep boundary.
+Composer/Symfony S0--S3, formatting and the unchanged unsafe ceiling pass.
+Network-dependent tests run outside the restricted development sandbox.
+Performance remains deferred to the aggregate correctness-sweep boundary.
 
 SHA-256 evidence: candidate
-`92cca0a2d2995490342c5eabf3214c064f87e0387a44bc793bfdea14f5d1156f`;
+`59ee38fb351f5a93c4eb66f458992dd278110a406279757e1a32927b484d959a`;
 Zend/lang manifest/pass set
-`c1d8362c3d5f04ebd506d714805d17a1b8c7d94891584b482185c9d5e1dcc157` /
-`73c510d5c697ec6ea170575a074eb2bb56b63608a609f543d4abf7fe8723ff92`;
+`3111f237fae9964b12fa71f62b9d354a1d8e64ad15177acd41721592fe709eb8` /
+`8de9f7db0e6a2e7d9d2b4732ab9af70be98a2d3a573f19e70e9564a8ab55ef62`;
 strings/array manifest/pass set
-`c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
+`78454ba1ec2d1726a1704a3c492b613e24f32c9341f41e13461c721fdaf7962e` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
 
-The remaining Fiber failures that require suspending internal callbacks or
-generators are a separate runtime architecture boundary. Tokenizer/parser
-front-end work is also explicitly outside this stream.
+The remaining Fiber failures require continuation through internal callbacks,
+destructors, ticks or custom Iterators and remain a separate runtime boundary.
+Tokenizer, lexer, parser, AST and other PHPStan front-end work are explicitly
+owned by another stream and were not changed here.
+
+### Preceding native Fiber-cycle checkpoint
+
+The `fiber-native-cycle-finalization` checkpoint over `2d68171e` added five
+exact PHP 8.5 passes without loss and reduced supported failure debt from 155
+to 150. It traced Fiber-native sidecars and force-closed unreachable cycles in
+PHP-compatible request-shutdown order.
 
 ### Preceding exception-handler checkpoint
 

@@ -38,6 +38,15 @@ pub enum GeneratorState {
     Completed,
 }
 
+/// Value injected when the owning Fiber resumes a generator activation that
+/// stopped inside `Fiber::suspend()`. This is kept on the detached Generator
+/// sidecar instead of retaining a pointer into the materialized VM frame.
+pub(crate) enum GeneratorFiberInput {
+    Resume(Value),
+    Throw(Value),
+    ForceClose(Value),
+}
+
 /// A PHP Generator object.
 /// Stores a snapshot of the execution context so execution can be
 /// suspended at yield points and resumed later.
@@ -84,6 +93,15 @@ pub struct Generator {
     /// block. The request sidecar is keyed by the transient frame address, so
     /// its stack must travel with the generator snapshot across every yield.
     pub pending_finally_exceptions: Vec<Value>,
+    /// Result slot of the `Fiber::suspend()` call in the detached generator
+    /// snapshot. `None` means this generator is not the active leaf of a
+    /// Fiber-owned suspended delegation chain.
+    pub(crate) fiber_suspend_result_slot: Option<u32>,
+    pub(crate) fiber_suspended: bool,
+    /// Resume input is published only on the root Generator whose internal
+    /// method call was interrupted. External attempts to advance the same
+    /// Running generator therefore continue to receive the canonical error.
+    pub(crate) fiber_resume_input: Option<GeneratorFiberInput>,
     /// Rewind remains legal until execution advances beyond the first
     /// suspension point. An empty generator also completes while rewindable.
     pub rewindable: bool,
@@ -165,6 +183,9 @@ impl Generator {
             force_closing: false,
             pending_return_after_finally: false,
             pending_finally_exceptions: Vec::new(),
+            fiber_suspend_result_slot: None,
+            fiber_suspended: false,
+            fiber_resume_input: None,
             rewindable: true,
             indirectly_primed: false,
             implicit_key: 0,
@@ -222,6 +243,13 @@ impl Generator {
         }
         for value in &self.pending_finally_exceptions {
             visitor(value);
+        }
+        if let Some(input) = &self.fiber_resume_input {
+            match input {
+                GeneratorFiberInput::Resume(value)
+                | GeneratorFiberInput::Throw(value)
+                | GeneratorFiberInput::ForceClose(value) => visitor(value),
+            }
         }
         visitor(&self.return_value);
         if let Some(static_vars) = &self.closure_static_vars {
@@ -288,6 +316,7 @@ impl Drop for Generator {
         self.tmp_values.clear();
         self.extra_args.clear();
         self.pending_finally_exceptions.clear();
+        self.fiber_resume_input = None;
 
         while let Some(generator) = next {
             if Rc::strong_count(&generator) != 1 {
@@ -305,6 +334,7 @@ impl Drop for Generator {
             generator_data.tmp_values.clear();
             generator_data.extra_args.clear();
             generator_data.pending_finally_exceptions.clear();
+            generator_data.fiber_resume_input = None;
         }
     }
 }
