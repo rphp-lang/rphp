@@ -807,6 +807,34 @@ fn valid_scoped_option_group_is_classified_as_an_engine_limit() {
     );
 }
 
+#[test]
+fn inline_ungreedy_options_shape_quantifiers_without_runtime_flags() {
+    let re = Regex::new("(?U)<.*>", RegexFlags::default()).unwrap();
+    assert_eq!(re.captures("<aa> <bb>").unwrap().get(0).unwrap().end, 4);
+
+    let re = Regex::new("(?U)<.*?>", RegexFlags::default()).unwrap();
+    assert_eq!(re.captures("<aa> <bb>").unwrap().get(0).unwrap().end, 9);
+
+    let re = Regex::new("(?U:<.*>)-<.*>", RegexFlags::default()).unwrap();
+    assert!(re.is_match("<a>-<b> <c>"));
+
+    let mut flags = RegexFlags::default();
+    flags.ungreedy = true;
+    let re = Regex::new("(?-U)<.*>", flags).unwrap();
+    assert_eq!(re.captures("<aa> <bb>").unwrap().get(0).unwrap().end, 9);
+}
+
+#[test]
+fn nested_lazy_repetitions_deduplicate_paths_and_keep_the_last_capture() {
+    let re = php_regex("/(['\"])((.*(\\\\\\1)*)*)\\1/U");
+    let subject = "key='abc' tail";
+    let captures = re.captures(subject).unwrap();
+    assert_eq!(captures.get(0).unwrap().as_str(subject), "'abc'");
+    assert_eq!(captures.get(2).unwrap().as_str(subject), "abc");
+    assert_eq!(captures.get(3).unwrap().as_str(subject), "c");
+    assert!(captures.get(4).is_none());
+}
+
 // ── P2: Named backreferences ───────────────────────────────────────────
 
 #[test]

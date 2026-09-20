@@ -13,7 +13,7 @@
 //!
 //! Flags: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended/comments), `U` (ungreedy), `u` (UTF-8), `S` (study hint)
 
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
 mod linear;
@@ -283,7 +283,7 @@ impl Default for RegexCache {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub struct Match {
     pub start: usize,
     pub end: usize,
@@ -1516,7 +1516,7 @@ fn match_seq_from_with_group(
 /// One possible matcher continuation. Capture registers and the last MARK are
 /// part of the state: two paths ending at the same subject position are not
 /// interchangeable when PHP later publishes their captures.
-#[derive(Clone)]
+#[derive(Clone, PartialEq, Eq, Hash)]
 struct BacktrackState {
     end: usize,
     groups: Vec<Option<Match>>,
@@ -1601,37 +1601,27 @@ fn collect_match_states_from(
             if !ctx.budget.enter_recursion() {
                 return Vec::new();
             }
-            let mut repetitions = Vec::new();
-            let limit = max.unwrap_or(usize::MAX);
-            let mut pending = vec![(0usize, state)];
-            while let Some((current_reps, state)) = pending.pop() {
-                if current_reps >= *min {
-                    repetitions.push((current_reps, state.clone()));
-                }
-                if current_reps >= limit {
-                    continue;
-                }
-                if !ctx.budget.retain_quantifier_continuation() {
-                    break;
-                }
-                let current_end = state.end;
-                let next_states = collect_match_states_from(inner, state, ctx);
-                for next in next_states.into_iter().rev() {
-                    if next.end == current_end {
-                        continue;
-                    }
-                    pending.push((current_reps + 1, next));
-                }
-            }
-            if *greedy {
-                repetitions.sort_by(|a, b| b.0.cmp(&a.0));
+            let states = if match_states_can_branch(inner) {
+                collect_branching_quantifier_states(
+                    inner,
+                    *min,
+                    *max,
+                    *greedy,
+                    *possessive,
+                    state,
+                    ctx,
+                )
             } else {
-                repetitions.sort_by(|a, b| a.0.cmp(&b.0));
-            }
-            if *possessive {
-                repetitions.truncate(1);
-            }
-            let states = repetitions.into_iter().map(|(_, state)| state).collect();
+                collect_single_path_quantifier_states(
+                    inner,
+                    *min,
+                    *max,
+                    *greedy,
+                    *possessive,
+                    state,
+                    ctx,
+                )
+            };
             ctx.budget.leave_recursion();
             states
         }
@@ -1670,6 +1660,112 @@ fn collect_match_states_from(
             }
         }
     }
+}
+
+/// Whether collecting this node can publish more than one continuation from
+/// one input state. Keeping the common single-atom quantifier on a dedicated
+/// path avoids allocating a convergence set for ordinary capture patterns.
+fn match_states_can_branch(node: &Node) -> bool {
+    match node {
+        Node::Sequence(nodes) => nodes.iter().any(match_states_can_branch),
+        Node::Alternation(branches) => {
+            branches.len() > 1 || branches.iter().any(match_states_can_branch)
+        }
+        Node::Quantifier { .. } => true,
+        Node::Group { inner, .. } => match_states_can_branch(inner),
+        _ => false,
+    }
+}
+
+fn collect_single_path_quantifier_states(
+    inner: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    possessive: bool,
+    state: BacktrackState,
+    ctx: &mut MatchCtx,
+) -> Vec<BacktrackState> {
+    let limit = max.unwrap_or(usize::MAX);
+    let mut repetitions = Vec::new();
+    let mut current_reps = 0usize;
+    let mut current = state;
+    loop {
+        if current_reps >= min {
+            repetitions.push(current.clone());
+        }
+        if current_reps >= limit || !ctx.budget.retain_quantifier_continuation() {
+            break;
+        }
+        let current_end = current.end;
+        let mut next = collect_match_states_from(inner, current, ctx);
+        let Some(next) = next.pop() else {
+            break;
+        };
+        if next.end == current_end {
+            break;
+        }
+        current = next;
+        current_reps += 1;
+    }
+    if greedy {
+        repetitions.reverse();
+    }
+    if possessive {
+        repetitions.truncate(1);
+    }
+    repetitions
+}
+
+/// Nested alternatives and quantifiers can reach the same continuation
+/// through exponentially many partitions. Once repetition count, subject
+/// position, captures and MARK agree, every future decision is identical.
+#[cold]
+#[inline(never)]
+fn collect_branching_quantifier_states(
+    inner: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    possessive: bool,
+    state: BacktrackState,
+    ctx: &mut MatchCtx,
+) -> Vec<BacktrackState> {
+    let mut repetitions = Vec::new();
+    let limit = max.unwrap_or(usize::MAX);
+    let mut pending = vec![(0usize, state)];
+    let mut seen = HashSet::new();
+    while let Some((current_reps, state)) = pending.pop() {
+        if current_reps >= min {
+            repetitions.push((current_reps, state.clone()));
+        }
+        if current_reps >= limit {
+            continue;
+        }
+        if !ctx.budget.retain_quantifier_continuation() {
+            break;
+        }
+        let current_end = state.end;
+        let next_states = collect_match_states_from(inner, state, ctx);
+        for next in next_states.into_iter().rev() {
+            if next.end == current_end {
+                continue;
+            }
+            let continuation = (current_reps + 1, next);
+            if seen.insert(continuation.clone()) {
+                pending.push(continuation);
+            }
+        }
+    }
+    if greedy {
+        repetitions.sort_by(|a, b| b.1.end.cmp(&a.1.end).then_with(|| a.0.cmp(&b.0)));
+    } else {
+        repetitions.sort_by(|a, b| a.1.end.cmp(&b.1.end).then_with(|| b.0.cmp(&a.0)));
+    }
+    if possessive {
+        repetitions.truncate(1);
+    }
+    repetitions.into_iter().map(|(_, state)| state).collect()
 }
 
 /// Match remaining nodes in the rest slice.
@@ -2467,26 +2563,58 @@ impl Parser {
                 return Ok(Node::Sequence(Vec::new()));
             }
 
-            // PCRE scoped option groups such as `(?-i:...)` are valid syntax,
-            // but changing matcher flags for only one subtree is not yet an
-            // engine capability. Parse the body far enough to distinguish a
-            // valid unsupported construct from a malformed group. Public
-            // preg_* callers can then preserve the historical silent engine
-            // limitation without publishing PHP's compilation warning for a
-            // pattern that PCRE itself accepts.
+            // Ungreedy is a parse-time option: quantifier nodes retain their
+            // effective greediness, so both option-only `(?U)` and scoped
+            // `(?-U:...)` forms can be implemented without adding a flag
+            // check to the matcher hot path. Other scoped options need
+            // runtime flag isolation and remain an explicit engine limit.
             let option_start = self.pos;
             let mut saw_option = false;
+            let mut only_ungreedy = true;
+            let mut disable_options = false;
+            let mut ungreedy = None;
             while let Some(option) = self.peek() {
                 if matches!(option, 'i' | 'm' | 'n' | 'r' | 's' | 'x' | 'J' | 'U' | 'X') {
                     saw_option = true;
+                    if option == 'U' {
+                        ungreedy = Some(!disable_options);
+                    } else {
+                        only_ungreedy = false;
+                    }
                     self.advance();
                     continue;
                 }
                 if option == '-' {
+                    disable_options = true;
                     self.advance();
                     continue;
                 }
                 break;
+            }
+            if saw_option
+                && only_ungreedy
+                && let Some(ungreedy) = ungreedy
+            {
+                match self.peek() {
+                    Some(')') => {
+                        self.advance();
+                        self.flags.ungreedy = ungreedy;
+                        return Ok(Node::Sequence(Vec::new()));
+                    }
+                    Some(':') => {
+                        self.advance();
+                        let previous = self.flags.ungreedy;
+                        self.flags.ungreedy = ungreedy;
+                        let inner = self.parse_alternation();
+                        self.flags.ungreedy = previous;
+                        let inner = inner?;
+                        if self.advance() != Some(')') {
+                            return Err("Unterminated scoped PCRE option group".into());
+                        }
+                        return Ok(inner);
+                    }
+                    _ => {}
+                }
             }
             if saw_option && self.peek() == Some(':') {
                 self.advance();
