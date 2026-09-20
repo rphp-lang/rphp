@@ -2072,7 +2072,7 @@ fn fn_array_unique(
     for (key, value) in &entries {
         let mut duplicate = false;
         for previous in &accepted {
-            if sort_value_order_runtime(ed, eg, previous, value, flags)?.is_eq() {
+            if sort_value_order_runtime(ed, eg, previous, value, flags, None)?.is_eq() {
                 duplicate = true;
                 break;
             }
@@ -3489,7 +3489,14 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
     // the optional guard are owned snapshots, and every later access resolves
     // the raw slot again after user code may have rebound it.
     unsafe {
-        if let Some(a) = (&*arr_ptr).as_array() {
+        // Cross the PHP COW boundary before snapshots retain recursive array
+        // owners. Those internal handles must not force a second detach at
+        // writeback, which would strand self-references on the prior root.
+        if let Some(array_ptr) = (&mut *arr_ptr)
+            .as_array_mut()
+            .map(|array| array as *mut PhpArray)
+        {
+            let a = &*array_ptr;
             let original_identity = (&*arr_ptr).array_identity();
             let reentrant_guard = if a
                 .values()
@@ -3513,7 +3520,7 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
                 )
             {
                 stable_sort_checked(&mut entries, |left, right| {
-                    sort_value_order_runtime(ed, eg, left, right, flags)
+                    sort_value_order_runtime(ed, eg, left, right, flags, original_identity)
                 })?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -3526,7 +3533,7 @@ fn fn_sort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
             for value in entries {
                 new.push(array_projection_value(&value));
             }
-            *arr_ptr = Value::array(new);
+            *array_ptr = new;
             ret!(rv, Value::bool(true));
         } else {
             ret!(rv, Value::bool(false));
@@ -3540,7 +3547,11 @@ fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     // SAFETY: this is the same live-slot/snapshot discipline as fn_sort; no
     // derived reference survives a callback and writeback rechecks identity.
     unsafe {
-        if let Some(a) = (&*arr_ptr).as_array() {
+        if let Some(array_ptr) = (&mut *arr_ptr)
+            .as_array_mut()
+            .map(|array| array as *mut PhpArray)
+        {
+            let a = &*array_ptr;
             let original_identity = (&*arr_ptr).array_identity();
             let reentrant_guard = if a
                 .values()
@@ -3564,7 +3575,7 @@ fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 )
             {
                 stable_sort_checked(&mut entries, |left, right| {
-                    sort_value_order_runtime(ed, eg, left, right, flags)
+                    sort_value_order_runtime(ed, eg, left, right, flags, original_identity)
                         .map(std::cmp::Ordering::reverse)
                 })?;
                 if eg.exception.is_some() {
@@ -3578,7 +3589,7 @@ fn fn_rsort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             for value in entries {
                 new.push(array_projection_value(&value));
             }
-            *arr_ptr = Value::array(new);
+            *array_ptr = new;
             ret!(rv, Value::bool(true));
         } else {
             ret!(rv, Value::bool(false));
@@ -3852,6 +3863,7 @@ fn fn_array_multisort(
                     &column.entries[*left].1,
                     &column.entries[*right].1,
                     column.flags,
+                    None,
                 )?;
                 let ordering = if column.direction == SORT_DESC {
                     ordering.reverse()
@@ -16685,7 +16697,8 @@ pub(crate) fn report_diagnostic_from(
         eg.record_last_error(level, message, &file, line);
     }
     if !handled && eg.error_reporting & level != 0 {
-        eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+        let diagnostic = format!("\n{label}: {message} in {file} on line {line}\n");
+        write_php_output(eg, diagnostic.as_bytes(), (!ed.is_null()).then_some(ed))?;
     }
     Ok(handled)
 }
@@ -18603,6 +18616,7 @@ fn sort_value_order_runtime(
     left: &Value,
     right: &Value,
     flags: i64,
+    sort_root_identity: Option<usize>,
 ) -> Result<std::cmp::Ordering, VmError> {
     if eg.exception.is_some() {
         return Ok(std::cmp::Ordering::Equal);
@@ -18664,7 +18678,7 @@ fn sort_value_order_runtime(
                 flags & SORT_FLAG_CASE != 0,
             )
         }
-        _ => sort_regular_value_order_runtime(eg, left, right)?,
+        _ => sort_regular_value_order_runtime(eg, left, right, sort_root_identity)?,
     };
     Ok(ordering)
 }
@@ -18696,6 +18710,7 @@ fn sort_regular_value_order_runtime(
     eg: &mut ExecutorGlobals,
     left: &Value,
     right: &Value,
+    sort_root_identity: Option<usize>,
 ) -> Result<std::cmp::Ordering, VmError> {
     let left_value = left.dereferenced();
     let right_value = right.dereferenced();
@@ -18729,6 +18744,19 @@ fn sort_regular_value_order_runtime(
     match sort_value_order(left, right, SORT_REGULAR, eg.precision) {
         Ok(ordering) => Ok(ordering),
         Err(()) => {
+            // Zend temporarily clears the live hash index while sorting in
+            // place. A recursive comparison that reaches that same root sees
+            // an unavailable lookup and remains stable instead of reporting
+            // an ordinary recursive-array comparison error. Keep that
+            // special case local to the array currently being sorted; two
+            // independent recursive values must still raise the canonical
+            // nesting error.
+            if sort_root_identity.is_some_and(|identity| {
+                left.dereferenced().array_identity() == Some(identity)
+                    || right.dereferenced().array_identity() == Some(identity)
+            }) {
+                return Ok(std::cmp::Ordering::Equal);
+            }
             report_recursive_sort_comparison(eg);
             Ok(std::cmp::Ordering::Equal)
         }
@@ -20380,7 +20408,7 @@ fn var_dump_value_inner(
                                 out.push_str(&format!(
                                     "{}  uninitialized({})\n",
                                     prefix,
-                                    definition.type_hint.property_declaration_display_name()
+                                    definition.diagnostic_type_display_name()
                                 ));
                             }
                             continue;
@@ -25989,10 +26017,16 @@ fn call_resolved_with_values_from(
             capture_preentry_error_origin,
         );
     }
+    let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
+    let arity_is_valid = {
+        let signature = &resolved.common().sig;
+        num_args >= signature.required_num_args as usize
+            && (signature.is_variadic || num_args <= signature.public_arity() as usize)
+    };
     if capture_preentry_error_origin
+        && arity_is_valid
         && let Some(error) = scope_introspection_callback_error(resolved)
     {
-        let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
         crate::vm::execute::call_function_owned_iter_with_context_and_named_from(
             eg,
             logical_caller,
@@ -26018,11 +26052,9 @@ fn call_resolved_with_values_from(
         eg.exception = Some(error);
         return Ok(Value::null());
     }
-    if reject_scope_introspection_callback(eg, resolved) {
+    if arity_is_valid && reject_scope_introspection_callback(eg, resolved) {
         return Ok(Value::null());
     }
-
-    let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
     crate::vm::execute::call_function_owned_iter_with_context_and_named_from(
         eg,
         logical_caller,
@@ -29136,7 +29168,11 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
     // comparator are owned snapshots, and the slot is re-read only after the
     // callback returns, before any writeback.
     unsafe {
-        if let Some(php_arr) = (&*arr_ptr).as_array() {
+        if let Some(array_ptr) = (&mut *arr_ptr)
+            .as_array_mut()
+            .map(|array| array as *mut PhpArray)
+        {
+            let php_arr = &*array_ptr;
             let original_identity = (&*arr_ptr).array_identity();
             let reentrant_guard = if php_arr
                 .values()
@@ -29162,7 +29198,7 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
                 )
             {
                 stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
-                    sort_value_order_runtime(ed, eg, left, right, flags)
+                    sort_value_order_runtime(ed, eg, left, right, flags, original_identity)
                 })?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -29181,7 +29217,7 @@ fn fn_asort(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             if utf8_text_keys {
                 new_arr.mark_utf8_text_keys();
             }
-            *arr_ptr = Value::array(new_arr);
+            *array_ptr = new_arr;
             ret!(rv, Value::bool(true));
         }
     }
@@ -29199,7 +29235,11 @@ fn fn_arsort(
     // SAFETY: this mirrors fn_asort's snapshot/re-resolve discipline for the
     // reverse comparator and never retains a slot reference across user code.
     unsafe {
-        if let Some(php_arr) = (&*arr_ptr).as_array() {
+        if let Some(array_ptr) = (&mut *arr_ptr)
+            .as_array_mut()
+            .map(|array| array as *mut PhpArray)
+        {
+            let php_arr = &*array_ptr;
             let original_identity = (&*arr_ptr).array_identity();
             let reentrant_guard = if php_arr
                 .values()
@@ -29225,7 +29265,7 @@ fn fn_arsort(
                 )
             {
                 stable_sort_checked(&mut pairs, |(_, left), (_, right)| {
-                    sort_value_order_runtime(ed, eg, left, right, flags)
+                    sort_value_order_runtime(ed, eg, left, right, flags, original_identity)
                         .map(std::cmp::Ordering::reverse)
                 })?;
                 if eg.exception.is_some() {
@@ -29245,7 +29285,7 @@ fn fn_arsort(
             if utf8_text_keys {
                 new_arr.mark_utf8_text_keys();
             }
-            *arr_ptr = Value::array(new_arr);
+            *array_ptr = new_arr;
             ret!(rv, Value::bool(true));
         }
     }

@@ -226,7 +226,7 @@ fn comparator(receiver: &Value, eg: &ExecutorGlobals) -> Comparator {
     }
 }
 fn compare_values(left: &Value, right: &Value, eg: &mut ExecutorGlobals) -> Result<i64, VmError> {
-    sort_regular_value_order_runtime(eg, left, right).map(|order| match order {
+    sort_regular_value_order_runtime(eg, left, right, None).map(|order| match order {
         std::cmp::Ordering::Less => -1,
         std::cmp::Ordering::Equal => 0,
         std::cmp::Ordering::Greater => 1,

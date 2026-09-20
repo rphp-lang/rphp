@@ -388,7 +388,9 @@ fn parse_ini(source: &str, process_sections: bool, mode: i64) -> Result<PhpArray
         }
         if line.starts_with('[') {
             let Some(close) = find_section_end(line) else {
-                let message = if line.contains("${") {
+                let message = if line.contains("${") && !line.contains(":-") {
+                    "syntax error, unexpected end of file, expecting TC_FALLBACK or '}'"
+                } else if line.contains("${") {
                     "syntax error, unexpected end of file, expecting '}'"
                 } else {
                     "syntax error, unexpected end of file, expecting ']'"
@@ -981,5 +983,17 @@ mod tests {
         let error = parse_ini("a=1\rmalformed", false, INI_SCANNER_NORMAL).unwrap_err();
         assert_eq!(error.line, 2);
         assert_eq!(error.message, "syntax error, unexpected end of line");
+
+        let error = parse_ini("[${ \t", false, INI_SCANNER_NORMAL).unwrap_err();
+        assert_eq!(
+            error.message,
+            "syntax error, unexpected end of file, expecting TC_FALLBACK or '}'"
+        );
+
+        let error = parse_ini("[${value:-fallback", false, INI_SCANNER_NORMAL).unwrap_err();
+        assert_eq!(
+            error.message,
+            "syntax error, unexpected end of file, expecting '}'"
+        );
     }
 }

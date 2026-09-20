@@ -272,7 +272,8 @@ fn report_php_diagnostic(
         eg.record_last_error(level, message, file, line);
     }
     if !handled && report_builtin {
-        eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+        let diagnostic = format!("\n{label}: {message} in {file} on line {line}\n");
+        crate::stdlib::write_php_output(eg, diagnostic.as_bytes(), Some(frame))?;
     }
     Ok(())
 }

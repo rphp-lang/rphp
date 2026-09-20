@@ -7,33 +7,46 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-stdlib-remainder` checkpoint over `aaf4aa4b` adds **10 exact PHP
-8.5 passes without loss**. It completes the measured `number_format()`, binary
-`strval()`, request-local default-charset, locale collation/introspection,
-`system()`, resource/extension introspection and oversized `str_pad()`
-boundaries. The changes preserve binary provenance, active locale and live
-request resource state instead of substituting fixture-specific output.
+The `core-language-remainder` checkpoint over `6857e056` adds **10 exact PHP
+8.5 passes without loss**. It aligns deferred `never` arrow validation,
+decimal numeric-string comparison, recursive-array sorting identity, malformed
+INI diagnostics, callback arity precedence, dynamic-property evaluation order,
+buffered diagnostics, source-level property type spelling, PHP closing tags in
+line comments and NUL-terminated magic-call names.
 
-The stable 7,174-case core is **6,688 pass / 94 fail / 182 skip / 210
+The stable 7,174-case core is **6,698 pass / 84 fail / 182 skip / 210
 unsupported**, with no timeout or crash. Zend/lang reaches
-**5,210/94/115/180** and strings/array reaches **1,478/0/67/30**, exact
+**5,220/84/115/180** and strings/array remains **1,478/0/67/30**, exact
 **+10/-0** overall. Default Cargo tests, the focused contract across all five
-feature configurations/all-targets, exact no-loss, Composer/Symfony S0--S3,
-formatting, PHPT-runner and unsafe policy are green. Production unsafe
-inventory is **1,626 blocks / 288 functions**. Network tests run outside the
-restricted development sandbox. Performance remains deferred to the aggregate
-correctness-sweep boundary.
+feature configurations and all-targets, exact no-loss, Composer S0, formatting,
+PHPT-runner and unsafe policy are green. Production unsafe inventory is
+**1,626 blocks / 288 functions**. The restricted sandbox cannot rerun the
+network resolver or dependency-installing Symfony gates; their accepted parent
+S0--S3 evidence is retained and no exact core pass is lost. Performance remains
+deferred to the aggregate correctness-sweep boundary.
 
 SHA-256 evidence: candidate
-`080c7c3f1dfaeea19d75224c756d0e315ca6380cb030f8200a8e701514fb8686`;
-stable-core pass set
-`179685a9632dd5d74e66bfcd4f222e5e7273b700c0ab933915c6468c2f8113f5`;
-release focused manifest
-`297d8bb5385381ff6b3e4bcef1a8151e601a231c29a9209e1db4ce59a9c64bf7`.
+`62e1cfe3fcdf131680df97fccc731c3825456d4419ede618b9e24bba60e4634e`;
+Zend/lang manifest/pass set
+`0656e8f21a2b10f6f5513892d803e04d140b4734efcdc24632c91903b3176216` /
+`43bdc43d0d650522fb08cc234ef41f878a40f7b08f6f280c74fc0caf6b9d0767`;
+strings/array manifest/pass set
+`c6bb4cb2d7e740ed54a3455e5974328a22db98aaa2aaaae9262680652f2a29de` /
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
+focused manifest
+`f0bcf3b8bc3f22e554893b83d9afe0bb25af193b8fcdd36a1164f06795966934`.
 
 GC cycle ordering and Fiber continuation architecture remain separate lifetime
-boundaries. Date/DateTime and tokenizer/PHPStan front-end work remain outside
-this stream.
+boundaries. Phar and PCRE remain owned by their separate workstreams;
+Date/DateTime is available to the continuing core sweep.
+
+### Preceding core standard-library checkpoint
+
+The `core-stdlib-remainder` checkpoint over `aaf4aa4b` added 10 exact PHP 8.5
+passes without loss and moved the stable core to 6,688/94/182/210. It aligned
+numeric formatting, binary string projection, request-local HTML charset,
+locale behavior, process output, live resources, extension introspection and
+allocation diagnostics.
 
 ### Preceding runtime-finalization checkpoint
 

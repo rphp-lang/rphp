@@ -1285,7 +1285,14 @@ impl<'a> Lexer<'a> {
             }
             // Skip // and # line comments
             if self.starts_with(b"//") || self.src[self.pos] == b'#' {
-                while self.pos < self.src.len() && self.src[self.pos] != b'\n' {
+                // A PHP closing tag terminates a line comment as well as the
+                // current code segment. Leave it for the main token loop so
+                // trailing inline text remains executable output (including
+                // eval() source units without a following opening tag).
+                while self.pos < self.src.len()
+                    && self.src[self.pos] != b'\n'
+                    && !self.starts_with(b"?>")
+                {
                     self.pos += 1;
                 }
                 continue;
@@ -2128,6 +2135,26 @@ mod tests {
                 echo(2),
                 Token::Integer(2),
                 Token::Semicolon(2),
+                Token::Eof,
+            ]
+        );
+    }
+
+    #[test]
+    fn closing_tag_inside_line_comment_ends_the_php_segment() {
+        let tokens = Lexer::new("<?php echo 3; // comment ?>5")
+            .tokenize()
+            .unwrap();
+        assert_eq!(
+            tokens,
+            vec![
+                Token::OpenTag,
+                echo(1),
+                Token::Integer(3),
+                Token::Semicolon(1),
+                echo(1),
+                Token::StringLiteral("5".into()),
+                Token::Semicolon(1),
                 Token::Eof,
             ]
         );

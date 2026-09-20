@@ -1629,6 +1629,7 @@ impl Compiler {
                 object_type: OpType,
                 property: u16,
                 property_type: OpType,
+                deferred_property_fetch: Option<(Instruction, usize)>,
                 deferred_fetches: Vec<(Instruction, usize)>,
                 line: usize,
             },
@@ -1691,6 +1692,7 @@ impl Compiler {
                     object_type,
                     property,
                     property_type: OpType::Const,
+                    deferred_property_fetch: None,
                     deferred_fetches,
                     line: *line,
                 }
@@ -1703,12 +1705,14 @@ impl Compiler {
             } => {
                 let (object, object_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
-                let (property, property_type) = self.compile_dynamic_property_name(property);
+                let (property, property_type, deferred_property_fetch) =
+                    self.compile_assignment_dynamic_property_name(property);
                 WriteTarget::Object {
                     object,
                     object_type,
                     property,
                     property_type,
+                    deferred_property_fetch,
                     deferred_fetches,
                     line: *line,
                 }
@@ -1846,9 +1850,13 @@ impl Compiler {
                 object_type,
                 property,
                 property_type,
+                deferred_property_fetch,
                 deferred_fetches,
                 line,
             } => {
+                if let Some((fetch, line)) = deferred_property_fetch {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 for (fetch, line) in deferred_fetches {
                     self.push_instruction_at_line(fetch, line);
                 }
@@ -3534,6 +3542,7 @@ impl Compiler {
                         "function"
                     };
                     let message = match &self.return_type_context {
+                        ParamTypeHint::Never if *line == 0 => None,
                         ParamTypeHint::Never => Some(format!(
                             "A never-returning {subject} must not return"
                         )),
@@ -6097,8 +6106,9 @@ impl Compiler {
                         resolved_parent.as_deref(),
                         false,
                     )?;
+                    let diagnostic_type_hint = self.convert_type_hint(&prop.type_hint);
                     let type_hint = self.resolve_declared_property_type_hint(
-                        self.convert_type_hint(&prop.type_hint),
+                        diagnostic_type_hint.clone(),
                         &resolved_class,
                         resolved_parent.as_deref(),
                     );
@@ -6256,7 +6266,8 @@ impl Compiler {
                         type_hint_requires_reified_check(&prop.type_hint),
                     )
                     .with_source_location(&self.source_file, *class_line)
-                    .with_reflection_order(prop.line);
+                    .with_reflection_order(prop.line)
+                    .with_diagnostic_type_hint(diagnostic_type_hint);
                     if default_is_deferred {
                         definition.set_has_default(true);
                     }
@@ -6333,8 +6344,9 @@ impl Compiler {
                             promoted.line,
                         ));
                     }
+                    let diagnostic_type_hint = self.convert_type_hint(&promoted.type_hint);
                     let type_hint = self.resolve_declared_property_type_hint(
-                        self.convert_type_hint(&promoted.type_hint),
+                        diagnostic_type_hint.clone(),
                         &resolved_class,
                         resolved_parent.as_deref(),
                     );
@@ -6348,7 +6360,8 @@ impl Compiler {
                         property_is_readonly,
                         type_hint_requires_reified_check(&promoted.type_hint),
                     ).with_source_location(&self.source_file, *class_line)
-                    .with_reflection_order(promoted.line);
+                    .with_reflection_order(promoted.line)
+                    .with_diagnostic_type_hint(diagnostic_type_hint);
                     definition.attributes = self.compile_attributes_in_scope(
                         &promoted.attributes,
                         8,

@@ -161,7 +161,9 @@ fn sort(
     // None represents a published PHP exception, not an arbitrary ordering.
     let mut compare = |left: &(ArrayKey, Value), right: &(ArrayKey, Value)| {
         let result: Result<Option<Ordering>, VmError> = match kind {
-            Kind::Values => sort_value_order_runtime(ed, eg, &left.1, &right.1, flags).map(Some),
+            Kind::Values => {
+                sort_value_order_runtime(ed, eg, &left.1, &right.1, flags, None).map(Some)
+            }
             Kind::Keys => Ok(Some(
                 sort_key_order(&left.0, &right.0, flags, eg.precision, external)
                     .unwrap_or(Ordering::Equal),

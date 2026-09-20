@@ -320,7 +320,7 @@ fn property_array_auto_init_error(
             "Cannot auto-initialize an array inside property {}::${} of type {}",
             property_diagnostic_class_name(&definition.type_scope),
             definition.name,
-            definition.type_hint.property_declaration_display_name(),
+            definition.diagnostic_type_display_name(),
         )
     })
 }
@@ -523,7 +523,7 @@ fn property_incdec_overflow_message(
         overflow.action(),
         property_diagnostic_class_name(&definition.type_scope),
         definition.name,
-        definition.type_hint.property_declaration_display_name(),
+        definition.diagnostic_type_display_name(),
         overflow.boundary(),
     ))
 }
@@ -567,7 +567,7 @@ fn prepare_property_assignment_with_diagnostic(
         property_assignment_type_name(&value),
         property_diagnostic_class_name(&definition.type_scope),
         definition.name,
-        definition.type_hint.property_declaration_display_name()
+        definition.diagnostic_type_display_name()
     ))
 }
 
@@ -859,7 +859,7 @@ pub(crate) fn prepare_typed_property_reference_attachment(
             existing.type_hint.property_declaration_display_name(),
             property_diagnostic_class_name(&definition.declaring_class),
             definition.name,
-            definition.type_hint.property_declaration_display_name()
+            definition.diagnostic_type_display_name()
         ));
     }
     Ok(prepared)

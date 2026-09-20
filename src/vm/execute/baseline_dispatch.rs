@@ -404,6 +404,9 @@ enum RuntimeComparisonMode {
 fn comparison_numeric_pair(left: &Value, right: &Value) -> Option<(f64, f64)> {
     let left = left.dereferenced();
     let right = right.dereferenced();
+    if left.value_type() == ValueType::String && right.value_type() == ValueType::String {
+        return None;
+    }
     let uses_boolean_comparison = matches!(
         left.value_type(),
         ValueType::True | ValueType::False | ValueType::Null | ValueType::Undef
@@ -3885,7 +3888,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 } else if let Some((left, right)) = comparison_numeric_pair(op1, op2) {
                     left == right
                 } else if op1.as_str().is_some() && op2.as_str().is_some() {
-                    php_string_values_equal(op1, op2)
+                    php_loose_string_values_cmp(op1, op2) == std::cmp::Ordering::Equal
                 } else {
                     let result = prepared_comparison_result(
                         eg,
@@ -4228,7 +4231,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             .map_or(PHP_COMPARISON_UNORDERED, ordering),
                     )
                 } else if op1.as_str().is_some() && op2.as_str().is_some() {
-                    Some(ordering(php_string_values_cmp(op1, op2)))
+                    Some(ordering(php_loose_string_values_cmp(op1, op2)))
                 } else {
                     None
                 };
@@ -4546,7 +4549,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         _ => unreachable!(),
                     }
                 } else if op1.as_str().is_some() && op2.as_str().is_some() {
-                    let ordering = php_string_values_cmp(op1, op2);
+                    let ordering = php_loose_string_values_cmp(op1, op2);
                     match opline.opcode {
                         OpCode::IsEqual => ordering == std::cmp::Ordering::Equal,
                         OpCode::IsNotEqual => ordering != std::cmp::Ordering::Equal,

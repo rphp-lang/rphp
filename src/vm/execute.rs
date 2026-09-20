@@ -1056,10 +1056,11 @@ enum ReturnTypePreparation {
 }
 
 #[derive(Clone, Copy)]
-struct PhpNumericString {
+struct PhpNumericString<'a> {
     number: f64,
     integer: Option<i64>,
     uses_float_syntax: bool,
+    numeric: &'a str,
 }
 
 #[derive(Clone, Copy)]
@@ -1131,7 +1132,7 @@ fn scan_php_numeric_prefix(value: &str) -> Option<PhpNumericStringScan<'_>> {
 
 /// Parse the numeric prefix accepted by PHP arithmetic. The boolean reports
 /// whether only PHP ASCII whitespace remains after that prefix.
-fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
+fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString<'_>, bool)> {
     let scan = scan_php_numeric_prefix(value)?;
     let number = scan.numeric.parse::<f64>().ok()?;
     Some((
@@ -1141,6 +1142,7 @@ fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
                 .then(|| scan.numeric.parse::<i64>().ok())
                 .flatten(),
             uses_float_syntax: scan.uses_float_syntax,
+            numeric: scan.numeric,
         },
         scan.complete,
     ))
@@ -1149,26 +1151,73 @@ fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString, bool)> {
 /// Parse a complete PHP numeric string. The conversion boundary needs to
 /// distinguish an out-of-range decimal integer from float syntax such as
 /// `1e2` while rejecting leading-numeric strings with trailing data.
-fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString> {
+fn parse_php_numeric_string(value: &str) -> Option<PhpNumericString<'_>> {
     let (parsed, complete) = parse_php_numeric_prefix(value)?;
     complete.then_some(parsed)
 }
 
 #[inline]
+fn compare_decimal_integer_strings(left: &str, right: &str) -> std::cmp::Ordering {
+    #[inline]
+    fn parts(value: &str) -> (bool, &str) {
+        let (negative, magnitude) = match value.as_bytes().first() {
+            Some(b'-') => (true, &value[1..]),
+            Some(b'+') => (false, &value[1..]),
+            _ => (false, value),
+        };
+        let magnitude = magnitude.trim_start_matches('0');
+        if magnitude.is_empty() {
+            (false, "0")
+        } else {
+            (negative, magnitude)
+        }
+    }
+
+    let (left_negative, left_magnitude) = parts(left);
+    let (right_negative, right_magnitude) = parts(right);
+    match left_negative.cmp(&right_negative) {
+        std::cmp::Ordering::Less => std::cmp::Ordering::Greater,
+        std::cmp::Ordering::Greater => std::cmp::Ordering::Less,
+        std::cmp::Ordering::Equal => {
+            let magnitude = left_magnitude
+                .len()
+                .cmp(&right_magnitude.len())
+                .then_with(|| left_magnitude.cmp(right_magnitude));
+            if left_negative {
+                magnitude.reverse()
+            } else {
+                magnitude
+            }
+        }
+    }
+}
+
+#[inline]
 fn compare_php_numeric_strings(
-    left: PhpNumericString,
-    right: PhpNumericString,
+    left: PhpNumericString<'_>,
+    right: PhpNumericString<'_>,
 ) -> Option<std::cmp::Ordering> {
-    match (left.integer, right.integer) {
-        (Some(left), Some(right)) => Some(left.cmp(&right)),
-        _ => left.number.partial_cmp(&right.number),
+    if !left.uses_float_syntax && !right.uses_float_syntax {
+        match (left.integer, right.integer) {
+            (Some(left), Some(right)) => Some(left.cmp(&right)),
+            _ => {
+                let exact = compare_decimal_integer_strings(left.numeric, right.numeric);
+                Some(if exact == std::cmp::Ordering::Equal {
+                    left.numeric.cmp(right.numeric)
+                } else {
+                    exact
+                })
+            }
+        }
+    } else {
+        left.number.partial_cmp(&right.number)
     }
 }
 
 #[inline]
 fn compare_number_to_php_numeric_string(
     left: &Value,
-    right: PhpNumericString,
+    right: PhpNumericString<'_>,
 ) -> Option<std::cmp::Ordering> {
     match left.value_type() {
         ValueType::Long => right
@@ -5126,6 +5175,22 @@ fn php_string_values_cmp(left: &Value, right: &Value) -> std::cmp::Ordering {
 #[inline]
 fn php_string_values_equal(left: &Value, right: &Value) -> bool {
     php_string_values_cmp(left, right) == std::cmp::Ordering::Equal
+}
+
+#[inline]
+fn php_loose_string_values_cmp(left: &Value, right: &Value) -> std::cmp::Ordering {
+    let left_text = left.as_str().expect("string comparison requires strings");
+    let right_text = right.as_str().expect("string comparison requires strings");
+    match (
+        parse_php_numeric_string(left_text),
+        parse_php_numeric_string(right_text),
+    ) {
+        (Some(left_numeric), Some(right_numeric)) => {
+            compare_php_numeric_strings(left_numeric, right_numeric)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        }
+        _ => php_string_values_cmp(left, right),
+    }
 }
 
 #[inline]

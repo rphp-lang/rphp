@@ -1702,6 +1702,10 @@ pub struct PropertyDefinition {
     /// Reflection-only declaration metadata stays after all established
     /// property execution fields so their offsets remain stable.
     pub attributes: Vec<AttributeDefinition>,
+    /// Original source-level contract used only by diagnostics. Runtime type
+    /// checks keep the linked class name, while PHP error text preserves
+    /// relative spellings such as `self` and `parent`.
+    diagnostic_type_hint: Option<Box<ParamTypeHint>>,
 }
 
 impl PropertyDefinition {
@@ -1716,6 +1720,7 @@ impl PropertyDefinition {
         let type_scope = declaring_class.clone();
         Self {
             attributes: Vec::new(),
+            diagnostic_type_hint: None,
             name,
             default,
             visibility,
@@ -1750,6 +1755,7 @@ impl PropertyDefinition {
         let type_scope = declaring_class.clone();
         Self {
             attributes: Vec::new(),
+            diagnostic_type_hint: None,
             name,
             default,
             visibility,
@@ -1806,6 +1812,18 @@ impl PropertyDefinition {
     pub fn with_reflection_order(mut self, source_line: usize) -> Self {
         self.reflection_order = source_line;
         self
+    }
+
+    pub fn with_diagnostic_type_hint(mut self, type_hint: ParamTypeHint) -> Self {
+        self.diagnostic_type_hint = Some(Box::new(type_hint));
+        self
+    }
+
+    pub(crate) fn diagnostic_type_display_name(&self) -> String {
+        self.diagnostic_type_hint
+            .as_deref()
+            .unwrap_or(&self.type_hint)
+            .property_declaration_display_name()
     }
 
     const FINAL_FLAG: usize = 1usize << (usize::BITS - 1);
@@ -9697,6 +9715,34 @@ impl Compiler {
             return (self.add_literal(Value::string("Array")), OpType::Const);
         }
         self.compile_expr(property)
+    }
+
+    /// An undefined simple CV used as a dynamic property name is resolved by
+    /// the write opcode after the RHS has run. More complex name expressions
+    /// retain their ordinary left-to-right evaluation before the RHS.
+    fn compile_assignment_dynamic_property_name(
+        &mut self,
+        property: &Expr,
+    ) -> (u16, OpType, Option<(Instruction, usize)>) {
+        let Expr::Variable { name, line } = property else {
+            let (operand, operand_type) = self.compile_dynamic_property_name(property);
+            return (operand, operand_type, None);
+        };
+        let cv = self.resolve_cv(name);
+        if *line == 0 || name == "this" || self.definitely_defined_cvs.contains(&cv) {
+            return (cv, OpType::Cv, None);
+        }
+        let name_literal = self.add_literal(Value::string(name.clone()));
+        let result = self.alloc_tmp();
+        let mut fetch = Instruction::new(OpCode::FetchCvR);
+        fetch.op1 = cv;
+        fetch.op1_type = OpType::Cv;
+        fetch.op2 = name_literal;
+        fetch.op2_type = OpType::Const;
+        fetch.result = result;
+        fetch.result_type = OpType::Tmp;
+        self.invalidate_reentrant_definitions();
+        (result, OpType::Tmp, Some((fetch, *line)))
     }
 
     /// Prepare a mutable receiver chain while deferring the property fetches

@@ -2866,7 +2866,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                                     "Value of type {original_type} returned from {class_name}::__get() must be compatible with unset property {}::${} of type {}",
                                     property_diagnostic_class_name(&definition.declaring_class),
                                     definition.name,
-                                    definition.type_hint.property_declaration_display_name(),
+                                    definition.diagnostic_type_display_name(),
                                 ),
                             )?);
                         }
@@ -3964,7 +3964,7 @@ fn op_bind_obj_prop_ref<'a>(
                                     "Value of type {original_type} returned from {class_name}::__get() must be compatible with unset property {}::${} of type {}",
                                     property_diagnostic_class_name(&definition.declaring_class),
                                     definition.name,
-                                    definition.type_hint.property_declaration_display_name(),
+                                    definition.diagnostic_type_display_name(),
                                 ),
                             )?);
                         }
@@ -5698,6 +5698,7 @@ fn op_init_method_call<'a>(
         }
         .as_str()
         .unwrap_or("");
+        let method = canonical_call_method_str(method);
         if method.eq_ignore_ascii_case("__invoke") {
             init_closure_dynamic_call(eg, frame, opline.extended_value, obj_val, true, 1);
             return Ok(ColdResult::Done);
@@ -5758,7 +5759,7 @@ fn op_init_method_call<'a>(
             let target_class_name = obj.class_name.clone();
             drop(obj); // release borrow before lookup
             let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-            let method = method_name.as_str().unwrap_or("");
+            let method = canonical_call_method_name(method_name);
             // Glob's uncached get_method policy checks instance readiness,
             // including user overrides, before arguments. PHP's resolved
             // literal-method cache bypasses that hook on later same-class
@@ -6005,7 +6006,7 @@ fn op_init_method_call<'a>(
         }
     } else {
         let method_name = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-        let method = method_name.as_str().unwrap_or("");
+        let method = canonical_call_method_name(method_name);
         let err = make_error_value(
             "Error",
             &format!(
@@ -6046,6 +6047,16 @@ enum MagicCallMethod {
     Concrete(*const FunctionCommon),
     Abstract,
     Missing,
+}
+
+#[inline]
+fn canonical_call_method_name(value: &Value) -> &str {
+    canonical_call_method_str(value.as_str().unwrap_or(""))
+}
+
+#[inline]
+fn canonical_call_method_str(value: &str) -> &str {
+    value.split_once('\0').map_or(value, |(prefix, _)| prefix)
 }
 
 #[cold]
@@ -6509,9 +6520,9 @@ fn op_init_static_call<'a>(
         Cow::Owned(class_name.as_str().unwrap_or("").to_string())
     };
     let method = if opline.op2_type == OpType::Const {
-        Cow::Borrowed(method_name.as_str().unwrap_or(""))
+        Cow::Borrowed(canonical_call_method_name(method_name))
     } else {
-        Cow::Owned(method_name.as_str().unwrap_or("").to_string())
+        Cow::Owned(canonical_call_method_name(method_name).to_string())
     };
     // A populated concrete ID also proves this immutable operand is not a
     // relative scope. Reuse that proof instead of classifying its spelling
@@ -6899,7 +6910,7 @@ fn op_init_late_static_call<'a>(
         .class_by_id(class_id)
         .is_some_and(|definition| definition.is_trait)
     {
-        let method = method_name.as_str().unwrap_or("");
+        let method = canonical_call_method_name(method_name);
         if let Some(result) = report_direct_static_trait_member_access(
             eg, frame, op_array, opline, class_id, method, true,
         )? {
@@ -6927,7 +6938,7 @@ fn op_init_late_static_call<'a>(
             });
         };
         let class = class_definition.name.clone();
-        let method = method_name.as_str().unwrap_or("");
+        let method = canonical_call_method_name(method_name);
         let method_info = eg.find_method_info(&class, method);
         let caller_class = if opline._pad & CALL_FLAG_DYNAMIC_STATIC_SCOPE != 0 {
             resolve_static_call_class(eg, frame, "self", true)
@@ -7819,7 +7830,7 @@ fn op_init_dynamic_static_member_call<'a>(
             "Array callback has to contain indices 0 and 1",
         )?);
     };
-    let Some(method) = method_value.as_str() else {
+    let Some(raw_method) = method_value.as_str() else {
         return Ok(throw_located_call_error(
             eg,
             frame,
@@ -7828,6 +7839,9 @@ fn op_init_dynamic_static_member_call<'a>(
             "Method name must be a string",
         )?);
     };
+    let method = raw_method
+        .split_once('\0')
+        .map_or(raw_method, |(prefix, _)| prefix);
     let class_name = owner
         .as_str()
         .map(str::to_string)
@@ -7893,9 +7907,13 @@ fn op_init_dynamic_static_member_call<'a>(
         )?);
     }
 
-    let transformed = owner.as_object().map(|_| {
+    let transformed = (owner.as_object().is_some() || method.len() != raw_method.len()).then(|| {
         let mut callback = PhpArray::with_packed_capacity(2);
-        callback.push(Value::string(&class_name));
+        callback.push(if owner.as_object().is_some() {
+            Value::string(&class_name)
+        } else {
+            owner.clone()
+        });
         callback.push(Value::string(method));
         Value::array(callback)
     });
@@ -8088,7 +8106,7 @@ fn op_init_dynamic_call<'a>(
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
         }
-        if callback_method.as_str().is_none() {
+        let Some(raw_method) = callback_method.as_str() else {
             let error = make_error_value("Error", "Method name must be a string");
             attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
             return Ok(match throw_in_frame(eg, frame, error)? {
@@ -8097,18 +8115,18 @@ fn op_init_dynamic_call<'a>(
                 }
                 ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
             });
-        }
+        };
+        let method = raw_method
+            .split_once('\0')
+            .map_or(raw_method, |(prefix, _)| prefix);
         if callback_owner.as_object().is_some_and(|object| eg.class_is_a(&object.class_name, "GlobIterator"))
-            && !callback_method.as_str().unwrap().eq_ignore_ascii_case("__construct")
+            && !method.eq_ignore_ascii_case("__construct")
             && !crate::stdlib::glob_method_state_ready(callback_owner)
         {
             return throw_located_call_error(eg, frame, op_array, instruction_index,
                 "The parent constructor was not called: the object is in an invalid state");
         }
-        let class_name = callback_method
-            .as_str()
-            .and_then(|_| callback_owner.as_str())
-            .map(str::to_string);
+        let class_name = callback_owner.as_str().map(str::to_string);
         if let Some(class_name) = class_name.as_deref()
             && matches!(class_name.to_ascii_lowercase().as_str(), "self" | "parent" | "static")
             && get_caller_class(frame, eg).is_none()
@@ -8152,7 +8170,6 @@ fn op_init_dynamic_call<'a>(
             }
         }
         if let Some(class_name) = class_name.as_deref()
-            && let Some(method) = callback_method.as_str()
             && class_callback_requires_instance(
                 eg,
                 class_name,
@@ -8169,7 +8186,14 @@ fn op_init_dynamic_call<'a>(
                 method,
             )?);
         }
-        let resolved = if callable_array.is_packed() {
+        let canonical_method;
+        let callback_method = if method.len() != raw_method.len() {
+            canonical_method = Value::string(method);
+            &canonical_method
+        } else {
+            callback_method
+        };
+        let resolved = if callable_array.is_packed() && method.len() == raw_method.len() {
             resolve_user_call_at_opline(eg, frame, op_array, opline)
         } else {
             resolve_nonpacked_array_callback(

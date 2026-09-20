@@ -36,24 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-stdlib-remainder` checkpoint over `aaf4aa4b` adds **10 exact PHP 8.5
-passes without loss**. The 7,174-case stable core is **6,688/94/182/210**;
-Zend/lang reaches **5,210/94/115/180**, while strings/array reaches
+The `core-language-remainder` checkpoint over `6857e056` adds **10 exact PHP
+8.5 passes without loss**. The 7,174-case stable core is **6,698/84/182/210**;
+Zend/lang reaches **5,220/84/115/180**, while strings/array remains
 **1,478/0/67/30**.
 
-The standard-library slice aligns numeric formatting, binary string projection,
-request-local HTML charset selection, locale introspection/collation, streamed
-process output, live resources, extension function introspection and allocation
-failure diagnostics. Default Cargo tests, all five focused feature
-configurations/all-targets, exact no-loss families, Composer/Symfony S0--S3,
-formatting, PHPT runner and unsafe policy are green.
+The language slice aligns deferred `never` arrow validation, exact decimal
+numeric-string comparison, recursive-array sorting identity, incomplete INI
+diagnostics, callback arity precedence, dynamic-property evaluation order,
+buffered diagnostics, source-level property type spelling, line-comment closing
+tags and NUL-terminated magic-call names. Default Cargo tests, all five focused
+feature configurations/all-targets, exact no-loss families, Composer S0,
+formatting, PHPT runner and unsafe policy are green. Dependency-installing
+Symfony and network resolver gates cannot run in the restricted sandbox; the
+accepted parent S0--S3 packet remains the external evidence boundary.
 
-Continue the shared-cause stable-core sweep from **94 to zero**. Keep the
-complete Date/DateTime surface and tokenizer/PHPStan front-end work out of this
-stream. Prefer a remaining runtime cluster with at least ten expected passes;
-GC-cycle release and Fiber continuation architecture remain named lifetime
-holdouts. Preserve the exact 5,210 and 1,478 parent pass sets. Aggregate
-performance optimization stays deferred by user direction.
+Continue the shared-cause stable-core sweep from **84 to zero**. Phar and PCRE
+remain outside this stream; Date/DateTime is available to the core sweep.
+Prefer a remaining cluster with at least ten expected passes. GC-cycle release
+and Fiber continuation architecture remain named lifetime holdouts. Preserve
+the exact 5,220 and 1,478 parent pass sets. Aggregate performance optimization
+stays deferred by user direction.
+
+### Preceding core standard-library checkpoint
+
+The `core-stdlib-remainder` checkpoint over `aaf4aa4b` reduced supported
+failure debt from 104 to 94, exact +10/-0. It aligned numeric formatting,
+binary string projection, request-local HTML charset, locale behavior, process
+output, live resources, extension introspection and allocation diagnostics.
 
 ### Preceding runtime-finalization checkpoint
 

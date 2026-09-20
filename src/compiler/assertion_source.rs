@@ -2314,7 +2314,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                             "{attributes}{static_prefix}fn{reference}({rendered_params}){return_type} => {}",
                             render(value, 0, false)?
                         ),
-                        100,
+                        10,
                     )
                 } else {
                     let static_prefix = if *is_static { "static " } else { "" };
