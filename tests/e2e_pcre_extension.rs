@@ -3,6 +3,26 @@ mod common;
 use common::run_php;
 
 #[test]
+fn pcre_extension_is_published_only_after_its_surface_is_available() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(extension_loaded('pcre'), extension_loaded('PCRE'));
+var_dump(in_array('pcre', get_loaded_extensions(), true));
+$function = new ReflectionFunction('preg_match');
+var_dump($function->getExtensionName());
+"#,
+        ),
+        concat!(
+            "bool(true)\n",
+            "bool(true)\n",
+            "bool(true)\n",
+            "string(4) \"pcre\"\n",
+        )
+    );
+}
+
+#[test]
 fn pcre_missing_globals_publish_php_85_signatures_and_constants() {
     assert_eq!(
         run_php(
@@ -49,7 +69,7 @@ echo "\n";
 }
 
 #[test]
-fn pcre_ini_defaults_are_request_local_and_mutable() {
+fn pcre_ini_defaults_follow_the_no_jit_build_and_limits_are_request_local() {
     assert_eq!(
         run_php(
             r#"<?php
@@ -62,12 +82,36 @@ var_dump(ini_set('pcre.recursion_limit', '23'), ini_get('pcre.recursion_limit'))
 "#,
         ),
         concat!(
-            "pcre.jit=0\n",
+            "pcre.jit=\n",
             "pcre.backtrack_limit=1000000\n",
             "pcre.recursion_limit=100000\n",
-            "string(1) \"0\"\nstring(1) \"1\"\n",
+            "bool(false)\nbool(false)\n",
             "string(7) \"1000000\"\nstring(2) \"17\"\n",
             "string(6) \"100000\"\nstring(2) \"23\"\n",
+        )
+    );
+}
+
+#[test]
+fn pattern_heap_limit_is_enforced_independently_of_backtrack_limit() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+var_dump(
+    preg_match('/(*LIMIT_HEAP=1)^abc$/', 'abc'),
+    preg_last_error(),
+    preg_last_error_msg()
+);
+var_dump(
+    preg_match('/(*LIMIT_HEAP=1)^(a|b)+$/', str_repeat('a', 10)),
+    preg_last_error(),
+    preg_last_error_msg()
+);
+"#,
+        ),
+        concat!(
+            "int(1)\nint(0)\nstring(8) \"No error\"\n",
+            "bool(false)\nint(1)\nstring(14) \"Internal error\"\n",
         )
     );
 }
@@ -107,6 +151,27 @@ var_dump(preg_replace_callback_array([
             "NULL\nint(1)\n",
             "2:preg_replace_callback_array(): Compilation failed: missing terminating ] for character class at offset 1\n",
             "NULL\nint(99)\n",
+        )
+    );
+}
+
+#[test]
+fn outer_compile_failure_wins_over_reentrant_error_handler_preg_calls() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+set_error_handler(static function (int $level, string $message): bool {
+    preg_replace('/x/', 'y', 'x');
+    echo $message, "\n";
+    return true;
+});
+var_dump(preg_match('/(*UNKNOWN)/', ''));
+var_dump(preg_last_error(), preg_last_error_msg());
+"#,
+        ),
+        concat!(
+            "preg_match(): Compilation failed: (*VERB) not recognized or malformed at offset 9\n",
+            "bool(false)\nint(1)\nstring(14) \"Internal error\"\n",
         )
     );
 }
@@ -278,6 +343,63 @@ preg_replace_callback('/_(a)(*MARK:A)_|_(b)_/', function ($matches) {
             "callback:{\"0\":\"b\",\"left\":\"\",\"1\":\"\",\"2\":\"b\"}\n",
             "mark:{\"0\":\"_a_\",\"1\":\"a\",\"MARK\":\"A\"}\n",
             "mark:[\"_b_\",\"\",\"b\"]\n",
+        )
+    );
+}
+
+#[test]
+fn duplicate_named_groups_project_the_active_slot_in_every_public_shape() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+preg_match('/(?J)(?:(?<g>foo)|(?<g>bar))(?<h>baz)/', 'foobaz', $m, PREG_UNMATCHED_AS_NULL);
+echo json_encode($m), "\n";
+preg_match('/(?J)(?:(?<g>foo)|(?<g>bar))(?<h>baz)/', 'barbaz', $m, PREG_UNMATCHED_AS_NULL);
+echo json_encode($m), "\n";
+preg_match_all('/(?<chr>[ac])(?<num>\d)|(?<chr>[b])/J', 'a1bc3', $m, PREG_SET_ORDER);
+echo json_encode($m), "\n";
+preg_match_all('/(?J)(?<g>a)|(?<g>b)/', 'abba', $m, PREG_UNMATCHED_AS_NULL);
+echo json_encode($m), "\n";
+preg_replace_callback('/(?J)(?<g>a)|(?<g>b)/', function ($m) {
+    echo json_encode($m), "\n";
+    return $m[0];
+}, 'ab', -1, $count, PREG_UNMATCHED_AS_NULL);
+echo $count, "\n";
+"#,
+        ),
+        concat!(
+            "{\"0\":\"foobaz\",\"g\":\"foo\",\"1\":\"foo\",\"2\":null,\"h\":\"baz\",\"3\":\"baz\"}\n",
+            "{\"0\":\"barbaz\",\"g\":\"bar\",\"1\":null,\"2\":\"bar\",\"h\":\"baz\",\"3\":\"baz\"}\n",
+            "[{\"0\":\"a1\",\"chr\":\"a\",\"1\":\"a\",\"num\":\"1\",\"2\":\"1\"},{\"0\":\"b\",\"chr\":\"b\",\"1\":\"\",\"num\":\"\",\"2\":\"\",\"3\":\"b\"},{\"0\":\"c3\",\"chr\":\"c\",\"1\":\"c\",\"num\":\"3\",\"2\":\"3\"}]\n",
+            "{\"0\":[\"a\",\"b\",\"b\",\"a\"],\"g\":[null,\"b\",\"b\",null],\"1\":[\"a\",null,null,\"a\"],\"2\":[null,\"b\",\"b\",null]}\n",
+            "{\"0\":\"a\",\"g\":\"a\",\"1\":\"a\",\"2\":null}\n",
+            "{\"0\":\"b\",\"g\":\"b\",\"1\":null,\"2\":\"b\"}\n",
+            "2\n",
+        )
+    );
+}
+
+#[test]
+fn reset_start_projects_zero_width_matches_without_losing_consumed_prefixes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$pattern = '~.{3}\K~';
+$subject = 'abcdefghijklm';
+preg_match_all($pattern, $subject, $matches, PREG_OFFSET_CAPTURE);
+echo json_encode($matches), "\n";
+var_export(preg_split($pattern, $subject, 3));
+echo "\n";
+var_dump(preg_replace($pattern, '|', $subject));
+preg_match('~abc\Kdef~', 'abcdef', $matches, PREG_OFFSET_CAPTURE);
+echo json_encode($matches), "\n";
+"#,
+        ),
+        concat!(
+            "[[[\"\",3],[\"\",6],[\"\",9],[\"\",12]]]\n",
+            "array (\n  0 => 'abc',\n  1 => 'def',\n  2 => 'ghijklm',\n)\n",
+            "string(17) \"abc|def|ghi|jkl|m\"\n",
+            "[[\"def\",3]]\n",
         )
     );
 }

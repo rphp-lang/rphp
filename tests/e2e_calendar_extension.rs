@@ -63,7 +63,7 @@ echo "\n", (int) extension_loaded('calendar'), (int) extension_loaded('Calendar'
             "CAL_EASTER_DEFAULT=0|CAL_EASTER_ROMAN=1|CAL_EASTER_ALWAYS_GREGORIAN=2|",
             "CAL_EASTER_ALWAYS_JULIAN=3|CAL_JEWISH_ADD_ALAFIM_GERESH=2|",
             "CAL_JEWISH_ADD_ALAFIM=4|CAL_JEWISH_ADD_GERESHAYIM=8|\n",
-            "110|calendar,date,gettext,iconv,Phar,tokenizer|0\n",
+            "110|calendar,date,gettext,iconv,Phar,pcre,tokenizer|0\n",
         )
     );
 }

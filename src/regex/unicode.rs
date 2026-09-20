@@ -5,7 +5,15 @@
 //! width and slicing: CR LF, Hangul syllable sequences, regional indicator
 //! pairs, combining marks, and ZWJ emoji sequences.
 
+use super::unicode_bidi_classes::{BIDI_CLASS_NAMES, BIDI_CLASS_RANGES};
+use super::unicode_binary_properties::{
+    BINARY_PROPERTY_ALIASES, BINARY_PROPERTY_NAMES, BINARY_PROPERTY_RANGES,
+    EXTENDED_PICTOGRAPHIC_INDEX,
+};
+use super::unicode_case_folding::SIMPLE_CASE_FOLD;
 use super::unicode_categories::{CATEGORY_NAMES, CATEGORY_RUNS};
+use super::unicode_grapheme_breaks::{GRAPHEME_BREAK_NAMES, GRAPHEME_BREAK_RANGES};
+use super::unicode_script_extensions::SCRIPT_EXTENSION_RUNS;
 use super::unicode_scripts;
 
 const CATEGORY_COUNT: usize = CATEGORY_NAMES.len();
@@ -27,6 +35,27 @@ pub(super) fn category_is(c: char, name: &str) -> bool {
 
 pub(super) fn category_has_initial(c: char, initial: char) -> bool {
     CATEGORY_NAMES[usize::from(general_category(c))].starts_with(initial)
+}
+
+/// PCRE2 uses Unicode simple case equivalence whenever UTF or UCP is active.
+/// Without either option its default C-locale tables fold ASCII only.
+pub(super) fn caseless_equal(left: char, right: char, unicode: bool) -> bool {
+    if left == right {
+        return true;
+    }
+    if !unicode {
+        return left.is_ascii() && right.is_ascii() && left.eq_ignore_ascii_case(&right);
+    }
+    simple_case_fold(left) == simple_case_fold(right)
+}
+
+pub(super) fn simple_case_fold(character: char) -> char {
+    let code_point = u32::from(character);
+    SIMPLE_CASE_FOLD
+        .binary_search_by_key(&code_point, |(source, _)| *source)
+        .ok()
+        .and_then(|index| char::from_u32(SIMPLE_CASE_FOLD[index].1))
+        .unwrap_or(character)
 }
 
 fn category_index(name: &str) -> Option<u8> {
@@ -53,6 +82,9 @@ pub(super) struct PropertyClass {
     extra: Extra,
     /// A `SCRIPT_NAMES` index when the name selects a script.
     script: Option<u16>,
+    script_extensions: bool,
+    binary: Option<u8>,
+    bidi_class: Option<u8>,
     negated: bool,
 }
 
@@ -63,6 +95,7 @@ enum Extra {
     AsciiSpace,
     RegionalIndicator,
     ExtendedPictographic,
+    UniversalCharacterName,
 }
 
 /// PCRE2 matches property names loosely: case, spaces, hyphens and
@@ -88,6 +121,41 @@ fn script_index(loose: &str) -> Option<u16> {
         .map(|position| unicode_scripts::SCRIPT_ALIASES[position].1)
 }
 
+fn binary_property_index(loose: &str) -> Option<u8> {
+    if let Some(index) = BINARY_PROPERTY_NAMES.iter().position(|name| *name == loose) {
+        return u8::try_from(index).ok();
+    }
+    BINARY_PROPERTY_ALIASES
+        .binary_search_by(|(alias, _)| (*alias).cmp(loose))
+        .ok()
+        .map(|position| BINARY_PROPERTY_ALIASES[position].1)
+}
+
+fn binary_property_matches(index: u8, c: char) -> bool {
+    let code_point = u32::from(c);
+    let ranges = BINARY_PROPERTY_RANGES[usize::from(index)];
+    let position = ranges.partition_point(|(first, _)| *first <= code_point);
+    position
+        .checked_sub(1)
+        .is_some_and(|position| code_point <= ranges[position].1)
+}
+
+fn bidi_class_index(loose: &str) -> Option<u8> {
+    BIDI_CLASS_NAMES
+        .binary_search(&loose)
+        .ok()
+        .and_then(|index| u8::try_from(index).ok())
+}
+
+fn bidi_class_matches(index: u8, c: char) -> bool {
+    let code_point = u32::from(c);
+    let ranges = BIDI_CLASS_RANGES[usize::from(index)];
+    let position = ranges.partition_point(|(first, _)| *first <= code_point);
+    position
+        .checked_sub(1)
+        .is_some_and(|position| code_point <= ranges[position].1)
+}
+
 /// Script of `c`, or `UNKNOWN_SCRIPT` for code points outside every run.
 fn script_of(c: char) -> u16 {
     let code_point = c as u32;
@@ -99,6 +167,10 @@ fn script_of(c: char) -> u16 {
     }
 }
 
+pub(super) fn script_name(c: char) -> &'static str {
+    unicode_scripts::SCRIPT_NAMES[usize::from(script_of(c))]
+}
+
 impl PropertyClass {
     /// Parse the text between `\p{` and `}` (or a single-letter form).
     pub(super) fn parse(name: &str, negated: bool) -> Option<Self> {
@@ -107,43 +179,79 @@ impl PropertyClass {
             None => (name, false),
         };
         let negated = negated != inverted;
-        let loose = loose_name(name);
+        let (property_type, property_name) = name
+            .split_once([':', '='])
+            .map_or((None, name), |(kind, value)| {
+                (Some(loose_name(kind)), value)
+            });
+        let loose = loose_name(property_name);
         let mut script = None;
-        let (mask, extra) = match loose.as_str() {
-            "any" => (u32::MAX, Extra::None),
-            "l&" => (
-                (1 << category_index("Lu")?)
-                    | (1 << category_index("Ll")?)
-                    | (1 << category_index("Lt")?),
-                Extra::None,
-            ),
-            "xan" => (mask_of_initial('L') | mask_of_initial('N'), Extra::None),
-            "xwd" => (
-                mask_of_initial('L') | mask_of_initial('N'),
-                Extra::Underscore,
-            ),
-            "xsp" | "xps" => (mask_of_initial('Z'), Extra::AsciiSpace),
-            "regionalindicator" | "ri" => (0, Extra::RegionalIndicator),
-            "extendedpictographic" => (0, Extra::ExtendedPictographic),
-            _ if loose.len() == 1 => {
-                let mask = mask_of_initial(loose.chars().next()?.to_ascii_uppercase());
-                if mask == 0 {
-                    return None;
-                }
-                (mask, Extra::None)
-            }
-            _ => match loose_category_index(&loose) {
-                Some(index) => (1 << index, Extra::None),
-                None => {
+        let mut script_extensions = false;
+        let mut binary = None;
+        let mut bidi_class = None;
+        let (mask, extra) = if let Some(property_type) = property_type {
+            match property_type.as_str() {
+                "sc" | "script" => {
                     script = Some(script_index(&loose)?);
                     (0, Extra::None)
                 }
-            },
+                "scx" | "scriptextensions" => {
+                    script = Some(script_index(&loose)?);
+                    script_extensions = true;
+                    (0, Extra::None)
+                }
+                "bc" | "bidiclass" => {
+                    bidi_class = Some(bidi_class_index(&loose)?);
+                    (0, Extra::None)
+                }
+                _ => return None,
+            }
+        } else {
+            match loose.as_str() {
+                "any" => (u32::MAX, Extra::None),
+                "l&" => (
+                    (1 << category_index("Lu")?)
+                        | (1 << category_index("Ll")?)
+                        | (1 << category_index("Lt")?),
+                    Extra::None,
+                ),
+                "xan" => (mask_of_initial('L') | mask_of_initial('N'), Extra::None),
+                "xwd" => (
+                    mask_of_initial('L') | mask_of_initial('N'),
+                    Extra::Underscore,
+                ),
+                "xsp" | "xps" => (mask_of_initial('Z'), Extra::AsciiSpace),
+                "regionalindicator" | "ri" => (0, Extra::RegionalIndicator),
+                "extendedpictographic" => (0, Extra::ExtendedPictographic),
+                "xuc" => (0, Extra::UniversalCharacterName),
+                _ if loose.len() == 1 => {
+                    let mask = mask_of_initial(loose.chars().next()?.to_ascii_uppercase());
+                    if mask == 0 {
+                        return None;
+                    }
+                    (mask, Extra::None)
+                }
+                _ => match loose_category_index(&loose) {
+                    Some(index) => (1 << index, Extra::None),
+                    None => {
+                        if let Some(index) = binary_property_index(&loose) {
+                            binary = Some(index);
+                        } else {
+                            script = Some(script_index(&loose)?);
+                            script_extensions = true;
+                        }
+                        (0, Extra::None)
+                    }
+                },
+            }
         };
         Some(Self {
             mask,
             extra,
             script,
+            script_extensions,
+            binary,
+            bidi_class,
             negated,
         })
     }
@@ -156,10 +264,48 @@ impl PropertyClass {
             Extra::AsciiSpace => matches!(c, '\t' | '\n' | '\u{b}' | '\u{c}' | '\r'),
             Extra::RegionalIndicator => is_regional_indicator(c),
             Extra::ExtendedPictographic => is_extended_pictographic(c),
+            Extra::UniversalCharacterName => matches!(c, '$' | '@' | '`') || c >= '\u{a0}',
         };
-        let script = self.script.is_some_and(|script| script_of(c) == script);
-        (self.mask & (1 << category) != 0 || extra || script) != self.negated
+        let script = self.script.is_some_and(|script| {
+            if self.script_extensions {
+                script_has_extension(c, script)
+            } else {
+                script_of(c) == script
+            }
+        });
+        let binary = self
+            .binary
+            .is_some_and(|index| binary_property_matches(index, c));
+        let bidi_class = self
+            .bidi_class
+            .is_some_and(|index| bidi_class_matches(index, c));
+        (self.mask & (1 << category) != 0 || extra || script || binary || bidi_class)
+            != self.negated
     }
+}
+
+pub(super) fn has_explicit_script_extensions(c: char) -> bool {
+    let code_point = u32::from(c);
+    let position = SCRIPT_EXTENSION_RUNS.partition_point(|(first, _, _)| *first <= code_point);
+    position
+        .checked_sub(1)
+        .is_some_and(|position| code_point <= SCRIPT_EXTENSION_RUNS[position].1)
+}
+
+pub(super) fn script_has_extension(c: char, script: u16) -> bool {
+    let code_point = u32::from(c);
+    let position = SCRIPT_EXTENSION_RUNS.partition_point(|(first, _, _)| *first <= code_point);
+    match position
+        .checked_sub(1)
+        .map(|index| SCRIPT_EXTENSION_RUNS[index])
+    {
+        Some((_, last, scripts)) if code_point <= last => scripts.contains(&script),
+        _ => script_of(c) == script,
+    }
+}
+
+fn is_regional_indicator(c: char) -> bool {
+    ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
 }
 
 /// `category_index` for a loose-form name such as `lu`.
@@ -170,110 +316,122 @@ fn loose_category_index(loose: &str) -> Option<u8> {
         .and_then(|index| u8::try_from(index).ok())
 }
 
-fn is_regional_indicator(c: char) -> bool {
-    ('\u{1F1E6}'..='\u{1F1FF}').contains(&c)
-}
-
-fn is_extend(c: char) -> bool {
-    matches!(
-        CATEGORY_NAMES[usize::from(general_category(c))],
-        "Mn" | "Me" | "Mc"
-    ) || c == '\u{200C}'
-        || c == '\u{200D}'
-}
-
-fn is_control(c: char) -> bool {
-    matches!(
-        CATEGORY_NAMES[usize::from(general_category(c))],
-        "Cc" | "Zl" | "Zp"
-    ) || (CATEGORY_NAMES[usize::from(general_category(c))] == "Cf"
-        && !matches!(c, '\u{200C}' | '\u{200D}'))
-}
-
 fn is_extended_pictographic(c: char) -> bool {
-    matches!(
-        u32::from(c),
-        0xA9 | 0xAE | 0x203C | 0x2049 | 0x2122 | 0x2139 | 0x2194..=0x2199 | 0x21A9..=0x21AA
-            | 0x231A..=0x231B | 0x2328 | 0x23CF | 0x23E9..=0x23F3 | 0x23F8..=0x23FA
-            | 0x24C2 | 0x25AA..=0x25AB | 0x25B6 | 0x25C0 | 0x25FB..=0x25FE
-            | 0x2600..=0x27BF | 0x2934..=0x2935 | 0x2B05..=0x2B07 | 0x2B1B..=0x2B1C
-            | 0x2B50 | 0x2B55 | 0x3030 | 0x303D | 0x3297 | 0x3299
-            | 0x1F000..=0x1FAFF | 0x1FC00..=0x1FFFD
-    )
+    binary_property_matches(EXTENDED_PICTOGRAPHIC_INDEX, c)
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Hangul {
+enum GraphemeBreak {
+    Cr,
+    Control,
+    Extend,
     L,
-    V,
-    T,
+    Lf,
     Lv,
     Lvt,
-    None,
+    Prepend,
+    RegionalIndicator,
+    SpacingMark,
+    T,
+    V,
+    Zwj,
+    Other,
 }
 
-fn hangul_kind(c: char) -> Hangul {
-    match u32::from(c) {
-        0x1100..=0x115F | 0xA960..=0xA97C => Hangul::L,
-        0x1160..=0x11A7 | 0xD7B0..=0xD7C6 => Hangul::V,
-        0x11A8..=0x11FF | 0xD7CB..=0xD7FB => Hangul::T,
-        0xAC00..=0xD7A3 => {
-            if (u32::from(c) - 0xAC00) % 28 == 0 {
-                Hangul::Lv
-            } else {
-                Hangul::Lvt
-            }
-        }
-        _ => Hangul::None,
+fn grapheme_break(character: char) -> GraphemeBreak {
+    let code_point = u32::from(character);
+    let position = GRAPHEME_BREAK_RANGES.partition_point(|(first, _, _)| *first <= code_point);
+    let Some((_, last, class)) = position
+        .checked_sub(1)
+        .map(|index| GRAPHEME_BREAK_RANGES[index])
+    else {
+        return GraphemeBreak::Other;
+    };
+    if code_point > last {
+        return GraphemeBreak::Other;
     }
+    match GRAPHEME_BREAK_NAMES[usize::from(class)] {
+        "CR" => GraphemeBreak::Cr,
+        "Control" => GraphemeBreak::Control,
+        "Extend" => GraphemeBreak::Extend,
+        "L" => GraphemeBreak::L,
+        "LF" => GraphemeBreak::Lf,
+        "LV" => GraphemeBreak::Lv,
+        "LVT" => GraphemeBreak::Lvt,
+        "Prepend" => GraphemeBreak::Prepend,
+        "Regional_Indicator" => GraphemeBreak::RegionalIndicator,
+        "SpacingMark" => GraphemeBreak::SpacingMark,
+        "T" => GraphemeBreak::T,
+        "V" => GraphemeBreak::V,
+        "ZWJ" => GraphemeBreak::Zwj,
+        _ => GraphemeBreak::Other,
+    }
+}
+
+fn joins_grapheme(chars: &[char], start: usize, boundary: usize) -> bool {
+    let previous = grapheme_break(chars[boundary - 1]);
+    let next = grapheme_break(chars[boundary]);
+    if previous == GraphemeBreak::Cr && next == GraphemeBreak::Lf {
+        return true;
+    }
+    if matches!(
+        previous,
+        GraphemeBreak::Cr | GraphemeBreak::Lf | GraphemeBreak::Control
+    ) || matches!(
+        next,
+        GraphemeBreak::Cr | GraphemeBreak::Lf | GraphemeBreak::Control
+    ) {
+        return false;
+    }
+    if matches!(previous, GraphemeBreak::L)
+        && matches!(
+            next,
+            GraphemeBreak::L | GraphemeBreak::V | GraphemeBreak::Lv | GraphemeBreak::Lvt
+        )
+    {
+        return true;
+    }
+    if matches!(previous, GraphemeBreak::Lv | GraphemeBreak::V)
+        && matches!(next, GraphemeBreak::V | GraphemeBreak::T)
+    {
+        return true;
+    }
+    if matches!(previous, GraphemeBreak::Lvt | GraphemeBreak::T) && next == GraphemeBreak::T {
+        return true;
+    }
+    if matches!(
+        next,
+        GraphemeBreak::Extend | GraphemeBreak::Zwj | GraphemeBreak::SpacingMark
+    ) || previous == GraphemeBreak::Prepend
+    {
+        return true;
+    }
+    if previous == GraphemeBreak::Zwj && is_extended_pictographic(chars[boundary]) {
+        let mut cursor = boundary - 1;
+        while cursor > start && grapheme_break(chars[cursor - 1]) == GraphemeBreak::Extend {
+            cursor -= 1;
+        }
+        if cursor > start && is_extended_pictographic(chars[cursor - 1]) {
+            return true;
+        }
+    }
+    if previous == GraphemeBreak::RegionalIndicator && next == GraphemeBreak::RegionalIndicator {
+        let preceding = chars[start..boundary]
+            .iter()
+            .rev()
+            .take_while(|character| grapheme_break(**character) == GraphemeBreak::RegionalIndicator)
+            .count();
+        return preceding % 2 == 1;
+    }
+    false
 }
 
 /// Length in characters of the extended grapheme cluster starting at `pos`.
 pub(super) fn grapheme_cluster_len(chars: &[char], pos: usize) -> Option<usize> {
-    let first = *chars.get(pos)?;
-    if first == '\r' {
-        return Some(if chars.get(pos + 1) == Some(&'\n') {
-            2
-        } else {
-            1
-        });
-    }
-    if is_control(first) {
-        return Some(1);
-    }
+    chars.get(pos)?;
     let mut index = pos + 1;
-    if is_regional_indicator(first) && chars.get(index).is_some_and(|c| is_regional_indicator(*c)) {
+    while index < chars.len() && joins_grapheme(chars, pos, index) {
         index += 1;
-    } else {
-        let mut previous = hangul_kind(first);
-        while let Some(&next) = chars.get(index) {
-            let kind = hangul_kind(next);
-            let joins = match (previous, kind) {
-                (Hangul::L, Hangul::L | Hangul::V | Hangul::Lv | Hangul::Lvt) => true,
-                (Hangul::Lv | Hangul::V, Hangul::V | Hangul::T) => true,
-                (Hangul::Lvt | Hangul::T, Hangul::T) => true,
-                _ => false,
-            };
-            if !joins {
-                break;
-            }
-            previous = kind;
-            index += 1;
-        }
-    }
-    while let Some(&next) = chars.get(index) {
-        if is_extend(next) {
-            index += 1;
-            if next == '\u{200D}'
-                && chars
-                    .get(index)
-                    .is_some_and(|c| is_extended_pictographic(*c))
-            {
-                index += 1;
-            }
-            continue;
-        }
-        break;
     }
     Some(index - pos)
 }

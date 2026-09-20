@@ -346,9 +346,15 @@ fn match_row(caps: CaptureView<'_>, subject: &str, flags: i64, unicode: bool) ->
     let mut row = PhpArray::new();
     for index in 0..=last {
         let value = capture_value(caps.get(index), subject, flags, unicode);
-        for (name, slot) in caps.named_groups() {
-            if *slot == index {
-                row.set_str(name, value.clone());
+        for (name, _) in caps.named_groups() {
+            if caps.named_group_output_slot(name) == Some(index) {
+                let alias_slot = caps.named_group_slot(name).unwrap_or(index);
+                let alias = if alias_slot == index {
+                    value.clone()
+                } else {
+                    capture_value(caps.get(alias_slot), subject, flags, unicode)
+                };
+                row.set_str(name, alias);
             }
         }
         row.push(value);
@@ -386,14 +392,26 @@ fn matches(regex: &Regex, subject: &str, mode: i64, flags: i64, unicode: bool) -
         });
     let matched = count.unwrap() != 0;
     if mode == 2 && flags & 2 == 0 {
-        for (index, column) in columns.into_iter().enumerate() {
-            let value = Value::array(column);
-            for (name, slot) in regex.capture_names() {
-                if *slot == index {
-                    out.set_str(name, value.clone());
+        if regex.has_duplicate_named_groups() {
+            let values = columns.into_iter().map(Value::array).collect::<Vec<_>>();
+            for (index, value) in values.iter().enumerate() {
+                for (name, slot) in regex.capture_names() {
+                    if regex.capture_name_output_slot(name) == Some(index) {
+                        out.set_str(name, values[*slot].clone());
+                    }
                 }
+                out.push(value.clone());
             }
-            out.push(value);
+        } else {
+            for (index, column) in columns.into_iter().enumerate() {
+                let value = Value::array(column);
+                for (name, slot) in regex.capture_names() {
+                    if *slot == index {
+                        out.set_str(name, value.clone());
+                    }
+                }
+                out.push(value);
+            }
         }
     }
     (Value::array(out), matched)

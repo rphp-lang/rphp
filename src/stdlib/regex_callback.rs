@@ -79,9 +79,22 @@ pub(super) fn replace(
                     unmatched_as_null,
                     mapped,
                 );
-                for (name, slot) in caps.named_groups() {
-                    if *slot == index {
-                        matches.set_str(name, value.clone());
+                for (name, _) in caps.named_groups() {
+                    if caps.named_group_output_slot(name) == Some(index) {
+                        let alias_slot = caps.named_group_slot(name).unwrap_or(index);
+                        let alias = if alias_slot == index {
+                            value.clone()
+                        } else {
+                            super::pcre_capture_value(
+                                caps.get(alias_slot),
+                                &subject,
+                                0,
+                                offset_capture,
+                                unmatched_as_null,
+                                mapped,
+                            )
+                        };
+                        matches.set_str(name, alias);
                     }
                 }
                 matches.push(value);

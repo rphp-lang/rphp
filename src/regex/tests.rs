@@ -130,11 +130,15 @@ fn test_anchors() {
 }
 
 #[test]
-fn dollar_anchor_accepts_one_final_newline_unless_end_only() {
+fn dollar_anchor_uses_the_selected_final_newline_unless_end_only() {
     let regular = Regex::new("^payload$", RegexFlags::default()).unwrap();
     assert!(regular.is_match("payload\n"));
-    assert!(regular.is_match("payload\r\n"));
+    assert!(!regular.is_match("payload\r\n"));
     assert!(!regular.is_match("payload\nnext"));
+
+    let crlf = Regex::new("(*CRLF)^payload$", RegexFlags::default()).unwrap();
+    assert!(crlf.is_match("payload\r\n"));
+    assert!(!crlf.is_match("payload\n"));
 
     let mut cache = RegexCache::default();
     let end_only = cache.get_or_compile("/^payload$/D").unwrap();
@@ -151,6 +155,17 @@ fn test_case_insensitive() {
     };
     let re = Regex::new("hello", flags).unwrap();
     assert!(re.captures("HELLO").is_some());
+}
+
+#[test]
+fn caseless_matching_uses_ascii_tables_without_unicode_and_simple_fold_with_it() {
+    assert!(php_regex("/^s$/iu").is_match("ſ"));
+    assert!(php_regex("/^σ$/iu").is_match("ς"));
+    assert!(php_regex("/^[a-z]$/iu").is_match("K"));
+    assert!(!php_regex("/^é$/i").is_match("É"));
+
+    let (pattern, flags) = parse_php_regex("/^\\xC9$/i").unwrap();
+    assert!(!Regex::new(&pattern, flags).unwrap().is_match("é"));
 }
 
 #[test]
@@ -299,6 +314,15 @@ fn capture_backtracking_keeps_the_registers_for_each_candidate_path() {
     let captures = alternative.captures("b").unwrap();
     assert!(captures.get(1).is_none());
     assert_eq!(captures.get(2).unwrap().as_str("b"), "b");
+}
+
+#[test]
+fn a_final_zero_width_repetition_publishes_its_capture_registers() {
+    let regex = php_regex(r"/([^;]*)*(;|$)/");
+    let captures = regex.captures("abc").unwrap();
+    assert_eq!(captures.get(0).unwrap().as_str("abc"), "abc");
+    assert_eq!(captures.get(1).unwrap().as_str("abc"), "");
+    assert_eq!(captures.get(2).unwrap().as_str("abc"), "");
 }
 
 #[test]
@@ -529,7 +553,7 @@ fn php_delimiter_scanner_preserves_escaped_and_nested_boundaries() {
 #[test]
 fn php_modifier_scanner_ignores_only_php_line_spacing() {
     let (_, flags) = parse_php_regex("/a/  S\r\n").unwrap();
-    assert!(!flags.unicode);
+    assert!(!flags.unicode_mode.utf());
     assert_eq!(
         parse_php_regex("/a/\t").unwrap_err(),
         "Unknown modifier '\t'"
@@ -683,6 +707,13 @@ fn test_multi_digit_backref_in_replacement() {
 }
 
 #[test]
+fn replacement_backreferences_consume_at_most_two_digits() {
+    let regex = php_regex("/(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)(k)/");
+    assert_eq!(regex.replace_all("abcdefghijkl", "$103"), "j3l");
+    assert_eq!(regex.replace_all("abcdefghijkl", r"\103"), "j3l");
+}
+
+#[test]
 fn test_multi_digit_backref_in_pattern() {
     // \10 refers to group 10
     let re = Regex::new("(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)\\10", RegexFlags::default()).unwrap();
@@ -725,14 +756,252 @@ fn test_unknown_modifier_rejected() {
 }
 
 #[test]
-fn valid_unimplemented_modifier_is_distinct_from_unknown_modifier() {
-    assert_eq!(
-        parse_php_regex("/a/J").unwrap_err(),
-        "Unsupported PCRE modifier 'J'"
-    );
+fn newer_pcre_modifier_is_unknown_at_the_reported_10_42_level() {
+    assert_eq!(parse_php_regex("/a/r").unwrap_err(), "Unknown modifier 'r'");
     assert_eq!(
         parse_php_regex("/a/Jz").unwrap_err(),
         "Unknown modifier 'z'"
+    );
+}
+
+#[test]
+fn extra_modifier_is_ignored_and_no_auto_capture_changes_only_plain_groups() {
+    let (pattern, flags) = parse_php_regex("/(a)/Xn").unwrap();
+    let regex = Regex::new(&pattern, flags).unwrap();
+    let captures = regex.captures("a").unwrap();
+    assert_eq!(captures.len(), 1);
+
+    let named = php_regex("/(?n)(a)(?<kept>b)(?-n:(c))/");
+    let captures = named.captures("abc").unwrap();
+    assert_eq!(captures.len(), 3);
+    assert_eq!(captures.get(1).unwrap().as_str("abc"), "b");
+    assert_eq!(captures.get_named("kept").unwrap().as_str("abc"), "b");
+    assert_eq!(captures.get(2).unwrap().as_str("abc"), "c");
+}
+
+#[test]
+fn extra_modifier_does_not_turn_unknown_letter_escapes_into_literals() {
+    let (pattern, flags) = parse_php_regex(r"/\y/X").unwrap();
+    assert_eq!(
+        Regex::new(&pattern, flags).unwrap_err(),
+        "unrecognized character follows \\ at offset 1"
+    );
+}
+
+#[test]
+fn octal_escapes_and_absolute_end_anchor_follow_pcre_spelling() {
+    let regex = php_regex(r"/a\000b\z/");
+    assert!(regex.is_match("a\0b"));
+    assert!(!regex.is_match("a\0b\n"));
+
+    let braced = php_regex(r"/[\o{77}]/");
+    assert!(braced.is_match("?"));
+}
+
+#[test]
+fn a_leading_non_quantifier_brace_is_literal() {
+    let regex = php_regex(r"{{\D+}}");
+    assert!(regex.is_match("{abcd}"));
+}
+
+#[test]
+fn bounded_repetition_respects_the_pcre_compiled_program_limit() {
+    let alternatives = (0..64)
+        .map(|index| format!("token{index}"))
+        .collect::<Vec<_>>()
+        .join("|");
+    let pattern = format!("(?:{alternatives}){{1,300}}");
+    assert!(
+        Regex::new(&pattern, RegexFlags::default())
+            .unwrap_err()
+            .starts_with("regular expression is too large at offset ")
+    );
+}
+
+#[test]
+fn pcre_10_42_compile_boundaries_reject_invalid_counts_names_and_references() {
+    assert!(Regex::new("a{0,65535}", RegexFlags::default()).is_ok());
+    assert!(
+        Regex::new("^a{99$", RegexFlags::default())
+            .unwrap()
+            .is_match("a{99")
+    );
+    assert!(
+        Regex::new("^a{99x}$", RegexFlags::default())
+            .unwrap()
+            .is_match("a{99x}")
+    );
+    assert_eq!(
+        Regex::new("a{3,2}", RegexFlags::default()).unwrap_err(),
+        "numbers out of order in {} quantifier at offset 5"
+    );
+    assert_eq!(
+        Regex::new("a{0,65536}", RegexFlags::default()).unwrap_err(),
+        "number too big in {} quantifier at offset 9"
+    );
+
+    let maximum_name = "a".repeat(32);
+    assert!(Regex::new(&format!("(?<{maximum_name}>x)"), RegexFlags::default()).is_ok());
+    let oversized_name = "a".repeat(33);
+    assert!(
+        Regex::new(&format!("(?<{oversized_name}>x)"), RegexFlags::default())
+            .unwrap_err()
+            .starts_with("subpattern name is too long (maximum 32 code units)")
+    );
+
+    assert!(
+        Regex::new("(?|(?<x>a)|(?<y>b))", RegexFlags::default())
+            .unwrap_err()
+            .starts_with("different names for subpatterns of the same number")
+    );
+    for pattern in [r"\g{99}", r"(?99)", r"(?&missing)"] {
+        assert!(
+            Regex::new(pattern, RegexFlags::default())
+                .unwrap_err()
+                .starts_with("reference to non-existent subpattern")
+        );
+    }
+}
+
+#[test]
+fn quantified_assertions_and_possessive_compounds_follow_pcre_backtracking() {
+    assert!(php_regex(r"/^a\Eb$/").is_match("ab"));
+    assert!(php_regex(r"/^(?=a)*a$/").is_match("a"));
+    let captures = php_regex(r"/^(?=(a))+a$/").captures("a").unwrap();
+    assert_eq!(captures.get(1).unwrap().as_str("a"), "a");
+    assert!(php_regex(r"/^a(?<=a)*$/").is_match("a"));
+
+    assert!(!php_regex(r"/^(a|ab)++c$/").is_match("abc"));
+    assert!(
+        Regex::new("[z-a]", RegexFlags::default())
+            .unwrap_err()
+            .starts_with("range out of order in character class")
+    );
+
+    assert!(php_regex("/(*CR)(?x)^a#comment\rb$/").is_match("ab"));
+}
+
+#[test]
+fn recursion_conditions_prefer_existing_capture_names() {
+    assert!(php_regex(r"/^(?<R>a)?(?(R)b|c)$/").is_match("ab"));
+    assert!(php_regex(r"/^(?<R1>a)?(?(R1)b|c)$/").is_match("ab"));
+    assert!(php_regex(r"/^(?<x>(?(R&x)a|b)(?&x)?)$/").is_match("ba"));
+}
+
+#[test]
+fn search_start_anchor_is_fixed_during_bump_along_and_advances_after_a_match() {
+    let anchor = php_regex(r"/\Gx/");
+    assert!(!anchor.is_match("ax"));
+    assert!(anchor.is_match("x"));
+
+    let contiguous = php_regex(r"/\G./");
+    assert_eq!(
+        contiguous
+            .captures_iter("abc")
+            .iter()
+            .map(|captures| captures.get(0).unwrap().as_str("abc"))
+            .collect::<Vec<_>>(),
+        ["a", "b", "c"]
+    );
+}
+
+#[test]
+fn duplicate_named_groups_follow_compile_match_and_alias_rules() {
+    assert!(
+        Regex::new("(?<g>a)(?<g>b)", RegexFlags::default())
+            .unwrap_err()
+            .contains("PCRE2_DUPNAMES not set")
+    );
+
+    let alternatives = php_regex("/(?J)(?:(?<g>a)|(?<g>b))/");
+    let left = alternatives.captures("a").unwrap();
+    assert_eq!(left.get_named("g").unwrap().as_str("a"), "a");
+    assert_eq!(left.named_group_slot("g"), Some(1));
+    let right = alternatives.captures("b").unwrap();
+    assert_eq!(right.get_named("g").unwrap().as_str("b"), "b");
+    assert_eq!(right.named_group_slot("g"), Some(2));
+
+    // Named backreferences use the first participating physical group even
+    // though the public alias projects the last participating group.
+    let backreference = php_regex(r"/(?J)(?<g>a)(?<g>b)\k<g>/");
+    assert!(backreference.is_match("aba"));
+    assert!(!backreference.is_match("abb"));
+
+    let modifier = php_regex("/(?<g>a)(?<g>b)/J");
+    assert_eq!(
+        modifier
+            .captures("ab")
+            .unwrap()
+            .get_named("g")
+            .unwrap()
+            .as_str("ab"),
+        "b"
+    );
+    assert!(php_regex("/(?J:(?<g>a)(?<g>b))/").is_match("ab"));
+    assert!(Regex::new("(?J)(?<g>a)(?-J)(?<g>b)", RegexFlags::default()).is_err());
+}
+
+#[test]
+fn reset_start_preserves_consumption_and_changes_only_the_full_match_span() {
+    let reset = Regex::new(r".{3}\K", RegexFlags::default()).unwrap();
+    let captures = reset.captures_iter("abcdefghijklm");
+    assert_eq!(
+        captures
+            .iter()
+            .map(|captures| {
+                let full = captures.get(0).unwrap();
+                (full.start, full.end)
+            })
+            .collect::<Vec<_>>(),
+        vec![(3, 3), (6, 6), (9, 9), (12, 12)]
+    );
+    assert_eq!(reset.replace_all("abcdefghijklm", "|"), "abc|def|ghi|jkl|m");
+    assert_eq!(
+        reset.split("abcdefghijklm", 3),
+        vec!["abc", "def", "ghijklm"]
+    );
+
+    let suffix = Regex::new(r"abc\Kdef", RegexFlags::default()).unwrap();
+    let full = suffix.captures("abcdef").unwrap();
+    assert_eq!(full.get(0).unwrap().as_str("abcdef"), "def");
+
+    assert_eq!(
+        Regex::new(r"(?=xyz\K)", RegexFlags::default()).unwrap_err(),
+        r"\K is not allowed in lookarounds (but see PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK) at offset 9"
+    );
+    assert_eq!(
+        Regex::new(r"(a(?=xyz\K))", RegexFlags::default()).unwrap_err(),
+        r"\K is not allowed in lookarounds (but see PCRE2_EXTRA_ALLOW_LOOKAROUND_BSK) at offset 12"
+    );
+}
+
+#[test]
+fn global_empty_matches_retry_a_nonempty_alternative_before_advancing() {
+    for pattern in [r"\K|.", "a*|b"] {
+        let regex = Regex::new(pattern, RegexFlags::default()).unwrap();
+        let matches = regex
+            .captures_iter(if pattern == "a*|b" { "b" } else { "a" })
+            .into_iter()
+            .map(|captures| captures.get(0).unwrap().clone())
+            .collect::<Vec<_>>();
+        assert_eq!(
+            matches,
+            [
+                Match { start: 0, end: 0 },
+                Match { start: 0, end: 1 },
+                Match { start: 1, end: 1 },
+            ]
+        );
+        assert_eq!(
+            regex.replace_all(if pattern == "a*|b" { "b" } else { "a" }, "X"),
+            "XXX"
+        );
+    }
+    assert_eq!(
+        Regex::new("a*", RegexFlags::default())
+            .unwrap()
+            .replace_all("b", "X"),
+        "XbX"
     );
 }
 
@@ -784,6 +1053,26 @@ fn unicode_properties_hex_escapes_and_grapheme_clusters() {
 }
 
 #[test]
+fn grapheme_clusters_follow_unicode_14_break_properties_and_emoji_rules() {
+    let clusters = |subject: &str| {
+        php_regex("/\\X/u")
+            .captures_iter(subject)
+            .into_iter()
+            .map(|captures| captures.get(0).unwrap().as_str(subject).to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(clusters("👍🏽x"), ["👍🏽", "x"]);
+    assert_eq!(clusters("\u{0600}Ax"), ["\u{0600}A", "x"]);
+    assert_eq!(clusters("क\u{093E}x"), ["का", "x"]);
+    assert_eq!(clusters("a\u{200D}😀"), ["a\u{200D}", "😀"]);
+    assert_eq!(
+        clusters("😀\u{FE0F}\u{200D}😀x"),
+        ["😀\u{FE0F}\u{200D}😀", "x"]
+    );
+    assert_eq!(clusters("🇨🇿🇨"), ["🇨🇿", "🇨"]);
+}
+
+#[test]
 fn test_php_rejects_alphanumeric_backslash_and_nul_delimiters() {
     for pattern in ["aba", "1b1", "\\b\\", "\0b\0"] {
         assert_eq!(
@@ -794,17 +1083,255 @@ fn test_php_rejects_alphanumeric_backslash_and_nul_delimiters() {
 }
 
 #[test]
-fn valid_scoped_option_group_is_classified_as_an_engine_limit() {
-    let (pattern, flags) = parse_php_regex("/(?i:a|(?-i:B))/").unwrap();
-    assert_eq!(
-        Regex::new(&pattern, flags).unwrap_err(),
-        "Unsupported PCRE scoped option group"
-    );
+fn inline_and_scoped_options_follow_lexical_group_boundaries() {
+    let scoped = php_regex("/^(?i:a|(?-i:B))$/");
+    assert!(scoped.is_match("a"));
+    assert!(scoped.is_match("A"));
+    assert!(scoped.is_match("B"));
+    assert!(!scoped.is_match("b"));
+
+    assert!(php_regex("/^(?i)a(?-i)b$/").is_match("Ab"));
+    assert!(!php_regex("/^(?i)a(?-i)b$/").is_match("AB"));
+    assert!(php_regex("/^(a(?i)b)c$/").is_match("aBc"));
+    assert!(!php_regex("/^(a(?i)b)c$/").is_match("aBC"));
+    assert!(php_regex("/^(?i)a(?^)b$/").is_match("Ab"));
+    assert!(php_regex("/^(?x) a \\x20 b $/").is_match("a b"));
+    assert!(php_regex("/^(?xx:[a b]+)$/").is_match("ab"));
+
     let (pattern, flags) = parse_php_regex("/(?i:a/").unwrap();
     assert_eq!(
         Regex::new(&pattern, flags).unwrap_err(),
         "Unterminated scoped PCRE option group"
     );
+}
+
+#[test]
+fn pcre_character_escapes_and_quoting_cover_the_documented_byte_surface() {
+    assert!(php_regex("/^\\a\\e\\f\\cA$/").is_match("\u{7}\u{1b}\u{c}\u{1}"));
+    assert!(php_regex("/^\\h+$/u").is_match("\t \u{a0}"));
+    assert!(php_regex("/^\\v+$/u").is_match("\n\u{2028}"));
+    assert!(php_regex("/^\\N+$/").is_match("abc"));
+    assert!(!php_regex("/^\\N+$/").is_match("a\nb"));
+    assert!(php_regex("/^\\N{U+41}$/u").is_match("A"));
+    assert!(php_regex("/foo\\Z/").is_match("foo\n"));
+    assert!(!php_regex("/foo\\Z/").is_match("foo\nx"));
+    assert!(php_regex("/^\\Q.a+$\\E$/").is_match(".a+$"));
+    assert!(php_regex("/^\\Qab\\E+$/").is_match("abb"));
+    assert!(!php_regex("/^\\Qab\\E+$/").is_match("abab"));
+    assert!(php_regex("/^[\\b]$/").is_match("\u{8}"));
+    assert!(php_regex("/^[\\h\\v]+$/u").is_match(" \n"));
+
+    let (pattern, flags) = parse_php_regex("/[\\B]/").unwrap();
+    assert!(Regex::new(&pattern, flags).is_err());
+}
+
+#[test]
+fn alternate_backreference_subroutine_comment_and_callout_spellings_work() {
+    assert!(php_regex("/^(a)(b)\\g{1}\\g2$/").is_match("abab"));
+    assert!(php_regex("/^(a)(b)\\g{-1}\\g{-2}$/").is_match("abba"));
+    assert!(php_regex("/^(?<x>a)\\g{x}\\k{x}$/").is_match("aaa"));
+    assert!(php_regex("/^(?<x>a)\\g<x>$/").is_match("aa"));
+    assert!(php_regex("/^(a)(?-1)$/").is_match("aa"));
+    assert!(php_regex("/^(?+1)(a)$/").is_match("aa"));
+    assert!(php_regex("/^(?<x>a)(?P>x)$/").is_match("aa"));
+    assert!(php_regex("/^a(?# ignored)b$/").is_match("ab"));
+    assert!(php_regex("/^a(?C)b$/").is_match("ab"));
+    assert!(php_regex("/^a(?C17)b$/").is_match("ab"));
+    assert!(php_regex("/^a(?C'hello')b$/").is_match("ab"));
+    assert!(php_regex("/^(a)\\11$/").is_match("a\t"));
+}
+
+#[test]
+fn leading_directives_select_unicode_newline_bsr_and_resource_modes() {
+    assert!(php_regex("/(*UTF)^é$/").is_match("é"));
+    assert!(php_regex("/(*UCP)^\\w+$/").is_match("č"));
+    assert!(php_regex("/(*CR)^b$/m").is_match("a\rb"));
+    assert!(!php_regex("/(*BSR_ANYCRLF)^\\R$/u").is_match("\u{2028}"));
+    assert!(php_regex("/(*BSR_UNICODE)^\\R$/u").is_match("\u{2028}"));
+
+    // PHP accepts the PCRE2 NOTEMPTY start items but does not propagate them
+    // to preg_match() as runtime options, so their observable PHP behavior is
+    // deliberately a no-op.
+    let captures = php_regex("/(*NOTEMPTY)a*/").captures("bbb").unwrap();
+    assert_eq!(captures.get(0).unwrap().start, 0);
+    assert_eq!(captures.get(0).unwrap().end, 0);
+    assert!(php_regex("/(*NO_AUTO_POSSESS)^a+a$/").is_match("aa"));
+
+    let limited = Regex::new("(*LIMIT_MATCH=1)^(a)+b$", RegexFlags::default()).unwrap();
+    assert_eq!(
+        limited.is_match_with_limits(
+            "aaaaaaaa",
+            MatchLimits {
+                backtrack: 1_000,
+                recursion: 1_000,
+                heap_frames: usize::MAX,
+                jit: false,
+            },
+        ),
+        Err(MatchLimitError::Backtrack)
+    );
+
+    let heap_limited = Regex::new("(*LIMIT_HEAP=1)^(a|b)+$", RegexFlags::default()).unwrap();
+    assert_eq!(
+        heap_limited.is_match_with_limits("aaaaaaaaaa", MatchLimits::default()),
+        Err(MatchLimitError::Heap)
+    );
+    assert_eq!(
+        heap_limited.is_match_with_limits("aaa", MatchLimits::default()),
+        Ok(true)
+    );
+}
+
+#[test]
+fn control_verbs_long_groups_and_extended_conditions_follow_pcre_order() {
+    assert!(php_regex("/^a(*FAIL)b|ac$/").is_match("ac"));
+    assert!(php_regex("/^a(*F)b|ac$/").is_match("ac"));
+    let accepted = php_regex("/^a(*ACCEPT)b$/").captures("a").unwrap();
+    assert_eq!(accepted.get(0).unwrap().as_str("a"), "a");
+    assert!(!php_regex("/^a+(*COMMIT)b|aac$/").is_match("aac"));
+    assert!(!php_regex("/a(*COMMIT)b|c/").is_match("ac"));
+    assert!(!php_regex("/^a+(*PRUNE)b|aac$/").is_match("aac"));
+    assert!(php_regex("/a(*PRUNE)b|c/").is_match("ac"));
+    assert!(!php_regex("/a+(*SKIP)b|a/").is_match("aac"));
+    assert!(php_regex("/^(?:a(*THEN)b|ac)$/").is_match("ac"));
+    let named_skip = php_regex("/a(*MARK:X)b(*SKIP:X)c|b/")
+        .captures("abx")
+        .unwrap();
+    assert_eq!(named_skip.get(0).unwrap().as_str("abx"), "b");
+    assert_eq!(named_skip.get(0).unwrap().start, 1);
+    assert!(php_regex("/a(*SKIP:X)b|a/").is_match("a"));
+
+    let assertion_accept = php_regex("/^(?=a(*ACCEPT)b)a$/").captures("a").unwrap();
+    assert_eq!(assertion_accept.get(0).unwrap().as_str("a"), "a");
+    let group_accept = php_regex("/^((?:a(*ACCEPT)b)c)d$/").captures("a").unwrap();
+    assert_eq!(group_accept.get(0).unwrap().as_str("a"), "a");
+    assert_eq!(group_accept.get(1).unwrap().as_str("a"), "a");
+
+    assert!(!php_regex("/^(*atomic:a+)ab$/").is_match("aaab"));
+    assert!(php_regex("/^(*positive_lookahead:a)a$/").is_match("a"));
+    assert!(php_regex("/^a(*positive_lookbehind:a)$/").is_match("a"));
+    assert!(php_regex("/^(*script_run:\\w+)$/u").is_match("abc"));
+
+    let subject = "word1 word2 word3 word2 word3 word4";
+    let non_atomic = php_regex("/^(?x)(*napla: .* \\b(\\w++)) (?> .*? \\b\\1\\b ){2}/")
+        .captures(subject)
+        .unwrap();
+    assert_eq!(non_atomic.get(1).unwrap().as_str(subject), "word3");
+    assert!(php_regex("/^(?*.*\\b(\\w++))(?>.*?\\b\\1\\b){2}/").is_match(subject));
+
+    assert!(php_regex("/^(?(?=a)a|b)$/").is_match("a"));
+    assert!(php_regex("/^(a)?(?(-1)b|c)$/").is_match("ab"));
+    assert!(php_regex("/^((?(R1)a|(?1)b))$/").is_match("ab"));
+    assert!(php_regex("/^(?(VERSION>=10.42)yes|no)$/").is_match("yes"));
+
+    assert_eq!(
+        Regex::new("^(a)?(?(<-1>)b|c)$", RegexFlags::default()).unwrap_err(),
+        "subpattern name expected at offset 9"
+    );
+    assert_eq!(
+        Regex::new("(?(<missing>)a|b)", RegexFlags::default()).unwrap_err(),
+        "reference to non-existent subpattern at offset 4"
+    );
+    assert!(Regex::new("(?(<later>)a|b)(?<later>x)", RegexFlags::default()).is_ok());
+}
+
+#[test]
+fn malformed_star_groups_report_pcre_compile_diagnostics() {
+    assert_eq!(
+        Regex::new("(*FOO)a", RegexFlags::default()).unwrap_err(),
+        "(*VERB) not recognized or malformed at offset 5"
+    );
+    assert_eq!(
+        Regex::new("(*FOO:x)a", RegexFlags::default()).unwrap_err(),
+        "(*VERB) not recognized or malformed at offset 5"
+    );
+    assert_eq!(
+        Regex::new("(*MARK)a", RegexFlags::default()).unwrap_err(),
+        "(*MARK) must have an argument at offset 6"
+    );
+    assert_eq!(
+        Regex::new("(*atomic)a", RegexFlags::default()).unwrap_err(),
+        "(*alpha_assertion) not recognized at offset 8"
+    );
+}
+
+#[test]
+fn lookbehind_compile_rules_match_pcre_10_42_fixed_length_contracts() {
+    assert!(php_regex("/(?<=a|bc)x/").is_match("bcx"));
+    assert!(Regex::new("(?<=(a|bc))x", RegexFlags::default()).is_err());
+    assert!(Regex::new("(?<=a+)x", RegexFlags::default()).is_err());
+    assert!(Regex::new("(?<=\\R)x", RegexFlags::default()).is_err());
+    assert!(Regex::new("(?<=(a)\\1)x", RegexFlags::default()).is_ok());
+}
+
+#[test]
+fn script_run_groups_reject_mixed_scripts_and_digit_sets() {
+    let run = php_regex("/^(*sr:\\S+)$/u");
+    assert!(run.is_match("paypal.com"));
+    assert!(!run.is_match("paypаl.com"));
+    assert!(run.is_match("漢ひカ"));
+    assert!(run.is_match("漢한ㄅ"));
+    assert!(!run.is_match("한ㄅ"));
+    assert!(run.is_match("a\u{301}"));
+    assert!(run.is_match("ا،"));
+    assert!(run.is_match("ܐ،"));
+    assert!(!run.is_match("a،"));
+    assert!(!run.is_match("ܐ۔"));
+    assert!(run.is_match("ا۔"));
+    assert!(run.is_match("١٢"));
+    assert!(!run.is_match("a1٢"));
+
+    let atomic = php_regex("/^(*asr:\\S+)$/u");
+    assert!(atomic.is_match("google.com"));
+    assert!(!atomic.is_match("gооgle.com"));
+}
+
+#[test]
+fn unicode_script_and_script_extension_properties_are_distinct() {
+    assert!(!php_regex("/\\p{sc:Arabic}/u").is_match("،"));
+    assert!(php_regex("/\\p{scx:Arabic}/u").is_match("،"));
+    assert!(php_regex("/\\p{Arabic}/u").is_match("،"));
+    assert!(php_regex("/\\p{Script=Latin}/u").is_match("A"));
+    assert!(php_regex("/\\p{Script_Extensions=Latin}/u").is_match("A"));
+    assert!(php_regex("/\\p{Xuc}/u").is_match("@"));
+    assert!(!php_regex("/\\p{Xuc}/u").is_match("A"));
+    assert!(php_regex("/\\p{Xuc}/u").is_match("é"));
+    assert!(Regex::new("\\p{gc=Lu}", RegexFlags::default()).is_err());
+}
+
+#[test]
+fn pcre_10_42_binary_property_inventory_is_compiled_from_unicode_14() {
+    for property in unicode_binary_properties::BINARY_PROPERTY_NAMES {
+        assert!(
+            Regex::new(&format!("\\p{{{property}}}"), RegexFlags::default()).is_ok(),
+            "binary property {property} must compile"
+        );
+    }
+    for unsupported in ["CE", "CWKCF", "Hyphen", "OAlpha", "XO_NFC"] {
+        assert!(Regex::new(&format!("\\p{{{unsupported}}}"), RegexFlags::default()).is_err());
+    }
+
+    assert!(php_regex("/^\\p{Alphabetic}+$/u").is_match("Žluťoučký"));
+    assert!(php_regex("/^\\p{Bidi_C}$/u").is_match("\u{061c}"));
+    assert!(php_regex("/^\\p{Emoji}$/u").is_match("😀"));
+    assert!(php_regex("/^\\p{Pat_Syn}$/u").is_match("+"));
+    assert!(php_regex("/^\\p{CWU}$/u").is_match("a"));
+    assert!(php_regex("/^\\p{WSpace}$/u").is_match("\u{2003}"));
+
+    // Kawi was assigned in Unicode 15.0. PCRE2 10.42 ships Unicode 14.0,
+    // so both its script name and its later letter assignment are absent.
+    assert!(Regex::new("\\p{Kawi}", RegexFlags::default()).is_err());
+    assert!(!php_regex("/^\\p{L}$/u").is_match("\u{11f02}"));
+}
+
+#[test]
+fn bidi_class_property_uses_the_pcre_short_class_inventory() {
+    assert!(php_regex("/^\\p{Bidi_Class:R}$/u").is_match("א"));
+    assert!(php_regex("/^\\p{BC=AL}$/u").is_match("ا"));
+    assert!(php_regex("/^\\p{bc:L}$/u").is_match("A"));
+    assert!(php_regex("/^\\p{bc:EN}$/u").is_match("1"));
+    assert!(!php_regex("/^\\p{bc:R}$/u").is_match("A"));
+    assert!(Regex::new("\\p{bc:Right_To_Left}", RegexFlags::default()).is_err());
 }
 
 #[test]
@@ -862,6 +1389,21 @@ fn symbolic_subroutines_support_forward_definitions_and_recursion() {
 }
 
 #[test]
+fn subroutine_calls_restore_the_callers_capture_registers() {
+    let ordinary = php_regex("/^(?<x>a)(?&x)$/").captures("aa").unwrap();
+    assert_eq!(ordinary.get(1).unwrap().as_str("aa"), "a");
+    assert_eq!(ordinary.get(1).unwrap().start, 0);
+
+    let define = php_regex("/^(?(DEFINE)(?<x>a))(?&x)$/")
+        .captures("a")
+        .unwrap();
+    assert!(define.get(1).is_none());
+
+    let nested = php_regex("/^((a))(?2)$/").captures("aa").unwrap();
+    assert_eq!(nested.get(2).unwrap().start, 0);
+}
+
+#[test]
 fn branching_quantifiers_try_the_preferred_partition_before_collecting_fallbacks() {
     let quoted = php_regex(r#"/^"([^"\\]*|\\.)*"$/"#);
     let subject = format!("\"{}\\\"tail\"", "value".repeat(128));
@@ -870,6 +1412,22 @@ fn branching_quantifiers_try_the_preferred_partition_before_collecting_fallbacks
     // The preferred branch can still be rejected by the continuation; the
     // exhaustive fallback must then find a shorter inner alternative.
     assert!(php_regex("/^(?:ab|a)*b$/").is_match("ab"));
+}
+
+#[test]
+fn nested_delimiter_unions_use_the_linear_reachability_path() {
+    let re = Regex::new(
+        r#"^\[((?:[^]]*|\[(?:[^]]*|\[[^]]*\])*\]|(?:[^{}]*|\{[^{}]*\})*)*)\]$"#,
+        RegexFlags::default(),
+    )
+    .unwrap();
+    let body = format!(
+        "{}[inner]{{\"key\":\"value\"}}tail",
+        "property=value,".repeat(256)
+    );
+    let subject = format!("[{body}]");
+    let captures = re.captures(&subject).unwrap();
+    assert_eq!(captures.get(1).unwrap().as_str(&subject), body);
 }
 
 #[test]
@@ -939,26 +1497,6 @@ fn subroutine_calls_inline_completed_groups_without_publishing_captures() {
 }
 
 #[test]
-fn recursive_and_forward_subroutine_calls_remain_engine_non_claims() {
-    assert_eq!(
-        Regex::new("(?<a>x(?&a)?)", RegexFlags::default()).unwrap_err(),
-        "Unsupported PCRE recursive subroutine call"
-    );
-    assert_eq!(
-        Regex::new("(?1)(x)", RegexFlags::default()).unwrap_err(),
-        "Unsupported PCRE forward subroutine call"
-    );
-    assert_eq!(
-        Regex::new("(?R)?x", RegexFlags::default()).unwrap_err(),
-        "Unsupported PCRE recursive subroutine call"
-    );
-    assert_eq!(
-        Regex::new("(?<a>x)(?&nope)", RegexFlags::default()).unwrap_err(),
-        "Unknown PCRE subpattern 'nope'"
-    );
-}
-
-#[test]
 fn braced_and_bare_g_escapes_are_backreferences() {
     for pattern in ["(a)\\g{1}", "(a)\\g1", "(a)\\g{-1}", "(?<q>a)\\g{q}"] {
         let re = Regex::new(pattern, RegexFlags::default()).unwrap();
@@ -972,9 +1510,9 @@ fn braced_and_bare_g_escapes_are_backreferences() {
 #[test]
 fn lookbehind_only_tries_starts_within_its_length_range() {
     let flags = RegexFlags::default();
-    let mixed = Regex::new("(?<=ab|c)x", flags).unwrap();
+    let mixed = Regex::new("(?<=ab|cd)x", flags).unwrap();
     assert!(mixed.is_match("abx"));
-    assert!(mixed.is_match("cx"));
+    assert!(mixed.is_match("cdx"));
     assert!(!mixed.is_match("bx"));
     let negative = Regex::new("(?<![\"'])[:-]\\w", flags).unwrap();
     assert!(negative.is_match("key:v"));
@@ -983,10 +1521,14 @@ fn lookbehind_only_tries_starts_within_its_length_range() {
     // A lookbehind at the subject start sees nothing before it.
     assert!(!Regex::new("(?<=a)x", flags).unwrap().is_match("x"));
     assert!(Regex::new("(?<!a)x", flags).unwrap().is_match("x"));
-    // Quantified and grouped bodies keep their full range.
-    assert!(Regex::new("(?<=a{2,3})x", flags).unwrap().is_match("aaax"));
-    assert!(!Regex::new("(?<=a{2,3})x", flags).unwrap().is_match("ax"));
-    assert!(Regex::new("(?<=(?:ab)+)x", flags).map_or(true, |re| re.is_match("ababx")));
+    // Fixed quantified and grouped bodies retain the bounded window.
+    assert!(Regex::new("(?<=a{3})x", flags).unwrap().is_match("aaax"));
+    assert!(!Regex::new("(?<=a{3})x", flags).unwrap().is_match("aax"));
+    assert!(
+        Regex::new("(?<=(?:ab){2})x", flags)
+            .unwrap()
+            .is_match("ababx")
+    );
 }
 
 #[test]
@@ -1012,6 +1554,7 @@ fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
             MatchLimits {
                 backtrack: 8,
                 recursion: 100,
+                heap_frames: usize::MAX,
                 jit: false,
             },
         ),
@@ -1025,6 +1568,7 @@ fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
             MatchLimits {
                 backtrack: 1,
                 recursion: 100,
+                heap_frames: usize::MAX,
                 jit: false,
             },
         ),
@@ -1038,6 +1582,7 @@ fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
             MatchLimits {
                 backtrack: 100,
                 recursion: 1,
+                heap_frames: usize::MAX,
                 jit: false,
             },
         ),
@@ -1051,6 +1596,7 @@ fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
             MatchLimits {
                 backtrack: 1_000_000,
                 recursion: 100,
+                heap_frames: usize::MAX,
                 jit: true,
             },
         ),

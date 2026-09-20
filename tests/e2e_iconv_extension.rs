@@ -55,7 +55,11 @@ echo "\n", ICONV_IMPL, '|', ICONV_VERSION, '|', ICONV_MIME_DECODE_STRICT,
     }
     assert_eq!(
         &identity[2..],
-        ["12", "11", "calendar,date,gettext,iconv,Phar,tokenizer"]
+        [
+            "12",
+            "11",
+            "calendar,date,gettext,iconv,Phar,pcre,tokenizer"
+        ]
     );
 }
 

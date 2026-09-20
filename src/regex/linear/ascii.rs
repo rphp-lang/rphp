@@ -1,11 +1,61 @@
 //! ASCII byte executor for capture-free linear regex shapes.
 
 use super::super::{
-    Anchor, CaptureView, ClassItem, Match, Node, Regex, RegexFlags, chars_equal, is_word_char,
-    match_class_item, match_shorthand,
+    Anchor, CaptureView, ClassItem, Match, NewlineConvention, Node, Regex, RegexFlags, chars_equal,
+    is_word_char, match_class_item, match_shorthand,
 };
 
 const PREFIX_LIMIT: usize = 32;
+
+pub(super) fn try_first_match(regex: &Regex, subject: &str) -> Option<Option<Match>> {
+    let bytes = subject.as_bytes();
+    if starts_at_search_boundary(&regex.ast) || regex.flags.anchored {
+        let inspected = maximum_consumption(&regex.ast)?.min(bytes.len());
+        if !bytes[..inspected].is_ascii() {
+            return None;
+        }
+    } else if !subject.is_ascii() {
+        return None;
+    }
+    let mut pos = 0usize;
+    while pos <= bytes.len() {
+        if let Some(end) = match_no_capture(&regex.ast, pos, bytes, regex.flags, 0) {
+            return Some(Some(Match { start: pos, end }));
+        }
+        if regex.flags.anchored {
+            break;
+        }
+        pos += 1;
+    }
+    Some(None)
+}
+
+fn starts_at_search_boundary(node: &Node) -> bool {
+    match node {
+        Node::Anchor(Anchor::SearchStart | Anchor::AbsoluteStart) => true,
+        Node::Sequence(nodes) => nodes.first().is_some_and(starts_at_search_boundary),
+        Node::Group { inner, .. } => starts_at_search_boundary(inner),
+        _ => false,
+    }
+}
+
+fn maximum_consumption(node: &Node) -> Option<usize> {
+    match node {
+        Node::Literal(_)
+        | Node::AnyChar
+        | Node::ByteUnit
+        | Node::NotNewline
+        | Node::CharClass { .. }
+        | Node::Shorthand(_) => Some(1),
+        Node::Anchor(_) | Node::WordBoundary(_) => Some(0),
+        Node::Group { inner, .. } => maximum_consumption(inner),
+        Node::Sequence(nodes) => nodes.iter().try_fold(0usize, |total, node| {
+            total.checked_add(maximum_consumption(node)?)
+        }),
+        Node::Quantifier { inner, max, .. } => maximum_consumption(inner)?.checked_mul((*max)?),
+        _ => None,
+    }
+}
 
 #[derive(Clone, Copy)]
 struct Tail<'a> {
@@ -110,7 +160,7 @@ where
             count += 1;
             if !visitor(CaptureView {
                 groups: &groups,
-                named_groups: &regex.symbols.named_groups,
+                symbols: &regex.symbols,
                 mark: None,
             })? {
                 break;
@@ -280,7 +330,7 @@ fn match_terminal_quantifier(
     let mut repetitions = 0;
 
     while repetitions < target {
-        let Some(next) = match_atom(inner, current, bytes, flags) else {
+        let Some(next) = match_atom(inner, current, bytes, flags, 0) else {
             break;
         };
         current = next;
@@ -291,7 +341,91 @@ fn match_terminal_quantifier(
 }
 
 #[inline]
-fn match_atom(node: &Node, pos: usize, bytes: &[u8], flags: RegexFlags) -> Option<usize> {
+fn match_no_capture(
+    node: &Node,
+    pos: usize,
+    bytes: &[u8],
+    flags: RegexFlags,
+    search_start: usize,
+) -> Option<usize> {
+    match node {
+        Node::Sequence(nodes) => {
+            let mut current = pos;
+            for node in nodes {
+                current = match node {
+                    Node::Quantifier {
+                        inner,
+                        min,
+                        max,
+                        greedy,
+                        ..
+                    } => match_terminal_quantifier_at(
+                        inner,
+                        *min,
+                        *max,
+                        *greedy,
+                        current,
+                        bytes,
+                        flags,
+                        search_start,
+                    )?,
+                    _ => match_atom(node, current, bytes, flags, search_start)?,
+                };
+            }
+            Some(current)
+        }
+        Node::Quantifier {
+            inner,
+            min,
+            max,
+            greedy,
+            ..
+        } => match_terminal_quantifier_at(
+            inner,
+            *min,
+            *max,
+            *greedy,
+            pos,
+            bytes,
+            flags,
+            search_start,
+        ),
+        _ => match_atom(node, pos, bytes, flags, search_start),
+    }
+}
+
+#[inline]
+fn match_terminal_quantifier_at(
+    inner: &Node,
+    min: usize,
+    max: Option<usize>,
+    greedy: bool,
+    pos: usize,
+    bytes: &[u8],
+    flags: RegexFlags,
+    search_start: usize,
+) -> Option<usize> {
+    let limit = max.unwrap_or(usize::MAX);
+    let target = if greedy { limit } else { min };
+    let mut current = pos;
+    let mut repetitions = 0;
+    while repetitions < target {
+        let Some(next) = match_atom(inner, current, bytes, flags, search_start) else {
+            break;
+        };
+        current = next;
+        repetitions += 1;
+    }
+    (repetitions >= min).then_some(current)
+}
+
+fn match_atom(
+    node: &Node,
+    pos: usize,
+    bytes: &[u8],
+    flags: RegexFlags,
+    search_start: usize,
+) -> Option<usize> {
     match node {
         Node::Literal(literal) => {
             if pos >= bytes.len() {
@@ -301,32 +435,48 @@ fn match_atom(node: &Node, pos: usize, bytes: &[u8], flags: RegexFlags) -> Optio
             let matches = if literal.is_ascii() && !flags.case_insensitive {
                 candidate == *literal as u8
             } else {
-                chars_equal(char::from(candidate), *literal, flags.case_insensitive)
+                chars_equal(char::from(candidate), *literal, flags)
             };
             matches.then_some(pos + 1)
         }
-        Node::AnyChar => {
-            (pos < bytes.len() && (flags.dotall || bytes[pos] != b'\n')).then_some(pos + 1)
-        }
+        Node::AnyChar => (pos < bytes.len()
+            && (flags.dotall
+                || newline_len_at_bytes(bytes, pos, flags.line_options.newline()).is_none()))
+        .then_some(pos + 1),
+        Node::ByteUnit => (pos < bytes.len()).then_some(pos + 1),
+        Node::NotNewline => (pos < bytes.len()
+            && newline_len_at_bytes(bytes, pos, flags.line_options.newline()).is_none())
+        .then_some(pos + 1),
         Node::Anchor(Anchor::Start) => {
             let matches = if flags.multiline {
-                pos == 0 || (pos > 0 && bytes[pos - 1] == b'\n')
+                pos == 0 || newline_ends_at_bytes(bytes, pos, flags.line_options.newline())
             } else {
                 pos == 0
             };
             matches.then_some(pos)
         }
         Node::Anchor(Anchor::AbsoluteStart) => (pos == 0).then_some(pos),
+        Node::Anchor(Anchor::AbsoluteEnd) => (pos == bytes.len()).then_some(pos),
+        Node::Anchor(Anchor::FinalEnd) => (pos == bytes.len()
+            || newline_len_at_bytes(bytes, pos, flags.line_options.newline())
+                .is_some_and(|length| pos + length == bytes.len()))
+        .then_some(pos),
+        Node::Anchor(Anchor::SearchStart) => (pos == search_start).then_some(pos),
         Node::Anchor(Anchor::End) => {
-            let matches = if flags.multiline {
-                pos == bytes.len() || bytes[pos] == b'\n'
+            let matches = if pos == bytes.len() {
+                true
+            } else if flags.multiline {
+                newline_len_at_bytes(bytes, pos, flags.line_options.newline()).is_some()
+            } else if flags.line_options.dollar_end_only() {
+                false
             } else {
-                pos == bytes.len()
+                newline_len_at_bytes(bytes, pos, flags.line_options.newline())
+                    .is_some_and(|length| pos + length == bytes.len())
             };
             matches.then_some(pos)
         }
         Node::WordBoundary(positive) => {
-            (is_word_boundary(bytes, pos, flags.unicode) == *positive).then_some(pos)
+            (is_word_boundary(bytes, pos, flags.unicode_mode.ucp()) == *positive).then_some(pos)
         }
         Node::CharClass { negated, items } => {
             if pos >= bytes.len() {
@@ -339,10 +489,43 @@ fn match_atom(node: &Node, pos: usize, bytes: &[u8], flags: RegexFlags) -> Optio
             (in_class != *negated).then_some(pos + 1)
         }
         Node::Shorthand(shorthand) => (pos < bytes.len()
-            && match_shorthand(*shorthand, char::from(bytes[pos]), flags.unicode))
+            && match_shorthand(*shorthand, char::from(bytes[pos]), flags.unicode_mode.ucp()))
         .then_some(pos + 1),
+        Node::Group { inner, .. } => match_no_capture(inner, pos, bytes, flags, search_start),
         _ => None,
     }
+}
+
+fn newline_len_at_bytes(bytes: &[u8], pos: usize, convention: NewlineConvention) -> Option<usize> {
+    let first = *bytes.get(pos)?;
+    match convention {
+        NewlineConvention::Lf => (first == b'\n').then_some(1),
+        NewlineConvention::Cr => (first == b'\r').then_some(1),
+        NewlineConvention::CrLf => {
+            (first == b'\r' && bytes.get(pos + 1) == Some(&b'\n')).then_some(2)
+        }
+        NewlineConvention::AnyCrLf | NewlineConvention::Any => {
+            if first == b'\r' && bytes.get(pos + 1) == Some(&b'\n') {
+                Some(2)
+            } else if matches!(first, b'\r' | b'\n')
+                || (convention == NewlineConvention::Any && matches!(first, 0x0b | 0x0c | 0x85))
+            {
+                Some(1)
+            } else {
+                None
+            }
+        }
+        NewlineConvention::Nul => (first == 0).then_some(1),
+    }
+}
+
+fn newline_ends_at_bytes(bytes: &[u8], pos: usize, convention: NewlineConvention) -> bool {
+    (pos > 0
+        && newline_len_at_bytes(bytes, pos - 1, convention)
+            .is_some_and(|length| pos - 1 + length == pos))
+        || (pos > 1
+            && newline_len_at_bytes(bytes, pos - 2, convention)
+                .is_some_and(|length| pos - 2 + length == pos))
 }
 
 #[inline]

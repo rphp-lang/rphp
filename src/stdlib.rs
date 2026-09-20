@@ -9812,6 +9812,12 @@ fn fn_str_repeat(
         ret!(rv, Value::null());
     }
     let times = times as usize;
+    if times == 1 {
+        // PHP can return the existing immutable string payload for a single
+        // repetition. Besides avoiding a needless copy, this keeps allocator
+        // accounting stable for strings produced by preg_replace().
+        ret!(rv, source_value.clone());
+    }
     let allocation_failure = |bytes: usize| {
         let (file, line) = internal_call_source(ed);
         VmError::Fatal(format!(
@@ -23717,8 +23723,99 @@ fn pcre_capture_value(
 }
 
 #[cold]
+#[inline(never)]
+fn pcre_project_capture_row(
+    caps: &crate::regex::Captures,
+    subject: &str,
+    offset_base: usize,
+    offset_capture: bool,
+    unmatched_as_null: bool,
+    mapped: bool,
+) -> PhpArray {
+    let last_capture = if unmatched_as_null {
+        caps.len() - 1
+    } else {
+        (0..caps.len())
+            .rev()
+            .find(|&index| caps.get(index).is_some())
+            .unwrap_or(0)
+    };
+    let mut row = PhpArray::new();
+    for index in 0..=last_capture {
+        let value = pcre_capture_value(
+            caps.get(index),
+            subject,
+            offset_base,
+            offset_capture,
+            unmatched_as_null,
+            mapped,
+        );
+        for (name, _) in caps.named_groups() {
+            if caps.named_group_output_slot(name) == Some(index) {
+                let alias_slot = caps.named_group_slot(name).unwrap_or(index);
+                let alias = if alias_slot == index {
+                    value.clone()
+                } else {
+                    pcre_capture_value(
+                        caps.get(alias_slot),
+                        subject,
+                        offset_base,
+                        offset_capture,
+                        unmatched_as_null,
+                        mapped,
+                    )
+                };
+                row.set_str(name, alias);
+            }
+        }
+        row.push(value);
+    }
+    if let Some(mark) = caps.mark() {
+        row.set_str("MARK", Value::string(mark));
+    }
+    row
+}
+
+#[cold]
 fn pcre_clear_matches_argument(ed: *mut ExecuteData, argument: u32) {
     arg_mut!(ed, argument, Value::array(PhpArray::new()));
+}
+
+#[cold]
+fn pcre_validate_start_offset(eg: &mut ExecutorGlobals, function: &str, raw_offset: i64) -> bool {
+    if raw_offset != i64::MIN {
+        return true;
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        &format!(
+            "{function}(): Argument #5 ($offset) must be greater than {}",
+            i64::MIN
+        ),
+    ));
+    false
+}
+
+#[cold]
+fn pcre_validate_match_flags(
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    flags: i64,
+    allow_order: bool,
+) -> bool {
+    let order = flags & 0b11;
+    let allowed = PREG_OFFSET_CAPTURE_RESULT | PREG_UNMATCHED_AS_NULL_RESULT | 0b11;
+    if flags >= 0
+        && flags & !allowed == 0
+        && ((allow_order && order != 0b11) || (!allow_order && order == 0))
+    {
+        return true;
+    }
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        &format!("{function}(): Argument #4 ($flags) must be a PREG_* constant"),
+    ));
+    false
 }
 
 #[cold]
@@ -23729,8 +23826,8 @@ fn pcre_empty_match_all_projection(regex: &crate::regex::Regex, set_order: bool)
     let mut result = PhpArray::new();
     for index in 0..regex.capture_count() {
         let value = Value::array(PhpArray::new());
-        for (name, slot) in regex.capture_names() {
-            if *slot == index {
+        for (name, _) in regex.capture_names() {
+            if regex.capture_name_output_slot(name) == Some(index) {
                 result.set_str(name, value.clone());
             }
         }
@@ -23790,34 +23887,14 @@ fn pcre_match_unicode(
     }
     match re.captures_with_limits(&searched_subject, limits) {
         Ok(Some(caps)) => {
-            let mut arr = PhpArray::new();
-            let last_capture = if unmatched_as_null {
-                caps.len() - 1
-            } else {
-                (0..caps.len())
-                    .rev()
-                    .find(|&index| caps.get(index).is_some())
-                    .unwrap_or(0)
-            };
-            for i in 0..=last_capture {
-                let value = pcre_capture_value(
-                    caps.get(i),
-                    &searched_subject,
-                    offset,
-                    offset_capture,
-                    unmatched_as_null,
-                    false,
-                );
-                for (name, slot) in caps.named_groups() {
-                    if *slot == i {
-                        arr.set_str(name, value.clone());
-                    }
-                }
-                arr.push(value);
-            }
-            if let Some(mark) = caps.mark() {
-                arr.set_str("MARK", Value::string(mark));
-            }
+            let arr = pcre_project_capture_row(
+                &caps,
+                &searched_subject,
+                offset,
+                offset_capture,
+                unmatched_as_null,
+                false,
+            );
             arg_mut!(ed, 2, Value::array(arr));
             ret!(rv, Value::long(1));
         }
@@ -23839,12 +23916,23 @@ fn fn_preg_match(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(pattern_str) = typed_internal_string_argument(ed, eg, "preg_match", 0, "pattern")?
-    else {
-        return Ok(());
+    let pattern_str = if let Some(pattern) = arg!(ed, 0).as_str() {
+        Cow::Borrowed(pattern)
+    } else {
+        let Some(pattern) = typed_internal_string_argument(ed, eg, "preg_match", 0, "pattern")?
+        else {
+            return Ok(());
+        };
+        Cow::Owned(pattern)
     };
-    let Some(subject) = typed_internal_string_argument(ed, eg, "preg_match", 1, "subject")? else {
-        return Ok(());
+    let subject = if let Some(subject) = arg!(ed, 1).as_str() {
+        Cow::Borrowed(subject)
+    } else {
+        let Some(subject) = typed_internal_string_argument(ed, eg, "preg_match", 1, "subject")?
+        else {
+            return Ok(());
+        };
+        Cow::Owned(subject)
     };
     let flags = if arg_opt!(ed, 3).is_some() {
         let Some(flags) = typed_internal_int_argument(ed, eg, "preg_match", 3, "flags")? else {
@@ -23864,6 +23952,9 @@ fn fn_preg_match(
     } else {
         0
     };
+    if !pcre_validate_start_offset(eg, "preg_match", raw_offset) {
+        return Ok(());
+    }
 
     let has_matches = {
         let raw = unsafe { (*ed).cv(2) };
@@ -23873,13 +23964,16 @@ fn fn_preg_match(
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_match", &pattern_str)? else {
         ret!(rv, Value::bool(false));
     };
+    if !pcre_validate_match_flags(eg, "preg_match", flags, false) {
+        return Ok(());
+    }
     if re.is_unicode() {
         return pcre_match_unicode(
             ed,
             rv,
             eg,
             &re,
-            Cow::Owned(subject),
+            subject,
             raw_offset,
             has_matches,
             offset_capture,
@@ -23887,7 +23981,7 @@ fn fn_preg_match(
         );
     }
 
-    let view = PcreByteView::new(arg!(ed, 1), subject);
+    let view = PcreByteView::new(arg!(ed, 1), subject.into_owned());
     let subject_len = view.php_len() as i64;
     if raw_offset > subject_len {
         if has_matches {
@@ -23918,34 +24012,14 @@ fn fn_preg_match(
         Ok(Some(caps)) => {
             if has_matches {
                 let matches_ptr = arg_mut!(ed, 2);
-                let mut arr = PhpArray::new();
-                let last_capture = if unmatched_as_null {
-                    caps.len() - 1
-                } else {
-                    (0..caps.len())
-                        .rev()
-                        .find(|&index| caps.get(index).is_some())
-                        .unwrap_or(0)
-                };
-                for i in 0..=last_capture {
-                    let value = pcre_capture_value(
-                        caps.get(i),
-                        searched_subject,
-                        offset,
-                        offset_capture,
-                        unmatched_as_null,
-                        view.mapped,
-                    );
-                    for (name, slot) in caps.named_groups() {
-                        if *slot == i {
-                            arr.set_str(name, value.clone());
-                        }
-                    }
-                    arr.push(value);
-                }
-                if let Some(mark) = caps.mark() {
-                    arr.set_str("MARK", Value::string(mark));
-                }
+                let arr = pcre_project_capture_row(
+                    &caps,
+                    searched_subject,
+                    offset,
+                    offset_capture,
+                    unmatched_as_null,
+                    view.mapped,
+                );
                 unsafe {
                     std::ptr::drop_in_place(matches_ptr);
                     matches_ptr.write(Value::array(arr));
@@ -24005,8 +24079,18 @@ fn preg_replace_strings(
             pcre::set_last_error(eg, pcre::PREG_BAD_UTF8_ERROR);
             return Ok((None, count));
         };
-        let (replaced, replacements) =
-            regex.replace_limit(&engine_subject, &engine_replacement, limit);
+        let (replaced, replacements) = match regex.replace_limit_with_limits(
+            &engine_subject,
+            &engine_replacement,
+            limit,
+            pcre::match_limits(eg),
+        ) {
+            Ok(result) => result,
+            Err(error) => {
+                pcre::set_match_limit_error(eg, error);
+                return Ok((None, count));
+            }
+        };
         result = pcre_engine_result_bytes(replaced, unicode);
         count += replacements;
     }
@@ -24143,7 +24227,18 @@ fn fn_preg_replace(
                 php_byte_result(pcre_engine_result_bytes(result, false), false)
             );
         };
-        let result = regex.replace_all(&subject, &replacement);
+        let result = match regex.replace_limit_with_limits(
+            &subject,
+            &replacement,
+            usize::MAX,
+            pcre::match_limits(eg),
+        ) {
+            Ok((result, _)) => result,
+            Err(error) => {
+                pcre::set_match_limit_error(eg, error);
+                ret!(rv, Value::null());
+            }
+        };
         ret!(rv, Value::string(result));
     }
 
@@ -31506,6 +31601,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     #[cfg(target_os = "linux")]
     "iconv",
     "Phar",
+    "pcre",
     "tokenizer",
 ];
 
@@ -31857,11 +31953,6 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, normalize_ini_boolean_value(value));
             }
-            "pcre.jit" => {
-                eg.ini_overrides
-                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                    .insert(normalized, normalize_ini_boolean_value(value));
-            }
             "pcre.backtrack_limit" | "pcre.recursion_limit" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -32024,7 +32115,6 @@ fn ini_base_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
         "fiber.stack_size" => "2097152".to_string(),
         "arg_separator.output" => "&".to_string(),
         "date.timezone" => "UTC".to_string(),
-        "pcre.jit" => "0".to_string(),
         "pcre.backtrack_limit" => "1000000".to_string(),
         "pcre.recursion_limit" => "100000".to_string(),
         "default_charset" => "UTF-8".to_string(),
@@ -33906,6 +33996,9 @@ fn fn_preg_match_all(
     } else {
         0
     };
+    if !pcre_validate_start_offset(eg, "preg_match_all", raw_offset) {
+        return Ok(());
+    }
     let offset_capture = flags & PREG_OFFSET_CAPTURE_RESULT != 0;
     let unmatched_as_null = flags & PREG_UNMATCHED_AS_NULL_RESULT != 0;
 
@@ -33917,6 +34010,9 @@ fn fn_preg_match_all(
     let Some(re) = pcre::compile_pattern(eg, ed, "preg_match_all", &pattern_str)? else {
         ret!(rv, Value::bool(false));
     };
+    if !pcre_validate_match_flags(eg, "preg_match_all", flags, true) {
+        return Ok(());
+    }
 
     let view = (!re.is_unicode()).then(|| PcreByteView::new(arg!(ed, 1), subject.clone()));
     let mapped = view.as_ref().is_some_and(|view| view.mapped);
@@ -33984,9 +34080,22 @@ fn fn_preg_match_all(
                     unmatched_as_null,
                     mapped,
                 );
-                for (name, slot) in caps.named_groups() {
-                    if *slot == index {
-                        row.set_str(name, capture.clone());
+                for (name, _) in caps.named_groups() {
+                    if caps.named_group_output_slot(name) == Some(index) {
+                        let alias_slot = caps.named_group_slot(name).unwrap_or(index);
+                        let alias = if alias_slot == index {
+                            capture.clone()
+                        } else {
+                            pcre_capture_value(
+                                caps.get(alias_slot),
+                                &subject,
+                                offset,
+                                offset_capture,
+                                unmatched_as_null,
+                                mapped,
+                            )
+                        };
+                        row.set_str(name, alias);
                     }
                 }
                 row.push(capture);
@@ -34054,19 +34163,32 @@ fn fn_preg_match_all(
         }
     };
 
+    let result_arrays =
+        result_arrays.unwrap_or_else(|| (0..re.capture_count()).map(|_| PhpArray::new()).collect());
     let mut out = PhpArray::new();
-    for (index, array) in result_arrays
-        .unwrap_or_else(|| (0..re.capture_count()).map(|_| PhpArray::new()).collect())
-        .into_iter()
-        .enumerate()
-    {
-        let value = Value::array(array);
-        for (name, slot) in re.capture_names() {
-            if *slot == index {
-                out.set_str(name, value.clone());
+    if re.has_duplicate_named_groups() {
+        let values = result_arrays
+            .into_iter()
+            .map(Value::array)
+            .collect::<Vec<_>>();
+        for (index, value) in values.iter().enumerate() {
+            for (name, slot) in re.capture_names() {
+                if re.capture_name_output_slot(name) == Some(index) {
+                    out.set_str(name, values[*slot].clone());
+                }
             }
+            out.push(value.clone());
         }
-        out.push(value);
+    } else {
+        for (index, array) in result_arrays.into_iter().enumerate() {
+            let value = Value::array(array);
+            for (name, slot) in re.capture_names() {
+                if *slot == index {
+                    out.set_str(name, value.clone());
+                }
+            }
+            out.push(value);
+        }
     }
     if !marks.is_empty() {
         out.set_str("MARK", Value::array(marks));
@@ -34259,12 +34381,14 @@ fn fn_preg_replace_callback(
 
     if let Some(subjects) = subject_value.as_array() {
         let Some((patterns, _)) = preg_replace_argument_strings(ed, eg, &pattern_value)? else {
+            pcre_report_deferred_array_string_warnings(ed, eg, subjects, 0)?;
             return Ok(());
         };
         let mut regexes = Vec::with_capacity(patterns.len());
         for pattern in &patterns {
             let Some(regex) = pcre::compile_pattern(eg, ed, "preg_replace_callback", pattern)?
             else {
+                pcre_report_deferred_array_string_warnings(ed, eg, subjects, 0)?;
                 if has_count {
                     arg_mut!(ed, 4, Value::long(total_count as i64));
                 }
@@ -34274,14 +34398,21 @@ fn fn_preg_replace_callback(
         }
 
         let mut values = Vec::with_capacity(subjects.len());
-        for (key, source) in subjects.iter() {
+        for (subject_index, (key, source)) in subjects.iter().enumerate() {
             let Some(mut value) = internal_value_to_string_value(ed, eg, source)? else {
+                pcre_report_deferred_array_string_warnings(ed, eg, subjects, subject_index + 1)?;
                 return Ok(());
             };
             for regex in &regexes {
                 let Some((replaced, count)) =
                     pcre::replace_callback_value(&value, regex, &resolved, limit, flags, ed, eg)?
                 else {
+                    pcre_report_deferred_array_string_warnings(
+                        ed,
+                        eg,
+                        subjects,
+                        subject_index + 1,
+                    )?;
                     return Ok(());
                 };
                 value = replaced;
@@ -34328,6 +34459,30 @@ fn fn_preg_replace_callback(
         arg_mut!(ed, 4, Value::long(total_count as i64));
     }
     ret!(rv, result);
+}
+
+/// PHP finishes the array-to-string cleanup diagnostics for later subject
+/// entries even when pattern conversion or a callback aborts the operation.
+/// Preserve the original exception while routing those warnings through the
+/// ordinary user error-handler boundary.
+#[cold]
+fn pcre_report_deferred_array_string_warnings(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    subjects: &PhpArray,
+    start: usize,
+) -> Result<(), VmError> {
+    let original_exception = eg.exception.take();
+    for (_, value) in subjects.iter().skip(start) {
+        if value.dereferenced().as_array().is_some() {
+            report_internal_diagnostic(eg, ed, 2, "Warning", "Array to string conversion")?;
+            // A warning handler may throw, but the exception that originally
+            // aborted preg_replace_callback remains PHP's visible failure.
+            eg.exception = None;
+        }
+    }
+    eg.exception = original_exception;
+    Ok(())
 }
 
 #[cfg(any(

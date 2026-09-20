@@ -48,14 +48,6 @@ fn preg_error_message(code: u8) -> &'static str {
 }
 
 #[inline(always)]
-fn ini_value<'a>(eg: &'a ExecutorGlobals, name: &str, fallback: &'static str) -> &'a str {
-    eg.ini_overrides
-        .as_deref()
-        .and_then(|overrides| overrides.get(name))
-        .map_or(fallback, String::as_str)
-}
-
-#[inline(always)]
 fn ini_limit(eg: &ExecutorGlobals, name: &str, fallback: usize) -> usize {
     let Some(value) = eg
         .ini_overrides
@@ -74,14 +66,13 @@ fn ini_limit(eg: &ExecutorGlobals, name: &str, fallback: usize) -> usize {
 
 #[inline(always)]
 pub(super) fn match_limits(eg: &ExecutorGlobals) -> MatchLimits {
-    let jit = matches!(
-        ini_value(eg, "pcre.jit", "0").trim(),
-        "1" | "on" | "On" | "ON" | "yes" | "Yes" | "YES" | "true" | "True" | "TRUE"
-    );
     MatchLimits {
         backtrack: ini_limit(eg, "pcre.backtrack_limit", 1_000_000),
         recursion: ini_limit(eg, "pcre.recursion_limit", 100_000),
-        jit,
+        heap_frames: usize::MAX,
+        // This is a native interpreter, not PCRE2's machine-code JIT. PHP
+        // omits the pcre.jit directive entirely in a no-JIT build.
+        jit: false,
     }
 }
 
@@ -91,6 +82,7 @@ pub(super) fn set_match_limit_error(eg: &mut ExecutorGlobals, error: MatchLimitE
         match error {
             MatchLimitError::Backtrack => PREG_BACKTRACK_LIMIT_ERROR,
             MatchLimitError::Recursion => PREG_RECURSION_LIMIT_ERROR,
+            MatchLimitError::Heap => PREG_INTERNAL_ERROR,
             MatchLimitError::JitStack => PREG_JIT_STACKLIMIT_ERROR,
         },
     );
@@ -114,6 +106,19 @@ fn rendered_compile_error(pattern: &str, error: &str) -> String {
             "Compilation failed: missing terminating ] for character class at offset {offset}"
         );
     }
+    if error.starts_with("Unexpected quantifier '") {
+        let offset = error
+            .split("position ")
+            .nth(1)
+            .and_then(|offset| offset.parse::<usize>().ok())
+            .unwrap_or(0);
+        return format!(
+            "Compilation failed: quantifier does not follow a repeatable item at offset {offset}"
+        );
+    }
+    if let Some(position) = error.strip_prefix("Unexpected character ')' at position ") {
+        return format!("Compilation failed: unmatched closing parenthesis at offset {position}");
+    }
     format!("Compilation failed: {error}")
 }
 
@@ -130,20 +135,17 @@ pub(super) fn compile_pattern(
         Ok(regex) => Ok(Some(regex)),
         Err(error) => {
             eg.regex_cache.set_last_error(PREG_INTERNAL_ERROR);
-            // A valid PCRE construct that the custom engine does not yet
-            // implement is an explicit engine non-claim, not a PHP pattern
-            // compilation failure. Preserve the pre-existing false/null
-            // result without adding a warning that reference PHP would never
-            // emit. Truly malformed patterns still publish the exact warning.
-            if !error.starts_with("Unsupported PCRE ") {
-                super::report_internal_diagnostic(
-                    eg,
-                    ed,
-                    2,
-                    "Warning",
-                    &format!("{function}(): {}", rendered_compile_error(pattern, &error)),
-                )?;
-            }
+            super::report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!("{function}(): {}", rendered_compile_error(pattern, &error)),
+            )?;
+            // A re-entrant user error handler may itself call preg_* and
+            // change the request-local slot. PHP publishes the outer compile
+            // failure after that callback returns.
+            eg.regex_cache.set_last_error(PREG_INTERNAL_ERROR);
             Ok(None)
         }
     }
@@ -159,6 +161,18 @@ pub(super) fn prepare_utf_subject<'a>(
     offset: usize,
 ) -> Result<Cow<'a, str>, u8> {
     let value = value.dereferenced();
+    // Ordinary runtime strings are already valid Rust UTF-8. Revalidating the
+    // entire remaining suffix for every non-zero preg offset turns a linear
+    // scan into O(n²); only byte-bridge strings can contain malformed UTF-8.
+    if !value.is_binary_string() {
+        if !rendered.is_char_boundary(offset) {
+            return Err(PREG_BAD_UTF8_OFFSET_ERROR);
+        }
+        return Ok(match rendered {
+            Cow::Borrowed(subject) => Cow::Borrowed(&subject[offset..]),
+            Cow::Owned(subject) => Cow::Owned(subject[offset..].to_string()),
+        });
+    }
     let Some(bytes) = value.php_string_bytes() else {
         if !rendered.is_char_boundary(offset) {
             return Err(PREG_BAD_UTF8_OFFSET_ERROR);
@@ -303,7 +317,14 @@ fn replace_strings(
         let Some(regex) = compile_pattern(eg, ed, function, pattern)? else {
             return Ok((None, count));
         };
-        let (replaced, replacements) = regex.replace_limit(&result, replacement, limit);
+        let (replaced, replacements) =
+            match regex.replace_limit_with_limits(&result, replacement, limit, match_limits(eg)) {
+                Ok(result) => result,
+                Err(error) => {
+                    set_match_limit_error(eg, error);
+                    return Ok((None, count));
+                }
+            };
         result = replaced;
         count += replacements;
     }

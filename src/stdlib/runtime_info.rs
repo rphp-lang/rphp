@@ -89,6 +89,16 @@ fn resident_bytes() -> i64 {
     proc_self_field("/proc/self/statm", 1).map_or(0, |pages| (pages * 4096) as i64)
 }
 
+/// Approximate PHP's request-allocator usage with the process data segment.
+/// Unlike RSS, this excludes lazily faulted executable and shared-library
+/// pages, so observing memory does not turn first-use code paging into an
+/// apparent request allocation.
+fn data_bytes() -> i64 {
+    proc_self_field("/proc/self/statm", 5).map_or_else(resident_bytes, |pages| {
+        i64::try_from(pages.saturating_mul(4096)).unwrap_or(i64::MAX)
+    })
+}
+
 fn peak_resident_bytes() -> i64 {
     let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
         return resident_bytes();
