@@ -23777,12 +23777,19 @@ fn pcre_match_unicode(
             ret!(rv, Value::bool(false));
         }
     };
+    let limits = pcre::match_limits(eg);
 
     if !has_matches {
-        ret!(rv, Value::long(re.is_match(&searched_subject) as i64));
+        match re.is_match_with_limits(&searched_subject, limits) {
+            Ok(matched) => ret!(rv, Value::long(matched as i64)),
+            Err(error) => {
+                pcre::set_match_limit_error(eg, error);
+                ret!(rv, Value::bool(false));
+            }
+        }
     }
-    match re.captures(&searched_subject) {
-        Some(caps) => {
+    match re.captures_with_limits(&searched_subject, limits) {
+        Ok(Some(caps)) => {
             let mut arr = PhpArray::new();
             let last_capture = if unmatched_as_null {
                 caps.len() - 1
@@ -23814,9 +23821,14 @@ fn pcre_match_unicode(
             arg_mut!(ed, 2, Value::array(arr));
             ret!(rv, Value::long(1));
         }
-        None => {
+        Ok(None) => {
             pcre_clear_matches_argument(ed, 2);
             ret!(rv, Value::long(0));
+        }
+        Err(error) => {
+            pcre_clear_matches_argument(ed, 2);
+            pcre::set_match_limit_error(eg, error);
+            ret!(rv, Value::bool(false));
         }
     }
 }
@@ -23890,13 +23902,20 @@ fn fn_preg_match(
         raw_offset
     } as usize;
     let searched_subject = &view.text[view.rust_offset(offset)..];
+    let limits = pcre::match_limits(eg);
 
     if !has_matches {
-        ret!(rv, Value::long(re.is_match(searched_subject) as i64));
+        match re.is_match_with_limits(searched_subject, limits) {
+            Ok(matched) => ret!(rv, Value::long(matched as i64)),
+            Err(error) => {
+                pcre::set_match_limit_error(eg, error);
+                ret!(rv, Value::bool(false));
+            }
+        }
     }
 
-    match re.captures(searched_subject) {
-        Some(caps) => {
+    match re.captures_with_limits(searched_subject, limits) {
+        Ok(Some(caps)) => {
             if has_matches {
                 let matches_ptr = arg_mut!(ed, 2);
                 let mut arr = PhpArray::new();
@@ -23934,7 +23953,7 @@ fn fn_preg_match(
             }
             ret!(rv, Value::long(1));
         }
-        None => {
+        Ok(None) => {
             if has_matches {
                 let matches_ptr = arg_mut!(ed, 2);
                 unsafe {
@@ -23943,6 +23962,13 @@ fn fn_preg_match(
                 }
             }
             ret!(rv, Value::long(0));
+        }
+        Err(error) => {
+            if has_matches {
+                pcre_clear_matches_argument(ed, 2);
+            }
+            pcre::set_match_limit_error(eg, error);
+            ret!(rv, Value::bool(false));
         }
     }
 }
@@ -31831,6 +31857,16 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, normalize_ini_boolean_value(value));
             }
+            "pcre.jit" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, normalize_ini_boolean_value(value));
+            }
+            "pcre.backtrack_limit" | "pcre.recursion_limit" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, value.clone());
+            }
             "zend.exception_string_param_max_len" => {
                 let published = normalize_exception_string_param_max_len(value);
                 eg.ini_overrides
@@ -31988,6 +32024,9 @@ fn ini_base_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
         "fiber.stack_size" => "2097152".to_string(),
         "arg_separator.output" => "&".to_string(),
         "date.timezone" => "UTC".to_string(),
+        "pcre.jit" => "0".to_string(),
+        "pcre.backtrack_limit" => "1000000".to_string(),
+        "pcre.recursion_limit" => "100000".to_string(),
         "default_charset" => "UTF-8".to_string(),
         "internal_encoding"
         | "input_encoding"
@@ -33909,50 +33948,64 @@ fn fn_preg_match_all(
         Some(view) => Cow::Owned(view.text[view.rust_offset(offset)..].to_string()),
     };
 
+    let limits = pcre::match_limits(eg);
     if !has_matches {
-        ret!(rv, Value::long(re.count_matches(&subject) as i64));
+        match re.count_matches_with_limits(&subject, limits) {
+            Ok(count) => ret!(rv, Value::long(count as i64)),
+            Err(error) => {
+                pcre::set_match_limit_error(eg, error);
+                ret!(rv, Value::bool(false));
+            }
+        }
     }
 
     if flags & 2 != 0 {
         // PREG_SET_ORDER — each top-level element represents one match and
         // contains the full match, capture groups, and named aliases.
         let mut out = PhpArray::new();
-        let count: Result<usize, std::convert::Infallible> =
-            re.try_visit_captures(&subject, |caps| {
-                let mut row = PhpArray::new();
-                // PHP omits trailing unmatched groups in PREG_SET_ORDER rows,
-                // while retaining empty placeholders before a later match.
-                let last_capture = if unmatched_as_null {
-                    caps.len() - 1
-                } else {
-                    (1..caps.len())
-                        .rev()
-                        .find(|&index| caps.get(index).is_some())
-                        .unwrap_or(0)
-                };
-                for index in 0..=last_capture {
-                    let capture = pcre_capture_value(
-                        caps.get(index),
-                        &subject,
-                        offset,
-                        offset_capture,
-                        unmatched_as_null,
-                        mapped,
-                    );
-                    for (name, slot) in caps.named_groups() {
-                        if *slot == index {
-                            row.set_str(name, capture.clone());
-                        }
+        let count = re.try_visit_captures_with_limits(&subject, limits, |caps| {
+            let mut row = PhpArray::new();
+            // PHP omits trailing unmatched groups in PREG_SET_ORDER rows,
+            // while retaining empty placeholders before a later match.
+            let last_capture = if unmatched_as_null {
+                caps.len() - 1
+            } else {
+                (1..caps.len())
+                    .rev()
+                    .find(|&index| caps.get(index).is_some())
+                    .unwrap_or(0)
+            };
+            for index in 0..=last_capture {
+                let capture = pcre_capture_value(
+                    caps.get(index),
+                    &subject,
+                    offset,
+                    offset_capture,
+                    unmatched_as_null,
+                    mapped,
+                );
+                for (name, slot) in caps.named_groups() {
+                    if *slot == index {
+                        row.set_str(name, capture.clone());
                     }
-                    row.push(capture);
                 }
-                if let Some(mark) = caps.mark() {
-                    row.set_str("MARK", Value::string(mark));
-                }
-                out.push(Value::array(row));
-                Ok(true)
-            });
-        let count = count.unwrap();
+                row.push(capture);
+            }
+            if let Some(mark) = caps.mark() {
+                row.set_str("MARK", Value::string(mark));
+            }
+            out.push(Value::array(row));
+            true
+        });
+        let count = match count {
+            Ok(count) => count,
+            Err(error) => {
+                let empty = pcre_empty_match_all_projection(&re, true);
+                arg_mut!(ed, 2, Value::array(empty));
+                pcre::set_match_limit_error(eg, error);
+                ret!(rv, Value::bool(false));
+            }
+        };
 
         let matches_ptr = arg_mut!(ed, 2);
         unsafe {
@@ -33968,7 +34021,7 @@ fn fn_preg_match_all(
     let mut result_arrays: Option<Vec<PhpArray>> = None;
     let mut marks = PhpArray::new();
     let mut match_index = 0i64;
-    let count: Result<usize, std::convert::Infallible> = re.try_visit_captures(&subject, |caps| {
+    let count = re.try_visit_captures_with_limits(&subject, limits, |caps| {
         if result_arrays.is_none() {
             result_arrays = Some((0..caps.len()).map(|_| PhpArray::new()).collect());
         }
@@ -33989,9 +34042,17 @@ fn fn_preg_match_all(
             marks.set_int(match_index, Value::string(mark));
         }
         match_index += 1;
-        Ok(true)
+        true
     });
-    let count = count.unwrap();
+    let count = match count {
+        Ok(count) => count,
+        Err(error) => {
+            let empty = pcre_empty_match_all_projection(&re, false);
+            arg_mut!(ed, 2, Value::array(empty));
+            pcre::set_match_limit_error(eg, error);
+            ret!(rv, Value::bool(false));
+        }
+    };
 
     let mut out = PhpArray::new();
     for (index, array) in result_arrays
@@ -34090,15 +34151,15 @@ fn fn_preg_split(
     let split_limit = if limit <= 0 { i64::MAX } else { limit };
     let mut cursor = 0usize;
     let mut splits = 0i64;
-    for captures in re.captures_iter(&subject) {
+    let result = re.try_visit_captures_with_limits(&subject, pcre::match_limits(eg), |captures| {
         if splits + 1 >= split_limit {
-            break;
+            return false;
         }
         let Some(delimiter) = captures.get(0) else {
-            continue;
+            return true;
         };
         if delimiter.start < cursor {
-            continue;
+            return true;
         }
         push_part(&subject[cursor..delimiter.start], php_offset(cursor));
         if capture_delimiters {
@@ -34112,6 +34173,14 @@ fn fn_preg_split(
         }
         cursor = delimiter.end;
         splits += 1;
+        true
+    });
+    match result {
+        Ok(_) => {}
+        Err(error) => {
+            pcre::set_match_limit_error(eg, error);
+            ret!(rv, Value::bool(false));
+        }
     }
     push_part(&subject[cursor..], php_offset(cursor));
     ret!(rv, Value::array(arr));

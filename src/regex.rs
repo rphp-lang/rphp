@@ -121,6 +121,33 @@ pub struct RegexFlags {
     pub anchored: bool,
 }
 
+/// Request-scoped execution limits applied by the public `preg_*` boundary.
+/// The custom engine keeps these independent from parsing so one cached AST
+/// can be reused after an `ini_set()` changes a limit.
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct MatchLimits {
+    pub backtrack: usize,
+    pub recursion: usize,
+    pub jit: bool,
+}
+
+impl Default for MatchLimits {
+    fn default() -> Self {
+        Self {
+            backtrack: 1_000_000,
+            recursion: 100_000,
+            jit: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum MatchLimitError {
+    Backtrack,
+    Recursion,
+    JitStack,
+}
+
 impl Default for RegexFlags {
     fn default() -> Self {
         Self {
@@ -364,6 +391,19 @@ impl Regex {
     /// contents for backreferences.
     #[inline(always)]
     pub fn is_match(&self, subject: &str) -> bool {
+        self.is_match_with_limits(subject, MatchLimits::default())
+            .unwrap_or(false)
+    }
+
+    #[inline(always)]
+    pub(crate) fn is_match_with_limits(
+        &self,
+        subject: &str,
+        limits: MatchLimits,
+    ) -> Result<bool, MatchLimitError> {
+        if !self.uses_backreferences && linear::is_boolean_supported(&self.ast) {
+            return Ok(linear::is_match(self, subject));
+        }
         let chars: Vec<char> = subject.chars().collect();
         let byte_offsets = if self.uses_backreferences {
             ByteOffsets::for_subject(subject, &chars)
@@ -379,6 +419,7 @@ impl Regex {
         } else {
             Vec::new()
         };
+        let mut budget = MatchBudget::new(limits);
         let mut start = 0;
         while start <= chars.len() {
             if let Some(literal) = self.start_literal
@@ -400,26 +441,41 @@ impl Regex {
                 groups: &mut groups,
                 named_groups: &self.named_groups,
                 mark: &mut mark,
+                budget: &mut budget,
             };
             if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
-                return true;
+                return Ok(true);
+            }
+            if let Some(error) = budget.error {
+                return Err(error);
             }
             if self.flags.anchored {
                 break;
             }
             start += 1;
         }
-        false
+        Ok(false)
     }
 
     /// Find first match in subject.  Returns captures (group 0 = whole match).
     pub fn captures(&self, subject: &str) -> Option<Captures> {
+        self.captures_with_limits(subject, MatchLimits::default())
+            .ok()
+            .flatten()
+    }
+
+    pub(crate) fn captures_with_limits(
+        &self,
+        subject: &str,
+        limits: MatchLimits,
+    ) -> Result<Option<Captures>, MatchLimitError> {
         let (chars, byte_offsets) = subject_chars(subject);
         let metadata = MatchMetadata {
             input: subject,
             byte_offsets: &byte_offsets,
         };
         let mut groups = vec![None; self.num_groups + 1];
+        let mut budget = MatchBudget::new(limits);
         // Try matching at every position; an anchored pattern only at the first.
         for start in 0..=chars.len() {
             if self.flags.anchored && start > 0 {
@@ -442,6 +498,7 @@ impl Regex {
                     groups: &mut groups,
                     named_groups: &self.named_groups,
                     mark: &mut mark,
+                    budget: &mut budget,
                 };
                 match_seq_from(&self.ast, &[], start, &mut ctx)
             };
@@ -450,14 +507,17 @@ impl Regex {
                     start: byte_offsets.get(start),
                     end: byte_offsets.get(end),
                 });
-                return Some(Captures {
+                return Ok(Some(Captures {
                     groups,
                     named_groups: self.named_groups.clone(),
                     mark,
-                });
+                }));
+            }
+            if let Some(error) = budget.error {
+                return Err(error);
             }
         }
-        None
+        Ok(None)
     }
 
     /// Replace all occurrences.  Replacement can use `$1`, `$10`, `${2}`, `\\1` backrefs.
@@ -483,6 +543,7 @@ impl Regex {
             }
             let mut groups = vec![None; self.num_groups + 1];
             let mut mark = None;
+            let mut budget = MatchBudget::new(MatchLimits::default());
             let mut ctx = MatchCtx {
                 chars: &chars,
                 metadata: &metadata,
@@ -490,6 +551,7 @@ impl Regex {
                 groups: &mut groups,
                 named_groups: &self.named_groups,
                 mark: &mut mark,
+                budget: &mut budget,
             };
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = byte_offsets.get(pos);
@@ -529,17 +591,24 @@ impl Regex {
 
     /// Count non-overlapping matches without publishing capture data.
     #[inline(always)]
-    pub(crate) fn count_matches(&self, subject: &str) -> usize {
+    pub(crate) fn count_matches_with_limits(
+        &self,
+        subject: &str,
+        limits: MatchLimits,
+    ) -> Result<usize, MatchLimitError> {
         if self.num_groups == 0
             && linear::is_supported(&self.ast)
             && let Some(count) = linear::try_count_matches(self, subject)
         {
-            return count;
+            return Ok(count);
         }
+        self.try_visit_captures_with_limits(subject, limits, |_| true)
+    }
 
-        let count: Result<usize, std::convert::Infallible> =
-            self.try_visit_captures(subject, |_| Ok(true));
-        count.unwrap()
+    #[cfg(test)]
+    fn count_matches(&self, subject: &str) -> usize {
+        self.count_matches_with_limits(subject, MatchLimits::default())
+            .unwrap_or(0)
     }
 
     /// Visit non-overlapping matches in order while reusing one capture-slot
@@ -557,6 +626,84 @@ impl Regex {
         } else {
             self.try_visit_backtracking_captures(subject, visitor)
         }
+    }
+
+    /// Limit-aware streaming visitor for `preg_match_all()` and `preg_split()`.
+    /// Capture storage is reused between matches, so adding resource errors
+    /// does not turn the ordinary projection path into an eager allocation.
+    pub(crate) fn try_visit_captures_with_limits<F>(
+        &self,
+        subject: &str,
+        limits: MatchLimits,
+        mut visitor: F,
+    ) -> Result<usize, MatchLimitError>
+    where
+        F: for<'capture> FnMut(CaptureView<'capture>) -> bool,
+    {
+        if self.num_groups == 0 && linear::is_supported(&self.ast) {
+            let result: Result<usize, std::convert::Infallible> =
+                linear::try_visit_captures(self, subject, |capture| Ok(visitor(capture)));
+            return Ok(result.unwrap());
+        }
+
+        let (chars, byte_offsets) = subject_chars(subject);
+        let metadata = MatchMetadata {
+            input: subject,
+            byte_offsets: &byte_offsets,
+        };
+        let mut groups = vec![None; self.num_groups + 1];
+        let mut pos = 0usize;
+        let mut count = 0usize;
+        let start_literal = self.start_literal.filter(|_| !self.flags.anchored);
+
+        while pos <= chars.len() {
+            if let Some(literal) = start_literal {
+                let Some(relative_pos) = chars[pos..].iter().position(|&candidate| {
+                    chars_equal(candidate, literal, self.flags.case_insensitive)
+                }) else {
+                    break;
+                };
+                pos += relative_pos;
+            }
+            groups.fill(None);
+            let mut mark = None;
+            let mut budget = MatchBudget::new(limits);
+            let end = {
+                let mut ctx = MatchCtx {
+                    chars: &chars,
+                    metadata: &metadata,
+                    flags: self.flags,
+                    groups: &mut groups,
+                    named_groups: &self.named_groups,
+                    mark: &mut mark,
+                    budget: &mut budget,
+                };
+                match_seq_from(&self.ast, &[], pos, &mut ctx)
+            };
+            if let Some(error) = budget.error {
+                return Err(error);
+            }
+            if let Some(end) = end {
+                groups[0] = Some(Match {
+                    start: byte_offsets.get(pos),
+                    end: byte_offsets.get(end),
+                });
+                count += 1;
+                if !visitor(CaptureView {
+                    groups: &groups,
+                    named_groups: &self.named_groups,
+                    mark: mark.as_deref(),
+                }) {
+                    break;
+                }
+                pos = if end == pos { pos + 1 } else { end };
+            } else if self.flags.anchored {
+                break;
+            } else {
+                pos += 1;
+            }
+        }
+        Ok(count)
     }
 
     #[inline(never)]
@@ -589,6 +736,7 @@ impl Regex {
             }
             groups.fill(None);
             let mut mark = None;
+            let mut budget = MatchBudget::new(MatchLimits::default());
             let end = {
                 let mut ctx = MatchCtx {
                     chars: &chars,
@@ -597,6 +745,7 @@ impl Regex {
                     groups: &mut groups,
                     named_groups: &self.named_groups,
                     mark: &mut mark,
+                    budget: &mut budget,
                 };
                 match_seq_from(&self.ast, &[], pos, &mut ctx)
             };
@@ -671,6 +820,7 @@ impl Regex {
                 }
                 let mut groups = vec![None; self.num_groups + 1];
                 let mut mark = None;
+                let mut budget = MatchBudget::new(MatchLimits::default());
                 let mut ctx = MatchCtx {
                     chars: &chars,
                     metadata: &metadata,
@@ -678,6 +828,7 @@ impl Regex {
                     groups: &mut groups,
                     named_groups: &self.named_groups,
                     mark: &mut mark,
+                    budget: &mut budget,
                 };
                 if let Some(end) = match_seq_from(&self.ast, &[], try_start, &mut ctx) {
                     let match_start_byte = byte_offsets.get(try_start);
@@ -721,6 +872,7 @@ impl Regex {
         while pos <= chars.len() {
             let mut groups = vec![None; self.num_groups + 1];
             let mut mark = None;
+            let mut budget = MatchBudget::new(MatchLimits::default());
             let mut ctx = MatchCtx {
                 chars: &chars,
                 metadata: &metadata,
@@ -728,6 +880,7 @@ impl Regex {
                 groups: &mut groups,
                 named_groups: &self.named_groups,
                 mark: &mut mark,
+                budget: &mut budget,
             };
             if let Some(end) = match_seq_from(&self.ast, &[], pos, &mut ctx) {
                 let match_start = byte_offsets.get(pos);
@@ -924,6 +1077,88 @@ struct MatchMetadata<'a> {
     byte_offsets: &'a ByteOffsets,
 }
 
+struct MatchBudget {
+    backtracks_remaining: usize,
+    recursion_limit: usize,
+    recursion_depth: usize,
+    /// The native PCRE2 JIT has a separate, deliberately bounded stack. The
+    /// custom engine models that resource independently from match_limit so a
+    /// huge quantified path cannot allocate one continuation per character.
+    jit_steps_remaining: usize,
+    jit: bool,
+    error: Option<MatchLimitError>,
+}
+
+impl MatchBudget {
+    const JIT_STEP_LIMIT: usize = 32_768;
+
+    fn new(limits: MatchLimits) -> Self {
+        Self {
+            backtracks_remaining: limits.backtrack,
+            recursion_limit: limits.recursion,
+            recursion_depth: 0,
+            jit_steps_remaining: if limits.jit {
+                Self::JIT_STEP_LIMIT
+            } else {
+                usize::MAX
+            },
+            jit: limits.jit,
+            error: None,
+        }
+    }
+
+    #[inline]
+    fn enter_recursion(&mut self) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
+        if self.recursion_depth >= self.recursion_limit {
+            self.error = Some(MatchLimitError::Recursion);
+            return false;
+        }
+        self.recursion_depth += 1;
+        true
+    }
+
+    #[inline]
+    fn leave_recursion(&mut self) {
+        self.recursion_depth = self.recursion_depth.saturating_sub(1);
+    }
+
+    #[inline]
+    fn retain_quantifier_continuation(&mut self) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
+        if self.jit {
+            if self.jit_steps_remaining == 0 {
+                self.error = Some(MatchLimitError::JitStack);
+                return false;
+            }
+            self.jit_steps_remaining -= 1;
+        }
+        true
+    }
+
+    #[inline]
+    fn consume_backtrack(&mut self) -> bool {
+        if self.error.is_some() {
+            return false;
+        }
+        if self.backtracks_remaining == 0 {
+            self.error = Some(MatchLimitError::Backtrack);
+            return false;
+        }
+        self.backtracks_remaining -= 1;
+        true
+    }
+
+    #[inline]
+    fn consume_alternative(&mut self) -> bool {
+        self.consume_backtrack()
+    }
+}
+
 struct MatchCtx<'a> {
     chars: &'a [char],
     metadata: &'a MatchMetadata<'a>,
@@ -931,6 +1166,7 @@ struct MatchCtx<'a> {
     groups: &'a mut Vec<Option<Match>>,
     named_groups: &'a HashMap<String, usize>,
     mark: &'a mut Option<String>,
+    budget: &'a mut MatchBudget,
 }
 
 // ── Core matching (backtracking with continuation) ──────────────────────────
@@ -985,6 +1221,9 @@ fn node_length_range(node: &Node) -> Option<(usize, usize)> {
 }
 
 fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
+    if ctx.budget.error.is_some() {
+        return None;
+    }
     match node {
         Node::Sequence(nodes) => {
             // Flatten: match first element with rest = remaining + outer rest
@@ -1097,7 +1336,10 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             match_rest(rest, pos + length, ctx)
         }
         Node::Alternation(branches) => {
-            for branch in branches {
+            for (index, branch) in branches.iter().enumerate() {
+                if index != 0 && !ctx.budget.consume_alternative() {
+                    return None;
+                }
                 let saved_groups = ctx.groups.clone();
                 let saved_mark = ctx.mark.clone();
                 if let Some(end) = match_seq_from(branch, rest, pos, ctx) {
@@ -1113,9 +1355,15 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             name: _,
             inner,
         } => {
+            if !ctx.budget.enter_recursion() {
+                return None;
+            }
             let tracked_index = index.filter(|idx| *idx < ctx.groups.len());
             let start_offset = tracked_index.map_or(0, |_| ctx.metadata.byte_offsets.get(pos));
-            match_seq_from_with_group(inner, rest, pos, ctx, tracked_index, start_offset)
+            let result =
+                match_seq_from_with_group(inner, rest, pos, ctx, tracked_index, start_offset);
+            ctx.budget.leave_recursion();
+            result
         }
         Node::Quantifier {
             inner,
@@ -1123,7 +1371,14 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             max,
             greedy,
             possessive,
-        } => match_quantifier(inner, *min, *max, *greedy, *possessive, rest, pos, ctx),
+        } => {
+            if !ctx.budget.enter_recursion() {
+                return None;
+            }
+            let result = match_quantifier(inner, *min, *max, *greedy, *possessive, rest, pos, ctx);
+            ctx.budget.leave_recursion();
+            result
+        }
         Node::Backreference(n) => match_backref_by_index(*n, rest, pos, ctx),
         Node::NamedBackreference(name) => {
             if let Some(&idx) = ctx.named_groups.get(name.as_str()) {
@@ -1133,11 +1388,14 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             }
         }
         Node::Lookahead { positive, inner } => {
+            if !ctx.budget.enter_recursion() {
+                return None;
+            }
             let saved = ctx.groups.clone();
             let saved_mark = ctx.mark.clone();
             // Use empty rest — lookahead doesn't consume input, just checks
             let result = match_seq_from(inner, &[], pos, ctx);
-            if *positive {
+            let result = if *positive {
                 if result.is_some() {
                     // Keep captures from inside lookahead (PHP behavior)
                     match_rest(rest, pos, ctx)
@@ -1156,9 +1414,14 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
                     *ctx.mark = saved_mark;
                     None
                 }
-            }
+            };
+            ctx.budget.leave_recursion();
+            result
         }
         Node::Lookbehind { positive, inner } => {
+            if !ctx.budget.enter_recursion() {
+                return None;
+            }
             // Try matching inner ending at `pos`. PCRE lookbehinds have a
             // bounded length, so only starts within that window can succeed;
             // scanning back to the subject start made every lookbehind O(n).
@@ -1178,15 +1441,22 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
                         false
                     }
                 });
-            if found == *positive {
+            let result = if found == *positive {
                 match_rest(rest, pos, ctx)
             } else {
                 None
-            }
+            };
+            ctx.budget.leave_recursion();
+            result
         }
         Node::Atomic(inner) => {
-            let end = match_seq_from(inner, &[], pos, ctx)?;
-            match_rest(rest, end, ctx)
+            if !ctx.budget.enter_recursion() {
+                return None;
+            }
+            let result =
+                match_seq_from(inner, &[], pos, ctx).and_then(|end| match_rest(rest, end, ctx));
+            ctx.budget.leave_recursion();
+            result
         }
         Node::Mark(name) => {
             let saved = ctx.mark.clone();
@@ -1286,6 +1556,9 @@ fn collect_match_states_from(
     state: BacktrackState,
     ctx: &mut MatchCtx,
 ) -> Vec<BacktrackState> {
+    if ctx.budget.error.is_some() {
+        return Vec::new();
+    }
     match node {
         Node::Sequence(nodes) => {
             let mut states = vec![state];
@@ -1306,6 +1579,9 @@ fn collect_match_states_from(
             let last = branches.len().saturating_sub(1);
             let mut initial = Some(state);
             for (index, branch) in branches.iter().enumerate() {
+                if index != 0 && !ctx.budget.consume_alternative() {
+                    break;
+                }
                 let branch_state = if index == last {
                     initial.take().unwrap()
                 } else {
@@ -1322,39 +1598,31 @@ fn collect_match_states_from(
             greedy,
             possessive,
         } => {
+            if !ctx.budget.enter_recursion() {
+                return Vec::new();
+            }
             let mut repetitions = Vec::new();
-            fn collect_reps(
-                inner: &Node,
-                min: usize,
-                limit: usize,
-                current_reps: usize,
-                state: BacktrackState,
-                ctx: &mut MatchCtx,
-                repetitions: &mut Vec<(usize, BacktrackState)>,
-            ) {
-                if current_reps >= min {
+            let limit = max.unwrap_or(usize::MAX);
+            let mut pending = vec![(0usize, state)];
+            while let Some((current_reps, state)) = pending.pop() {
+                if current_reps >= *min {
                     repetitions.push((current_reps, state.clone()));
                 }
                 if current_reps >= limit {
-                    return;
+                    continue;
+                }
+                if !ctx.budget.retain_quantifier_continuation() {
+                    break;
                 }
                 let current_end = state.end;
-                for next in collect_match_states_from(inner, state, ctx) {
+                let next_states = collect_match_states_from(inner, state, ctx);
+                for next in next_states.into_iter().rev() {
                     if next.end == current_end {
                         continue;
                     }
-                    collect_reps(inner, min, limit, current_reps + 1, next, ctx, repetitions);
+                    pending.push((current_reps + 1, next));
                 }
             }
-            collect_reps(
-                inner,
-                *min,
-                max.unwrap_or(usize::MAX),
-                0,
-                state,
-                ctx,
-                &mut repetitions,
-            );
             if *greedy {
                 repetitions.sort_by(|a, b| b.0.cmp(&a.0));
             } else {
@@ -1363,13 +1631,18 @@ fn collect_match_states_from(
             if *possessive {
                 repetitions.truncate(1);
             }
-            repetitions.into_iter().map(|(_, state)| state).collect()
+            let states = repetitions.into_iter().map(|(_, state)| state).collect();
+            ctx.budget.leave_recursion();
+            states
         }
         Node::Group {
             index,
             name: _,
             inner,
         } => {
+            if !ctx.budget.enter_recursion() {
+                return Vec::new();
+            }
             let pos = state.end;
             let tracked_index = index.filter(|idx| *idx < state.groups.len());
             let start_offset = tracked_index.map_or(0, |_| ctx.metadata.byte_offsets.get(pos));
@@ -1383,6 +1656,7 @@ fn collect_match_states_from(
                     });
                 }
             }
+            ctx.budget.leave_recursion();
             states
         }
         // For simple nodes, delegate to match_seq_from with empty rest
@@ -1488,6 +1762,9 @@ fn match_quantifier(
         }
 
         if repetitions >= min {
+            if ctx.budget.error.is_some() {
+                return None;
+            }
             return Some(current_pos);
         }
         if let Some(initial_groups) = initial_groups {
@@ -1501,50 +1778,42 @@ fn match_quantifier(
     let tracks_captures = ctx.groups.len() > 1;
     let mut states: Vec<(usize, usize, Option<Vec<Option<Match>>>)> = Vec::new();
 
-    fn collect_states(
-        inner: &Node,
-        min: usize,
-        limit: usize,
-        pos: usize,
-        current_reps: usize,
-        tracks_captures: bool,
-        ctx: &mut MatchCtx,
-        states: &mut Vec<(usize, usize, Option<Vec<Option<Match>>>)>,
-    ) {
+    if !ctx.budget.consume_backtrack() {
+        return None;
+    }
+
+    let mut current_pos = pos;
+    let mut current_reps = 0usize;
+    loop {
         if current_reps >= min {
             let groups = tracks_captures.then(|| ctx.groups.clone());
-            states.push((current_reps, pos, groups));
+            states.push((current_reps, current_pos, groups));
         }
         if current_reps >= limit {
-            return;
+            break;
+        }
+        if !ctx.budget.retain_quantifier_continuation() {
+            break;
         }
         let saved = tracks_captures.then(|| ctx.groups.clone());
         // Try one more repetition
-        if let Some(np) = match_seq_from(inner, &[], pos, ctx) {
-            if np == pos {
-                // Zero-width match — don't recurse to avoid infinite loop
+        match match_seq_from(inner, &[], current_pos, ctx) {
+            Some(next_pos) if next_pos != current_pos => {
+                current_pos = next_pos;
+                current_reps += 1;
+            }
+            _ => {
                 if let Some(saved) = saved {
                     *ctx.groups = saved;
                 }
-                return;
+                break;
             }
-            collect_states(
-                inner,
-                min,
-                limit,
-                np,
-                current_reps + 1,
-                tracks_captures,
-                ctx,
-                states,
-            );
-        }
-        if let Some(saved) = saved {
-            *ctx.groups = saved;
         }
     }
 
-    collect_states(inner, min, limit, pos, 0, tracks_captures, ctx, &mut states);
+    if ctx.budget.error.is_some() {
+        return None;
+    }
 
     // collect_states records states in increasing repetition order, so the
     // greedy path can iterate backwards without sorting.
@@ -1557,6 +1826,9 @@ fn match_quantifier(
         }
     } else if greedy {
         for (_, end_pos, saved_groups) in states.into_iter().rev() {
+            if !ctx.budget.consume_backtrack() {
+                return None;
+            }
             if let Some(saved_groups) = saved_groups {
                 *ctx.groups = saved_groups;
             }
@@ -1566,6 +1838,9 @@ fn match_quantifier(
         }
     } else {
         for (_, end_pos, saved_groups) in states {
+            if !ctx.budget.consume_backtrack() {
+                return None;
+            }
             if let Some(saved_groups) = saved_groups {
                 *ctx.groups = saved_groups;
             }

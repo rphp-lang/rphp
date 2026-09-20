@@ -37,6 +37,52 @@ pub(super) fn is_supported(node: &Node) -> bool {
     }
 }
 
+/// Boolean matching may discard captures, so deterministic groups are safe
+/// even though the capture visitor must continue to reject them.
+pub(super) fn is_boolean_supported(node: &Node) -> bool {
+    match node {
+        Node::Sequence(nodes) => nodes.iter().enumerate().all(|(index, node)| match node {
+            Node::Quantifier { inner, .. } => {
+                index + 1 == nodes.len() && is_linear_consuming_atom(inner)
+            }
+            Node::Group { inner, .. } => is_boolean_supported(inner),
+            _ => is_linear_atom(node),
+        }),
+        Node::Quantifier { inner, .. } => is_linear_consuming_atom(inner),
+        Node::Group { inner, .. } => is_boolean_supported(inner),
+        _ => is_linear_atom(node),
+    }
+}
+
+/// Boolean executor for proven capture-free linear shapes. Besides avoiding
+/// capture allocation this keeps very long generated sequences off the Rust
+/// call stack (PHP's regex cache test grows a pattern past four thousand
+/// atoms).
+#[inline(always)]
+pub(super) fn is_match(regex: &Regex, subject: &str) -> bool {
+    let chars: Vec<char> = subject.chars().collect();
+    let mut pos = 0usize;
+    let start_literal = regex.start_literal.filter(|_| !regex.flags.anchored);
+    while pos <= chars.len() {
+        if let Some(literal) = start_literal {
+            let Some(relative_pos) = chars[pos..].iter().position(|&candidate| {
+                chars_equal(candidate, literal, regex.flags.case_insensitive)
+            }) else {
+                break;
+            };
+            pos += relative_pos;
+        }
+        if match_no_capture(&regex.ast, pos, &chars, regex.flags).is_some() {
+            return true;
+        }
+        if regex.flags.anchored {
+            break;
+        }
+        pos += 1;
+    }
+    false
+}
+
 /// Select the byte executor only for a proven fixed-prefix or terminal-class
 /// shape. Keeping this dispatch outside both scan loops leaves their
 /// machine-code layout independent.
@@ -220,6 +266,7 @@ fn match_atom(node: &Node, pos: usize, chars: &[char], flags: RegexFlags) -> Opt
         Node::Shorthand(shorthand) => (pos < chars.len()
             && match_shorthand(*shorthand, chars[pos], flags.unicode))
         .then_some(pos + 1),
+        Node::Group { inner, .. } => match_no_capture(inner, pos, chars, flags),
         _ => None,
     }
 }

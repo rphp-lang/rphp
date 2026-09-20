@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use super::{ResolvedCallback, regex_callback};
 use crate::compiler::{make_internal_function, make_internal_function_ref};
-use crate::regex::Regex;
+use crate::regex::{MatchLimitError, MatchLimits, Regex};
 use crate::runtime::ExecutorGlobals;
 use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
@@ -18,8 +18,11 @@ use crate::vm::function::{FunctionCommon, InternalFunction, ParamTypeHint};
 
 const PREG_NO_ERROR: u8 = 0;
 const PREG_INTERNAL_ERROR: u8 = 1;
+const PREG_BACKTRACK_LIMIT_ERROR: u8 = 2;
+const PREG_RECURSION_LIMIT_ERROR: u8 = 3;
 pub(super) const PREG_BAD_UTF8_ERROR: u8 = 4;
 pub(super) const PREG_BAD_UTF8_OFFSET_ERROR: u8 = 5;
+const PREG_JIT_STACKLIMIT_ERROR: u8 = 6;
 const PREG_OFFSET_CAPTURE: i64 = 256;
 const PREG_UNMATCHED_AS_NULL: i64 = 512;
 const PREG_GREP_INVERT: i64 = 1;
@@ -42,6 +45,55 @@ fn preg_error_message(code: u8) -> &'static str {
         6 => "JIT stack limit exhausted",
         _ => "Unknown error",
     }
+}
+
+#[inline(always)]
+fn ini_value<'a>(eg: &'a ExecutorGlobals, name: &str, fallback: &'static str) -> &'a str {
+    eg.ini_overrides
+        .as_deref()
+        .and_then(|overrides| overrides.get(name))
+        .map_or(fallback, String::as_str)
+}
+
+#[inline(always)]
+fn ini_limit(eg: &ExecutorGlobals, name: &str, fallback: usize) -> usize {
+    let Some(value) = eg
+        .ini_overrides
+        .as_deref()
+        .and_then(|overrides| overrides.get(name))
+    else {
+        return fallback;
+    };
+    value
+        .trim()
+        .parse::<u64>()
+        .ok()
+        .and_then(|value| usize::try_from(value).ok())
+        .unwrap_or(fallback)
+}
+
+#[inline(always)]
+pub(super) fn match_limits(eg: &ExecutorGlobals) -> MatchLimits {
+    let jit = matches!(
+        ini_value(eg, "pcre.jit", "0").trim(),
+        "1" | "on" | "On" | "ON" | "yes" | "Yes" | "YES" | "true" | "True" | "TRUE"
+    );
+    MatchLimits {
+        backtrack: ini_limit(eg, "pcre.backtrack_limit", 1_000_000),
+        recursion: ini_limit(eg, "pcre.recursion_limit", 100_000),
+        jit,
+    }
+}
+
+pub(super) fn set_match_limit_error(eg: &mut ExecutorGlobals, error: MatchLimitError) {
+    set_last_error(
+        eg,
+        match error {
+            MatchLimitError::Backtrack => PREG_BACKTRACK_LIMIT_ERROR,
+            MatchLimitError::Recursion => PREG_RECURSION_LIMIT_ERROR,
+            MatchLimitError::JitStack => PREG_JIT_STACKLIMIT_ERROR,
+        },
+    );
 }
 
 fn rendered_compile_error(pattern: &str, error: &str) -> String {

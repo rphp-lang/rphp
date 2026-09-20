@@ -24,10 +24,11 @@ foreach ($names as $name) {
     echo ")\n";
 }
 foreach ([
+    'PCRE_VERSION','PCRE_VERSION_MAJOR','PCRE_VERSION_MINOR','PCRE_JIT_SUPPORT',
     'PREG_GREP_INVERT','PREG_NO_ERROR','PREG_INTERNAL_ERROR',
     'PREG_BACKTRACK_LIMIT_ERROR','PREG_RECURSION_LIMIT_ERROR',
     'PREG_BAD_UTF8_ERROR','PREG_BAD_UTF8_OFFSET_ERROR','PREG_JIT_STACKLIMIT_ERROR',
-] as $name) echo $name, '=', constant($name), '|';
+] as $name) echo $name, '=', var_export(constant($name), true), '|';
 echo "\n";
 "#,
         ),
@@ -37,10 +38,36 @@ echo "\n";
             "preg_last_error:pcre:0/0:int()\n",
             "preg_last_error_msg:pcre:0/0:string()\n",
             "preg_replace_callback_array:pcre:2/5:array|string|null(pattern:array:0,subject:array|string:0,limit:int:0=-1,count::1=NULL,flags:int:0=0,)\n",
+            "PCRE_VERSION='10.42 2022-12-11'|PCRE_VERSION_MAJOR=10|",
+            "PCRE_VERSION_MINOR=42|PCRE_JIT_SUPPORT=false|",
             "PREG_GREP_INVERT=1|PREG_NO_ERROR=0|PREG_INTERNAL_ERROR=1|",
             "PREG_BACKTRACK_LIMIT_ERROR=2|PREG_RECURSION_LIMIT_ERROR=3|",
             "PREG_BAD_UTF8_ERROR=4|PREG_BAD_UTF8_OFFSET_ERROR=5|",
             "PREG_JIT_STACKLIMIT_ERROR=6|\n",
+        )
+    );
+}
+
+#[test]
+fn pcre_ini_defaults_are_request_local_and_mutable() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (['pcre.jit', 'pcre.backtrack_limit', 'pcre.recursion_limit'] as $name) {
+    echo $name, '=', ini_get($name), "\n";
+}
+var_dump(ini_set('pcre.jit', '1'), ini_get('pcre.jit'));
+var_dump(ini_set('pcre.backtrack_limit', '17'), ini_get('pcre.backtrack_limit'));
+var_dump(ini_set('pcre.recursion_limit', '23'), ini_get('pcre.recursion_limit'));
+"#,
+        ),
+        concat!(
+            "pcre.jit=0\n",
+            "pcre.backtrack_limit=1000000\n",
+            "pcre.recursion_limit=100000\n",
+            "string(1) \"0\"\nstring(1) \"1\"\n",
+            "string(7) \"1000000\"\nstring(2) \"17\"\n",
+            "string(6) \"100000\"\nstring(2) \"23\"\n",
         )
     );
 }

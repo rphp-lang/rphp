@@ -917,3 +917,48 @@ fn lookbehind_cost_does_not_grow_with_subject_position() {
     assert_eq!(re.captures_iter(&subject).len(), 20_000);
     assert!(started.elapsed() < std::time::Duration::from_secs(5));
 }
+
+#[test]
+fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
+    let long_linear = Regex::new(&".".repeat(4_097), RegexFlags::default()).unwrap();
+    assert!(long_linear.is_match(&"x".repeat(4_097)));
+
+    let repeated = Regex::new("^(a)+b$", RegexFlags::default()).unwrap();
+    assert_eq!(
+        repeated.is_match_with_limits(
+            &"a".repeat(64),
+            MatchLimits {
+                backtrack: 8,
+                recursion: 100,
+                jit: false,
+            },
+        ),
+        Err(MatchLimitError::Backtrack)
+    );
+
+    let nested = Regex::new("^((a))$", RegexFlags::default()).unwrap();
+    assert!(matches!(
+        nested.captures_with_limits(
+            "a",
+            MatchLimits {
+                backtrack: 100,
+                recursion: 1,
+                jit: false,
+            },
+        ),
+        Err(MatchLimitError::Recursion)
+    ));
+
+    let jit_repeated = Regex::new("^(a)+$", RegexFlags::default()).unwrap();
+    assert_eq!(
+        jit_repeated.is_match_with_limits(
+            &"a".repeat(MatchBudget::JIT_STEP_LIMIT + 1),
+            MatchLimits {
+                backtrack: 1_000_000,
+                recursion: 100,
+                jit: true,
+            },
+        ),
+        Err(MatchLimitError::JitStack)
+    );
+}
