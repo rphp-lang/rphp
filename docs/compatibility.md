@@ -247,6 +247,72 @@ strings/array manifest/pass set
 `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
 
+### Separate complete Date extension checkpoint
+
+The separate Date workstream now completes the PHP 8.5 Date extension on the
+validated Linux x86-64 platform.  The independently implemented IANA **2026a**
+compiler/runtime remains the sole timezone engine: the generated transition
+database is deterministic, and RPHP uses no host tzcode, timelib, native
+timezone engine, FFI or copied implementation.  The completed surface covers
+the textual and relative parser, civil-time normalization, timezone
+transitions, serialization, interval/period arithmetic, solar functions and
+the stateful `DateTime`, `DateTimeImmutable`, `DateInterval`, `DatePeriod` and
+`DateTimeZone` contracts.  `extension_loaded('date')` and the loaded-extension
+inventory now expose Date.
+
+The release builtin audit against PHP 8.5.10 reports all **48 of 48** Date
+globals present, call-shape compatible and Reflection-exact.  Its six Date
+types expose all **88 of 88** reference-declared methods with exact reflected
+signatures.  The unmodified 688-case php-src `ext/date` suite is **676 pass / 0
+fail / 12 skip / 0 unsupported**, exact **+23/-0** over the preceding parser
+checkpoint.  The twelve skips are only the suite's platform/extension gates:
+nine 32-bit cases, two Windows cases and one `intl`-dependent case; there is no
+hidden Date failure, timeout or crash on the validated platform.
+
+The fixed-parent broad gates preserve byte-identical pass sets: Zend/lang is
+**5,119/186/115/179** and strings/array is **1,470/8/68/29**, with zero gained
+or lost paths relative to `7880621c`.  Default, no-default, erased, reified,
+all-features and all-target Cargo gates pass, as do the unsafe/tooling/data
+checks and Composer 2.8.12 plus Symfony 7.4 S0--S3, including cold-cache,
+recovery and concurrent-publication scenarios.
+
+The exact parent/candidate CPU-2 gate uses 32 balanced pairs and byte-identical
+output.  Paired medians are startup **+1.804%**, ordinary computation
+**+0.546%**, UTC `date()` **-2.581%**, UTC `mktime()` **-2.162%**, IANA-zone
+`date()` **+0.047%**, IANA-zone `mktime()` **-0.439%**, stateful
+`DateTimeImmutable` **-2.274%** and `date_parse()` **-36.128%**.  The candidate
+adds 117,640 bytes (0.659%) over the exact parent.
+
+SHA-256 evidence: final release
+`1f60414b1c68ac74762b8c061239fc9242a9ce11b5e0e7bc5305fefa094d8daf`;
+exact parent
+`324ea5fc4fbd5f550244dfe7673ff15e35379fc10df51bf1a7647a6a743dd11c`;
+generated IANA database
+`ee5885390fb2f6e8969962833ff61177d751ad4762e158a2ca676ffd7aa1478b`;
+Date manifest/summary/pass set
+`1916f8b367944a1396b60b07db5276227199551521eb50fb6b9ab4e1c2d666ab` /
+`d259eefa86a9b9b8fd0d2f054b0004bfb75c1fb90810d5eb453c039fb5b96d74` /
+`9e35dd3ea7e5213d014d98ce1a5ec05bff862752a5f7b2c5c36fe4d947a1e24e`;
+builtin audit summary/report/function/method tables
+`fec3ec1c93c9fec4b96e511840f9b256e9347edd768ee1a1d1553cbe4ffff073` /
+`4f049465d7cc0f00a0ae3a0ff2664e470409645d3df81912ec06f3881dc62d77` /
+`a2d13e05c8c9da5707cd7d6130359e86b3ee37b62de8bf33a490372ca69cb568` /
+`b8f768851517973f27d3f56c21647d6506a0e60153c256ff00d1b71b030ba5a9`;
+Zend/lang manifest/pass set
+`50fe3334ede5de6555ccf4f188a5cce5bbd0f39dccd1af2c62e09a191c723875` /
+`6c47d8c2e97716e6e11c38d52200c9bc9279c7a0b141ce79ecf52b8f35a9e72b`;
+strings/array manifest/pass set
+`19e380823260ac0caa1459aa7b870340da581600335be01bd81c1675b5dea7a5` /
+`e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`;
+performance packet
+`e4c05e7e21cccac7abb3404ccfb157b9c0707fbd0000aab8b743189f9804728e`.
+
+This completion claim is deliberately platform-scoped.  The skipped 32-bit,
+Windows and `intl` integration paths were not executed and are not inferred;
+nor does completing Date imply blanket PHP-runtime compatibility.  The two
+following Date sections remain as historical checkpoints superseded by this
+completion record.
+
 ### Separate Date transition-core checkpoint
 
 The separately owned `date-tzdb-transition-core` checkpoint over the scalar

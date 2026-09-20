@@ -168,18 +168,18 @@ from the current 224 Zend/lang failures and preserve the exact 5,080 and 1,470
 parent pass sets. Performance optimization remains deferred to the aggregate
 sweep boundary by user direction.
 
-The separate Date workstream has accepted its timezone-introspection checkpoint
-over the independent IANA 2026a transition core.  `date.timezone` CLI-INI is
-admitted with PHP startup diagnostics; eight timezone globals and the
-DateTimeZone constructor/name/location/transition/list projections raise the
-Date inventory from 11 to **19 of 48** functions.  Under the same updated
-runner, the 688-case `ext/date` packet moves from 56 to 80 passes, exact
-**+24/-0**.  Full Cargo, no-loss, Composer/Symfony and two fixed-parent
-performance packets are green.  The extension remains deliberately
-undiscoverable.  Before selecting the next Date checkpoint, review whether to
-prioritize the shared textual/relative parser or DateTime object state;
-`timezone_offset_get()` remains coupled to a real DateTimeInterface.  Do not
-substitute host tzcode, timelib or FFI.
+The separate Date workstream is complete on its validated Linux x86-64 target.
+The independent IANA 2026a engine now backs the full textual/relative parser,
+all **48 of 48** reflected global functions and all **88 of 88** reflected
+methods across the six Date types; `extension_loaded('date')` is admitted.  The
+unmodified 688-case `ext/date` suite is **676/0/12/0**, with the twelve skips
+limited to explicit 32-bit, Windows and `intl` preconditions.  Broad pass sets
+are unchanged, the five Cargo configurations/all-targets, unsafe/tooling,
+Composer/Symfony S0--S3 and a fixed-parent 32-pair performance packet are
+green.  The Date workstream is paused for user review; do not start another
+Date checkpoint.  Windows, 32-bit and `intl` integration remain explicit
+platform non-claims, and no host tzcode, timelib or FFI may replace the
+repository-owned implementation.
 
 ### Preceding core property-receiver checkpoint
 
