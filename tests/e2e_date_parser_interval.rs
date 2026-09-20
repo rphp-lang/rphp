@@ -275,6 +275,33 @@ foreach (['28 Feb 2008 12:00:00 +1460000 days', '28 Feb 2008 12:00:00 -1460000 d
 }
 
 #[test]
+fn parser_handles_compact_clocks_iso_weeks_and_split_relative_time_phases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+date_default_timezone_set('UTC');
+foreach (['2001-10-22T211958-2', '2001-W43-1 21:19:58-02:00'] as $input) {
+    echo (new DateTimeImmutable($input))->format('Y-m-d H:i:s P'), "\n";
+}
+date_default_timezone_set('Pacific/Nauru');
+echo (new DateTimeImmutable('1942-08-28 20:00:00'))
+    ->modify('next Saturday +2 hours')->format('Y-m-d H:i:s P'), "\n";
+date_default_timezone_set('UTC');
+echo (new DateTimeImmutable('2010-02-17 12:34:56'))
+    ->modify('february first day of this month midnight - 1 second')
+    ->format('Y-m-d H:i:s'), "\n";
+"#,
+        ),
+        concat!(
+            "2001-10-22 21:19:58 -02:00\n",
+            "2001-10-22 21:19:58 -02:00\n",
+            "1942-08-29 02:00:00 +09:00\n",
+            "2010-01-31 23:59:59\n",
+        )
+    );
+}
+
+#[test]
 fn format_parser_supports_unix_fractions_day_of_year_and_trailing_warnings() {
     assert_eq!(
         run_php(

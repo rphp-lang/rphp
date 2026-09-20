@@ -561,10 +561,12 @@ pub(super) fn apply_to_datetime(
         seconds: sign * relative.seconds,
         microseconds: sign * relative.microseconds,
         business_days: sign * relative.business_days,
+        business_days_present: relative.business_days_present,
         weekday: relative
             .weekday
             .map(|(weekday, direction)| (weekday, direction.saturating_mul(sign as i8))),
         weekday_resets_time: relative.weekday_resets_time,
+        weekday_before_days: relative.weekday_before_days,
         first_day: relative.first_day,
         last_day: relative.last_day,
     };
@@ -1099,7 +1101,7 @@ pub(crate) fn fn_date_interval_unserialize(
                 return Ok(());
             }
             if install(arg!(ed, 0), state) {
-                super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
+                super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, ed, eg);
             }
         }
         Err(message) => {

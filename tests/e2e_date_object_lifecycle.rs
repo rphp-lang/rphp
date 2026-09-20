@@ -74,9 +74,13 @@ echo $interval->format('%y/%m/%d %h:%i:%s %a'), "\n";
             "DateTimeImmutable:O:17:\"DateTimeImmutable\":3:{s:4:\"date\";s:26:\"2024-01-02 03:04:05.123456\";s:13:\"timezone_type\";i:3;s:8:\"timezone\";s:3:\"UTC\";}\n",
             "DateTimeZone:O:12:\"DateTimeZone\":2:{s:13:\"timezone_type\";i:3;s:8:\"timezone\";s:3:\"UTC\";}\n",
             "DateInterval:O:12:\"DateInterval\":10:{s:1:\"y\";i:1;s:1:\"m\";i:2;s:1:\"d\";i:3;s:1:\"h\";i:4;s:1:\"i\";i:5;s:1:\"s\";i:6;s:1:\"f\";d:0.25;s:6:\"invert\";i:0;s:4:\"days\";b:0;s:11:\"from_string\";b:0;}\n",
+            "\nDeprecated: Method DateTime::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize() in <main> on line 14\n",
             "DateTime:Error:Invalid serialization data for DateTime object\n",
+            "\nDeprecated: Method DateTimeImmutable::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize() in <main> on line 14\n",
             "DateTimeImmutable:Error:Invalid serialization data for DateTimeImmutable object\n",
+            "\nDeprecated: Method DateTimeZone::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize() in <main> on line 14\n",
             "DateTimeZone:Error:Invalid serialization data for DateTimeZone object\n",
+            "\nDeprecated: Method DatePeriod::__wakeup() is deprecated since 8.5, this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize() in <main> on line 14\n",
             "DatePeriod:Error:Invalid serialization data for DatePeriod object\n",
             "-1/-1/-1 -1:-1:-1 -1\n",
         )

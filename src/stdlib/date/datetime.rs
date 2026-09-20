@@ -72,6 +72,11 @@ pub(super) fn parse_fraction(value: &str) -> Option<u32> {
 }
 
 pub(super) fn parse_timestamp(value: &str) -> Option<(i64, u32)> {
+    if !value.contains('.')
+        && let Ok(seconds) = value.parse::<i64>()
+    {
+        return Some((seconds, 0));
+    }
     let number = value.parse::<f64>().ok()?;
     if !number.is_finite() || number < i64::MIN as f64 || number >= i64::MAX as f64 {
         return None;
@@ -663,7 +668,12 @@ fn serialization_class_name(receiver: &Value, eg: &ExecutorGlobals) -> &'static 
         .map_or("DateTime", |_| "DateTimeImmutable")
 }
 
-fn unserialize_into(receiver: &Value, data: &PhpArray, eg: &mut ExecutorGlobals) -> bool {
+fn unserialize_into(
+    receiver: &Value,
+    data: &PhpArray,
+    source_frame: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> bool {
     let class_name = serialization_class_name(receiver, eg);
     let Some(state) = serialized_fields_state(
         data.get_str("date"),
@@ -677,7 +687,7 @@ fn unserialize_into(receiver: &Value, data: &PhpArray, eg: &mut ExecutorGlobals)
     if !install_state(receiver, state) {
         return false;
     }
-    super::restore_custom_properties(receiver, data, &SERIALIZED_KEYS, eg)
+    super::restore_custom_properties(receiver, data, &SERIALIZED_KEYS, source_frame, eg)
 }
 
 pub(crate) fn fn_date_time_unserialize(
@@ -688,7 +698,7 @@ pub(crate) fn fn_date_time_unserialize(
     let Some(data) = arg!(ed, 1).dereferenced().as_array() else {
         return Ok(());
     };
-    unserialize_into(arg!(ed, 0), &data, eg);
+    unserialize_into(arg!(ed, 0), &data, ed, eg);
     Ok(())
 }
 
@@ -739,7 +749,7 @@ fn set_state(
     };
     let class_name = called_date_class(ed, eg, class_name);
     if let Some(value) = allocate(eg, &class_name, state) {
-        super::restore_custom_properties(&value, &data, &SERIALIZED_KEYS, eg);
+        super::restore_custom_properties(&value, &data, &SERIALIZED_KEYS, ed, eg);
         ret!(rv, value);
     }
     Ok(())
@@ -1033,7 +1043,17 @@ pub(crate) fn fn_date_timestamp_set(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let timestamp = arg_long!(ed, 1);
+    let Some(timestamp) = super::super::typed_internal_int_argument_expected(
+        ed,
+        eg,
+        "date_timestamp_set",
+        1,
+        "timestamp",
+        "int",
+    )?
+    else {
+        return Ok(());
+    };
     let receiver = arg!(ed, 0).clone();
     let Some(result) = mutate(&receiver, eg, |state| {
         state.timestamp = timestamp;
@@ -1231,6 +1251,15 @@ fn create_from_format_handler(
     };
     let format = arg_str!(ed, 1);
     let input = arg_str!(ed, 2);
+    if input.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!(
+                "{class_name}::createFromFormat(): Argument #2 ($datetime) must not contain any null bytes"
+            ),
+        ));
+        return Ok(());
+    }
     let timezone = parse_timezone_argument(arg_opt!(ed, 3), eg);
     if eg.exception.is_some() {
         return Ok(());
@@ -1263,6 +1292,13 @@ pub(crate) fn fn_date_create_from_format(
 ) -> Result<(), VmError> {
     let format = arg_str!(ed, 0);
     let input = arg_str!(ed, 1);
+    if input.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "date_create_from_format(): Argument #2 ($datetime) must not contain any null bytes",
+        ));
+        return Ok(());
+    }
     let timezone = parse_timezone_argument(arg_opt!(ed, 2), eg);
     if eg.exception.is_some() {
         return Ok(());
@@ -1279,6 +1315,13 @@ pub(crate) fn fn_date_create_immutable_from_format(
 ) -> Result<(), VmError> {
     let format = arg_str!(ed, 0);
     let input = arg_str!(ed, 1);
+    if input.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "date_create_immutable_from_format(): Argument #2 ($datetime) must not contain any null bytes",
+        ));
+        return Ok(());
+    }
     let timezone = parse_timezone_argument(arg_opt!(ed, 2), eg);
     if eg.exception.is_some() {
         return Ok(());
@@ -1584,6 +1627,12 @@ fn parse_projection(
         ] {
             relative_value.set_str(name, Value::long(value));
         }
+        if relative.first_day {
+            relative_value.set_str("first_day_of_month", Value::bool(true));
+        }
+        if relative.last_day {
+            relative_value.set_str("last_day_of_month", Value::bool(true));
+        }
         result.set_str("relative", Value::array(relative_value));
     } else if let Some(state) = state {
         result.set_str("is_localtime", Value::bool(fields.timezone));
@@ -1657,6 +1706,13 @@ pub(crate) fn fn_date_parse_from_format(
 ) -> Result<(), VmError> {
     let format = arg_str!(ed, 0);
     let input = arg_str!(ed, 1);
+    if input.contains('\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "date_parse_from_format(): Argument #2 ($datetime) must not contain any null bytes",
+        ));
+        return Ok(());
+    }
     let result = parse_projection(super::parser::parse_from_format(
         format.as_ref(),
         input.as_ref(),
@@ -1672,7 +1728,10 @@ pub(crate) fn fn_strtotime(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let input = arg_str!(ed, 0);
-    let base_timestamp = match arg_opt!(ed, 1) {
+    if input.trim().is_empty() {
+        ret!(rv, Value::bool(false));
+    }
+    let base_timestamp = match (unsafe { (*ed).num_args > 1 }).then(|| arg!(ed, 1)) {
         None => super::current_timestamp(),
         Some(value) if value.dereferenced().value_type() == ValueType::Null => {
             super::current_timestamp()
@@ -1706,7 +1765,7 @@ pub(crate) fn fn_strtotime(
                     || relative.seconds != 0
                     || relative.microseconds != 0
             });
-            if (parsed.fields.year || parsed.fields.month || parsed.fields.day)
+            if (parsed.fields.month || parsed.fields.day)
                 && !parsed.fields.hour
                 && !relative_changes_clock
             {

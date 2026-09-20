@@ -17,8 +17,10 @@ pub(super) struct RelativeAdjustment {
     pub seconds: i64,
     pub microseconds: i64,
     pub business_days: i64,
+    pub business_days_present: bool,
     pub weekday: Option<(i64, i8)>,
     pub weekday_resets_time: bool,
+    pub weekday_before_days: bool,
     pub first_day: bool,
     pub last_day: bool,
 }
@@ -266,11 +268,32 @@ fn split_timezone(
         }
     }
     if let Some(index) = trimmed.char_indices().rev().find_map(|(index, character)| {
-        (index > 9 && matches!(character, '+' | '-')).then_some(index)
+        let prefix = &trimmed[..index];
+        let has_iso_time_separator = prefix
+            .as_bytes()
+            .windows(2)
+            .any(|pair| pair[0].is_ascii_digit() && matches!(pair[1], b'T' | b't'));
+        (index > 9
+            && matches!(character, '+' | '-')
+            && (prefix.contains(':') || has_iso_time_separator))
+            .then_some(index)
     }) {
         if let Some(description) = parse_datetime_timezone(&trimmed[index..]) {
             return (trimmed[..index].trim_end(), description);
         }
+    }
+    let suffix_start = trimmed
+        .char_indices()
+        .rev()
+        .take_while(|(_, character)| character.is_ascii_alphabetic())
+        .last()
+        .map(|(index, _)| index);
+    if let Some(index) = suffix_start
+        && index > 0
+        && trimmed.as_bytes()[index - 1].is_ascii_digit()
+        && let Some(description) = parse_datetime_timezone(&trimmed[index..])
+    {
+        return (trimmed[..index].trim_end(), description);
     }
     (trimmed, fallback)
 }
@@ -288,6 +311,15 @@ fn parse_datetime_timezone(value: &str) -> Option<timezone::TimezoneDescription>
                     char::from(*sign),
                     char::from(*hour_1),
                     char::from(*hour_2)
+                ));
+            }
+            if let [sign @ (b'+' | b'-'), hour] = bytes
+                && hour.is_ascii_digit()
+            {
+                return timezone::parse_timezone(&format!(
+                    "{}0{}:00",
+                    char::from(*sign),
+                    char::from(*hour)
                 ));
             }
             if let [sign @ (b'+' | b'-'), hour, b':', minute] = bytes
@@ -319,15 +351,41 @@ fn parse_datetime_timezone(value: &str) -> Option<timezone::TimezoneDescription>
 
 fn parse_clock_flexible(value: &str) -> Option<(i64, i64, i64, u32, usize)> {
     parse_clock(value).or_else(|| {
+        if value.contains('.') {
+            let parts = value.split('.').collect::<Vec<_>>();
+            if matches!(parts.len(), 3 | 4)
+                && parts[..3].iter().all(|part| {
+                    !part.is_empty()
+                        && part.len() <= 2
+                        && part.bytes().all(|byte| byte.is_ascii_digit())
+                })
+                && parts.get(3).is_none_or(|part| {
+                    !part.is_empty() && part.bytes().all(|byte| byte.is_ascii_digit())
+                })
+            {
+                let hour = parts[0].parse::<i64>().ok()?;
+                let minute = parts[1].parse::<i64>().ok()?;
+                let second = parts[2].parse::<i64>().ok()?;
+                if hour <= 24 && minute < 60 && second < 60 {
+                    let microsecond = parts
+                        .get(3)
+                        .map_or(Some(0), |fraction| datetime::parse_fraction(fraction))?;
+                    return Some((hour, minute, second, microsecond, value.len()));
+                }
+            }
+            return None;
+        }
         let digits = value.bytes().take_while(u8::is_ascii_digit).count();
-        if digits == 4 && digits == value.len() {
-            return Some((
-                value[..2].parse().ok()?,
-                value[2..].parse().ok()?,
-                0,
-                0,
-                digits,
-            ));
+        if matches!(digits, 4 | 6) && digits == value.len() {
+            let hour = value[..2].parse::<i64>().ok()?;
+            let minute = value[2..4].parse::<i64>().ok()?;
+            let second = if digits == 6 {
+                value[4..6].parse::<i64>().ok()?
+            } else {
+                0
+            };
+            return (hour <= 24 && minute < 60 && second < 60)
+                .then_some((hour, minute, second, 0, digits));
         }
         if !(1..=2).contains(&digits) || digits != value.len() {
             return None;
@@ -393,20 +451,49 @@ fn parse_numeric_absolute(
     fallback: timezone::TimezoneDescription,
 ) -> Option<datetime::DateTimeState> {
     let (input, selected_timezone) = split_timezone(input, fallback);
-    if input.len() >= 7
-        && input
-            .as_bytes()
-            .get(4)
-            .is_some_and(|byte| matches!(byte, b'W' | b'w'))
+    let input = input
+        .split_once(char::is_whitespace)
+        .filter(|(prefix, _)| weekday_number(prefix).is_some())
+        .map_or(input, |(_, remainder)| remainder.trim_start());
+    if let Some((date, clock)) = input.split_once(':') {
+        let date_parts = date.split('/').collect::<Vec<_>>();
+        if let [day, month, year] = date_parts.as_slice()
+            && let Some(month) = month_number(month)
+            && let Some(parsed) = parse_clock_flexible(clock)
+            && parsed.4 == clock.len()
+        {
+            return Some(civil_state(
+                year.parse().ok()?,
+                month,
+                day.parse().ok()?,
+                parsed.0,
+                parsed.1,
+                parsed.2,
+                parsed.3,
+                selected_timezone,
+            ));
+        }
+    }
+    let iso_week_start = match input.as_bytes().get(4..) {
+        Some([b'W' | b'w', ..]) => Some(5),
+        Some([b'-', b'W' | b'w', ..]) => Some(6),
+        _ => None,
+    };
+    if let Some(week_start) = iso_week_start
+        && input.len() >= week_start + 2
         && input[..4].bytes().all(|byte| byte.is_ascii_digit())
     {
         let year = input[..4].parse::<i64>().ok()?;
-        let week = input[5..7].parse::<i64>().ok()?;
-        let weekday = input
-            .get(7..)
+        let week_end = week_start + 2;
+        let week = input[week_start..week_end].parse::<i64>().ok()?;
+        let suffix = input
+            .get(week_end..)
             .map(|suffix| suffix.trim_start_matches(|character| matches!(character, '-' | ' ')))
-            .filter(|suffix| !suffix.is_empty())
-            .and_then(|suffix| suffix[..1].parse::<i64>().ok())
+            .unwrap_or_default();
+        let weekday = suffix
+            .get(..1)
+            .filter(|value| value.bytes().all(|byte| byte.is_ascii_digit()))
+            .and_then(|suffix| suffix.parse::<i64>().ok())
             .unwrap_or(1);
         let january_fourth = super::normalized_timestamp(year, 1, 4, 0, 0, 0);
         let january_fourth_weekday = super::super::unix_to_parts(january_fourth).6;
@@ -415,7 +502,32 @@ fn parse_numeric_absolute(
         let timestamp = monday
             .saturating_add(((week - 1).saturating_mul(7) + weekday - 1).saturating_mul(86_400));
         let (year, month, day, ..) = super::super::unix_to_parts(timestamp);
-        return Some(civil_state(year, month, day, 0, 0, 0, 0, selected_timezone));
+        let clock_suffix = if suffix.as_bytes().first().is_some_and(u8::is_ascii_digit) {
+            &suffix[1..]
+        } else {
+            suffix
+        };
+        let clock_suffix = clock_suffix.trim_start();
+        let clock = clock_suffix
+            .strip_prefix('T')
+            .or_else(|| clock_suffix.strip_prefix('t'))
+            .unwrap_or(clock_suffix);
+        let parsed = if clock.is_empty() {
+            (0, 0, 0, 0, 0)
+        } else {
+            let parsed = parse_clock_flexible(clock)?;
+            (parsed.4 == clock.len()).then_some(parsed)?
+        };
+        return Some(civil_state(
+            year,
+            month,
+            day,
+            parsed.0,
+            parsed.1,
+            parsed.2,
+            parsed.3,
+            selected_timezone,
+        ));
     }
     if input.len() >= 9
         && input
@@ -424,15 +536,17 @@ fn parse_numeric_absolute(
         && input[..8].bytes().all(|byte| byte.is_ascii_digit())
     {
         let clock_text = input[9..].trim_end_matches(['Z', 'z']);
-        if clock_text.len() == 6 && clock_text.bytes().all(|byte| byte.is_ascii_digit()) {
+        if let Some(parsed) = parse_clock_flexible(clock_text)
+            && parsed.4 == clock_text.len()
+        {
             return Some(civil_state(
                 input[..4].parse().ok()?,
                 input[4..6].parse().ok()?,
                 input[6..8].parse().ok()?,
-                clock_text[..2].parse().ok()?,
-                clock_text[2..4].parse().ok()?,
-                clock_text[4..6].parse().ok()?,
-                0,
+                parsed.0,
+                parsed.1,
+                parsed.2,
+                parsed.3,
                 if input.ends_with('Z') || input.ends_with('z') {
                     timezone::TimezoneDescription {
                         kind: 2,
@@ -582,6 +696,7 @@ fn parse_named_absolute(
     let mut first_day = false;
     let mut last_day = false;
     let mut relative_days = 0;
+    let mut relative_weeks = 0;
     let mut ordinal_weekday = None;
     let mut unrecognized = false;
     for (index, part) in parts.iter().enumerate() {
@@ -589,7 +704,13 @@ fn parse_named_absolute(
             continue;
         }
         let cleaned = part.trim_matches(|character: char| matches!(character, ',' | '.'));
-        if cleaned.is_empty() || weekday_number(cleaned).is_some() {
+        if cleaned.is_empty() {
+            continue;
+        }
+        if let Some(weekday) = weekday_number(cleaned) {
+            if ordinal_weekday.is_none() {
+                ordinal_weekday = Some((weekday, 0));
+            }
             continue;
         }
         if let Some(parsed) = parse_clock(cleaned)
@@ -600,6 +721,35 @@ fn parse_named_absolute(
         }
         if let Some(zone) = parse_datetime_timezone(cleaned) {
             selected_timezone = zone;
+            continue;
+        }
+        if cleaned == "+" || cleaned == "-" {
+            continue;
+        }
+        if let Ok(number) = cleaned.parse::<i64>()
+            && parts
+                .get(index + 1)
+                .is_some_and(|value| unit_name(value).eq_ignore_ascii_case("week"))
+        {
+            let sign = if index > 0 && parts[index - 1] == "-" {
+                -1
+            } else {
+                1
+            };
+            relative_weeks += sign * number;
+            continue;
+        }
+        if unit_name(cleaned).eq_ignore_ascii_case("week")
+            && index > 0
+            && parts[index - 1].parse::<i64>().is_ok()
+        {
+            continue;
+        }
+        if let Ok(number) = cleaned.parse::<i64>()
+            && let Some(weekday) = parts.get(index + 1).and_then(|value| weekday_number(value))
+        {
+            first_day = true;
+            ordinal_weekday = Some((weekday, 20 + i8::try_from(number).ok()?));
             continue;
         }
         if let Ok(number) = cleaned.parse::<i64>() {
@@ -638,13 +788,13 @@ fn parse_named_absolute(
                 first_day = true;
                 if let Some(weekday) = parts.get(index + 1).and_then(|value| weekday_number(value))
                 {
-                    ordinal_weekday = Some((weekday, 0));
+                    ordinal_weekday = Some((weekday, 11));
                 }
             }
             "second" | "third" | "fourth" | "fifth" => {
                 if let Some(weekday) = parts.get(index + 1).and_then(|value| weekday_number(value))
                 {
-                    ordinal_weekday = Some((weekday, parse_number(cleaned)? as i8));
+                    ordinal_weekday = Some((weekday, 10 + parse_number(cleaned)? as i8));
                     first_day = true;
                 }
             }
@@ -709,10 +859,13 @@ fn parse_named_absolute(
     }
     if last_day {
         day = super::super::days_in_month(year, month);
-    } else if first_day || ordinal_weekday.is_some() {
+    } else if first_day {
         day = 1;
     }
-    day = day.saturating_add(relative_days);
+    day = day
+        .saturating_add(relative_days)
+        .saturating_add(relative_weeks.saturating_mul(7));
+    let explicit_clock = clock.is_some();
     let clock = clock.unwrap_or((base_hour, base_minute, base_second, base.microsecond));
     let mut state = civil_state(
         year,
@@ -732,7 +885,7 @@ fn parse_named_absolute(
                 ..RelativeAdjustment::default()
             },
         );
-        if clock == (base_hour, base_minute, base_second, base.microsecond) {
+        if !explicit_clock {
             let (year, month, day, _, _, _) = datetime::local_parts(&state);
             datetime::set_local(&mut state, year, month, day, 0, 0, 0);
             state.microsecond = 0;
@@ -844,7 +997,8 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                     parse_number(&lower).unwrap_or(1) as i8
                 },
             ));
-            result.weekday_resets_time = true;
+            result.weekday_resets_time = !tokens[index + 1].eq_ignore_ascii_case("this");
+            result.weekday_before_days = true;
             matched = true;
             index += 5;
             continue;
@@ -880,14 +1034,18 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                     .get(index + 1)
                     .is_some_and(|v| v.eq_ignore_ascii_case("day")) =>
             {
-                result.first_day = lower == "first";
-                result.last_day = lower == "last";
+                let has_of = tokens
+                    .get(index + 2)
+                    .is_some_and(|value| value.eq_ignore_ascii_case("of"));
+                if has_of {
+                    result.first_day = lower == "first";
+                    result.last_day = lower == "last";
+                } else {
+                    result.days += if lower == "first" { 1 } else { -1 };
+                }
                 matched = true;
                 index += 2;
-                if tokens
-                    .get(index)
-                    .is_some_and(|v| v.eq_ignore_ascii_case("of"))
-                {
+                if has_of {
                     index += 1;
                 }
                 continue;
@@ -931,7 +1089,8 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                     1
                 },
             ));
-            result.weekday_resets_time = true;
+            result.weekday_resets_time = !tokens[index + 1].eq_ignore_ascii_case("this");
+            result.weekday_before_days = true;
             matched = true;
             index += 3;
             continue;
@@ -945,7 +1104,8 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                 .and_then(|value| weekday_number(value))
         {
             result.weekday = Some((weekday, if lower == "next" { 1 } else { 0 }));
-            result.weekday_resets_time = true;
+            result.weekday_resets_time = lower != "this";
+            result.weekday_before_days = true;
             matched = true;
             index += 3;
             continue;
@@ -956,7 +1116,8 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                 .is_some_and(|value| unit_name(value).eq_ignore_ascii_case("week"))
         {
             result.weekday = Some((1, -2));
-            result.weekday_resets_time = true;
+            result.weekday_resets_time = false;
+            result.weekday_before_days = true;
             matched = true;
             index += 2;
             continue;
@@ -976,6 +1137,7 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
         {
             let amount = if invert { -amount } else { amount };
             result.weekday = Some((weekday, i8::try_from(amount).ok()?));
+            result.weekday_resets_time = token.parse::<i64>().is_err();
             matched = true;
             index += 2;
             continue;
@@ -1001,6 +1163,10 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
                 "month" => result.months += amount,
                 "week" => result.days += amount.saturating_mul(7),
                 "day" => result.days += amount,
+                "weekday" => {
+                    result.business_days += amount;
+                    result.business_days_present = true;
+                }
                 "hour" | "hr" | "h" => result.hours += amount,
                 "minute" | "min" => result.minutes += amount,
                 "second" | "sec" => result.seconds += amount,
@@ -1036,7 +1202,10 @@ pub(super) fn parse_relative(input: &str) -> Option<RelativeAdjustment> {
             "fortnight" => result.days += amount.saturating_mul(14),
             "week" => result.days += amount.saturating_mul(7),
             "day" => result.days += amount,
-            "weekday" => result.business_days += amount,
+            "weekday" => {
+                result.business_days += amount;
+                result.business_days_present = true;
+            }
             "hour" | "hr" | "h" => result.hours += amount,
             "minute" | "min" => result.minutes += amount,
             "second" | "sec" => result.seconds += amount,
@@ -1056,7 +1225,14 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
         datetime::local_parts(state);
     year = year.saturating_add(relative.years);
     month = month.saturating_add(relative.months);
-    day = day.saturating_add(relative.days);
+    let deferred_days = if relative.weekday_before_days {
+        relative.days
+    } else {
+        0
+    };
+    if !relative.weekday_before_days {
+        day = day.saturating_add(relative.days);
+    }
     hour = hour.saturating_add(relative.hours);
     minute = minute.saturating_add(relative.minutes);
     second = second.saturating_add(relative.seconds);
@@ -1095,6 +1271,18 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
                 remaining -= 1;
             }
         }
+    } else if relative.business_days_present {
+        let offset = timezone::description_state(&state.timezone, state.timestamp).1;
+        let weekday = super::super::unix_to_parts(state.timestamp.saturating_add(offset)).6;
+        let delta = match weekday {
+            6 => 2,
+            0 => 1,
+            _ => 0,
+        };
+        if delta != 0 {
+            let (year, month, day, hour, minute, second) = datetime::local_parts(state);
+            datetime::set_local(state, year, month, day + delta, hour, minute, second);
+        }
     }
     if let Some((wanted, direction)) = relative.weekday {
         let offset = timezone::description_state(&state.timezone, state.timestamp).1;
@@ -1114,6 +1302,16 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
                 let current = if current == 0 { 7 } else { current };
                 wanted - current
             }
+            count if (11..20).contains(&count) => {
+                let ordinal = i64::from(count - 10);
+                let delta = (wanted - current).rem_euclid(7);
+                let delta = if delta == 0 { 7 } else { delta };
+                delta + 7 * (ordinal - 1)
+            }
+            count if count >= 21 => {
+                let ordinal = i64::from(count - 20);
+                (wanted - current).rem_euclid(7) + 7 * (ordinal - 1)
+            }
             count if count > 1 => (wanted - current).rem_euclid(7) + 7 * (i64::from(count) - 1),
             count if count < -2 => {
                 -((current - wanted).rem_euclid(7) + 7 * (i64::from(-count) - 1))
@@ -1122,6 +1320,18 @@ pub(super) fn apply_relative(state: &mut datetime::DateTimeState, relative: &Rel
         };
         let (year, month, day, hour, minute, second) = datetime::local_parts(state);
         datetime::set_local(state, year, month, day + delta, hour, minute, second);
+    }
+    if deferred_days != 0 {
+        let (year, month, day, hour, minute, second) = datetime::local_parts(state);
+        datetime::set_local(
+            state,
+            year,
+            month,
+            day.saturating_add(deferred_days),
+            hour,
+            minute,
+            second,
+        );
     }
 }
 
@@ -1197,22 +1407,49 @@ fn apply_relative_expression(
     clock: Option<ParsedClock>,
 ) -> datetime::DateTimeState {
     let lower = source.to_ascii_lowercase();
-    if relative.weekday_resets_time
+    let resets_time = relative.weekday_resets_time
         || lower.contains("today")
         || lower.contains("tomorrow")
         || lower.contains("yesterday")
         || lower.contains("midnight")
-        || lower.contains("noon")
-    {
+        || lower.contains("noon");
+    let has_relative_clock = relative.hours != 0
+        || relative.minutes != 0
+        || relative.seconds != 0
+        || relative.microseconds != 0;
+    let defer_relative_clock = has_relative_clock && (resets_time || clock.is_some());
+    if defer_relative_clock {
+        let mut date = relative.clone();
+        date.hours = 0;
+        date.minutes = 0;
+        date.seconds = 0;
+        date.microseconds = 0;
+        // Resolve the relative date before applying the implicit midnight.
+        // The base date itself can lie in a midnight DST gap; normalizing it
+        // first would leak that gap's projection into the target weekday.
+        apply_relative(&mut state, &date);
+    } else {
+        apply_relative(&mut state, relative);
+    }
+    if resets_time {
         let (year, month, day, _, _, _) = datetime::local_parts(&state);
         datetime::set_local(&mut state, year, month, day, 0, 0, 0);
         state.microsecond = 0;
     }
-    apply_relative(&mut state, relative);
     if let Some((hour, minute, second, microsecond)) = clock {
         let (year, month, day, _, _, _) = datetime::local_parts(&state);
         datetime::set_local(&mut state, year, month, day, hour, minute, second);
         state.microsecond = microsecond;
+    }
+    if defer_relative_clock {
+        let clock_relative = RelativeAdjustment {
+            hours: relative.hours,
+            minutes: relative.minutes,
+            seconds: relative.seconds,
+            microseconds: relative.microseconds,
+            ..RelativeAdjustment::default()
+        };
+        apply_relative(&mut state, &clock_relative);
     }
     state
 }
@@ -1412,6 +1649,38 @@ fn parse_malformed_mixed_projection(input: &str) -> Option<ParsedDateTime> {
     })
 }
 
+fn parse_leading_military_timezone(input: &str) -> Option<ParsedDateTime> {
+    let mut tokens = input.split_whitespace();
+    let abbreviation = tokens.next()?;
+    if !abbreviation.eq_ignore_ascii_case("a") || tokens.next().is_none() {
+        return None;
+    }
+    let (timestamp, microsecond) = datetime::now();
+    Some(ParsedDateTime {
+        state: datetime::DateTimeState {
+            timestamp,
+            microsecond,
+            timezone: timezone::TimezoneDescription {
+                kind: 2,
+                name: "A".to_string(),
+            },
+            initialized: true,
+        },
+        diagnostics: DateParseDiagnostics {
+            warnings: Vec::new(),
+            errors: vec![(
+                2,
+                "The timezone could not be found in the database".to_string(),
+            )],
+        },
+        relative: None,
+        fields: ParsedFields {
+            timezone: true,
+            ..ParsedFields::default()
+        },
+    })
+}
+
 pub(super) fn parse_datetime(
     input: &str,
     supplied_timezone: Option<timezone::TimezoneDescription>,
@@ -1429,12 +1698,33 @@ pub(super) fn parse_datetime(
         input
     };
     let has_explicit_base = base.is_some();
-    let fallback = supplied_timezone.unwrap_or_else(|| timezone::default_description(eg));
+    let fallback = supplied_timezone
+        .or_else(|| base.map(|state| state.timezone.clone()))
+        .unwrap_or_else(|| timezone::default_description(eg));
+    if let Some(parsed) = parse_leading_military_timezone(input) {
+        return Ok(parsed);
+    }
     if let Some(parsed) = parse_malformed_mixed_projection(input) {
         return Ok(parsed);
     }
     if let Some(parsed) = parse_short_offset_projection(input.trim(), &fallback) {
         return Ok(parsed);
+    }
+    if let Some(suffix) = input.split_whitespace().last()
+        && suffix.len() > 1
+        && matches!(suffix.as_bytes()[0], b'+' | b'-')
+        && suffix[1..]
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || byte == b':')
+        && parse_datetime_timezone(suffix).is_none()
+    {
+        return Err(DateParseDiagnostics {
+            warnings: Vec::new(),
+            errors: vec![(
+                input.len().saturating_sub(suffix.len()),
+                "Unexpected character".to_string(),
+            )],
+        });
     }
     // The low-level absolute parser intentionally accepts a valid prefix.
     // Do not let that prefix consume an otherwise valid relative suffix (or
@@ -1455,14 +1745,15 @@ pub(super) fn parse_datetime(
                     parse_relative(&relative_source).is_some()
                 }
             });
-    if !has_relative_expression
-        && let Some(state) = datetime::parse_absolute(input, Some(fallback.clone()), eg)
+    // Prefer the complete numeric grammar over the low-level prefix parser.
+    // The latter deliberately accepts a valid prefix and would otherwise
+    // interpret the trailing day in `Mon 2017-01-02` as a clock hour.
+    if !has_relative_expression && let Some(state) = parse_numeric_absolute(input, fallback.clone())
     {
         let fields = infer_fields(input);
-        let diagnostics = absolute_diagnostics(input, &fields);
         return Ok(ParsedDateTime {
             state,
-            diagnostics,
+            diagnostics: absolute_diagnostics(input, &fields),
             relative: None,
             fields,
         });
@@ -1490,14 +1781,101 @@ pub(super) fn parse_datetime(
         default_named_base.microsecond = 0;
         &default_named_base
     };
-    if !has_relative_expression && let Some(state) = parse_numeric_absolute(input, fallback.clone())
+    let compact_time_tokens = input.split_whitespace().collect::<Vec<_>>();
+    if let [year_token, clock_token] = compact_time_tokens.as_slice()
+        && year_token.len() == 5
+        && clock_token.len() == 5
+        && year_token.starts_with(['T', 't'])
+        && clock_token.starts_with(['T', 't'])
+        && year_token[1..].bytes().all(|byte| byte.is_ascii_digit())
+        && let Some(parsed) = parse_clock_flexible(&clock_token[1..])
     {
-        let fields = infer_fields(input);
+        let (_, month, day, _, _, _) = datetime::local_parts(base);
+        let year = year_token[1..].parse::<i64>().unwrap_or_default();
         return Ok(ParsedDateTime {
-            state,
-            diagnostics: absolute_diagnostics(input, &fields),
+            state: civil_state(
+                year,
+                month,
+                day,
+                parsed.0,
+                parsed.1,
+                parsed.2,
+                parsed.3,
+                fallback.clone(),
+            ),
+            diagnostics: DateParseDiagnostics::default(),
             relative: None,
-            fields,
+            fields: ParsedFields {
+                year: true,
+                hour: true,
+                minute: true,
+                year_value: Some(year),
+                hour_value: Some(parsed.0),
+                minute_value: Some(parsed.1),
+                second_value: Some(parsed.2),
+                ..ParsedFields::default()
+            },
+        });
+    }
+    let (clock_source, clock_timezone) = split_timezone(input, fallback.clone());
+    let explicit_clock_timezone = clock_source.len() != input.trim().len();
+    let clock_source = clock_source
+        .strip_prefix('T')
+        .or_else(|| clock_source.strip_prefix('t'))
+        .unwrap_or(clock_source);
+    if let Some(parsed) = parse_clock_flexible(clock_source)
+        && parsed.4 == clock_source.len()
+    {
+        let (year, month, day, _, _, _) = datetime::local_parts(base);
+        return Ok(ParsedDateTime {
+            state: civil_state(
+                year,
+                month,
+                day,
+                parsed.0,
+                parsed.1,
+                parsed.2,
+                parsed.3,
+                clock_timezone,
+            ),
+            diagnostics: DateParseDiagnostics::default(),
+            relative: None,
+            fields: ParsedFields {
+                hour: true,
+                minute: true,
+                second: clock_source.matches([':', '.']).count() >= 2
+                    || clock_source.trim_start_matches(['T', 't']).len() == 6,
+                fraction: clock_source.matches('.').count() >= 3,
+                timezone: explicit_clock_timezone,
+                hour_value: Some(parsed.0),
+                minute_value: Some(parsed.1),
+                second_value: Some(parsed.2),
+                fraction_value: Some(f64::from(parsed.3) / 1_000_000.0),
+                ..ParsedFields::default()
+            },
+        });
+    }
+    if input.len() == 4 && input.bytes().all(|byte| byte.is_ascii_digit()) {
+        let (base_year, month, day, hour, minute, second) = datetime::local_parts(base);
+        let year = input.parse::<i64>().unwrap_or(base_year);
+        return Ok(ParsedDateTime {
+            state: civil_state(
+                year,
+                month,
+                day,
+                hour,
+                minute,
+                second,
+                base.microsecond,
+                fallback.clone(),
+            ),
+            diagnostics: DateParseDiagnostics::default(),
+            relative: None,
+            fields: ParsedFields {
+                year: true,
+                year_value: Some(year),
+                ..ParsedFields::default()
+            },
         });
     }
     if !has_relative_expression
@@ -1508,6 +1886,18 @@ pub(super) fn parse_datetime(
             diagnostics: DateParseDiagnostics::default(),
             relative: None,
             fields: infer_fields(input),
+        });
+    }
+    if !has_relative_expression
+        && let Some(state) = datetime::parse_absolute(input, Some(base.timezone.clone()), eg)
+    {
+        let fields = infer_fields(input);
+        let diagnostics = absolute_diagnostics(input, &fields);
+        return Ok(ParsedDateTime {
+            state,
+            diagnostics,
+            relative: None,
+            fields,
         });
     }
     let sign_normalized_expression = input
@@ -1531,9 +1921,16 @@ pub(super) fn parse_datetime(
             continue;
         }
         let (relative_source, clock) = extract_clock_expression(suffix);
-        let prefix_state = datetime::parse_absolute(prefix, Some(base.timezone.clone()), eg)
-            .or_else(|| parse_numeric_absolute(prefix, base.timezone.clone()))
-            .or_else(|| parse_named_absolute(prefix, base.timezone.clone(), named_base));
+        let prefix_has_relative_sign = prefix
+            .split_whitespace()
+            .any(|token| matches!(token, "+" | "-"));
+        let prefix_state = (!prefix_has_relative_sign)
+            .then(|| {
+                parse_numeric_absolute(prefix, base.timezone.clone())
+                    .or_else(|| parse_named_absolute(prefix, base.timezone.clone(), named_base))
+                    .or_else(|| datetime::parse_absolute(prefix, Some(base.timezone.clone()), eg))
+            })
+            .flatten();
         let Some(prefix_state) = prefix_state else {
             continue;
         };
@@ -1732,7 +2129,12 @@ fn infer_fields(input: &str) -> ParsedFields {
         .any(|part| month_number(part).is_some());
     let has_date = iso_date || compact_date || named_date;
     let clock_position = trimmed.find(':');
+    let compact_clock = trimmed
+        .find(['T', 't'])
+        .and_then(|position| trimmed.get(position + 1..))
+        .map(|clock| clock.bytes().take_while(u8::is_ascii_digit).count());
     let has_clock = (bytes.len() == 14 && bytes.iter().all(u8::is_ascii_digit))
+        || compact_clock.is_some_and(|digits| matches!(digits, 4 | 6))
         || clock_position.is_some()
         || trimmed
             .split_whitespace()
@@ -1768,7 +2170,7 @@ fn infer_fields(input: &str) -> ParsedFields {
         if let Some(value) = remainder.strip_prefix("- ") {
             remainder = value.trim_start();
         }
-        parse_clock(remainder)
+        parse_clock_flexible(remainder)
     });
     ParsedFields {
         year: has_date,
@@ -1776,7 +2178,11 @@ fn infer_fields(input: &str) -> ParsedFields {
         day: has_date,
         hour: has_clock,
         minute: has_clock,
-        second: has_clock && trimmed.matches(':').count() >= 2,
+        second: has_clock
+            && (trimmed.matches(':').count() >= 2
+                || compact_clock == Some(6)
+                || (bytes.len() == 6 && bytes.iter().all(u8::is_ascii_digit))
+                || trimmed.matches('.').count() >= 2),
         fraction,
         timezone,
         year_value: parsed_date.map(|value| value.0),
@@ -1828,6 +2234,7 @@ pub(super) fn parse_from_format(
     let mut allow_trailing = false;
     let mut unix_timestamp = None;
     let mut parsed_year = false;
+    let mut parsed_weekday = None;
     let mut input_position = 0;
     let mut escaped = false;
     let mut diagnostics = DateParseDiagnostics::default();
@@ -2044,6 +2451,8 @@ pub(super) fn parse_from_format(
                     diagnostics
                         .errors
                         .push((start, "A textual day could not be found".to_string()));
+                } else {
+                    parsed_weekday = weekday_number(&input[start..input_position]);
                 }
             }
             'S' => {
@@ -2261,7 +2670,7 @@ pub(super) fn parse_from_format(
             .warnings
             .push((input_position, "The parsed date was invalid".to_string()));
     }
-    let state = if let Some(timestamp) = unix_timestamp {
+    let mut state = if let Some(timestamp) = unix_timestamp {
         datetime::DateTimeState {
             timestamp,
             microsecond,
@@ -2280,6 +2689,15 @@ pub(super) fn parse_from_format(
             timezone,
         )
     };
+    if let Some(weekday) = parsed_weekday {
+        apply_relative(
+            &mut state,
+            &RelativeAdjustment {
+                weekday: Some((weekday, 0)),
+                ..RelativeAdjustment::default()
+            },
+        );
+    }
     fields.year_value = fields.year.then_some(year);
     fields.month_value = fields.month.then_some(month);
     fields.day_value = fields.day.then_some(day);
@@ -2357,6 +2775,21 @@ mod tests {
         assert_eq!(month_number("September"), Some(9));
         assert_eq!(normalize_two_digit_year(69), 2069);
         assert_eq!(normalize_two_digit_year(70), 1970);
+    }
+
+    #[test]
+    fn iso_week_dates_accept_a_clock_and_numeric_timezone() {
+        let fallback = timezone::TimezoneDescription {
+            kind: 2,
+            name: "Z".to_string(),
+        };
+        let (source, selected) = split_timezone("2001-W43-1 21:19:58-02:00", fallback.clone());
+        assert_eq!(source, "2001-W43-1 21:19:58");
+        assert_eq!(selected.name, "-02:00");
+        assert_eq!(parse_clock_flexible("21:19:58").unwrap().4, 8);
+        let state = parse_numeric_absolute("2001-W43-1 21:19:58-02:00", fallback).unwrap();
+        assert_eq!(datetime::local_parts(&state), (2001, 10, 22, 21, 19, 58));
+        assert_eq!(state.timezone.name, "-02:00");
     }
 
     #[test]

@@ -575,7 +575,7 @@ fn compile_zone(
     let mut start = i64::MIN;
 
     for era in eras {
-        let events = match &era.rules {
+        let mut events = match &era.rules {
             RuleMode::Named(name) => {
                 let rules = all_rules
                     .get(name)
@@ -592,6 +592,23 @@ fn compile_zone(
             .unwrap_or(i64::MAX);
         if end <= start {
             return Err(format!("zone {name}: non-increasing era boundary"));
+        }
+
+        // A rule may begin at the exact wall-clock instant that starts a new
+        // zone era.  Its `w` basis is interpreted using the state inherited
+        // from the preceding era (Europe/Berlin's 1945 SovietZone boundary is
+        // the canonical example), not a synthetic zero-save state.  Align the
+        // event with the already-resolved era boundary so the intermediate
+        // state is never published.
+        if start != i64::MIN {
+            let inherited_wall = start.saturating_add(i64::from(current.offset));
+            if let Some(event) = events
+                .iter_mut()
+                .find(|event| event.nominal == inherited_wall)
+            {
+                event.timestamp = start;
+                events.sort_by_key(|event| event.timestamp);
+            }
         }
 
         let (enter_save, _) = state_before(start, &era.rules, &events, "");

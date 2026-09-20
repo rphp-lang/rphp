@@ -21031,7 +21031,14 @@ fn var_export_value_at(
         ValueType::Null => PhpOutputBytes::from_text("NULL"),
         ValueType::True => PhpOutputBytes::from_text("true"),
         ValueType::False => PhpOutputBytes::from_text("false"),
-        ValueType::Long => PhpOutputBytes::from_text(val.as_long().unwrap().to_string()),
+        ValueType::Long => {
+            let value = val.as_long().unwrap();
+            PhpOutputBytes::from_text(if value == i64::MIN {
+                "-9223372036854775807-1".to_string()
+            } else {
+                value.to_string()
+            })
+        }
         ValueType::Double => {
             PhpOutputBytes::from_text(crate::value::php_var_export_float_to_string(
                 val.as_double().unwrap(),
@@ -30275,10 +30282,14 @@ pub(crate) fn format_php_date_with_microseconds(
                 "{:02}",
                 date::iso_week_and_year(year, month, day, wday, yday).1
             )),
-            'o' => out.push_str(&format!(
-                "{:04}",
-                date::iso_week_and_year(year, month, day, wday, yday).0
-            )),
+            'o' => out.push_str(&format!("{}", {
+                let iso_year = date::iso_week_and_year(year, month, day, wday, yday).0;
+                if iso_year <= 0 {
+                    iso_year.to_string()
+                } else {
+                    format!("{iso_year:04}")
+                }
+            })),
             'I' => out.push(if is_dst { '1' } else { '0' }),
             'Z' => out.push_str(&offset.to_string()),
             'O' => out.push_str(&date::format_timezone_offset(offset, false)),
@@ -31004,6 +31015,7 @@ fn fn_nl_langinfo(
 
 const LOADED_EXTENSION_NAMES: &[&str] = &[
     "calendar",
+    "date",
     #[cfg(target_os = "linux")]
     "gettext",
     #[cfg(target_os = "linux")]

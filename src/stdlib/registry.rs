@@ -35,6 +35,16 @@ static ASSERT_OPTIONS_DEPRECATION: InternalFunctionDeprecation = InternalFunctio
     message: "",
 };
 
+static DATE_SUN_DEPRECATION: InternalFunctionDeprecation = InternalFunctionDeprecation {
+    since: "8.1",
+    message: "use date_sun_info() instead",
+};
+
+static STRFTIME_DEPRECATION: InternalFunctionDeprecation = InternalFunctionDeprecation {
+    since: "8.1",
+    message: "use IntlDateFormatter::format() instead",
+};
+
 #[cold]
 #[inline(never)]
 fn register_radix_conversions(
@@ -2902,6 +2912,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::ClassName("false".to_string()),
         ]);
         function.handler_validates_types = true;
+        function.set_deprecation(&DATE_SUN_DEPRECATION);
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
         funcs.push(function);
@@ -2939,6 +2950,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::ClassName("false".to_string()),
         ]);
         function.handler_validates_types = true;
+        function.set_deprecation(&STRFTIME_DEPRECATION);
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
         funcs.push(function);
@@ -3071,7 +3083,33 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         let function = eg
             .find_function(name)
             .expect("date function was just registered");
-        eg.register_internal_function_reflection_metadata(function, defaults, "date");
+        match name {
+            "timezone_identifiers_list" => {
+                eg.register_internal_function_reflection_metadata_with_diagnostics(
+                    function,
+                    defaults,
+                    &[Some("DateTimeZone::ALL"), None],
+                    "date",
+                );
+            }
+            "timezone_transitions_get" => {
+                eg.register_internal_function_reflection_metadata_with_diagnostics(
+                    function,
+                    defaults,
+                    &[None, Some("PHP_INT_MIN"), None],
+                    "date",
+                );
+            }
+            "date_sunrise" | "date_sunset" => {
+                eg.register_internal_function_reflection_metadata_with_diagnostics(
+                    function,
+                    defaults,
+                    &[None, Some("SUNFUNCS_RET_STRING"), None, None, None, None],
+                    "date",
+                );
+            }
+            _ => eg.register_internal_function_reflection_metadata(function, defaults, "date"),
+        }
     }
 
     // --- exit / die ---

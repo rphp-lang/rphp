@@ -42,7 +42,7 @@ foreach (['checkdate', 'idate', 'localtime', 'getdate', 'gmmktime',
 }
 
 #[test]
-fn partial_date_surface_does_not_advertise_a_complete_extension() {
+fn complete_date_surface_is_advertised_as_a_loaded_extension() {
     assert_eq!(
         run_php(
             r#"<?php
@@ -51,7 +51,7 @@ var_dump(in_array('date', get_loaded_extensions(), true));
 echo (new ReflectionFunction('checkdate'))->getExtensionName(), "\n";
 "#,
         ),
-        "bool(false)\nbool(false)\ndate\n"
+        "bool(true)\nbool(true)\ndate\n"
     );
 }
 

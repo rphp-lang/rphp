@@ -460,6 +460,10 @@ fn test_round_precision() {
 #[test]
 fn test_var_export() {
     assert_eq!(run_php(r#"<?php echo var_export(42, true);"#), "42");
+    assert_eq!(
+        run_php(r#"<?php echo var_export(PHP_INT_MIN, true);"#),
+        "-9223372036854775807-1"
+    );
 }
 
 #[test]

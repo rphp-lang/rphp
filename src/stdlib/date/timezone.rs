@@ -313,6 +313,9 @@ pub(super) fn parse_timezone(value: &str) -> Option<TimezoneDescription> {
     if let Some(name) = fixed_offset(value) {
         return Some(TimezoneDescription { kind: 1, name });
     }
+    if let Some(name) = value.strip_prefix("GMT").and_then(fixed_offset) {
+        return Some(TimezoneDescription { kind: 1, name });
+    }
     if matches!(value, "UTC" | "Etc/UTC") {
         return Some(TimezoneDescription {
             kind: 3,
@@ -1016,7 +1019,7 @@ pub(crate) fn fn_date_time_zone_unserialize(
         return Ok(());
     };
     install_description(arg!(ed, 0), description);
-    super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
+    super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, ed, eg);
     Ok(())
 }
 

@@ -632,7 +632,9 @@ struct Parser<'a> {
     next_reference: usize,
     references: HashMap<usize, Value>,
     uppercase_reference_targets: Vec<usize>,
+    pending_unserialize_hooks: Vec<(Value, Value)>,
     diagnostic: Option<UnserializeDiagnostic>,
+    diagnostic_reported: bool,
 }
 
 struct UnserializeDiagnostic {
@@ -839,6 +841,7 @@ pub(crate) fn populate_object_properties(
     object: &Value,
     class_name: &str,
     properties: &PhpArray,
+    dynamic_property_diagnostic_frame: Option<*mut ExecuteData>,
 ) -> Result<(), ()> {
     let class_id = object.as_object().map(|object| object.class_id).ok_or(())?;
     for (key, value) in properties.iter() {
@@ -865,6 +868,31 @@ pub(crate) fn populate_object_properties(
                 &format!("Cannot create dynamic property {class_name}::${property}"),
             ));
             return Err(());
+        }
+        if slot.is_none()
+            && dynamic_property_diagnostic_frame.is_some()
+            && !object
+                .as_object()
+                .is_some_and(|object| object.is_dynamic_std_class())
+            && eg
+                .find_class(class_name)
+                .is_some_and(|class| !class.allow_dynamic_properties)
+        {
+            let property = key
+                .strip_prefix('\0')
+                .and_then(|key| key.split_once('\0').map(|(_, name)| name))
+                .unwrap_or(&key);
+            super::report_internal_diagnostic(
+                eg,
+                dynamic_property_diagnostic_frame.expect("checked above"),
+                8192,
+                "Deprecated",
+                &format!("Creation of dynamic property {class_name}::${property} is deprecated"),
+            )
+            .map_err(|_| ())?;
+            if eg.exception.is_some() {
+                return Err(());
+            }
         }
         let mut stored = clone_unserialized_storage_value(value);
         let definition = slot
@@ -969,6 +997,38 @@ pub(crate) fn populate_object_properties(
 }
 
 impl<'a> Parser<'a> {
+    #[cold]
+    #[inline(never)]
+    fn invoke_unserialize_hook(
+        &mut self,
+        eg: &mut ExecutorGlobals,
+        object: &Value,
+        serialized: &Value,
+    ) -> Result<(), ()> {
+        let Some(resolved) =
+            crate::stdlib::resolve_object_public_method(eg, object, "__unserialize")
+        else {
+            return Ok(());
+        };
+        crate::stdlib::call_resolved_object_method(eg, &resolved, std::slice::from_ref(serialized))
+            .map_err(|_| ())?;
+        if eg.exception.is_some() {
+            project_unserialize_hook_trace(eg, self.source_frame);
+            return Err(());
+        }
+        Ok(())
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn invoke_pending_unserialize_hooks(&mut self, eg: &mut ExecutorGlobals) -> Result<(), ()> {
+        let hooks = std::mem::take(&mut self.pending_unserialize_hooks);
+        for (object, serialized) in hooks {
+            self.invoke_unserialize_hook(eg, &object, &serialized)?;
+        }
+        Ok(())
+    }
+
     #[cold]
     #[inline(never)]
     fn deque_payload(
@@ -1254,6 +1314,43 @@ impl<'a> Parser<'a> {
             self.diagnostic = Some(UnserializeDiagnostic { message, offset });
         }
         Err(())
+    }
+
+    fn report_diagnostic_now(&mut self, eg: &mut ExecutorGlobals) -> Result<(), ()> {
+        if self.diagnostic_reported {
+            return Ok(());
+        }
+        let Some(diagnostic) = self.diagnostic.as_ref() else {
+            return Ok(());
+        };
+        if let Some(message) = diagnostic.message.as_ref() {
+            super::report_internal_diagnostic(
+                eg,
+                self.source_frame,
+                2,
+                "Warning",
+                &format!("unserialize(): {message}"),
+            )
+            .map_err(|_| ())?;
+            if eg.exception.is_some() {
+                self.diagnostic_reported = true;
+                return Err(());
+            }
+        }
+        super::report_internal_diagnostic(
+            eg,
+            self.source_frame,
+            2,
+            "Warning",
+            &format!(
+                "unserialize(): Error at offset {} of {} bytes",
+                diagnostic.offset,
+                self.input.len()
+            ),
+        )
+        .map_err(|_| ())?;
+        self.diagnostic_reported = true;
+        eg.exception.is_none().then_some(()).ok_or(())
     }
 
     #[inline]
@@ -1586,6 +1683,7 @@ impl<'a> Parser<'a> {
                 Ok(Value::array(array))
             }
             b'O' => {
+                let object_start = self.position.saturating_sub(1);
                 self.expect(b':')?;
                 let class_length = self.integer(b':')?;
                 let class_length = usize::try_from(class_length).map_err(|_| ())?;
@@ -1604,7 +1702,10 @@ impl<'a> Parser<'a> {
                 let property_count = self.integer(b':')?;
                 let property_count = usize::try_from(property_count).map_err(|_| ())?;
                 self.expect(b'{')?;
-                let class_name = std::str::from_utf8(class_bytes).map_err(|_| ())?;
+                let class_name = match std::str::from_utf8(class_bytes) {
+                    Ok(class_name) => class_name,
+                    Err(_) => return self.reject(None, object_start),
+                };
                 let allowed = allowed_classes.allows(class_name);
                 let object = if allowed {
                     allocate_object(eg, class_name)?
@@ -1614,11 +1715,9 @@ impl<'a> Parser<'a> {
                 // Publish the object before parsing properties so `r:N;` can
                 // close self-references and longer object cycles.
                 self.publish_partial_reference(reference, &object)?;
-                let unserialize_hook = allowed
-                    .then(|| {
-                        crate::stdlib::resolve_object_public_method(eg, &object, "__unserialize")
-                    })
-                    .flatten();
+                let has_unserialize_hook = allowed
+                    && crate::stdlib::resolve_object_public_method(eg, &object, "__unserialize")
+                        .is_some();
                 let mut properties = PhpArray::with_hash_capacity(property_count);
                 let mut property_value_offsets = Vec::with_capacity(property_count);
                 for _ in 0..property_count {
@@ -1656,7 +1755,7 @@ impl<'a> Parser<'a> {
                             // Hook arguments are arrays, not raw object tables.
                             // Canonicalize on insertion so interleaved string
                             // and integer duplicates obey wire order as well.
-                            if unserialize_hook.is_some() {
+                            if has_unserialize_hook {
                                 super::set_object_var(&mut properties, &key, member);
                             } else {
                                 properties.set_str(&key, member);
@@ -1664,42 +1763,60 @@ impl<'a> Parser<'a> {
                         }
                     }
                 }
-                self.expect(b'}')?;
-                if !allowed {
-                    Ok(incomplete_object(class_name, &properties))
-                } else {
-                    match unserialize_hook {
-                        Some(resolved) => {
-                            let serialized = Value::array(properties);
-                            crate::stdlib::call_resolved_object_method(
-                                eg,
-                                &resolved,
-                                std::slice::from_ref(&serialized),
-                            )
-                            .map_err(|_| ())?;
-                            if eg.exception.is_some() {
-                                project_unserialize_hook_trace(eg, self.source_frame);
-                            }
-                        }
-                        None => {
-                            let virtual_property = object.as_object().and_then(|object| {
-                                property_value_offsets.iter().find_map(|(key, offset)| {
-                                    unserialized_virtual_property_name(eg, &object, class_name, key)
-                                        .map(|name| (name, *offset))
-                                })
-                            });
-                            if let Some((name, offset)) = virtual_property {
-                                return self.reject(
-                                    Some(format!(
-                                        "Cannot unserialize value for virtual property {class_name}::${name}"
-                                    )),
-                                    offset,
-                                );
-                            }
-                            populate_object_properties(eg, &object, class_name, &properties)?
-                        }
+                let malformed_close = self.input.get(self.position) != Some(&b'}');
+                if malformed_close {
+                    if self.diagnostic.is_none() {
+                        self.diagnostic = Some(UnserializeDiagnostic {
+                            message: None,
+                            offset: self.position,
+                        });
                     }
-                    Ok(object)
+                    // Zend has already materialized the declared property
+                    // table at this point. Its warning is emitted before a
+                    // native Date hook validates that table (and before any
+                    // dynamic-property deprecation raised by hydration).
+                    self.report_diagnostic_now(eg)?;
+                } else {
+                    self.position += 1;
+                }
+                let hydrated = if !allowed {
+                    incomplete_object(class_name, &properties)
+                } else {
+                    if has_unserialize_hook {
+                        let serialized = Value::array(properties);
+                        if malformed_close {
+                            self.invoke_unserialize_hook(eg, &object, &serialized)?;
+                        } else {
+                            // Zend defers complete-object __unserialize()
+                            // callbacks until the whole graph has parsed. A
+                            // later syntax error must therefore discard these
+                            // callbacks without observable side effects.
+                            self.pending_unserialize_hooks
+                                .push((object.clone(), serialized));
+                        }
+                    } else {
+                        let virtual_property = object.as_object().and_then(|object| {
+                            property_value_offsets.iter().find_map(|(key, offset)| {
+                                unserialized_virtual_property_name(eg, &object, class_name, key)
+                                    .map(|name| (name, *offset))
+                            })
+                        });
+                        if let Some((name, offset)) = virtual_property {
+                            return self.reject(
+                                Some(format!(
+                                    "Cannot unserialize value for virtual property {class_name}::${name}"
+                                )),
+                                offset,
+                            );
+                        }
+                        populate_object_properties(eg, &object, class_name, &properties, None)?;
+                    }
+                    object
+                };
+                if malformed_close || eg.exception.is_some() {
+                    Err(())
+                } else {
+                    Ok(hydrated)
                 }
             }
             b'C' => {
@@ -1893,9 +2010,16 @@ pub(super) fn unserialize_deque(
         next_reference: 1,
         references: HashMap::new(),
         uppercase_reference_targets: uppercase_reference_targets(input),
+        pending_unserialize_hooks: Vec::new(),
         diagnostic: None,
+        diagnostic_reported: false,
     };
-    let _ = parser.deque_payload(receiver, eg, &AllowedClasses::All);
+    if parser
+        .deque_payload(receiver, eg, &AllowedClasses::All)
+        .is_ok()
+    {
+        let _ = parser.invoke_pending_unserialize_hooks(eg);
+    }
 }
 
 #[cold]
@@ -1914,9 +2038,16 @@ pub(super) fn unserialize_array_wrapper(
         next_reference: 1,
         references: HashMap::new(),
         uppercase_reference_targets: uppercase_reference_targets(input),
+        pending_unserialize_hooks: Vec::new(),
         diagnostic: None,
+        diagnostic_reported: false,
     };
-    let _ = parser.array_wrapper_payload(receiver, eg, &AllowedClasses::All, ed);
+    if parser
+        .array_wrapper_payload(receiver, eg, &AllowedClasses::All, ed)
+        .is_ok()
+    {
+        let _ = parser.invoke_pending_unserialize_hooks(eg);
+    }
 }
 
 /// Discover the reference-table slots that may need stable PHP cells before
@@ -2010,10 +2141,15 @@ pub(super) fn unserialize(
         next_reference: 1,
         references: HashMap::new(),
         uppercase_reference_targets: uppercase_reference_targets(input_bytes.as_ref()),
+        pending_unserialize_hooks: Vec::new(),
         diagnostic: None,
+        diagnostic_reported: false,
     };
     match parser.value(eg, &allowed_classes) {
         Ok(value) if parser.position == parser.input.len() => {
+            if parser.invoke_pending_unserialize_hooks(eg).is_err() {
+                return return_value(rv, Value::bool(false));
+            }
             // The parser's root reference cell is bookkeeping, not a PHP
             // reference returned by unserialize(). Nested `R:` aliases retain
             // their cells inside the materialized graph.
@@ -2040,7 +2176,9 @@ pub(super) fn unserialize(
                     }
                 })
             });
-            if let Some(diagnostic) = diagnostic {
+            if let Some(diagnostic) = diagnostic
+                && !parser.diagnostic_reported
+            {
                 if let Some(message) = diagnostic.message {
                     super::report_internal_diagnostic(
                         eg,

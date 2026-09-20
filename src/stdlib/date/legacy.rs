@@ -116,17 +116,6 @@ fn strftime_handler(
     eg: &mut ExecutorGlobals,
     utc: bool,
 ) -> Result<(), VmError> {
-    let function = if utc { "gmstrftime" } else { "strftime" };
-    super::super::report_internal_deprecation(
-        eg,
-        ed,
-        &format!(
-            "Function {function}() is deprecated since 8.1, use IntlDateFormatter::format() instead"
-        ),
-    )?;
-    if eg.exception.is_some() {
-        return Ok(());
-    }
     let format = arg_str!(ed, 0);
     if format.is_empty() {
         ret!(rv, Value::bool(false));
@@ -348,14 +337,6 @@ fn sun_function(
     } else {
         "date_sunset"
     };
-    super::super::report_internal_deprecation(
-        eg,
-        ed,
-        &format!("Function {function}() is deprecated since 8.1, use date_sun_info() instead"),
-    )?;
-    if eg.exception.is_some() {
-        return Ok(());
-    }
     let timestamp = arg_long!(ed, 0);
     let return_format = arg_opt!(ed, 1).and_then(Value::as_long).unwrap_or(1);
     if !(0..=2).contains(&return_format) {

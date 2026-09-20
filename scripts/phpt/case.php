@@ -96,6 +96,22 @@ function ini_arguments(string $section): array
         if ($line === '' || str_starts_with($line, ';')) {
             continue;
         }
+        // PHPT INI sections use php.ini syntax, where an unquoted semicolon
+        // starts an inline comment. Keep quoted semicolons intact.
+        $quote = null;
+        for ($index = 0; $index < strlen($line); $index++) {
+            $character = $line[$index];
+            if (($character === '"' || $character === "'")
+                && ($index === 0 || $line[$index - 1] !== '\\')) {
+                $quote = $quote === $character ? null : ($quote ?? $character);
+            } elseif ($character === ';' && $quote === null) {
+                $line = rtrim(substr($line, 0, $index));
+                break;
+            }
+        }
+        if ($line === '') {
+            continue;
+        }
         $separator = strpos($line, '=');
         if ($separator === false) {
             $name = trim($line);

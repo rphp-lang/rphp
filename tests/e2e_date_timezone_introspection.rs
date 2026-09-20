@@ -16,6 +16,7 @@ foreach (['timezone_version_get', 'timezone_identifiers_list',
         $function->getNumberOfParameters(), ':', (string) $function->getReturnType(), ':',
         $function->getExtensionName(), "\n";
 }
+
 "#,
         ),
         concat!(
@@ -27,6 +28,68 @@ foreach (['timezone_version_get', 'timezone_identifiers_list',
             "timezone_name_get:1/1:string:date\n",
             "timezone_location_get:1/1:array|false:date\n",
             "timezone_transitions_get:1/3:array|false:date\n",
+        )
+    );
+}
+
+#[test]
+fn date_reflection_preserves_deprecations_tentative_types_and_constant_defaults() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (['date_sunrise', 'date_sunset', 'strftime', 'gmstrftime'] as $name) {
+    $function = new ReflectionFunction($name);
+    $attribute = $function->getAttributes(Deprecated::class)[0];
+    echo $name, ':', (int) $function->isDeprecated(), ':',
+        implode('|', $attribute->getArguments()), "\n";
+}
+foreach ([
+    [DateTime::class, 'format'],
+    [DateTime::class, 'getMicrosecond'],
+    [DateTime::class, 'createFromInterface'],
+    [DateTimeImmutable::class, 'createFromInterface'],
+    [DateTimeZone::class, 'getTransitions'],
+] as [$class, $name]) {
+    $method = new ReflectionMethod($class, $name);
+    echo "$class::$name:", (string) $method->getReturnType(), ':',
+        (int) $method->hasTentativeReturnType(), ':',
+        (string) $method->getTentativeReturnType(), "\n";
+}
+foreach ([
+    new ReflectionParameter('timezone_identifiers_list', 0),
+    new ReflectionParameter('timezone_transitions_get', 1),
+    new ReflectionParameter('date_sunrise', 1),
+    new ReflectionParameter([DateTimeZone::class, 'listIdentifiers'], 0),
+    new ReflectionParameter([DateTimeZone::class, 'getTransitions'], 0),
+] as $parameter) {
+    echo $parameter->getDefaultValueConstantName(), "\n";
+}
+foreach ([DateTimeInterface::class, DateTime::class, DateTimeImmutable::class,
+          DateTimeZone::class, DateInterval::class, DatePeriod::class] as $class) {
+    $method = new ReflectionMethod($class, '__wakeup');
+    echo $class, ':', (int) $method->isDeprecated(), ':',
+        implode('|', $method->getAttributes(Deprecated::class)[0]->getArguments()), "\n";
+}
+"#,
+        ),
+        concat!(
+            "date_sunrise:1:8.1|use date_sun_info() instead\n",
+            "date_sunset:1:8.1|use date_sun_info() instead\n",
+            "strftime:1:8.1|use IntlDateFormatter::format() instead\n",
+            "gmstrftime:1:8.1|use IntlDateFormatter::format() instead\n",
+            "DateTime::format::1:string\n",
+            "DateTime::getMicrosecond:int:0:\n",
+            "DateTime::createFromInterface:DateTime:0:\n",
+            "DateTimeImmutable::createFromInterface:DateTimeImmutable:0:\n",
+            "DateTimeZone::getTransitions::1:array|false\n",
+            "DateTimeZone::ALL\nPHP_INT_MIN\nSUNFUNCS_RET_STRING\n",
+            "DateTimeZone::ALL\nPHP_INT_MIN\n",
+            "DateTimeInterface:1:8.5|this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n",
+            "DateTime:1:8.5|this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n",
+            "DateTimeImmutable:1:8.5|this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n",
+            "DateTimeZone:1:8.5|this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n",
+            "DateInterval:1:8.5|this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n",
+            "DatePeriod:1:8.5|this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()\n",
         )
     );
 }

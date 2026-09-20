@@ -837,7 +837,7 @@ pub(crate) fn fn_date_period_unserialize(
         );
     }
     if install(arg!(ed, 0), state, eg) {
-        super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, eg);
+        super::restore_custom_properties(arg!(ed, 0), &data, &SERIALIZED_KEYS, ed, eg);
     }
     Ok(())
 }

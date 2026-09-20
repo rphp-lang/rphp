@@ -7,7 +7,9 @@
 use super::*;
 use crate::compiler::compile::ClassDef;
 use crate::value::make_error_value;
-use crate::vm::function::{AttributeArgument, AttributeDefinition, AttributeEvaluationScope};
+use crate::vm::function::{
+    AttributeArgument, AttributeDefinition, AttributeEvaluationScope, InternalFunctionDeprecation,
+};
 use crate::vm::instruction::{
     FETCH_DIM_COMPOUND, FETCH_DIM_EMPTY, FETCH_DIM_MUTABLE, FETCH_DIM_UNSET,
 };
@@ -44,6 +46,10 @@ pub(crate) use iterator_delegate::resolve_method as resolve_iterator_delegated_m
 pub(crate) use recursive_iterator::validate_start as validate_recursive_iterator_start;
 
 const ROUNDING_MODE_CLASS: &str = "RoundingMode";
+static DATE_WAKEUP_DEPRECATION: InternalFunctionDeprecation = InternalFunctionDeprecation {
+    since: "8.5",
+    message: "this method is obsolete, as serialization hooks are provided by __unserialize() and __serialize()",
+};
 thread_local! {
     // These immutable templates have no elements and therefore no PHP-owned
     // edges. Native declarations can share one allocation per thread; a class
@@ -3908,12 +3914,13 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         function.common.sig.param_type_hints = vec![ParamTypeHint::Int, ParamTypeHint::Int];
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_internal_function_reflection_metadata(
+        eg.register_internal_function_reflection_metadata_with_diagnostics(
             pointer,
             vec![
                 Some(Value::long(i64::MIN)),
                 Some(Value::long(i64::from(i32::MAX))),
             ],
+            &[Some("PHP_INT_MIN"), None],
             "date",
         );
     }
@@ -3950,9 +3957,10 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         ];
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
-        eg.register_internal_function_reflection_metadata(
+        eg.register_internal_function_reflection_metadata_with_diagnostics(
             pointer,
             vec![Some(Value::long(0x07ff)), Some(Value::null())],
+            &[Some("DateTimeZone::ALL"), None],
             "date",
         );
     }
@@ -3998,6 +4006,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     );
     {
         let function = funcs.last_mut().expect("DateTimeZone::__wakeup registered");
+        function.set_deprecation(&DATE_WAKEUP_DEPRECATION);
         let pointer = &function.common as *const FunctionCommon;
         eg.register_internal_function_reflection_metadata(pointer, vec![], "date");
     }
@@ -4130,8 +4139,19 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             );
             let function = funcs.last_mut().expect("DateTime method registered");
             function.common.sig.param_type_hints = vec![$($hint),*];
-            function.common.sig.return_type_hint = $return_hint;
+            let executable_return_type = $return_hint;
+            let (reflection_return_type, tentative) = eg
+                .internal_method_reflection_return_type($class, $method)
+                .unwrap_or((executable_return_type, false));
+            function.common.sig.return_type_hint = if tentative {
+                ParamTypeHint::None
+            } else {
+                reflection_return_type
+            };
             function.handler_validates_types = true;
+            if $method.eq_ignore_ascii_case("__wakeup") {
+                function.set_deprecation(&DATE_WAKEUP_DEPRECATION);
+            }
             let pointer = &function.common as *const FunctionCommon;
             eg.register_internal_function_reflection_metadata(
                 pointer,
@@ -4159,7 +4179,15 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
                 .last_mut()
                 .expect("DateTime static method registered");
             function.common.sig.param_type_hints = vec![$($hint),*];
-            function.common.sig.return_type_hint = $return_hint;
+            let executable_return_type = $return_hint;
+            let (reflection_return_type, tentative) = eg
+                .internal_method_reflection_return_type($class, $method)
+                .unwrap_or((executable_return_type, false));
+            function.common.sig.return_type_hint = if tentative {
+                ParamTypeHint::None
+            } else {
+                reflection_return_type
+            };
             function.handler_validates_types = true;
             let pointer = &function.common as *const FunctionCommon;
             eg.register_internal_function_reflection_metadata(

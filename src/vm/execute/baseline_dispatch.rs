@@ -849,6 +849,21 @@ fn prepared_comparison_result(
     left: &Value,
     right: &Value,
 ) -> Result<Result<bool, ()>, VmError> {
+    if left.as_object().is_some_and(|object| {
+        eg.class_is_a(object.class_name.as_ref(), "DateInterval")
+    }) && right.as_object().is_some_and(|object| {
+        eg.class_is_a(object.class_name.as_ref(), "DateInterval")
+    }) {
+        report_php_warning(
+            eg,
+            frame,
+            op_array,
+            opline,
+            "Cannot compare DateInterval objects",
+            false,
+        )?;
+        return Ok(Ok(false));
+    }
     let comparison_result = |comparison: i32| match opcode {
         OpCode::IsEqual | OpCode::IsEqual_CvConst => comparison == 0,
         OpCode::IsNotEqual => comparison != 0,

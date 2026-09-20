@@ -9,6 +9,10 @@ function unsupported_rphp_ini_directives(string $section): array
         'allow_url_fopen' => true,
         'assert.exception' => true,
         'date.timezone' => true,
+        // Three historical ext/date fixtures put this PHP expression in the
+        // INI section. run-tests.php passes it through as an unknown directive
+        // and PHP ignores it; admit the same inert key for RPHP.
+        'date_default_timezone_set("america/sao_paulo")' => true,
         'error_reporting' => true,
         'highlight.comment' => true,
         'highlight.default' => true,

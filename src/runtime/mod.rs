@@ -2938,6 +2938,28 @@ impl ExecutorGlobals {
         None
     }
 
+    /// Native method bodies share the executable descriptor used by ordinary
+    /// dispatch, while the stub contract remains authoritative for whether a
+    /// return type is formal or tentative. Registration uses this cold lookup
+    /// to keep Reflection's formal type channel byte-exact without duplicating
+    /// the declaration table in each extension.
+    #[cold]
+    pub(crate) fn internal_method_reflection_return_type(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Option<(ParamTypeHint, bool)> {
+        self.internal_method_contracts(owner)
+            .iter()
+            .find(|contract| contract.name.eq_ignore_ascii_case(name))
+            .map(|contract| {
+                (
+                    contract.signature.return_type_hint.clone(),
+                    contract.return_type_is_tentative,
+                )
+            })
+    }
+
     #[cold]
     pub(crate) fn publish_detached_trace_caller(&mut self, frame: usize, caller: usize) {
         if caller != 0 {

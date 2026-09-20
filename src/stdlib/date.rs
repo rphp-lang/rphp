@@ -96,6 +96,7 @@ pub(super) fn restore_custom_properties(
     receiver: &Value,
     data: &PhpArray,
     native_keys: &[&str],
+    source_frame: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> bool {
     let mut properties = PhpArray::new();
@@ -121,7 +122,14 @@ pub(super) fn restore_custom_properties(
         }
         properties.set(key, value.clone_for_php_storage());
     }
-    super::serialization::populate_object_properties(eg, receiver, &class_name, &properties).is_ok()
+    super::serialization::populate_object_properties(
+        eg,
+        receiver,
+        &class_name,
+        &properties,
+        Some(source_frame),
+    )
+    .is_ok()
 }
 
 pub(crate) fn datetime_comparison(
@@ -411,8 +419,7 @@ pub(super) fn normalized_timestamp(
     let month_index = month.saturating_sub(1);
     let normalized_year = year.saturating_add(month_index.div_euclid(12));
     let normalized_month = month_index.rem_euclid(12) + 1;
-    super::parts_to_unix(normalized_year, normalized_month, 1, hour, minute, second)
-        .saturating_add(day.saturating_sub(1).saturating_mul(86_400))
+    super::parts_to_unix(normalized_year, normalized_month, day, hour, minute, second)
 }
 
 #[inline]
