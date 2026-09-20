@@ -34,7 +34,10 @@ pub struct BlockInfo {
     pub end_ip: u32,
 }
 
-/// Per-block execution plan.
+/// Per-block execution plan. Loop plans are boxed so the common
+/// `Interpret` entry stays word-sized: every function allocates one plan per
+/// basic block, and an inline loop payload made that cost tens of kilobytes
+/// even for functions that never form a loop.
 pub enum BlockPlan {
     /// Not yet hot — use baseline interpreter.
     Interpret,
@@ -43,17 +46,17 @@ pub enum BlockPlan {
     /// Was macro but guards failed too often — permanently reverted.
     Deoptimized,
     /// Guarded scalar loop region selected by the no-JIT quick executor.
-    QuickLongAccumulate(QuickLongAccumulateLoop),
+    QuickLongAccumulate(Box<QuickLongAccumulateLoop>),
     /// Long-controlled loop accumulating exact Double scalar-call results.
-    QuickDoubleCallAccumulate(QuickDoubleCallAccumulateLoop),
+    QuickDoubleCallAccumulate(Box<QuickDoubleCallAccumulateLoop>),
     /// Guarded induction-only `for` or `while` loop.
-    QuickLongInduction(QuickLongInductionLoop),
+    QuickLongInduction(Box<QuickLongInductionLoop>),
     /// Guarded value-only foreach accumulation over long array values.
-    QuickForeachLongAccumulate(QuickForeachLongAccumulateLoop),
+    QuickForeachLongAccumulate(Box<QuickForeachLongAccumulateLoop>),
     /// Guarded value-only foreach accumulation over object property projections.
-    QuickForeachObjectPropertyAccumulate(QuickForeachObjectPropertyAccumulateLoop),
+    QuickForeachObjectPropertyAccumulate(Box<QuickForeachObjectPropertyAccumulateLoop>),
     /// Typed scalar operations for a closed loop not covered by a superinstruction.
-    QuickLongOps(QuickLongOpsLoop),
+    QuickLongOps(Box<QuickLongOpsLoop>),
     /// Function-level proof stored after the indexed per-block prefix. It is
     /// resolved only when an enclosing call region is entered and therefore
     /// adds no field or ordinary-path access to every `UserFunction`.

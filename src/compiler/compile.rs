@@ -2068,6 +2068,38 @@ fn constant_expression_references_symbol(expression: &Expr) -> bool {
 
 const RESOLVED_CONSTANT_EXPRESSION_PREFIX: &str = "\0rphp-resolved-symbol\0";
 
+/// Constant lookup for the compile-time evaluator: an expression-local
+/// overlay (`__PROPERTY__`, relative spellings) layered over the source unit's
+/// shared constant table, so evaluating a default value never copies that
+/// table.
+pub(crate) struct ConstantScope<'a> {
+    base: &'a HashMap<String, Value>,
+    overlay: Option<HashMap<String, Value>>,
+}
+
+impl<'a> ConstantScope<'a> {
+    pub(crate) fn flat(base: &'a HashMap<String, Value>) -> Self {
+        Self {
+            base,
+            overlay: None,
+        }
+    }
+
+    fn layered(base: &'a HashMap<String, Value>, overlay: HashMap<String, Value>) -> Self {
+        Self {
+            base,
+            overlay: Some(overlay),
+        }
+    }
+
+    fn get(&self, key: &str) -> Option<&Value> {
+        self.overlay
+            .as_ref()
+            .and_then(|overlay| overlay.get(key))
+            .or_else(|| self.base.get(key))
+    }
+}
+
 #[inline]
 fn resolved_constant_expression_key(source: &str) -> String {
     format!("{RESOLVED_CONSTANT_EXPRESSION_PREFIX}{source}")
@@ -3367,7 +3399,9 @@ pub struct Compiler {
     implicit_return_value: Value,
     /// Constants known at compile time (from `const FOO = 42;` in the same file).
     /// Used by eval_const_expr to resolve Expr::Constant in property defaults.
-    known_constants: HashMap<String, Value>,
+    /// Shared copy-on-write: child compilers read the parent's table and only
+    /// materialize their own copy when they add a constant.
+    known_constants: Rc<HashMap<String, Value>>,
     /// Canonical declaration names of enums whose case objects are available
     /// to the declaration-time constant folder in this compilation scope.
     known_enum_classes: Rc<HashSet<String>>,
@@ -3733,7 +3767,7 @@ impl Compiler {
             source_file: String::new(),
             source_directory: String::new(),
             implicit_return_value: Value::null(),
-            known_constants: HashMap::new(),
+            known_constants: Rc::new(HashMap::new()),
             known_enum_classes: Rc::new(HashSet::new()),
             compiler_halt_offset: None,
             compiling_constant_expression: false,
@@ -3797,7 +3831,7 @@ impl Compiler {
     }
 
     pub fn with_known_constants(mut self, constants: HashMap<String, Value>) -> Self {
-        self.known_constants = constants;
+        self.known_constants = Rc::new(constants);
         self
     }
 
@@ -3964,7 +3998,7 @@ impl Compiler {
         child.bindable_closure_scope = self.bindable_closure_scope;
         child.source_file = self.source_file.clone();
         child.source_directory = self.source_directory.clone();
-        child.known_constants = self.known_constants.clone();
+        child.known_constants = Rc::clone(&self.known_constants);
         child.known_enum_classes = Rc::clone(&self.known_enum_classes);
         child.known_value_constructors = self.known_value_constructors.clone();
         child.known_public_constructors = self.known_public_constructors.clone();
@@ -4588,7 +4622,7 @@ impl Compiler {
             stmts,
             None,
             &mut HashSet::new(),
-            &mut self.known_constants,
+            Rc::make_mut(&mut self.known_constants),
             file_context,
             self.precision,
         );
@@ -4597,7 +4631,7 @@ impl Compiler {
             stmts,
             None,
             &mut HashSet::new(),
-            &mut self.known_constants,
+            Rc::make_mut(&mut self.known_constants),
             file_context,
             self.precision,
         );
@@ -4697,7 +4731,7 @@ impl Compiler {
                             && !constant_expression_materializes_object(value)
                             && let Ok(val) = Self::eval_const_expr_with_context(
                                 value,
-                                known,
+                                &ConstantScope::flat(known),
                                 file_context,
                                 precision,
                             )
@@ -5989,7 +6023,7 @@ impl Compiler {
             Self::find_compiler_halt_offset(stmts).and_then(|offset| i64::try_from(offset).ok())
         });
         if let Some(offset) = self.compiler_halt_offset {
-            self.known_constants
+            Rc::make_mut(&mut self.known_constants)
                 .insert("__COMPILER_HALT_OFFSET__".to_string(), Value::long(offset));
         }
 
@@ -6627,7 +6661,7 @@ impl Compiler {
         expr: &Expr,
         known: &HashMap<String, Value>,
     ) -> Result<Value, String> {
-        Self::eval_const_expr_with_context(expr, known, None, 14)
+        Self::eval_const_expr_with_context(expr, &ConstantScope::flat(known), None, 14)
     }
 
     fn eval_const_expr_in_source(
@@ -6649,15 +6683,17 @@ impl Compiler {
         // constant table immutable and publish expression-local spellings in
         // a separate sentinel namespace: a relative spelling such as `A\X`
         // may also be the canonical name of a different constant.
-        let mut imported = known.clone();
-        imported.insert(
+        // The overlay is layered over the shared table instead of copying it
+        // for every default value and constant expression in the unit.
+        let mut overlay = HashMap::new();
+        overlay.insert(
             "__PROPERTY__".to_string(),
             Value::string(lexical_property.unwrap_or_default()),
         );
-        self.collect_class_name_literals(expr, &mut imported);
+        self.collect_class_name_literals(expr, known, &mut overlay);
         Self::eval_const_expr_with_context_and_enum_classes(
             expr,
-            &imported,
+            &ConstantScope::layered(known, overlay),
             Some((self.source_file.as_str(), self.source_directory.as_str())),
             self.precision,
             &self.known_enum_classes,
@@ -7074,11 +7110,11 @@ impl Compiler {
             lexical_property: lexical_property.map(str::to_owned),
             source_directory: self.source_directory.clone(),
         });
-        let mut known = self.known_constants.clone();
+        let mut known = (*self.known_constants).clone();
         if let Some(class) = lexical_class {
             known.insert("self::class".to_string(), Value::string(class));
             let prefix = format!("{class}::");
-            for (name, value) in &self.known_constants {
+            for (name, value) in self.known_constants.iter() {
                 if let Some(constant) = name.strip_prefix(&prefix) {
                     known.insert(format!("self::{constant}"), value.clone());
                 }
@@ -7087,7 +7123,7 @@ impl Compiler {
         if let Some(parent) = lexical_parent {
             known.insert("parent::class".to_string(), Value::string(parent));
             let prefix = format!("{parent}::");
-            for (name, value) in &self.known_constants {
+            for (name, value) in self.known_constants.iter() {
                 if let Some(constant) = name.strip_prefix(&prefix) {
                     known.insert(format!("parent::{constant}"), value.clone());
                 }
@@ -7183,12 +7219,17 @@ impl Compiler {
         (value.value_type() != ValueType::Object).then(|| value.value_type())
     }
 
-    fn collect_class_name_literals(&self, expr: &Expr, known: &mut HashMap<String, Value>) {
+    fn collect_class_name_literals(
+        &self,
+        expr: &Expr,
+        base: &HashMap<String, Value>,
+        overlay: &mut HashMap<String, Value>,
+    ) {
         match expr {
             Expr::Constant { name, .. } => {
                 let resolved = self.resolve_constant_name(name).0;
-                if let Some(value) = known.get(&resolved).cloned() {
-                    known.insert(resolved_constant_expression_key(name), value);
+                if let Some(value) = base.get(&resolved).cloned() {
+                    overlay.insert(resolved_constant_expression_key(name), value);
                 }
             }
             Expr::ClassConstant {
@@ -7208,65 +7249,67 @@ impl Compiler {
                         "static" => None,
                         _ => Some(self.resolve_name(class_name)),
                     };
-                    if let Some(value) = known
+                    if let Some(value) = base
                         .get(&source_key)
                         .cloned()
                         .or_else(|| resolved_class.map(Value::string))
                     {
-                        known.insert(resolved_constant_expression_key(&source_key), value);
+                        overlay.insert(resolved_constant_expression_key(&source_key), value);
                     }
                 } else {
                     let resolved_class = self.resolve_name(class_name);
                     let resolved_key = format!("{resolved_class}::{constant}");
-                    if let Some(value) = known
+                    if let Some(value) = base
                         .get(&resolved_key)
                         .cloned()
                         .or_else(|| crate::builtin_class_constant(&resolved_class, constant))
                     {
-                        known.insert(resolved_constant_expression_key(&source_key), value);
+                        overlay.insert(resolved_constant_expression_key(&source_key), value);
                     }
                 }
             }
             Expr::BinaryOp { left, right, .. }
             | Expr::NullCoalesce { left, right }
             | Expr::Elvis { left, right } => {
-                self.collect_class_name_literals(left, known);
-                self.collect_class_name_literals(right, known);
+                self.collect_class_name_literals(left, base, overlay);
+                self.collect_class_name_literals(right, base, overlay);
             }
             Expr::Ternary {
                 condition,
                 then_expr,
                 else_expr,
             } => {
-                self.collect_class_name_literals(condition, known);
-                self.collect_class_name_literals(then_expr, known);
-                self.collect_class_name_literals(else_expr, known);
+                self.collect_class_name_literals(condition, base, overlay);
+                self.collect_class_name_literals(then_expr, base, overlay);
+                self.collect_class_name_literals(else_expr, base, overlay);
             }
             Expr::UnaryPlus(inner)
             | Expr::UnaryMinus(inner)
             | Expr::Not(inner)
             | Expr::BitwiseNot { expr: inner, .. }
-            | Expr::Cast { expr: inner, .. } => self.collect_class_name_literals(inner, known),
+            | Expr::Cast { expr: inner, .. } => {
+                self.collect_class_name_literals(inner, base, overlay)
+            }
             Expr::ArrayLiteral(elements) => {
                 for element in elements {
                     if let Some(key) = &element.key {
-                        self.collect_class_name_literals(key, known);
+                        self.collect_class_name_literals(key, base, overlay);
                     }
-                    self.collect_class_name_literals(&element.value, known);
+                    self.collect_class_name_literals(&element.value, base, overlay);
                 }
             }
             Expr::ArrayAccess { array, index, .. } => {
-                self.collect_class_name_literals(array, known);
-                self.collect_class_name_literals(index, known);
+                self.collect_class_name_literals(array, base, overlay);
+                self.collect_class_name_literals(index, base, overlay);
             }
             Expr::PropertyAccess { object, .. } => {
-                self.collect_class_name_literals(object, known);
+                self.collect_class_name_literals(object, base, overlay);
             }
             Expr::DynamicPropertyAccess {
                 object, property, ..
             } => {
-                self.collect_class_name_literals(object, known);
-                self.collect_class_name_literals(property, known);
+                self.collect_class_name_literals(object, base, overlay);
+                self.collect_class_name_literals(property, base, overlay);
             }
             _ => {}
         }
@@ -7277,7 +7320,7 @@ impl Compiler {
     /// declaration context and remain rejected until that context is explicit.
     fn eval_const_expr_with_context(
         expr: &Expr,
-        known: &HashMap<String, Value>,
+        known: &ConstantScope<'_>,
         file_context: Option<(&str, &str)>,
         precision: i32,
     ) -> Result<Value, String> {
@@ -7295,7 +7338,7 @@ impl Compiler {
     /// selected fallback is evaluated; invalid array-key types remain errors.
     fn eval_const_coalesce_probe(
         expr: &Expr,
-        known: &HashMap<String, Value>,
+        known: &ConstantScope<'_>,
         file_context: Option<(&str, &str)>,
         precision: i32,
         known_enum_classes: &HashSet<String>,
@@ -7423,7 +7466,7 @@ impl Compiler {
 
     fn eval_const_expr_with_context_and_enum_classes(
         expr: &Expr,
-        known: &HashMap<String, Value>,
+        known: &ConstantScope<'_>,
         file_context: Option<(&str, &str)>,
         precision: i32,
         known_enum_classes: &HashSet<String>,

@@ -518,12 +518,14 @@ impl Parser {
 
     fn parse_ternary(&mut self) -> Result<Expr, String> {
         let expr = self.parse_null_coalesce()?;
-        let ternary_line = self.last_primary_line.unwrap_or_else(|| {
-            self.following_semicolon_source_line()
-                .unwrap_or_else(|| self.closest_token_source_line())
-        });
 
         if self.peek() == Token::Question {
+            // Resolve the diagnostic line only for an actual ternary: the
+            // forward semicolon scan is linear in the remaining tokens.
+            let ternary_line = self.last_primary_line.unwrap_or_else(|| {
+                self.following_semicolon_source_line()
+                    .unwrap_or_else(|| self.closest_token_source_line())
+            });
             self.advance(); // consume ?
 
             // Elvis operator: $x ?: $y  (evaluates lhs once)

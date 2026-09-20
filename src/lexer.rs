@@ -361,6 +361,10 @@ pub struct Lexer<'a> {
     punctuation_scan_line: usize,
     brace_scan_pos: usize,
     brace_scan_line: usize,
+    /// `(position, line)` of the last `source_line_at()` answer, so token
+    /// lines are counted incrementally instead of from the start of the
+    /// source for every token.
+    line_cache: std::cell::Cell<(usize, usize)>,
     deferred_compile_errors: Vec<(String, usize)>,
     deferred_compile_diagnostics: Vec<DeferredCompileDiagnostic>,
 }
@@ -533,6 +537,7 @@ impl<'a> Lexer<'a> {
             punctuation_scan_line: 1,
             brace_scan_pos: 0,
             brace_scan_line: 1,
+            line_cache: std::cell::Cell::new((0, 1)),
             deferred_compile_errors: Vec::new(),
             deferred_compile_diagnostics: Vec::new(),
         }
@@ -641,10 +646,7 @@ impl<'a> Lexer<'a> {
 
             match ch {
                 b'#' if self.peek_next() == Some(b'[') => {
-                    let line = 1 + self.src[..self.pos]
-                        .iter()
-                        .filter(|byte| **byte == b'\n')
-                        .count();
+                    let line = self.punctuation_source_line();
                     tokens.push(Token::AttributeStart(line));
                     self.pos += 2;
                 }
@@ -794,10 +796,7 @@ impl<'a> Lexer<'a> {
                 }
                 b'.' => {
                     if self.peek_next() == Some(b'.') && self.src.get(self.pos + 2) == Some(&b'.') {
-                        let line = 1 + self.src[..self.pos]
-                            .iter()
-                            .filter(|&&byte| byte == b'\n')
-                            .count();
+                        let line = self.punctuation_source_line();
                         tokens.push(Token::DotDotDot(line));
                         self.pos += 3;
                     } else if self.peek_next() == Some(b'=') {
@@ -829,10 +828,7 @@ impl<'a> Lexer<'a> {
                 }
                 b'|' => {
                     if self.peek_next() == Some(b'>') {
-                        let line = 1 + self.src[..self.pos]
-                            .iter()
-                            .filter(|&&byte| byte == b'\n')
-                            .count();
+                        let line = self.punctuation_source_line();
                         tokens.push(Token::PipeGreater(line));
                         self.pos += 2;
                     } else if self.peek_next() == Some(b'|') {
@@ -952,10 +948,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'(' => {
-                    let line = 1 + self.src[..self.pos]
-                        .iter()
-                        .filter(|&&byte| byte == b'\n')
-                        .count();
+                    let line = self.punctuation_source_line();
                     tokens.push(Token::LParen(line));
                     self.pos += 1;
                 }
@@ -979,10 +972,7 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'[' => {
-                    let line = 1 + self.src[..self.pos]
-                        .iter()
-                        .filter(|byte| **byte == b'\n')
-                        .count();
+                    let line = self.punctuation_source_line();
                     tokens.push(Token::LBracket(line));
                     self.pos += 1;
                 }
@@ -1024,10 +1014,7 @@ impl<'a> Lexer<'a> {
                 b'$' => {
                     let variable_start = self.pos;
                     self.pos += 1;
-                    let line = 1 + self.src[..variable_start]
-                        .iter()
-                        .filter(|byte| **byte == b'\n')
-                        .count();
+                    let line = self.source_line_at(variable_start);
                     if matches!(self.src.get(self.pos), Some(b'$' | b'{')) {
                         tokens.push(Token::Dollar(line));
                         continue;
@@ -1052,10 +1039,7 @@ impl<'a> Lexer<'a> {
                 b'a'..=b'z' | b'A'..=b'Z' | b'_' | b'\x80'..=b'\xff' => {
                     let identifier_start = self.pos;
                     let ident = self.read_identifier();
-                    let line = 1 + self.src[..identifier_start]
-                        .iter()
-                        .filter(|byte| **byte == b'\n')
-                        .count();
+                    let line = self.source_line_at(identifier_start);
                     let is_member_name = matches!(
                         tokens.last(),
                         Some(
@@ -1861,10 +1845,7 @@ impl<'a> Lexer<'a> {
     fn emit_inline_html(&self, tokens: &mut Vec<Token>, inline_start: usize, inline_end: usize) {
         if inline_end > inline_start {
             let inline = &self.src[inline_start..inline_end];
-            let line = 1 + self.src[..inline_start]
-                .iter()
-                .filter(|byte| **byte == b'\n')
-                .count();
+            let line = self.source_line_at(inline_start);
             tokens.push(Token::Echo { line });
             tokens.push(match std::str::from_utf8(inline) {
                 Ok(inline) => Token::StringLiteral(inline.to_string()),

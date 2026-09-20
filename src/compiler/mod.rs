@@ -660,18 +660,18 @@ impl OpArray {
             #[cfg(feature = "vm-stats")]
             crate::vm::stats::inc_jit_loop_candidate();
             let plan = crate::vm::quick::detect_long_induction_loop(self, header_ip, backedge_ip)
-                .map(BlockPlan::QuickLongInduction)
+                .map(|plan| BlockPlan::QuickLongInduction(Box::new(plan)))
                 .or_else(|| {
                     crate::vm::quick::detect_double_call_accumulate_loop(
                         self,
                         header_ip,
                         backedge_ip,
                     )
-                    .map(BlockPlan::QuickDoubleCallAccumulate)
+                    .map(|plan| BlockPlan::QuickDoubleCallAccumulate(Box::new(plan)))
                 })
                 .or_else(|| {
                     crate::vm::quick::detect_long_accumulate_loop(self, header_ip, backedge_ip)
-                        .map(BlockPlan::QuickLongAccumulate)
+                        .map(|plan| BlockPlan::QuickLongAccumulate(Box::new(plan)))
                 })
                 .or_else(|| {
                     crate::vm::quick::detect_foreach_object_property_accumulate_loop(
@@ -679,7 +679,7 @@ impl OpArray {
                         header_ip,
                         backedge_ip,
                     )
-                    .map(BlockPlan::QuickForeachObjectPropertyAccumulate)
+                    .map(|plan| BlockPlan::QuickForeachObjectPropertyAccumulate(Box::new(plan)))
                 })
                 .or_else(|| {
                     crate::vm::quick::detect_foreach_long_accumulate_loop(
@@ -687,11 +687,11 @@ impl OpArray {
                         header_ip,
                         backedge_ip,
                     )
-                    .map(BlockPlan::QuickForeachLongAccumulate)
+                    .map(|plan| BlockPlan::QuickForeachLongAccumulate(Box::new(plan)))
                 })
                 .or_else(|| {
                     crate::vm::quick::detect_long_ops_loop(self, header_ip, backedge_ip)
-                        .map(BlockPlan::QuickLongOps)
+                        .map(|plan| BlockPlan::QuickLongOps(Box::new(plan)))
                 });
             if let Some(plan) = plan {
                 let block_idx = *self.ip_to_block.get(header_ip).unwrap_or(&u16::MAX);
@@ -801,7 +801,7 @@ impl OpArray {
                 if plan.straight_array_kernel.is_none() {
                     continue;
                 }
-                self.block_plans[block_idx as usize] = BlockPlan::QuickLongOps(plan);
+                self.block_plans[block_idx as usize] = BlockPlan::QuickLongOps(Box::new(plan));
                 self.instructions[entry_ip].extended_value = u32::from(block_idx) + 1;
                 #[cfg(feature = "vm-stats")]
                 {

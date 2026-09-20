@@ -528,7 +528,29 @@ impl<'a> Lexer<'a> {
     }
 
     pub(super) fn source_line_at(&self, position: usize) -> usize {
-        1 + Self::count_logical_line_breaks(&self.src[..position.min(self.src.len())])
+        let position = position.min(self.src.len());
+        let (cached_position, cached_line) = self.line_cache.get();
+        let (mut start, base_line) = if position >= cached_position {
+            (cached_position, cached_line)
+        } else {
+            (0, 1)
+        };
+        // The cache may sit between the bytes of one `\r\n` break, which the
+        // previous answer already counted.
+        if start > 0
+            && start < self.src.len()
+            && self.src[start - 1] == b'\r'
+            && self.src[start] == b'\n'
+        {
+            start += 1;
+        }
+        let line = if position <= start {
+            base_line
+        } else {
+            base_line + Self::count_logical_line_breaks(&self.src[start..position])
+        };
+        self.line_cache.set((position, line));
+        line
     }
 
     pub(super) fn count_logical_line_breaks(content: &[u8]) -> usize {
@@ -1144,25 +1166,23 @@ impl<'a> Lexer<'a> {
         pos: &mut usize,
         output: &mut Vec<u8>,
     ) -> Result<bool, String> {
+        // Validate only the one sequence that starts here. Checking the whole
+        // remaining source per character made string literals quadratic.
         let rest = &bytes[*pos..];
-        let valid = match std::str::from_utf8(rest) {
-            Ok(valid) => valid,
-            Err(error) if error.valid_up_to() > 0 => {
-                std::str::from_utf8(&rest[..error.valid_up_to()]).unwrap()
-            }
-            Err(_) => {
-                output.push(bytes[*pos]);
-                *pos += 1;
-                return Ok(true);
-            }
+        let width = match rest[0] {
+            0x00..=0x7F => 1,
+            0xC2..=0xDF => 2,
+            0xE0..=0xEF => 3,
+            0xF0..=0xF4 => 4,
+            _ => 0,
         };
-        let length = valid
-            .chars()
-            .next()
-            .expect("non-empty source tail")
-            .len_utf8();
-        output.extend_from_slice(&rest[..length]);
-        *pos += length;
+        if width == 0 || rest.len() < width || std::str::from_utf8(&rest[..width]).is_err() {
+            output.push(bytes[*pos]);
+            *pos += 1;
+            return Ok(true);
+        }
+        output.extend_from_slice(&rest[..width]);
+        *pos += width;
         Ok(false)
     }
 

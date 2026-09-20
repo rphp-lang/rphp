@@ -29,7 +29,7 @@
             BlockPlan::QuickLongAccumulate(plan) => Some(plan.clone()),
             _ => None,
         }) {
-            return plan;
+            return *plan;
         }
         let selected_backedge = main
             .op_array

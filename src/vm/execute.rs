@@ -3152,7 +3152,7 @@ unsafe fn execute_quick_loop_backedge(
                 super::planner::BlockPlan::QuickLongInduction(plan) => {
                     #[cfg(feature = "vm-stats")]
                     stats::inc_jit_region_execution(stats::JitRegionKind::LongInduction);
-                    run_quick_long_induction_loop(eg, frame, op_array, *plan)?
+                    run_quick_long_induction_loop(eg, frame, op_array, **plan)?
                 }
                 super::planner::BlockPlan::QuickLongAccumulate(plan) => {
                     #[cfg(feature = "vm-stats")]
@@ -3168,7 +3168,7 @@ unsafe fn execute_quick_loop_backedge(
                     #[cfg(feature = "vm-stats")]
                     stats::inc_jit_region_execution(stats::JitRegionKind::ForeachLongAccumulate);
                     super::quick_foreach::run_quick_foreach_long_accumulate_loop(
-                        eg, frame, op_array, *plan,
+                        eg, frame, op_array, **plan,
                     )?
                 }
                 super::planner::BlockPlan::QuickForeachObjectPropertyAccumulate(plan) => {
@@ -3177,7 +3177,7 @@ unsafe fn execute_quick_loop_backedge(
                         stats::JitRegionKind::ForeachObjectPropertyAccumulate,
                     );
                     super::quick_foreach::run_quick_foreach_object_property_accumulate_loop(
-                        eg, frame, op_array, *plan,
+                        eg, frame, op_array, **plan,
                     )?
                 }
                 super::planner::BlockPlan::QuickLongOps(plan) => {

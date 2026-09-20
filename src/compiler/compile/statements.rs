@@ -5264,7 +5264,7 @@ impl Compiler {
                     .flatten();
                 let (val_op, val_type) = if let Some(ct_val) = compile_time {
                     if first_source_declaration {
-                        self.known_constants
+                        std::rc::Rc::make_mut(&mut self.known_constants)
                             .entry(declaration_name.clone())
                             .or_insert_with(|| ct_val.clone());
                     }
@@ -5944,7 +5944,7 @@ impl Compiler {
                 // allows a property declared in the same class to use
                 // `self::CONSTANT`, even though the class itself is not linked
                 // until the complete declaration has been compiled.
-                let mut property_constants = self.known_constants.clone();
+                let mut property_constants = (*self.known_constants).clone();
                 property_constants.insert(
                     "self::class".to_string(),
                     Value::string(resolved_class.clone()),
@@ -5965,7 +5965,7 @@ impl Compiler {
                     property_constants
                         .insert("parent::class".to_string(), Value::string(parent.clone()));
                     let prefix = format!("{}::", parent);
-                    for (constant, value) in &self.known_constants {
+                    for (constant, value) in self.known_constants.iter() {
                         if let Some(name) = constant.strip_prefix(&prefix) {
                             property_constants
                                 .insert(format!("parent::{name}"), value.clone());
@@ -7127,7 +7127,7 @@ impl Compiler {
                 let mut readonly_props: Vec<String> = Vec::new();
                 let mut deferred_instance_defaults = Vec::new();
                 let mut rebound_trait_defaults = Vec::new();
-                let mut trait_property_constants = self.known_constants.clone();
+                let mut trait_property_constants = (*self.known_constants).clone();
                 trait_property_constants.insert(
                     "self::class".to_string(),
                     Value::string(resolved_trait.clone()),
@@ -7737,11 +7737,10 @@ impl Compiler {
                                     .map(|constant| (constant.to_string(), value.clone()))
                             })
                             .collect();
+                        let known = std::rc::Rc::make_mut(&mut self.known_constants);
                         for (constant, value) in constants {
-                            self.known_constants
-                                .insert(format!("self::{constant}"), value.clone());
-                            self.known_constants
-                                .insert(format!("{resolved_enum}::{constant}"), value);
+                            known.insert(format!("self::{constant}"), value.clone());
+                            known.insert(format!("{resolved_enum}::{constant}"), value);
                         }
                     }
                 }
@@ -8182,12 +8181,12 @@ impl Compiler {
                         0, // assigned at runtime registration
                         props,
                     ));
-                    self.known_constants.insert(
+                    std::rc::Rc::make_mut(&mut self.known_constants).insert(
                         format!("{}::{}", resolved_enum, case_name),
                         obj.clone(),
                     );
                     if name != &resolved_enum {
-                        self.known_constants
+                        std::rc::Rc::make_mut(&mut self.known_constants)
                             .insert(format!("{}::{}", name, case_name), obj.clone());
                     }
                     let mut definition = PropertyDefinition::new(
@@ -8420,10 +8419,10 @@ impl Compiler {
             }
         }
 
-        let mut known = self.known_constants.clone();
+        let mut known = (*self.known_constants).clone();
         known.insert("self::class".into(), Value::string(owner.to_string()));
         let owner_prefix = format!("{owner}::");
-        for (name, value) in &self.known_constants {
+        for (name, value) in self.known_constants.iter() {
             if let Some(constant) = name.strip_prefix(&owner_prefix) {
                 known.insert(format!("self::{constant}"), value.clone());
             }
@@ -8431,7 +8430,7 @@ impl Compiler {
         if let Some(parent) = parent {
             known.insert("parent::class".into(), Value::string(parent.to_string()));
             let prefix = format!("{}::", parent);
-            for (name, value) in &self.known_constants {
+            for (name, value) in self.known_constants.iter() {
                 if let Some(constant) = name.strip_prefix(&prefix) {
                     known.insert(format!("parent::{}", constant), value.clone());
                 }
@@ -8491,7 +8490,7 @@ impl Compiler {
                 };
                 known.insert(format!("self::{}", constant.name), value.clone());
                 known.insert(format!("{}::{}", owner, constant.name), value.clone());
-                self.known_constants
+                std::rc::Rc::make_mut(&mut self.known_constants)
                     .insert(format!("{}::{}", owner, constant.name), value.clone());
                 values[index] = Some(value);
                 remaining -= 1;

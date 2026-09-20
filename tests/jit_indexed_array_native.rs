@@ -36,7 +36,9 @@ fn native_array_plans(
         .block_plans
         .iter()
         .filter_map(|plan| match plan {
-            BlockPlan::QuickLongOps(plan) if plan.native_jit().native_entries() != 0 => Some(plan),
+            BlockPlan::QuickLongOps(plan) if plan.native_jit().native_entries() != 0 => {
+                Some(&**plan)
+            }
             _ => None,
         })
 }

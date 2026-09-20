@@ -26523,9 +26523,14 @@ PHP-Parser AST built through `PhpToken`, BetterReflection over the runtime
 Reflection surface, and Symfony Console's wrapped table rows with their
 four-byte emoji identifier markers. This admits the exercised path only; it is
 not a claim that every PHPStan rule, extension, editor URL or larger project
-analyses identically, and the analysis currently takes about 17 s of RPHP
-wall time against under 1 s for cached reference PHP, with performance
-deferred by user direction.
+analyses identically. Bootstrapping PHPStan compiles about 2,350 files; the
+first checkpoint spent 17 s and 1 GB on it because the lexer validated the
+remaining source per string character and recounted lines from the file
+start per token, every basic block carried an inline loop plan, and every
+constant expression copied the unit's constant table. With those made linear,
+boxed and layered, the fixture now analyses in about 4 s and 200 MB against
+under 1 s for reference PHP; the remaining gap is ordinary compile and
+class-linking cost and stays deferred by user direction.
 
 The checkpoint adds `ext/tokenizer`: `token_get_all()`, `token_name()`,
 `PhpToken` (`tokenize`, `is`, `isIgnorable`, `getTokenName`, `__toString`),

@@ -784,6 +784,14 @@ pub(crate) struct PendingClosureBindings {
     pub(crate) owner: Option<Value>,
 }
 
+/// Case-folded class name index; see `ExecutorGlobals::class_name_index`.
+#[derive(Default)]
+struct ClassNameIndex {
+    /// Number of `class_table` entries the index accounts for.
+    indexed: usize,
+    names: HashMap<String, String>,
+}
+
 pub struct ExecutorGlobals {
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -815,6 +823,10 @@ pub struct ExecutorGlobals {
     /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
     /// inline-cache pointers stable while aliases reuse the exact identity.
     pub class_table: HashMap<String, std::rc::Rc<ClassDef>>,
+    /// Case-folded class and anonymous public names → `class_table` key, so a
+    /// lookup that misses the exact spelling stays O(1) instead of scanning
+    /// every registered class. Rebuilt whenever the table grew behind it.
+    class_name_index: std::cell::RefCell<ClassNameIndex>,
     /// Anonymous declarations become visible only when their `new class`
     /// expression executes. Eager registration would autoload dependencies
     /// from branches that PHP never evaluates.
@@ -1993,6 +2005,7 @@ impl ExecutorGlobals {
             private_function_table: HashMap::new(),
             runtime_function_declarations: HashMap::new(),
             class_table: HashMap::new(),
+            class_name_index: std::cell::RefCell::new(ClassNameIndex::default()),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
             active_runtime_class_relations: HashMap::new(),
@@ -2127,6 +2140,7 @@ impl ExecutorGlobals {
             private_function_table: HashMap::new(),
             runtime_function_declarations: HashMap::new(),
             class_table: HashMap::new(),
+            class_name_index: std::cell::RefCell::new(ClassNameIndex::default()),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
             active_runtime_class_relations: HashMap::new(),
@@ -8241,6 +8255,7 @@ impl ExecutorGlobals {
         // publish another lookup key without duplicating metadata or identity.
         let class_def = std::rc::Rc::new(class_def);
         let class_ptr = std::rc::Rc::as_ptr(&class_def);
+        self.index_class_name(&class_name, &class_def);
         self.class_table.insert(class_name.clone(), class_def);
         let class_id = unsafe { (*class_ptr).class_id as usize };
         if self.class_by_id.len() <= class_id {
@@ -9179,16 +9194,45 @@ impl ExecutorGlobals {
             .get(name)
             .map(std::rc::Rc::as_ref)
             .or_else(|| {
-                self.class_table
-                    .iter()
-                    .find(|(registered, class)| {
-                        registered.eq_ignore_ascii_case(name)
-                            || class
-                                .anonymous_public_name()
-                                .is_some_and(|public| public.eq_ignore_ascii_case(name))
-                    })
-                    .map(|(_, class)| class.as_ref())
+                let key = self.class_key_ignore_case(name)?;
+                self.class_table.get(&key).map(std::rc::Rc::as_ref)
             })
+    }
+
+    /// Record the case-folded lookup keys of a class about to enter
+    /// `class_table` under `key`.
+    fn index_class_name(&mut self, key: &str, class: &ClassDef) {
+        let replacing = self.class_table.contains_key(key);
+        let index = self.class_name_index.get_mut();
+        index
+            .names
+            .insert(key.to_ascii_lowercase(), key.to_string());
+        if let Some(public) = class.anonymous_public_name() {
+            index
+                .names
+                .insert(public.to_ascii_lowercase(), key.to_string());
+        }
+        if !replacing {
+            index.indexed += 1;
+        }
+    }
+
+    /// Resolve a class name ignoring case through the folded index. A table
+    /// that grew without passing through `index_class_name` is re-indexed
+    /// first, so direct `class_table` inserts stay correct.
+    fn class_key_ignore_case(&self, name: &str) -> Option<String> {
+        let mut index = self.class_name_index.borrow_mut();
+        if index.indexed != self.class_table.len() {
+            index.names.clear();
+            for (key, class) in &self.class_table {
+                index.names.insert(key.to_ascii_lowercase(), key.clone());
+                if let Some(public) = class.anonymous_public_name() {
+                    index.names.insert(public.to_ascii_lowercase(), key.clone());
+                }
+            }
+            index.indexed = self.class_table.len();
+        }
+        index.names.get(&name.to_ascii_lowercase()).cloned()
     }
 
     /// Userland lookup must not observe a class whose inheritance transaction
@@ -9254,6 +9298,7 @@ impl ExecutorGlobals {
                 function,
             );
         }
+        self.index_class_name(alias, &class);
         self.class_table.insert(alias.to_string(), class);
         self.retry_pending_named_classes()
             .map_err(ClassAliasRegistrationError::DelayedLink)?;
