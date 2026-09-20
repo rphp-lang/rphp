@@ -691,10 +691,16 @@ fn op_add_call_unpack<'a>(
             let source = &mut *source_ptr;
             let entries = collect_source(eg, source)?;
             let given = entries.is_none().then(|| {
-                source
-                    .as_object()
-                    .map(|object| object.class_name.to_string())
-                    .unwrap_or_else(|| source.type_name().to_string())
+                source.as_object().map_or_else(
+                    || {
+                        if source.value_type() == ValueType::Undef {
+                            "null".to_string()
+                        } else {
+                            source.type_name().to_string()
+                        }
+                    },
+                    |object| object.class_name.to_string(),
+                )
             });
             (entries, given)
         }

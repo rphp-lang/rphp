@@ -2051,6 +2051,8 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
         name: PHP_TOKEN.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec!["Stringable".to_string()],
         is_interface: false,

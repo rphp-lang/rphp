@@ -432,6 +432,8 @@ fn internal_class(name: &str, implements: Vec<String>) -> ClassDef {
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements,
         is_interface: false,

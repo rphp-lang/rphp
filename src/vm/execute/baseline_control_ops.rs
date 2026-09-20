@@ -1122,6 +1122,7 @@ fn execute_source_unit_inner(
     }
     if caller.is_some() {
         for (cv_idx, var_name) in &main_func.op_array.main_scope_vars {
+            eg.materialize_auto_global(var_name);
             if let Some(val) = eg.globals.get(var_name) {
                 unsafe {
                     let cv_ptr = (*inc_frame).cv_mut(*cv_idx) as *mut Value;

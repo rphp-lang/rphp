@@ -483,9 +483,28 @@ pub(super) fn fn_file_put_contents(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = arg_str!(ed, 0);
-    let data = arg_str!(ed, 1);
+    let data = arg!(ed, 1);
     let flags = arg_opt!(ed, 2).map(Value::to_long_val).unwrap_or(0);
-    let raw_bytes = php_string_to_bytes(data.as_ref());
+    let raw_bytes = match data.php_string_bytes() {
+        Some(bytes) => bytes.into_owned(),
+        None => php_string_to_bytes(&data.echo_to_string()),
+    };
+    if let Some(target) = path.strip_prefix("php://") {
+        let written = match target {
+            "output" => {
+                eg.write_output(&raw_bytes);
+                Ok(())
+            }
+            "stdout" => std::io::stdout().lock().write_all(&raw_bytes),
+            "stderr" => std::io::stderr().lock().write_all(&raw_bytes),
+            "memory" | "temp" => Ok(()),
+            _ => Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
+        };
+        return match written {
+            Ok(()) => ret!(rv, Value::long(raw_bytes.len() as i64)),
+            Err(_) => ret!(rv, Value::bool(false)),
+        };
+    }
     let append = flags & 8 != 0;
     let locked = flags & 2 != 0;
     let result = if append || locked {

@@ -14,6 +14,19 @@ impl Parser {
         (*position >= start).then(|| comment.clone())
     }
 
+    /// The doc comment ending exactly at the current statement's first token.
+    fn declaration_doc_comment(&self) -> Option<std::sync::Arc<str>> {
+        self.class_member_doc_comment(self.statement_start, self.statement_start)
+    }
+
+    /// Source line of the closing brace consumed by the previous `expect`.
+    fn consumed_brace_line(&self) -> usize {
+        match self.tokens.get(self.pos.wrapping_sub(1)) {
+            Some(Token::RBrace(line)) => *line,
+            _ => 0,
+        }
+    }
+
     fn closest_token_source_line(&self) -> usize {
         self.closest_token_source_line_before(self.pos)
     }
@@ -852,7 +865,60 @@ impl Parser {
     fn advance(&mut self) -> Token {
         let tok = self.peek();
         self.pos += 1;
+        if let Token::Variable(name, _) = &tok
+            && name.starts_with('_')
+        {
+            self.note_auto_global(name);
+        }
         tok
+    }
+
+    fn note_auto_global(&mut self, name: &str) {
+        if let Some(scope) = self.auto_global_scopes.last_mut()
+            && is_auto_global_name(name)
+            && !scope.iter().any(|known| known == name)
+        {
+            scope.push(name.to_string());
+        }
+    }
+
+    /// Parse a braced function-like body. Superglobals referenced inside it
+    /// bind to the global symbol table through an implicit leading `global`
+    /// statement, which is how PHP's auto-globals behave in every scope.
+    fn parse_function_body(&mut self) -> Result<Vec<Stmt>, String> {
+        self.expect(&Token::LBrace(0))?;
+        self.auto_global_scopes.push(Vec::new());
+        let mut body = Vec::new();
+        let mut failure = None;
+        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+            match self.parse_stmt_in_scope(false) {
+                Ok(statement) => body.push(statement),
+                Err(error) => {
+                    failure = Some(error);
+                    break;
+                }
+            }
+        }
+        if failure.is_none()
+            && let Err(error) = self.expect(&Token::RBrace(0))
+        {
+            failure = Some(error);
+        }
+        let auto_globals = self.auto_global_scopes.pop().unwrap_or_default();
+        if let Some(error) = failure {
+            return Err(error);
+        }
+        Ok(Self::with_auto_globals(auto_globals, body))
+    }
+
+    fn with_auto_globals(names: Vec<String>, mut body: Vec<Stmt>) -> Vec<Stmt> {
+        if !names.is_empty() {
+            body.insert(
+                0,
+                Stmt::Global(names.into_iter().map(GlobalTarget::Variable).collect()),
+            );
+        }
+        body
     }
 
     fn expect(&mut self, expected: &Token) -> Result<(), String> {

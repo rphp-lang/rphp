@@ -309,9 +309,12 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
     if frame.is_null() {
         return None;
     }
-    // SAFETY: callers pass the live executing frame. Its function pointer and
-    // compiler-sized CV range remain valid for this non-reentrant scope probe.
-    unsafe {
+    // SAFETY: callers pass the live executing frame; its function pointer,
+    // compiler-sized CV range and scope TMP remain valid for this
+    // non-reentrant scope probe. The block yields the declaring trait of a
+    // trait-owned function whose scope could not be settled from its receiver
+    // or scope TMP, so the late-static fallback below can compose it.
+    let declaring_trait = unsafe {
         let func = (*frame).func;
         if func.is_null() {
             return None;
@@ -320,6 +323,7 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
             let id = (*frame).tmp((*frame).num_temps - 1).as_long().unwrap_or(0) as u32;
             return eg.class_by_id(id).map(|class| class.name.clone());
         }
+        let mut declaring_trait = None;
         if let Some(class) = eg.declaring_class_of(func) {
             let is_trait = eg
                 .class_table
@@ -328,6 +332,7 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
             if !is_trait {
                 return Some(class.to_string());
             }
+            declaring_trait = Some(class);
 
             if (*func).fn_type == FunctionType::User {
                 let function = &*(func as *const UserFunction);
@@ -352,14 +357,28 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
                 return Some(scope.to_string());
             }
         }
-    }
+        declaring_trait
+    };
 
     let embedded = frame_embedded_late_static_class_id(frame);
-    let class_id = if embedded != 0 {
+    let mut class_id = if embedded != 0 {
         embedded
     } else {
         eg.late_static_scope_class_id(frame as usize)
     };
+    if let Some(trait_name) = declaring_trait {
+        // A static trait method has no receiver, so its lexical scope is the
+        // class that composed the trait for the late-called class rather than
+        // the called class itself (`N::make()` inheriting `M { use T; }`).
+        if class_id == 0 {
+            class_id = called_class_id_for_frame(eg, frame, 0);
+        }
+        let called = eg.class_by_id(class_id)?;
+        return Some(
+            eg.trait_composition_scope(&called.name, trait_name)
+                .map_or_else(|| called.name.clone(), str::to_string),
+        );
+    }
     eg.class_by_id(class_id).map(|class| class.name.clone())
 }
 
@@ -3817,6 +3836,30 @@ fn too_few_arguments_error(
     error
 }
 
+/// Spell a declared type the way PHP renders it in runtime TypeErrors. The
+/// lexical `self` scope is the already resolved class when the caller has one
+/// (for example the composing class of a static trait method); otherwise it is
+/// recovered from the frame, and `static` is the late-called class.
+#[cold]
+fn scoped_hint_diagnostic_name(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    hint: &ParamTypeHint,
+    self_scope: Option<&str>,
+) -> String {
+    if !hint.uses_declaring_class_scope() {
+        return hint.diagnostic_display_name();
+    }
+    let self_class = self_scope
+        .map(str::to_string)
+        .or_else(|| get_caller_class(frame, eg));
+    let static_class = eg
+        .class_by_id(late_static_call_class_id(eg, frame))
+        .map(|class| class.name.clone());
+    resolved_type_diagnostic_name(hint, eg, self_class.as_deref(), static_class.as_deref())
+}
+
+#[cold]
 fn argument_type_error(
     eg: &ExecutorGlobals,
     function: *const FunctionCommon,
@@ -3829,6 +3872,7 @@ fn argument_type_error(
     caller_op_array: &crate::compiler::OpArray,
     call_instruction: &Instruction,
     explicit_closure_invoke: bool,
+    scope_class: Option<&str>,
 ) -> Value {
     let ordinary_name = displayed_frame_function_name(eg, call);
     let name = ordinary_name
@@ -3852,13 +3896,7 @@ fn argument_type_error(
     let mut message = format!(
         "{name}(): Argument #{}{parameter} must be of type {}, {} given",
         argument_index + 1,
-        resolved_type_diagnostic_name(
-            hint,
-            eg,
-            eg.declaring_class_of(function),
-            eg.class_by_id(late_static_call_class_id(eg, call))
-                .map(|class| class.name.as_str()),
-        ),
+        scoped_hint_diagnostic_name(eg, call, hint, scope_class),
         declared_type_error_value_name(value)
     );
     if common.fn_type == FunctionType::User
@@ -4180,33 +4218,51 @@ fn execute_full_call<'a>(
     // User signatures record every relative argument/return/bound scope;
     // concrete hints cannot consume it. Internal signatures retain canonical
     // resolution because their bit is not derived by the user compiler.
-    let callee_class = if func_common.fn_type == FunctionType::User
-        && !func_common.sig.needs_bound_type_scope()
-    {
-        None
-    } else {
-        unsafe {
-            let mut resolved = eg.declaring_class_of((*call).func).map(str::to_string);
-            if let Some(declared) = resolved.as_deref()
-                && eg
-                    .find_class(declared)
-                    .is_some_and(|definition| definition.is_trait)
-                && func_common.sig.this_offset == 1
-            {
-                let receiver = (*call).cv(0);
-                if receiver.value_type() == ValueType::Object
-                    && let Some(scope) =
-                        eg.trait_composition_scope(receiver.object_class_name_unchecked(), declared)
+    let callee_class =
+        if func_common.fn_type == FunctionType::User && !func_common.sig.needs_bound_type_scope() {
+            None
+        } else {
+            // SAFETY: `call` is the live initialized callee frame; its function
+            // pointer stays valid for the whole call and `this_offset == 1`
+            // proves CV0 exists before the receiver slot is read below.
+            unsafe {
+                let mut resolved = eg.declaring_class_of((*call).func).map(str::to_string);
+                if let Some(declared) = resolved.as_deref()
+                    && eg
+                        .find_class(declared)
+                        .is_some_and(|definition| definition.is_trait)
                 {
-                    resolved = Some(scope.to_string());
+                    let receiver_class = (func_common.sig.this_offset == 1)
+                        .then(|| (*call).cv(0))
+                        .filter(|receiver| receiver.value_type() == ValueType::Object)
+                        .map(|receiver| receiver.object_class_name_unchecked().to_string());
+                    let composing_class = match receiver_class {
+                        Some(receiver_class) => Some(receiver_class),
+                        None => {
+                            // Static trait methods have no receiver: `self` names
+                            // the composing class selected by the static call
+                            // site, which the late-static recovery reconstructs.
+                            let mut called_class_id = late_static_call_class_id(eg, call);
+                            if called_class_id == 0 {
+                                called_class_id =
+                                    static_site_called_class_id(eg, frame, op_array, opline_ptr, 0);
+                            }
+                            eg.class_by_id(called_class_id)
+                                .map(|class| class.name.clone())
+                        }
+                    };
+                    if let Some(composing_class) = composing_class
+                        && let Some(scope) = eg.trait_composition_scope(&composing_class, declared)
+                    {
+                        resolved = Some(scope.to_string());
+                    }
                 }
+                if resolved.is_none() && func_common.sig.needs_bound_type_scope() {
+                    resolved = get_caller_class(call, eg);
+                }
+                resolved
             }
-            if resolved.is_none() && func_common.sig.needs_bound_type_scope() {
-                resolved = get_caller_class(call, eg);
-            }
-            resolved
-        }
-    };
+        };
     let callee_class_ref = callee_class.as_deref();
     let callable_caller_class = get_caller_class(frame, eg);
     let callable_caller_class_ref = callable_caller_class.as_deref();
@@ -4353,6 +4409,7 @@ fn execute_full_call<'a>(
                     op_array,
                     opline,
                     (*call).is_explicit_closure_invoke(),
+                    callee_class_ref,
                 ));
                 break;
             }

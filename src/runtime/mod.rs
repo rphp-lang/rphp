@@ -846,6 +846,7 @@ pub struct ExecutorGlobals {
     compiler_halt_offsets: Option<Box<HashMap<String, i64>>>,
     /// Reflection-only metadata for source-level global constants.
     pub constant_attributes: HashMap<String, Vec<crate::vm::function::AttributeDefinition>>,
+    /// Doc comments of source-level class-like declarations (lowercase keys).
     /// Cold dependency expressions used only when one constant read may need
     /// to diagnose deprecated constants referenced by its declaration value.
     pub constant_expressions: HashMap<String, crate::compiler::compile::ConstantExpressionMetadata>,
@@ -977,6 +978,10 @@ pub struct ExecutorGlobals {
     fiber_runtime: Option<Box<fiber::FiberRuntime>>,
     /// Global variables — shared across function calls via `global $x;`
     pub globals: HashMap<String, crate::value::Value>,
+    /// Request auto-globals PHP creates lazily (`auto_globals_jit`): `$_SERVER`,
+    /// `$_ENV` and `$_REQUEST` join the symbol table only once a compiled unit
+    /// or `global` statement names them.
+    pub jit_auto_globals: HashMap<String, crate::value::Value>,
     /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
     /// slot. Keep those rare entries in a frame-keyed cold symbol table while
     /// statically known names continue to live directly in their CVs.
@@ -2066,6 +2071,7 @@ impl ExecutorGlobals {
             active_generator: None,
             fiber_runtime: None,
             globals: HashMap::new(),
+            jit_auto_globals: HashMap::new(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
@@ -2199,6 +2205,7 @@ impl ExecutorGlobals {
             active_generator: None,
             fiber_runtime: None,
             globals: HashMap::new(),
+            jit_auto_globals: HashMap::new(),
             dynamic_variables: HashMap::new(),
             dynamic_scope_owners: HashMap::new(),
             detached_trace_callers: None,
@@ -11211,6 +11218,21 @@ impl ExecutorGlobals {
     /// value, matching `libxml_disable_entity_loader()`'s historical API.
     pub(crate) fn replace_libxml_entity_loader_disabled(&self, disabled: bool) -> bool {
         self.libxml_entity_loader_disabled.replace(disabled)
+    }
+
+    /// Move a lazily created request auto-global into the symbol table the
+    /// first time code names it. Returns whether a value was materialized.
+    pub fn materialize_auto_global(&mut self, name: &str) -> bool {
+        if self.jit_auto_globals.is_empty() {
+            return false;
+        }
+        match self.jit_auto_globals.remove(name) {
+            Some(value) => {
+                self.globals.insert(name.to_string(), value);
+                true
+            }
+            None => false,
+        }
     }
 
     pub fn write_output(&self, data: &[u8]) {

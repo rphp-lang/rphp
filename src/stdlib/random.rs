@@ -65,6 +65,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         name: INTERVAL_BOUNDARY.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec!["UnitEnum".to_string()],
         is_interface: false,

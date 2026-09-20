@@ -1,29 +1,15 @@
 //! Feature-gated formatted stream I/O and the scanf family.
 //!
-//! The four public handlers share two cold parsers: one for printf-style
-//! output and one for scanf-style input.  Keeping these paths out of the
-//! existing sprintf handlers preserves their admitted hot-code layout while
-//! this compatibility surface is evaluated.
+//! The stream printf handlers render through the shared sprintf engine so
+//! every byte-exact formatting rule has one implementation; the scanf family
+//! keeps its own cold input parser here.
+
+use std::borrow::Cow;
 
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
-
-#[derive(Clone, Copy)]
-enum OutputCall {
-    Variadic,
-    Array,
-}
-
-#[derive(Default)]
-struct OutputFlags {
-    left: bool,
-    plus: bool,
-    space: bool,
-    zero: bool,
-    pad: Option<u8>,
-}
 
 #[cold]
 fn set_error(eg: &mut ExecutorGlobals, class: &str, message: impl AsRef<str>) {
@@ -105,80 +91,6 @@ fn stream_argument(
 }
 
 #[cold]
-fn output_values_from_array(
-    execute_data: *mut ExecuteData,
-    eg: &mut ExecutorGlobals,
-    function: &str,
-    index: u32,
-) -> Option<Vec<Value>> {
-    let value = argument(execute_data, index);
-    let Some(values) = value.as_array() else {
-        set_error(
-            eg,
-            "TypeError",
-            format!(
-                "{function}(): Argument #{} ($values) must be of type array, {} given",
-                index + 1,
-                value.type_name()
-            ),
-        );
-        return None;
-    };
-    Some(
-        values
-            .values()
-            .map(|value| value.dereferenced().clone())
-            .collect(),
-    )
-}
-
-#[cold]
-fn output_format_error(eg: &mut ExecutorGlobals, message: impl AsRef<str>) -> Option<String> {
-    set_error(eg, "ValueError", message);
-    None
-}
-
-#[cold]
-fn take_output_argument<'a>(
-    values: &'a [Value],
-    next: &mut usize,
-    position: Option<usize>,
-    function: &str,
-    call: OutputCall,
-    eg: &mut ExecutorGlobals,
-) -> Option<&'a Value> {
-    let index = position.unwrap_or_else(|| {
-        let index = *next;
-        *next += 1;
-        index
-    });
-    if let Some(value) = values.get(index) {
-        return Some(value);
-    }
-    match call {
-        OutputCall::Variadic => set_error(
-            eg,
-            "ArgumentCountError",
-            format!(
-                "{} arguments are required, {} given",
-                index + 3,
-                values.len() + 2
-            ),
-        ),
-        OutputCall::Array => set_error(
-            eg,
-            "ValueError",
-            format!(
-                "The arguments array must contain {} items, {} given",
-                index + 1,
-                values.len()
-            ),
-        ),
-    }
-    let _ = function;
-    None
-}
-
 fn parse_decimal(bytes: &[u8], index: &mut usize) -> Option<usize> {
     let start = *index;
     let mut value = 0usize;
@@ -191,267 +103,40 @@ fn parse_decimal(bytes: &[u8], index: &mut usize) -> Option<usize> {
     (*index > start).then_some(value)
 }
 
-fn add_sign(mut rendered: String, flags: &OutputFlags, nonnegative: bool) -> String {
-    if nonnegative {
-        if flags.plus {
-            rendered.insert(0, '+');
-        } else if flags.space {
-            rendered.insert(0, ' ');
-        }
-    }
-    rendered
-}
-
-fn apply_width(mut rendered: String, width: usize, flags: &OutputFlags, specifier: u8) -> String {
-    let length = rendered.len();
-    if length >= width {
-        return rendered;
-    }
-    let count = width - length;
-    let numeric = specifier != b's' && specifier != b'c';
-    let zero_pad =
-        flags.zero && (!flags.left || matches!(specifier, b'e' | b'E' | b'f' | b'F' | b'g' | b'G'));
-    let pad = flags.pad.unwrap_or(if zero_pad { b'0' } else { b' ' }) as char;
-    if flags.left {
-        rendered.extend(std::iter::repeat_n(pad, count));
-        return rendered;
-    }
-    if numeric && pad == '0' && matches!(rendered.as_bytes().first(), Some(b'+' | b'-' | b' ')) {
-        let sign = rendered.remove(0);
-        let mut padded = String::with_capacity(width);
-        padded.push(sign);
-        padded.extend(std::iter::repeat_n(pad, count));
-        padded.push_str(&rendered);
-        return padded;
-    }
-    let mut padded = String::with_capacity(width);
-    padded.extend(std::iter::repeat_n(pad, count));
-    padded.push_str(&rendered);
-    padded
-}
-
-fn normalize_exponent(mut rendered: String, upper: bool) -> String {
-    let marker = if upper { 'E' } else { 'e' };
-    if upper {
-        rendered = rendered.replace('e', "E");
-    }
-    if let Some(position) = rendered.find(marker) {
-        let sign_position = position + 1;
-        if !matches!(rendered.as_bytes().get(sign_position), Some(b'+' | b'-')) {
-            rendered.insert(sign_position, '+');
-        }
-    }
-    rendered
-}
-
-fn output_float_value(value: &Value) -> f64 {
-    let Some(string) = value.as_str() else {
-        return value.to_float_val();
-    };
-    let bytes = super::php_string_to_bytes(string);
-    let mut position = 0usize;
-    skip_input_whitespace(&bytes, &mut position);
-    scan_float(&bytes, &mut position, usize::MAX)
-        .and_then(|value| value.as_double())
-        .unwrap_or(0.0)
-}
-
-#[cold]
-fn render_output_value(
-    value: &Value,
-    specifier: u8,
-    precision: Option<usize>,
-    flags: &OutputFlags,
-) -> String {
-    match specifier {
-        b's' => {
-            let mut rendered = value.echo_to_string();
-            if let Some(precision) = precision {
-                rendered.truncate(precision.min(rendered.len()));
-            }
-            rendered
-        }
-        b'c' => super::bytes_to_php_string(&[(value.to_long_val() & 0xff) as u8]),
-        b'd' => {
-            let number = value.to_long_val();
-            add_sign(number.to_string(), flags, number >= 0)
-        }
-        b'u' => (value.to_long_val() as u64).to_string(),
-        b'b' => format!("{:b}", value.to_long_val()),
-        b'o' => format!("{:o}", value.to_long_val()),
-        b'x' => format!("{:x}", value.to_long_val()),
-        b'X' => format!("{:X}", value.to_long_val()),
-        b'f' | b'F' => {
-            let number = output_float_value(value);
-            let precision = precision.unwrap_or(6);
-            let rendered = if number.is_nan() {
-                "NaN".to_string()
-            } else if number == f64::INFINITY {
-                "INF".to_string()
-            } else if number == f64::NEG_INFINITY {
-                "-INF".to_string()
-            } else {
-                format!("{number:.precision$}")
-            };
-            add_sign(rendered, flags, !number.is_sign_negative())
-        }
-        b'e' | b'E' => {
-            let number = output_float_value(value);
-            let precision = precision.unwrap_or(6);
-            let rendered = if number.is_nan() {
-                "NaN".to_string()
-            } else if number == f64::INFINITY {
-                "INF".to_string()
-            } else if number == f64::NEG_INFINITY {
-                "-INF".to_string()
-            } else {
-                normalize_exponent(format!("{number:.precision$e}"), specifier == b'E')
-            };
-            add_sign(rendered, flags, !number.is_sign_negative())
-        }
-        b'g' | b'G' => {
-            let number = output_float_value(value);
-            let rendered = value.echo_to_string();
-            add_sign(
-                if specifier == b'G' {
-                    rendered.replace('e', "E")
-                } else {
-                    rendered
-                },
-                flags,
-                !number.is_sign_negative(),
-            )
-        }
-        _ => unreachable!("validated output conversion"),
-    }
-}
-
-#[cold]
-fn format_output(
-    format: &str,
-    values: &[Value],
-    function: &str,
-    call: OutputCall,
-    eg: &mut ExecutorGlobals,
-) -> Option<String> {
-    let bytes = format.as_bytes();
-    let mut output = String::with_capacity(format.len().saturating_add(values.len() * 8));
-    let mut index = 0usize;
-    let mut next_argument = 0usize;
-    while index < bytes.len() {
-        if bytes[index] != b'%' {
-            output.push(bytes[index] as char);
-            index += 1;
-            continue;
-        }
-        index += 1;
-        if bytes.get(index) == Some(&b'%') {
-            output.push('%');
-            index += 1;
-            continue;
-        }
-        if index >= bytes.len() {
-            return output_format_error(eg, "Missing format specifier at end of string");
-        }
-
-        let number_start = index;
-        let number = parse_decimal(bytes, &mut index);
-        let position = if bytes.get(index) == Some(&b'$') {
-            index += 1;
-            let Some(position) = number else {
-                return output_format_error(
-                    eg,
-                    "Argument number specifier must be greater than zero and less than 2147483647",
-                );
-            };
-            if position == 0 || position >= i32::MAX as usize {
-                return output_format_error(
-                    eg,
-                    "Argument number specifier must be greater than zero and less than 2147483647",
-                );
-            }
-            Some(position - 1)
-        } else {
-            index = number_start;
-            None
-        };
-
-        let mut flags = OutputFlags::default();
-        loop {
-            match bytes.get(index).copied() {
-                Some(b'-') => flags.left = true,
-                Some(b'+') => flags.plus = true,
-                Some(b' ') => flags.space = true,
-                Some(b'0') => flags.zero = true,
-                Some(b'\'') => {
-                    index += 1;
-                    let Some(pad) = bytes.get(index).copied() else {
-                        return output_format_error(eg, "Missing padding character");
-                    };
-                    flags.pad = Some(pad);
-                }
-                _ => break,
-            }
-            index += 1;
-        }
-        let width = parse_decimal(bytes, &mut index).unwrap_or(0);
-        if width >= i32::MAX as usize {
-            return output_format_error(eg, "Width must be between 0 and 2147483647");
-        }
-        let precision = if bytes.get(index) == Some(&b'.') {
-            index += 1;
-            Some(parse_decimal(bytes, &mut index).unwrap_or(0))
-        } else {
-            None
-        };
-        let Some(specifier) = bytes.get(index).copied() else {
-            return output_format_error(eg, "Missing format specifier at end of string");
-        };
-        index += 1;
-        if !matches!(
-            specifier,
-            b'b' | b'c'
-                | b'd'
-                | b'e'
-                | b'E'
-                | b'f'
-                | b'F'
-                | b'g'
-                | b'G'
-                | b'o'
-                | b's'
-                | b'u'
-                | b'x'
-                | b'X'
-        ) {
-            return output_format_error(
-                eg,
-                format!("Unknown format specifier \"{}\"", specifier as char),
-            );
-        }
-        let value = take_output_argument(values, &mut next_argument, position, function, call, eg)?;
-        let rendered = render_output_value(value, specifier, precision, &flags);
-        output.push_str(&apply_width(rendered, width, &flags, specifier));
-    }
-    Some(output)
-}
-
-#[cold]
 fn write_formatted(
     execute_data: *mut ExecuteData,
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
     function: &str,
-    resource: i64,
-    format: String,
-    values: Vec<Value>,
-    call: OutputCall,
+    call: super::SprintfCall,
 ) -> Result<(), VmError> {
-    let Some(rendered) = format_output(&format, &values, function, call, eg) else {
+    let Some(resource) = stream_argument(execute_data, eg, function) else {
         return Ok(());
     };
-    let bytes = super::php_string_to_bytes(&rendered);
-    let result = super::streams::write_stream_bytes(eg, execute_data, resource, &bytes)?;
+    let format_value = argument(execute_data, 1).dereferenced();
+    let format: Cow<'_, [u8]> = if format_value.value_type() == ValueType::String {
+        format_value.php_string_bytes().unwrap_or_default()
+    } else {
+        let Some(format) = typed_string_argument(execute_data, eg, function, 1, "format") else {
+            return Ok(());
+        };
+        Cow::Owned(super::php_string_to_bytes(&format))
+    };
+    let values = argument(execute_data, 2).dereferenced();
+    let args = match values.as_array() {
+        Some(array) => Some(array),
+        None if matches!(call, super::SprintfCall::Array) => {
+            super::sprintf_type_error(eg, function, 2, "values", "array", values);
+            return Ok(());
+        }
+        None => None,
+    };
+    let Some(rendered) =
+        super::format_sprintf_values(execute_data, eg, &format, args.as_deref(), call, function)?
+    else {
+        return Ok(());
+    };
+    let result = super::streams::write_stream_bytes(eg, execute_data, resource, rendered.bytes())?;
     let value = match result {
         Some(Ok(written)) => Value::long(written as i64),
         _ => Value::bool(false),
@@ -465,25 +150,12 @@ pub(super) fn fn_fprintf(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(resource) = stream_argument(execute_data, eg, "fprintf") else {
-        return Ok(());
-    };
-    let Some(format) = typed_string_argument(execute_data, eg, "fprintf", 1, "format") else {
-        return Ok(());
-    };
-    let values = output_values_from_array(execute_data, eg, "fprintf", 2).unwrap_or_default();
-    if eg.exception.is_some() {
-        return Ok(());
-    }
     write_formatted(
         execute_data,
         return_pointer,
         eg,
         "fprintf",
-        resource,
-        format,
-        values,
-        OutputCall::Variadic,
+        super::SprintfCall::Variadic,
     )
 }
 
@@ -492,24 +164,12 @@ pub(super) fn fn_vfprintf(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some(resource) = stream_argument(execute_data, eg, "vfprintf") else {
-        return Ok(());
-    };
-    let Some(format) = typed_string_argument(execute_data, eg, "vfprintf", 1, "format") else {
-        return Ok(());
-    };
-    let Some(values) = output_values_from_array(execute_data, eg, "vfprintf", 2) else {
-        return Ok(());
-    };
     write_formatted(
         execute_data,
         return_pointer,
         eg,
         "vfprintf",
-        resource,
-        format,
-        values,
-        OutputCall::Array,
+        super::SprintfCall::Array,
     )
 }
 
@@ -1281,20 +941,6 @@ pub(super) fn fn_fscanf_raw_variadic(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn width_and_custom_padding_match_php_shapes() {
-        let flags = OutputFlags {
-            zero: true,
-            ..OutputFlags::default()
-        };
-        assert_eq!(apply_width("-1".to_string(), 7, &flags, b'd'), "-000001");
-        let flags = OutputFlags {
-            pad: Some(b'#'),
-            ..OutputFlags::default()
-        };
-        assert_eq!(apply_width("-1".to_string(), 7, &flags, b'd'), "#####-1");
-    }
 
     #[test]
     fn integer_scanning_stops_at_the_first_invalid_digit() {

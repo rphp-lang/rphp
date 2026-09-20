@@ -26511,6 +26511,106 @@ normalized cache file manifest is still compared. This admits only the named
 short-lived Symfony CLI kernel; an HTTP SAPI, request superglobals and
 repeated-worker isolation remain S4 work.
 
+## PHPStan analysis gate
+
+The `phpstan-tokenizer` checkpoint over `5b70cb78` runs the unmodified PHPStan
+2.2.14 distribution under RPHP. Because Phar loading is not claimed, the gate
+uses the phar's extracted file tree: `bin/phpstan --version` and
+`bin/phpstan analyse --no-progress --no-ansi` over a two-error fixture
+(`return.type` and `property.nonObject`) print byte-identical output to
+reference PHP 8.5, including the Nette DI container build and cache, the
+PHP-Parser AST built through `PhpToken`, BetterReflection over the runtime
+Reflection surface, and Symfony Console's wrapped table rows with their
+four-byte emoji identifier markers. This admits the exercised path only; it is
+not a claim that every PHPStan rule, extension, editor URL or larger project
+analyses identically, and the analysis currently takes about 17 s of RPHP
+wall time against under 1 s for cached reference PHP, with performance
+deferred by user direction.
+
+The checkpoint adds `ext/tokenizer`: `token_get_all()`, `token_name()`,
+`PhpToken` (`tokenize`, `is`, `isIgnorable`, `getTokenName`, `__toString`),
+every `T_*` identity constant and `TOKEN_PARSE`. The scanner is a byte state
+machine over the source; on the 2.5 MB php-src `--FILE--` corpus it
+tokenizes at roughly 31 MB/s through `token_get_all()` and 20 MB/s through
+`PhpToken::tokenize()` in release builds, bounded by PHP value
+materialization rather than scanning. Upstream `ext/tokenizer/tests` reach 45
+pass / 5 fail / 3 unsupported; the remaining failures are general parse-error
+message and `eval()` line-number gaps, not token shapes.
+
+Runtime contracts aligned for PHPStan and verified against reference PHP:
+
+- Static trait methods resolve `self` parameter and return hints, `self::class`,
+  `self::CONST` and private visibility to the class that composed the trait,
+  also when a subclass forwards the call; TypeError messages spell `self`,
+  `parent` and `static` as the resolved classes.
+- The abstract-method check stops at the nearest declaration, so
+  `parent::method()` into a concrete override of an abstract ancestor works;
+  the compact all-`int` argument guard is no longer claimed for calls that rely
+  on defaulted parameters.
+- `array_column()` reads private and protected object columns through the
+  calling scope; `ReflectionClass`, `ReflectionObject` and `ReflectionEnum`
+  report `getStartLine()`, `getEndLine()` and class `getDocComment()`;
+  `ReflectionClass`, `ReflectionProperty`, `ReflectionClassConstant` and
+  `ReflectionFunction` modifier constants exist; `ReflectionNamedType`,
+  `ReflectionUnionType` and `ReflectionIntersectionType` are non-final and
+  subclassable.
+- Byte projections of ordinary strings that remain valid UTF-8 (for example
+  `substr()` cut on a character boundary) stay ordinary strings, the `(string)`
+  cast keeps byte identity, and `md5()`, `strrev()`, `unpack()`, `fprintf()`,
+  `vfprintf()`, `fputs()` and `file_put_contents()` operate on PHP bytes.
+  `php://stdin`, `php://stdout`, `php://stderr` and `php://output` open through
+  `fopen()`/`file_put_contents()`, and `php://output` honors output buffers.
+- PCRE patterns without `u` match bytes: byte classes such as `[\x80-\xFF]`,
+  `.`, offsets, replacements, callbacks, `preg_split()` and `preg_grep()` see
+  one unit per byte, while `u` patterns keep character semantics. `\R`, the
+  `A` modifier, `\p{..}`/`\P{..}`/`\p{^..}`, `\x{..}`, `\X` and Unicode
+  15.0 general categories (plus `L&`, `Any`, `Xan`, `Xwd`, `Xsp`, `Xps` and
+  `Regional_Indicator`), `\p{Extended_Pictographic}` and every Unicode 15.0
+  script name or ISO 15924 alias with PCRE2's loose name matching are
+  supported; `PCRE_VERSION` reports 10.42.
+- The CLI publishes `$argv`, `$argc`, `$_GET`, `$_POST`, `$_COOKIE`,
+  `$_FILES` and `$_SERVER` in PHP's symbol-table order, while `$_ENV` and
+  `$_REQUEST` follow `auto_globals_jit` and join `$GLOBALS` and
+  `get_defined_vars()` once the main scope, an include or a `global`
+  statement names them; `-r code [--] args`, `-f file [--] args` and `--`
+  (code from standard input) follow PHP.
+  `get_cfg_var()`, `php_ini_loaded_file()`, `php_ini_scanned_files()`,
+  `memory_get_usage()`, `memory_get_peak_usage()`,
+  `memory_reset_peak_usage()`, `getmypid()`, `sys_getloadavg()`,
+  `gethostname()`, `lcg_value()`, `mt_getrandmax()`, `uniqid()`,
+  `is_countable()`, `stream_isatty()`, `fnmatch()`, `hash_algos()`,
+  `hash_file()` and SHA-256 hashing are available.
+- `$GLOBALS` probe chains inside functions, classes declaring `__toString()`
+  (no longer early-bound ahead of a polyfill guard), source-unpacked static
+  callables that trigger autoloading, and unpacking a by-value array
+  parameter (previously heap-corrupting through the borrowed-argument proof)
+  behave like PHP.
+
+Upstream evidence on the pinned php-src against the `5b70cb78` parent build:
+Zend/lang runs 5,599 cases at **5,127 pass / 177 fail / 115 skip / 180
+unsupported**, exact **+4/-1** (gained `get_defined_vars`, `objects_022`,
+`typehints/bug43332_1` and `generators/finally/run_on_dtor`). The one loss,
+`Zend/tests/bug63882_2.phpt`, sorts an array that contains a reference to
+itself while `$GLOBALS` now carries the CLI request globals; PHP's outcome
+there depends on comparing the array against its own buckets while
+`zend_sort` permutes them under a stale hash index, which RPHP does not
+emulate, so its comparison reaches the self-reference and reports the
+recursion. `ext/pcre/tests` moves from 106 to 111 passes, `ext/reflection/
+tests` from 161 to 166, and `ext/standard/tests/strings` and
+`ext/tokenizer/tests` keep their exact 642 and 45 passes. Original E2E
+coverage lives in `tests/e2e_tokenizer_extension.rs`,
+`tests/e2e_phpstan_runtime_contracts.rs`, `tests/e2e_string_byte_identity.rs`
+and `tests/cli_request_globals.rs`.
+
+Not claimed: Phar loading and the `phar://` wrapper (PHPStan runs from the
+extracted tree), `proc_open()`-based parallel workers, function and method
+`getStartLine()`/`getEndLine()`, method and property doc comments, exact
+`TOKEN_PARSE` parse-error messages, compile-time activation of `$_ENV` and
+`$_REQUEST` that are named only inside function bodies (they activate at the
+first `global` binding instead), `$_ENV` population under `variables_order`,
+and O(1) byte-offset recovery for non-`u` matches on non-ASCII subjects
+(currently O(n) per capture).
+
 ## Retained implementation and PHP 8.4 trend notes
 
 The following implementation notes and pass-set comparisons describe retained

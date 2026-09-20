@@ -7,13 +7,8 @@ fn return_type_diagnostic_name(
     function: *const FunctionCommon,
     hint: &ParamTypeHint,
 ) -> String {
-    resolved_type_diagnostic_name(
-        hint,
-        eg,
-        eg.declaring_class_of(function),
-        eg.class_by_id(late_static_call_class_id(eg, frame))
-            .map(|class| class.name.as_str()),
-    )
+    let _ = function;
+    scoped_hint_diagnostic_name(eg, frame, hint, None)
 }
 
 #[cold]
@@ -4624,7 +4619,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         Value::double(converted)
                     }
                     2 => {                                   // (string)
-                        if source.as_double().is_some_and(f64::is_nan) {
+                        if source.value_type() == ValueType::String {
+                            // A string casts to itself; cloning keeps its
+                            // exact byte identity instead of re-encoding a
+                            // binary payload through its character view.
+                            source.clone()
+                        } else if source.as_double().is_some_and(f64::is_nan) {
                             let converted =
                                 Value::string(source.echo_to_string_with_precision(eg.precision));
                             report_php_warning(

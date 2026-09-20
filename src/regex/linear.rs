@@ -15,6 +15,9 @@ mod ascii;
 /// visitor executor.
 #[inline(always)]
 pub(super) fn try_count_matches(regex: &Regex, subject: &str) -> Option<usize> {
+    if regex.flags.anchored {
+        return None;
+    }
     ascii::try_count_matches(regex, subject)
 }
 
@@ -47,6 +50,7 @@ where
     F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
 {
     if subject.is_ascii()
+        && !regex.flags.anchored
         && let Some(count) = ascii::try_visit_captures(regex, subject, &mut visitor)?
     {
         return Ok(count);
@@ -66,7 +70,7 @@ where
     let mut groups = vec![None];
     let mut pos = 0;
     let mut count = 0;
-    let start_literal = regex.start_literal;
+    let start_literal = regex.start_literal.filter(|_| !regex.flags.anchored);
 
     while pos <= chars.len() {
         if let Some(literal) = start_literal {
@@ -96,6 +100,8 @@ where
             } else {
                 pos = end;
             }
+        } else if regex.flags.anchored {
+            break;
         } else {
             pos += 1;
         }

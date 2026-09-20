@@ -843,6 +843,12 @@ fn runtime_class_declaration_names(
                 && (class_has_runtime_interface_boundary(class, class_defs)
                     || (!class.is_interface
                         && (!class.uses.is_empty()
+                            // `__toString` implements Stringable implicitly;
+                            // PHP never binds an interface implementer early.
+                            || class
+                                .methods
+                                .iter()
+                                .any(|(name, ..)| name.eq_ignore_ascii_case("__tostring"))
                             || class_has_runtime_variance_boundary(
                                 class,
                                 class_defs,
@@ -1301,8 +1307,12 @@ fn propagate_declared_scalar_types(
                 if let Some(return_type) = guarded_return {
                     op_array.instructions[ip].set_method_return_guard_type(return_type);
                 }
+                // The runtime guard compares the declared arity with the
+                // supplied count, so a call that relies on defaulted
+                // parameters must not claim the exact all-`int` ABI.
                 let exact_long_arguments = exact_parameters.as_ref().is_some_and(|hints| {
                     !hints.is_empty()
+                        && hints.len() == instruction.extended_value as usize
                         && hints.iter().all(|hint| matches!(hint, ParamTypeHint::Int))
                         && exact_ref_args == Some(0)
                 });
@@ -3040,6 +3050,10 @@ pub struct ClassDef {
     /// Source line of the class-like declaration for cold link diagnostics.
     /// Built-ins use zero.
     pub declaration_line: usize,
+    /// Source line of the declaration's closing brace. Built-ins use zero.
+    pub end_line: usize,
+    /// The doc comment immediately preceding the declaration, for Reflection.
+    pub doc_comment: Option<std::sync::Arc<str>>,
     pub parent: Option<String>,
     pub implements: Vec<String>,
     pub is_interface: bool,
@@ -3805,6 +3819,12 @@ impl Compiler {
         let instruction_index = self.instructions.len();
         self.instructions.push(instruction);
         if line != 0 {
+            debug_assert!(
+                self.instruction_source_lines
+                    .last()
+                    .is_none_or(|(last, _)| (*last as usize) < instruction_index),
+                "source line recorded for a removed instruction"
+            );
             self.instruction_source_lines.push((
                 u32::try_from(instruction_index).unwrap_or(u32::MAX),
                 u32::try_from(line).unwrap_or(u32::MAX),
@@ -3813,6 +3833,21 @@ impl Compiler {
         if is_call {
             self.invalidate_reentrant_definitions();
         }
+    }
+
+    /// Remove the last emitted instruction together with its source-line
+    /// entry, so re-emitting it later records the line at its new position.
+    fn pop_instruction(&mut self) -> Option<Instruction> {
+        let instruction = self.instructions.pop()?;
+        let index = u32::try_from(self.instructions.len()).unwrap_or(u32::MAX);
+        while self
+            .instruction_source_lines
+            .last()
+            .is_some_and(|(recorded, _)| *recorded >= index)
+        {
+            self.instruction_source_lines.pop();
+        }
+        Some(instruction)
     }
 
     fn record_last_instruction_source_line(&mut self, line: usize) {
@@ -9741,7 +9776,11 @@ impl Compiler {
             fetch.op1_type = key_type;
             fetch.result = result;
             fetch.result_type = OpType::Tmp;
-            fetch._pad |= FETCH_DIM_ISSET;
+            // Only a single-key isset() wants the boolean here. Nested probes
+            // and value probes (empty(), `??`) continue with the silent value.
+            if keys.len() == 1 && terminal_flags & FETCH_DIM_ISSET != 0 {
+                fetch._pad |= FETCH_DIM_ISSET;
+            }
             self.push_instruction_at_line(fetch, line);
             (result, OpType::Tmp, 1)
         } else {
@@ -10735,8 +10774,7 @@ impl Compiler {
                                             instruction.opcode == OpCode::FetchDimR
                                         }) {
                                             deferred_fetches.push(
-                                                self.instructions
-                                                    .pop()
+                                                self.pop_instruction()
                                                     .expect("checked trailing dimension fetch"),
                                             );
                                         }
@@ -12976,13 +13014,16 @@ impl Compiler {
                 uses,
                 trait_aliases,
                 line,
+                end_line,
                 call_line,
             } => {
                 let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {
                     line: *call_line,
+                    end_line: *end_line,
                     attributes: attributes.clone(),
+                    doc_comment: None,
                     name: format!("\\{class_name}"),
                     parent: parent.clone(),
                     implements: implements.clone(),
@@ -13330,32 +13371,41 @@ impl Compiler {
                         self.resolve_name(class_name)
                     };
                 if generic_args.is_empty()
-                    && !matches!(pseudo_class.as_str(), "self" | "parent" | "static")
                     && args
                         .iter()
                         .any(|argument| matches!(argument, CallArg::Unpack(_)))
                 {
-                    let callback = self.alloc_tmp();
-                    let mut init = Instruction::new(OpCode::InitArray);
-                    init.result = callback;
-                    init.result_type = OpType::Tmp;
-                    init.extended_value = 2;
-                    self.instructions.push(init);
-                    for value in [resolved_class.clone(), method.clone()] {
-                        let value = self.add_literal(Value::string(value));
-                        let mut add = Instruction::new(OpCode::AddArrayElement);
-                        add.op1 = callback;
-                        add.op1_type = OpType::Tmp;
-                        add.op2 = value;
-                        add.op2_type = OpType::Const;
-                        self.instructions.push(add);
-                    }
+                    let relative_scope =
+                        matches!(pseudo_class.as_str(), "self" | "parent" | "static");
+                    let (callback, callback_type) = if relative_scope {
+                        // `self::`/`parent::`/`static::` keep their runtime
+                        // scope semantics through the scoped callable form.
+                        let spelled = format!("{pseudo_class}::{method}");
+                        (self.add_literal(Value::string(spelled)), OpType::Const)
+                    } else {
+                        let callback = self.alloc_tmp();
+                        let mut init = Instruction::new(OpCode::InitArray);
+                        init.result = callback;
+                        init.result_type = OpType::Tmp;
+                        init.extended_value = 2;
+                        self.instructions.push(init);
+                        for value in [resolved_class.clone(), method.clone()] {
+                            let value = self.add_literal(Value::string(value));
+                            let mut add = Instruction::new(OpCode::AddArrayElement);
+                            add.op1 = callback;
+                            add.op1_type = OpType::Tmp;
+                            add.op2 = value;
+                            add.op2_type = OpType::Const;
+                            self.instructions.push(add);
+                        }
+                        (callback, OpType::Tmp)
+                    };
                     let (arguments, arguments_type) =
                         self.compile_mixed_unpacked_call_arguments(args, 0, None);
                     let tmp = self.alloc_tmp();
                     let mut call = Instruction::new(OpCode::CallUserFuncArray);
                     call.op1 = callback;
-                    call.op1_type = OpType::Tmp;
+                    call.op1_type = callback_type;
                     call.op2 = arguments;
                     call.op2_type = arguments_type;
                     call.result = tmp;
@@ -15623,21 +15673,31 @@ impl Compiler {
     }
 
     fn compile_source_unpack_operand(&mut self, expression: &Expr) -> (u16, OpType) {
-        let (value, value_type) = self.compile_expr(expression);
-        if value_type == OpType::Tmp
-            && matches!(expression, Expr::Variable { .. })
-            && let Some(fetch) = self.instructions.last_mut()
-            && fetch.opcode == OpCode::FetchCvR
-            && fetch.result == value
+        if let Expr::Variable { name, line } = expression
+            && name != "this"
+            && name != "GLOBALS"
         {
-            // A top-level call invalidates the compiler's defined-CV proof,
-            // but `...$array` remains a live l-value source after its checked
-            // read. Avoid manufacturing a second PHP array owner: a later
-            // by-reference unpack parameter must promote the original member,
-            // while an actually undefined variable still consumes null.
-            fetch._pad |= FETCH_CV_LIVE_UNPACK_SOURCE;
+            // `...$array` promotes members of the live variable when the
+            // callee takes them by reference, so the unpack must own the CV
+            // itself rather than a borrowed snapshot (a snapshot's copy-on-
+            // write detach would release a share it never held). A possibly
+            // undefined variable still reports PHP's warning first and then
+            // unpacks null.
+            let cv = self.resolve_cv(name);
+            if *line != 0 && !self.definitely_defined_cvs.contains(&cv) {
+                let name_literal = self.add_literal(Value::string(name.clone()));
+                let mut check = Instruction::new(OpCode::FetchCvR);
+                check.op1 = cv;
+                check.op1_type = OpType::Cv;
+                check.op2 = name_literal;
+                check.op2_type = OpType::Const;
+                check.result_type = OpType::Unused;
+                self.push_instruction_at_line(check, *line);
+                self.invalidate_reentrant_definitions();
+            }
+            return (cv, OpType::Cv);
         }
-        (value, value_type)
+        self.compile_expr(expression)
     }
 
     fn compile_mixed_unpacked_call_arguments(

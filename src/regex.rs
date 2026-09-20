@@ -17,6 +17,9 @@ use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 
 mod linear;
+mod unicode;
+mod unicode_categories;
+mod unicode_scripts;
 
 /// Keep the cache bounded so scripts generating regexes dynamically cannot
 /// retain an unbounded amount of compiled AST data for the lifetime of the
@@ -67,6 +70,10 @@ enum Node {
     /// the synthetic named capture `MARK` without consuming input.
     Mark(String),
     WordBoundary(bool), // true = \b, false = \B
+    /// `\X`: one extended grapheme cluster.
+    GraphemeCluster,
+    /// `\R`: one newline sequence, with `\r\n` consumed atomically.
+    Linebreak,
 }
 
 #[derive(Debug, Clone)]
@@ -91,6 +98,8 @@ enum Shorthand {
     NonWord,  // \W
     Space,    // \s
     NonSpace, // \S
+    /// `\p{…}` / `\P{…}` Unicode property class.
+    Property(unicode::PropertyClass),
 }
 
 // ── Flags ───────────────────────────────────────────────────────────────────
@@ -107,6 +116,9 @@ pub struct RegexFlags {
     /// boundary, PHP 8.5 enables Unicode character properties for the word
     /// and whitespace shorthand classes admitted by this checkpoint.
     pub unicode: bool,
+    /// PCRE `A` modifier: a match may only start at the search position, and
+    /// each further match must begin where the previous one ended.
+    pub anchored: bool,
 }
 
 impl Default for RegexFlags {
@@ -119,6 +131,7 @@ impl Default for RegexFlags {
             ungreedy: false,
             dollar_end_only: false,
             unicode: false,
+            anchored: false,
         }
     }
 }
@@ -211,7 +224,12 @@ impl RegexCache {
             return Ok(Rc::clone(regex));
         }
 
-        let (pattern, flags) = parse_php_regex(php_pattern)?;
+        let (mut pattern, flags) = parse_php_regex(php_pattern)?;
+        if !flags.unicode && !pattern.is_ascii() {
+            // Without `u` PCRE compiles the pattern byte by byte; present its
+            // UTF-8 bytes one char each so literals meet byte-view subjects.
+            pattern = pattern.bytes().map(char::from).collect();
+        }
         let regex = Rc::new(Regex::new(&pattern, flags)?);
 
         let capacity = self.capacity();
@@ -363,7 +381,9 @@ impl Regex {
         };
         let mut start = 0;
         while start <= chars.len() {
-            if let Some(literal) = self.start_literal {
+            if let Some(literal) = self.start_literal
+                && !self.flags.anchored
+            {
                 let Some(relative_start) = chars[start..].iter().position(|&candidate| {
                     chars_equal(candidate, literal, self.flags.case_insensitive)
                 }) else {
@@ -384,6 +404,9 @@ impl Regex {
             if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
                 return true;
             }
+            if self.flags.anchored {
+                break;
+            }
             start += 1;
         }
         false
@@ -397,8 +420,11 @@ impl Regex {
             byte_offsets: &byte_offsets,
         };
         let mut groups = vec![None; self.num_groups + 1];
-        // Try matching at every position
+        // Try matching at every position; an anchored pattern only at the first.
         for start in 0..=chars.len() {
+            if self.flags.anchored && start > 0 {
+                break;
+            }
             if let Some(literal) = self.start_literal {
                 if start == chars.len()
                     || !chars_equal(chars[start], literal, self.flags.case_insensitive)
@@ -488,6 +514,9 @@ impl Regex {
                 } else {
                     pos = end;
                 }
+            } else if self.flags.anchored {
+                result.push_str(&subject[byte_offsets.get(pos)..]);
+                break;
             } else {
                 if pos < chars.len() {
                     result.push(chars[pos]);
@@ -547,7 +576,7 @@ impl Regex {
         let mut groups = vec![None; self.num_groups + 1];
         let mut pos = 0;
         let mut count = 0;
-        let start_literal = self.start_literal;
+        let start_literal = self.start_literal.filter(|_| !self.flags.anchored);
 
         while pos <= chars.len() {
             if let Some(literal) = start_literal {
@@ -592,6 +621,8 @@ impl Regex {
                 } else {
                     pos = end;
                 }
+            } else if self.flags.anchored {
+                break;
             } else {
                 pos += 1;
             }
@@ -635,6 +666,9 @@ impl Regex {
             // Try matching at every position starting from `scan`
             let mut found = false;
             for try_start in scan..=chars.len() {
+                if self.flags.anchored && try_start > scan {
+                    break;
+                }
                 let mut groups = vec![None; self.num_groups + 1];
                 let mut mark = None;
                 let mut ctx = MatchCtx {
@@ -719,6 +753,9 @@ impl Regex {
                 } else {
                     pos = end;
                 }
+            } else if self.flags.anchored {
+                result.push_str(&subject[byte_offsets.get(pos)..]);
+                break;
             } else {
                 if pos < chars.len() {
                     result.push(chars[pos]);
@@ -829,8 +866,11 @@ fn expand_replacement(repl: &str, groups: &[Option<Match>], input: &str) -> Stri
                 continue;
             }
         }
-        out.push(bytes[i] as char);
-        i += 1;
+        // Copy one whole character: a non-ASCII literal must keep its
+        // encoding instead of being re-read as individual Latin-1 bytes.
+        let width = repl[i..].chars().next().map_or(1, char::len_utf8);
+        out.push_str(&repl[i..i + width]);
+        i += width;
     }
     out
 }
@@ -995,6 +1035,24 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             } else {
                 None
             }
+        }
+        Node::GraphemeCluster => {
+            let length = unicode::grapheme_cluster_len(ctx.chars, pos)?;
+            match_rest(rest, pos + length, ctx)
+        }
+        Node::Linebreak => {
+            let first = *ctx.chars.get(pos)?;
+            let length = if first == '\r' && ctx.chars.get(pos + 1) == Some(&'\n') {
+                2
+            } else if matches!(
+                first,
+                '\n' | '\u{0b}' | '\u{0c}' | '\r' | '\u{85}' | '\u{2028}' | '\u{2029}'
+            ) {
+                1
+            } else {
+                return None;
+            };
+            match_rest(rest, pos + length, ctx)
         }
         Node::Alternation(branches) => {
             for branch in branches {
@@ -1513,6 +1571,7 @@ fn match_shorthand(sh: Shorthand, c: char, unicode: bool) -> bool {
                 !c.is_ascii_whitespace()
             }
         }
+        Shorthand::Property(class) => class.matches(c),
     }
 }
 
@@ -1711,8 +1770,100 @@ impl Parser {
                 let n: usize = num_str.parse().unwrap();
                 Ok(Node::Backreference(n))
             }
+            Some('x') => Ok(Node::Literal(self.parse_hex_escape()?)),
+            Some('p') => Ok(Node::Shorthand(Shorthand::Property(
+                self.parse_property_escape(false)?,
+            ))),
+            Some('P') => Ok(Node::Shorthand(Shorthand::Property(
+                self.parse_property_escape(true)?,
+            ))),
+            Some('X') => Ok(Node::GraphemeCluster),
+            Some('R') => Ok(Node::Linebreak),
             Some(c) => Ok(Node::Literal(c)), // \/, \\, \., etc.
             None => Err("Unexpected end after \\".into()),
+        }
+    }
+
+    /// `\xhh` or `\x{h…}` after the `x` was consumed.
+    fn parse_hex_escape(&mut self) -> Result<char, String> {
+        let mut value: u32 = 0;
+        if self.peek() == Some('{') {
+            self.advance();
+            let mut digits = 0;
+            loop {
+                match self.advance() {
+                    Some('}') => break,
+                    Some(c) => {
+                        let digit = c.to_digit(16).ok_or("Malformed \\x{} escape sequence")?;
+                        value = value
+                            .checked_mul(16)
+                            .and_then(|value| value.checked_add(digit))
+                            .filter(|value| *value <= 0x10FFFF)
+                            .ok_or("character code point value in \\x{} or \\o{} is too large")?;
+                        digits += 1;
+                    }
+                    None => return Err("Malformed \\x{} escape sequence".into()),
+                }
+            }
+            if digits == 0 {
+                return Err("Malformed \\x{} escape sequence".into());
+            }
+        } else {
+            for _ in 0..2 {
+                let Some(digit) = self.peek().and_then(|c| c.to_digit(16)) else {
+                    break;
+                };
+                value = value * 16 + digit;
+                self.advance();
+            }
+        }
+        char::from_u32(value)
+            .ok_or_else(|| "character code point value in \\x{} or \\o{} is too large".into())
+    }
+
+    /// `\p…` / `\P…` after the letter was consumed.
+    fn parse_property_escape(&mut self, negated: bool) -> Result<unicode::PropertyClass, String> {
+        let name = if self.peek() == Some('{') {
+            self.advance();
+            let mut name = String::new();
+            loop {
+                match self.advance() {
+                    Some('}') => break,
+                    Some(c) => name.push(c),
+                    None => return Err("malformed \\P or \\p sequence".into()),
+                }
+            }
+            name
+        } else {
+            self.advance()
+                .map(String::from)
+                .ok_or("malformed \\P or \\p sequence")?
+        };
+        unicode::PropertyClass::parse(&name, negated)
+            .ok_or_else(|| "unknown property name after \\P or \\p".to_string())
+    }
+
+    /// One escaped character-class atom after the backslash was consumed.
+    fn parse_class_escape(&mut self) -> Result<ClassItem, String> {
+        match self.advance() {
+            Some('d') => Ok(ClassItem::Shorthand(Shorthand::Digit)),
+            Some('D') => Ok(ClassItem::Shorthand(Shorthand::NonDigit)),
+            Some('w') => Ok(ClassItem::Shorthand(Shorthand::Word)),
+            Some('W') => Ok(ClassItem::Shorthand(Shorthand::NonWord)),
+            Some('s') => Ok(ClassItem::Shorthand(Shorthand::Space)),
+            Some('S') => Ok(ClassItem::Shorthand(Shorthand::NonSpace)),
+            Some('n') => Ok(ClassItem::Literal('\n')),
+            Some('r') => Ok(ClassItem::Literal('\r')),
+            Some('t') => Ok(ClassItem::Literal('\t')),
+            Some('x') => Ok(ClassItem::Literal(self.parse_hex_escape()?)),
+            Some('p') => Ok(ClassItem::Shorthand(Shorthand::Property(
+                self.parse_property_escape(false)?,
+            ))),
+            Some('P') => Ok(ClassItem::Shorthand(Shorthand::Property(
+                self.parse_property_escape(true)?,
+            ))),
+            Some(ec) => Ok(ClassItem::Literal(ec)),
+            None => Err("Unexpected end in character class escape".into()),
         }
     }
 
@@ -1737,33 +1888,33 @@ impl Parser {
                 self.advance();
                 return Ok(Node::CharClass { negated, items });
             }
-            if c == '\\' {
-                self.advance();
-                match self.advance() {
-                    Some('d') => items.push(ClassItem::Shorthand(Shorthand::Digit)),
-                    Some('D') => items.push(ClassItem::Shorthand(Shorthand::NonDigit)),
-                    Some('w') => items.push(ClassItem::Shorthand(Shorthand::Word)),
-                    Some('W') => items.push(ClassItem::Shorthand(Shorthand::NonWord)),
-                    Some('s') => items.push(ClassItem::Shorthand(Shorthand::Space)),
-                    Some('S') => items.push(ClassItem::Shorthand(Shorthand::NonSpace)),
-                    Some('n') => items.push(ClassItem::Literal('\n')),
-                    Some('r') => items.push(ClassItem::Literal('\r')),
-                    Some('t') => items.push(ClassItem::Literal('\t')),
-                    Some(ec) => items.push(ClassItem::Literal(ec)),
-                    None => return Err("Unexpected end in character class escape".into()),
-                }
+            self.advance();
+            let item = if c == '\\' {
+                self.parse_class_escape()?
             } else {
-                self.advance();
-                // Check for range: a-z
-                if self.peek() == Some('-') && self.chars.get(self.pos + 1).copied() != Some(']') {
-                    self.advance(); // consume '-'
-                    let hi = self
-                        .advance()
-                        .ok_or("Unexpected end in character class range")?;
-                    items.push(ClassItem::Range(c, hi));
-                } else {
-                    items.push(ClassItem::Literal(c));
-                }
+                ClassItem::Literal(c)
+            };
+            // Ranges accept literal or escaped endpoints: a-z, \x{41}-\x{43}.
+            let range_follows = self.peek() == Some('-')
+                && self
+                    .chars
+                    .get(self.pos + 1)
+                    .is_some_and(|next| *next != ']');
+            if let ClassItem::Literal(lo) = item
+                && range_follows
+            {
+                self.advance(); // consume '-'
+                let hi = match self.advance() {
+                    Some('\\') => match self.parse_class_escape()? {
+                        ClassItem::Literal(hi) => hi,
+                        _ => return Err("invalid range in character class".into()),
+                    },
+                    Some(hi) => hi,
+                    None => return Err("Unexpected end in character class range".into()),
+                };
+                items.push(ClassItem::Range(lo, hi));
+            } else {
+                items.push(item);
             }
         }
         Err("Unterminated character class".into())
@@ -2279,11 +2430,12 @@ pub fn parse_php_regex(input: &str) -> Result<(String, RegexFlags), String> {
             // observable match or replacement results.
             'S' => {}
             'D' => flags.dollar_end_only = true,
+            'A' => flags.anchored = true,
             // These are valid PHP/PCRE modifiers, but their engine semantics
             // are not implemented yet. Finish scanning first so a genuinely
             // unknown modifier later in the same suffix still wins and emits
             // PHP's compile warning.
-            'A' | 'J' | 'X' | 'n' | 'r' => {
+            'J' | 'X' | 'n' | 'r' => {
                 unsupported_modifier.get_or_insert(ch);
             }
             ' ' | '\n' | '\r' => {}

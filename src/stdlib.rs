@@ -225,10 +225,16 @@ mod iterator;
 mod pcre;
 mod process;
 mod recursive_arrays;
+mod runtime_info;
+mod sha256;
 mod source_filters;
 mod strings;
+mod superglobals;
 pub(crate) mod ticks;
 mod weak;
+
+pub use runtime_info::set_startup_config;
+pub use superglobals::{JIT_AUTO_GLOBALS, REQUEST_AUTO_GLOBAL_ORDER, register_request_globals};
 
 use filesystem::{bytes_to_php_string, php_string_to_bytes};
 
@@ -3190,12 +3196,22 @@ fn array_column_object_value(
     let class_name = object.class_name.to_string();
     let class_id = object.class_id;
 
+    // PHP reads declared properties through the caller's lexical scope, so a
+    // class projecting its own private or protected columns succeeds while
+    // outside callers fall through to `__isset`/`__get`.
+    let caller_class = crate::vm::execute::lexical_class_name_for_internal_call(eg, ed);
     let visibility = eg.find_property_visibility(&class_name, &name);
-    if visibility
-        .as_ref()
-        .is_some_and(|(visibility, _)| *visibility == Visibility::Public)
-    {
-        if let Some(slot) = object.property_slot(&name) {
+    let accessible = match &visibility {
+        Some((Visibility::Public, _)) => true,
+        Some((visibility, defining_class)) => {
+            eg.check_visibility(caller_class.as_deref(), defining_class, *visibility)
+        }
+        None => false,
+    };
+    if accessible {
+        let storage_key =
+            crate::runtime::resolve_property_key(eg, &class_name, &name, caller_class.as_deref());
+        if let Some(slot) = object.property_slot(&storage_key) {
             let definition = eg.instance_property_definition(class_id, slot);
             if definition.is_some_and(|definition| definition.has_get_hook) {
                 drop(object);
@@ -5807,7 +5823,9 @@ mod md5_tests {
 }
 
 fn fn_md5(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    let Some(input) = typed_internal_string_argument(ed, eg, "md5", 0, "string")? else {
+    let Some(input) =
+        typed_internal_string_value_argument_expected(ed, eg, "md5", 0, "string", "string")?
+    else {
         return Ok(());
     };
     let binary = if arg_opt!(ed, 1).is_some() {
@@ -5818,7 +5836,7 @@ fn fn_md5(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Res
     } else {
         false
     };
-    let digest = md5_digest(&php_string_to_bytes(&input));
+    let digest = md5_digest(&input.php_string_bytes().unwrap_or_default());
     if binary {
         ret!(rv, php_byte_result(digest.to_vec(), true));
     }
@@ -5870,6 +5888,52 @@ fn digest_file_error_reason(error: &std::io::Error) -> String {
     }
 }
 
+/// Read the file a `*_file()` digest function hashes. `None` means the call
+/// already raised its ValueError or reported the failed open as a warning.
+fn digest_file_bytes(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    filename: &Value,
+) -> Result<Option<Vec<u8>>, VmError> {
+    let filename_bytes = filename.php_string_bytes().unwrap_or_default();
+    if filename_bytes.is_empty() {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "Path must not be empty",
+        ));
+        return Ok(None);
+    }
+    if filename_bytes.contains(&b'\0') {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            &format!("{function}(): Argument #1 ($filename) must not contain any null bytes"),
+        ));
+        return Ok(None);
+    }
+    let filename = filename.as_str().unwrap_or_default();
+    if filename == "php://memory" || filename == "php://temp" {
+        return Ok(Some(Vec::new()));
+    }
+    let path = filename.strip_prefix("file://").unwrap_or(filename);
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) => {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!(
+                    "{function}({filename}): Failed to open stream: {}",
+                    digest_file_error_reason(&error)
+                ),
+            )?;
+            Ok(None)
+        }
+    }
+}
+
 fn file_digest_builtin<const N: usize>(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -5890,45 +5954,11 @@ fn file_digest_builtin<const N: usize>(
     } else {
         false
     };
-    let filename_bytes = filename.php_string_bytes().unwrap_or_default();
-    if filename_bytes.is_empty() {
-        eg.exception = Some(crate::value::make_error_value(
-            "ValueError",
-            "Path must not be empty",
-        ));
-        return Ok(());
-    }
-    if filename_bytes.contains(&b'\0') {
-        eg.exception = Some(crate::value::make_error_value(
-            "ValueError",
-            &format!("{function}(): Argument #1 ($filename) must not contain any null bytes"),
-        ));
-        return Ok(());
-    }
-    let filename = filename.as_str().unwrap_or_default();
-    let bytes = if filename == "php://memory" || filename == "php://temp" {
-        Vec::new()
-    } else {
-        let path = filename.strip_prefix("file://").unwrap_or(filename);
-        match std::fs::read(path) {
-            Ok(bytes) => bytes,
-            Err(error) => {
-                report_internal_diagnostic(
-                    eg,
-                    ed,
-                    2,
-                    "Warning",
-                    &format!(
-                        "{function}({filename}): Failed to open stream: {}",
-                        digest_file_error_reason(&error)
-                    ),
-                )?;
-                if eg.exception.is_some() {
-                    return Ok(());
-                }
-                ret!(rv, Value::bool(false));
-            }
+    let Some(bytes) = digest_file_bytes(ed, eg, function, &filename)? else {
+        if eg.exception.is_some() {
+            return Ok(());
         }
+        ret!(rv, Value::bool(false));
     };
     let digest = digest(&bytes);
     if binary {
@@ -5999,15 +6029,8 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
         None
     };
     let data = data.php_string_bytes().unwrap_or_default();
-    if algorithm.eq_ignore_ascii_case("md5") {
-        let digest = md5_digest(data.as_ref());
-        if binary {
-            ret!(rv, php_byte_result(digest.to_vec(), true));
-        }
-        ret!(rv, Value::string(format_hex_digest(&digest)));
-    }
-    if algorithm.eq_ignore_ascii_case("xxh128") {
-        let seed = match options.and_then(|options| options.get_str("seed")) {
+    let seed = if algorithm.eq_ignore_ascii_case("xxh128") {
+        match options.and_then(|options| options.get_str("seed")) {
             None => 0,
             Some(seed) if seed.dereferenced().value_type() == ValueType::Long => {
                 seed.dereferenced().as_long().unwrap_or_default() as u64
@@ -6023,33 +6046,125 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
                 }
                 0
             }
-        };
+        }
+    } else {
+        0
+    };
+    let Some(digest) = hash_algorithm_digest(algorithm, data.as_ref(), seed) else {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "hash(): Argument #1 ($algo) must be a valid hashing algorithm",
+        ));
+        ret!(rv, Value::null());
+    };
+    if binary {
+        ret!(rv, php_byte_result(digest, true));
+    }
+    ret!(rv, Value::string(format_hex_digest(&digest)));
+}
+
+/// Registered `hash()` algorithms, in `hash_algos()` order.
+const HASH_ALGORITHMS: &[&str] = &["md5", "sha1", "sha256", "crc32", "crc32b", "xxh128"];
+
+/// Digest bytes of one registered algorithm; `None` for an unknown name.
+fn hash_algorithm_digest(algorithm: &str, data: &[u8], seed: u64) -> Option<Vec<u8>> {
+    let digest = if algorithm.eq_ignore_ascii_case("md5") {
+        md5_digest(data).to_vec()
+    } else if algorithm.eq_ignore_ascii_case("sha1") {
+        sha1_digest(data).to_vec()
+    } else if algorithm.eq_ignore_ascii_case("sha256") {
+        sha256::sha256_digest(data).to_vec()
+    } else if algorithm.eq_ignore_ascii_case("crc32") {
+        php_crc32(data).to_le_bytes().to_vec()
+    } else if algorithm.eq_ignore_ascii_case("crc32b") {
+        php_crc32_ieee(data).to_be_bytes().to_vec()
+    } else if algorithm.eq_ignore_ascii_case("xxh128") {
         let digest = if seed == 0 {
-            xxhash_rust::xxh3::xxh3_128(data.as_ref())
+            xxhash_rust::xxh3::xxh3_128(data)
         } else {
-            xxhash_rust::xxh3::xxh3_128_with_seed(data.as_ref(), seed)
+            xxhash_rust::xxh3::xxh3_128_with_seed(data, seed)
         };
-        if binary {
-            ret!(rv, php_byte_result(digest.to_be_bytes().to_vec(), true));
-        }
-        ret!(rv, Value::string(format!("{digest:032x}")));
+        digest.to_be_bytes().to_vec()
+    } else {
+        return None;
+    };
+    Some(digest)
+}
+
+fn fn_hash_algos(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mut algorithms = PhpArray::with_packed_capacity(HASH_ALGORITHMS.len());
+    for algorithm in HASH_ALGORITHMS {
+        algorithms.push(Value::string(*algorithm));
     }
-    if algorithm.eq_ignore_ascii_case("crc32") {
-        let digest = php_crc32(data.as_ref()).to_le_bytes();
-        if binary {
-            ret!(rv, php_byte_result(digest.to_vec(), true));
-        }
-        let mut output = String::with_capacity(8);
-        for byte in digest {
-            write!(output, "{byte:02x}").unwrap();
-        }
-        ret!(rv, Value::string(output));
+    ret!(rv, Value::array(algorithms));
+}
+
+/// hash_file(string $algo, string $filename, bool $binary = false, array $options = []): string|false
+fn fn_hash_file(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(algorithm) = typed_internal_string_argument(ed, eg, "hash_file", 0, "algo")? else {
+        return Ok(());
+    };
+    if !HASH_ALGORITHMS
+        .iter()
+        .any(|candidate| candidate.eq_ignore_ascii_case(&algorithm))
+    {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "hash_file(): Argument #1 ($algo) must be a valid hashing algorithm",
+        ));
+        return Ok(());
     }
-    eg.exception = Some(crate::value::make_error_value(
-        "ValueError",
-        "hash(): Argument #1 ($algo) must be a valid hashing algorithm",
-    ));
-    ret!(rv, Value::null());
+    let Some(filename) = typed_internal_string_value_argument_expected(
+        ed,
+        eg,
+        "hash_file",
+        1,
+        "filename",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let binary = if arg_opt!(ed, 2).is_some() {
+        let Some(binary) = typed_internal_bool_argument(ed, eg, "hash_file", 2, "binary")? else {
+            return Ok(());
+        };
+        binary
+    } else {
+        false
+    };
+    if let Some(options) = arg_opt!(ed, 3)
+        && options.dereferenced().value_type() != ValueType::Array
+    {
+        typed_internal_argument_error(
+            eg,
+            "hash_file",
+            options.dereferenced(),
+            4,
+            "options",
+            "array",
+        );
+        return Ok(());
+    }
+    let Some(bytes) = digest_file_bytes(ed, eg, "hash_file", &filename)? else {
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    };
+    let digest = hash_algorithm_digest(&algorithm, &bytes, 0).expect("validated algorithm");
+    if binary {
+        ret!(rv, php_byte_result(digest, true));
+    }
+    ret!(rv, Value::string(format_hex_digest(&digest)));
 }
 
 #[inline]
@@ -7922,13 +8037,16 @@ fn strtr_ascii_pairs(subject: &str, pairs: &PhpArray) -> Option<String> {
 }
 
 fn php_byte_result(bytes: Vec<u8>, binary: bool) -> Value {
-    if binary || !bytes.is_ascii() {
-        Value::binary_string(&bytes)
-    } else {
-        // SAFETY: the preceding branch proved every byte is ASCII, hence
-        // valid UTF-8 (including NUL). The owned Vec is unchanged between
-        // that proof and this conversion; no callback can mutate it.
-        Value::string(unsafe { String::from_utf8_unchecked(bytes) })
+    if binary {
+        return Value::binary_string(&bytes);
+    }
+    // A byte projection of an ordinary string that still forms valid UTF-8
+    // (for example `substr()` cut on a character boundary) is the same value
+    // a literal with those bytes would produce; only invalid sequences need
+    // the lossless binary storage.
+    match String::from_utf8(bytes) {
+        Ok(text) => Value::string(text),
+        Err(error) => Value::binary_string(error.as_bytes()),
     }
 }
 
@@ -7950,13 +8068,8 @@ mod php_byte_result_tests {
     }
 
     #[test]
-    fn high_bytes_and_utf8_sequences_retain_lossless_binary_storage() {
-        let mut cases = vec![
-            vec![0xc3, 0xa9],
-            vec![0xf0, 0x9f, 0x98, 0x80],
-            vec![0xe0, 0x80, 0x80],
-            vec![0xff, 0x00, 0x7f],
-        ];
+    fn invalid_sequences_retain_lossless_binary_storage() {
+        let mut cases = vec![vec![0xe0, 0x80, 0x80], vec![0xff, 0x00, 0x7f]];
         cases.extend((128..=255).map(|byte| vec![b'a', byte, 0]));
         for bytes in cases {
             for binary in [false, true] {
@@ -7964,6 +8077,17 @@ mod php_byte_result_tests {
                 assert!(value.is_binary_string());
                 assert_eq!(value.php_string_bytes().unwrap().as_ref(), bytes);
             }
+        }
+    }
+
+    #[test]
+    fn valid_utf8_projections_of_ordinary_strings_stay_ordinary() {
+        for bytes in [vec![0xc3, 0xa9], vec![0xf0, 0x9f, 0x98, 0x80]] {
+            let value = php_byte_result(bytes.clone(), false);
+            assert!(!value.is_binary_string());
+            assert_eq!(value.php_string_bytes().unwrap().as_ref(), bytes);
+            assert_eq!(value.php_string_len(), Some(bytes.len()));
+            assert!(php_byte_result(bytes, true).is_binary_string());
         }
     }
 }
@@ -10951,13 +11075,13 @@ fn fn_strrev(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let s = arg_str!(ed, 0);
-    // The current Value string backend is UTF-8-backed, so retain valid
-    // internal strings by reversing represented characters. Exact reversal
-    // of arbitrary PHP binary strings requires the planned byte-string value
-    // representation and remains outside this checkpoint.
-    let reversed: String = s.chars().rev().collect();
-    ret!(rv, Value::string(reversed));
+    let value = arg!(ed, 0);
+    let (bytes, binary) = match value.php_string_bytes() {
+        Some(bytes) => (bytes.into_owned(), value.is_binary_string()),
+        None => (value.echo_to_string().into_bytes(), false),
+    };
+    let reversed: Vec<u8> = bytes.into_iter().rev().collect();
+    ret!(rv, php_byte_result(reversed, binary));
 }
 
 fn fn_number_format(
@@ -11298,8 +11422,11 @@ fn fn_unpack(
         }
     }
     let format = arg_str!(ed, 0);
-    let data = arg_str!(ed, 1);
-    let bytes = php_string_to_bytes(&data);
+    let data = arg!(ed, 1);
+    let bytes = match data.php_string_bytes() {
+        Some(bytes) => bytes.into_owned(),
+        None => php_string_to_bytes(&data.echo_to_string()),
+    };
     let offset = arg_opt!(ed, 2).map_or(0, explicit_long_conversion);
     if offset < 0 || usize::try_from(offset).map_or(true, |offset| offset > bytes.len()) {
         eg.exception = Some(crate::value::make_error_value(
@@ -11360,9 +11487,13 @@ impl SprintfOutput {
     }
 
     fn write_to(&self, eg: &ExecutorGlobals) {
+        eg.write_output(self.bytes());
+    }
+
+    fn bytes(&self) -> &[u8] {
         match self {
-            Self::Text(output) => eg.write_output(output.as_bytes()),
-            Self::Bytes(output) => eg.write_output(output),
+            Self::Text(output) => output.as_bytes(),
+            Self::Bytes(output) => output,
         }
     }
 
@@ -22822,15 +22953,106 @@ const PREG_OFFSET_CAPTURE_RESULT: i64 = 256;
 const PREG_UNMATCHED_AS_NULL_RESULT: i64 = 512;
 
 #[cold]
+/// Present PHP string bytes to the regex engine. Patterns without the `u`
+/// modifier match byte by byte in PCRE, so a non-ASCII subject is projected
+/// one char per byte (its byte view); `u` patterns keep real characters and
+/// reject malformed UTF-8 through `prepare_utf_subject`. ASCII bytes are the
+/// same in both projections, so the common case never reallocates.
+fn pcre_engine_subject(bytes: &[u8], unicode: bool) -> Option<String> {
+    if unicode {
+        String::from_utf8(bytes.to_vec()).ok()
+    } else {
+        Some(bytes_to_php_string(bytes))
+    }
+}
+
+/// Recover PHP bytes from text the engine produced for the given projection.
+fn pcre_engine_result_bytes(text: String, unicode: bool) -> Vec<u8> {
+    if unicode || text.is_ascii() {
+        text.into_bytes()
+    } else {
+        php_string_to_bytes(&text)
+    }
+}
+
+/// Subject projection for one non-`u` preg call: `mapped` records that the
+/// text is a byte view whose slices must be re-projected into byte values and
+/// whose offsets are char indices rather than Rust byte offsets.
+struct PcreByteView {
+    text: String,
+    mapped: bool,
+}
+
+impl PcreByteView {
+    fn new(value: &Value, rendered: String) -> Self {
+        if rendered.is_ascii() {
+            return Self {
+                text: rendered,
+                mapped: false,
+            };
+        }
+        // Binary strings already hold one char per byte.
+        if value.dereferenced().is_binary_string() {
+            return Self {
+                text: rendered,
+                mapped: true,
+            };
+        }
+        Self {
+            text: bytes_to_php_string(rendered.as_bytes()),
+            mapped: true,
+        }
+    }
+
+    /// PHP byte length of the subject.
+    fn php_len(&self) -> usize {
+        if self.mapped {
+            self.text.chars().count()
+        } else {
+            self.text.len()
+        }
+    }
+
+    /// Rust offset of the PHP byte offset `php_offset` inside `text`.
+    fn rust_offset(&self, php_offset: usize) -> usize {
+        if !self.mapped {
+            return php_offset.min(self.text.len());
+        }
+        self.text
+            .char_indices()
+            .nth(php_offset)
+            .map_or(self.text.len(), |(index, _)| index)
+    }
+}
+
+/// Build the PHP value for an engine slice of a (possibly byte-view) subject.
+fn pcre_view_value(slice: &str, mapped: bool) -> Value {
+    if !mapped || slice.is_ascii() {
+        Value::string(slice)
+    } else {
+        php_byte_result(php_string_to_bytes(slice), false)
+    }
+}
+
+/// PHP byte offset of the Rust offset `rust_offset` inside `text`.
+fn pcre_php_offset(text: &str, rust_offset: usize, mapped: bool) -> usize {
+    if mapped {
+        text[..rust_offset].chars().count()
+    } else {
+        rust_offset
+    }
+}
+
 fn pcre_capture_value(
     capture: Option<&RegexMatch>,
     subject: &str,
     offset_base: usize,
     offset_capture: bool,
     unmatched_as_null: bool,
+    mapped: bool,
 ) -> Value {
     let value = match capture {
-        Some(capture) => Value::string(capture.as_str(subject)),
+        Some(capture) => pcre_view_value(capture.as_str(subject), mapped),
         None if unmatched_as_null => Value::null(),
         None => Value::string(""),
     };
@@ -22839,9 +23061,9 @@ fn pcre_capture_value(
     }
     let mut pair = PhpArray::with_packed_capacity(2);
     pair.push(value);
-    pair.push(Value::long(
-        capture.map_or(-1, |capture| (offset_base + capture.start) as i64),
-    ));
+    pair.push(Value::long(capture.map_or(-1, |capture| {
+        (offset_base + pcre_php_offset(subject, capture.start, mapped)) as i64
+    })));
     Value::array(pair)
 }
 
@@ -22928,6 +23150,7 @@ fn pcre_match_unicode(
                     offset,
                     offset_capture,
                     unmatched_as_null,
+                    false,
                 );
                 for (name, slot) in caps.named_groups() {
                     if *slot == i {
@@ -23003,7 +23226,8 @@ fn fn_preg_match(
         );
     }
 
-    let subject_len = subject.len() as i64;
+    let view = PcreByteView::new(arg!(ed, 1), subject);
+    let subject_len = view.php_len() as i64;
     if raw_offset > subject_len {
         if has_matches {
             pcre_clear_matches_argument(ed, 2);
@@ -23016,7 +23240,7 @@ fn fn_preg_match(
     } else {
         raw_offset
     } as usize;
-    let searched_subject = &subject[offset..];
+    let searched_subject = &view.text[view.rust_offset(offset)..];
 
     if !has_matches {
         ret!(rv, Value::long(re.is_match(searched_subject) as i64));
@@ -23042,6 +23266,7 @@ fn fn_preg_match(
                         offset,
                         offset_capture,
                         unmatched_as_null,
+                        view.mapped,
                     );
                     for (name, slot) in caps.named_groups() {
                         if *slot == i {
@@ -23073,29 +23298,41 @@ fn fn_preg_match(
     }
 }
 
+/// Apply every pattern in turn over PHP bytes. Each pattern selects its own
+/// projection (`u` characters or a byte view), so a mixed pattern list stays
+/// byte-exact between iterations.
 fn preg_replace_strings(
     eg: &mut ExecutorGlobals,
     ed: *mut ExecuteData,
     function: &str,
     patterns: &[String],
-    replacements: &[String],
+    replacements: &[Vec<u8>],
     replacement_is_array: bool,
-    subject: &str,
+    subject: &[u8],
     limit: usize,
-) -> Result<(Option<String>, usize), VmError> {
-    let mut result = subject.to_string();
+) -> Result<(Option<Vec<u8>>, usize), VmError> {
+    let mut result = subject.to_vec();
     let mut count = 0;
     for (index, pattern) in patterns.iter().enumerate() {
         let replacement = if replacement_is_array {
-            replacements.get(index).map_or("", String::as_str)
+            replacements.get(index).map_or(&[][..], Vec::as_slice)
         } else {
-            replacements.first().map_or("", String::as_str)
+            replacements.first().map_or(&[][..], Vec::as_slice)
         };
         let Some(regex) = pcre::compile_pattern(eg, ed, function, pattern)? else {
             return Ok((None, count));
         };
-        let (replaced, replacements) = regex.replace_limit(&result, replacement, limit);
-        result = replaced;
+        let unicode = regex.is_unicode();
+        let (Some(engine_subject), Some(engine_replacement)) = (
+            pcre_engine_subject(&result, unicode),
+            pcre_engine_subject(replacement, unicode),
+        ) else {
+            pcre::set_last_error(eg, pcre::PREG_BAD_UTF8_ERROR);
+            return Ok((None, count));
+        };
+        let (replaced, replacements) =
+            regex.replace_limit(&engine_subject, &engine_replacement, limit);
+        result = pcre_engine_result_bytes(replaced, unicode);
         count += replacements;
     }
     Ok((Some(result), count))
@@ -23118,6 +23355,29 @@ fn preg_replace_argument_strings(
     } else {
         Ok(Some((
             vec![value.as_str().unwrap_or_default().to_string()],
+            false,
+        )))
+    }
+}
+
+/// Replacement operands as PHP bytes, keeping array/scalar provenance.
+fn preg_replace_argument_bytes(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    value: &Value,
+) -> Result<Option<(Vec<Vec<u8>>, bool)>, VmError> {
+    if let Some(values) = value.as_array() {
+        let mut strings = Vec::with_capacity(values.len());
+        for (_, value) in values.iter() {
+            let Some(value) = internal_value_to_string_value(ed, eg, value)? else {
+                return Ok(None);
+            };
+            strings.push(value.php_string_bytes().unwrap_or_default().into_owned());
+        }
+        Ok(Some((strings, true)))
+    } else {
+        Ok(Some((
+            vec![value.php_string_bytes().unwrap_or_default().into_owned()],
             false,
         )))
     }
@@ -23193,8 +23453,20 @@ fn fn_preg_replace(
                     ret!(rv, Value::null());
                 }
             }
-        } else {
+        } else if subject.is_ascii() && replacement.is_ascii() {
             Cow::Borrowed(subject)
+        } else {
+            // Byte-exact non-`u` replacement over a non-ASCII operand.
+            let subject_bytes = subject_value.php_string_bytes().unwrap_or_default();
+            let replacement_bytes = replacement_value.php_string_bytes().unwrap_or_default();
+            let result = regex.replace_all(
+                &bytes_to_php_string(&subject_bytes),
+                &bytes_to_php_string(&replacement_bytes),
+            );
+            ret!(
+                rv,
+                php_byte_result(pcre_engine_result_bytes(result, false), false)
+            );
         };
         let result = regex.replace_all(&subject, &replacement);
         ret!(rv, Value::string(result));
@@ -23204,7 +23476,7 @@ fn fn_preg_replace(
         return Ok(());
     };
     let Some((replacements, replacement_is_array)) =
-        preg_replace_argument_strings(ed, eg, &replacement_value)?
+        preg_replace_argument_bytes(ed, eg, &replacement_value)?
     else {
         return Ok(());
     };
@@ -23213,9 +23485,10 @@ fn fn_preg_replace(
     if let Some(subjects) = subject_value.as_array() {
         let mut result = PhpArray::new();
         for (key, value) in subjects.iter() {
-            let Some(subject) = internal_value_to_string(ed, eg, value)? else {
+            let Some(subject) = internal_value_to_string_value(ed, eg, value)? else {
                 return Ok(());
             };
+            let subject = subject.php_string_bytes().unwrap_or_default();
             let (replaced, count) = preg_replace_strings(
                 eg,
                 ed,
@@ -23233,9 +23506,10 @@ fn fn_preg_replace(
                 }
                 ret!(rv, Value::null());
             };
+            let replaced = php_byte_result(replaced, false);
             match key {
-                ArrayKey::Int(key) => result.set_int(key, Value::string(replaced)),
-                ArrayKey::String(key) => result.set_str(&key, Value::string(replaced)),
+                ArrayKey::Int(key) => result.set_int(key, replaced),
+                ArrayKey::String(key) => result.set_str(&key, replaced),
             }
         }
         copy_array_key_provenance(subjects, &result);
@@ -23245,7 +23519,7 @@ fn fn_preg_replace(
         ret!(rv, Value::array(result));
     }
 
-    let subject = subject_value.as_str().unwrap_or_default();
+    let subject = subject_value.php_string_bytes().unwrap_or_default();
     let (result, count) = preg_replace_strings(
         eg,
         ed,
@@ -23253,7 +23527,7 @@ fn fn_preg_replace(
         &patterns,
         &replacements,
         replacement_is_array,
-        subject,
+        &subject,
         limit,
     )?;
     let Some(result) = result else {
@@ -23265,7 +23539,7 @@ fn fn_preg_replace(
     if has_count {
         arg_mut!(ed, 4, Value::long(count as i64));
     }
-    ret!(rv, Value::string(result));
+    ret!(rv, php_byte_result(result, false));
 }
 
 // ============================================================================
@@ -26247,14 +26521,62 @@ pub(crate) fn invoke_source_unpacked_call(
             "Compiler-owned unpack argument list is not an array".to_string(),
         ));
     };
+    // A static callable names its class; load it first, as the ordinary
+    // static call boundary does, and report PHP's class/method errors.
+    let static_target = source_static_callable_target(callback);
+    if let Some((class_name, _)) = &static_target
+        && !matches!(
+            class_name.to_ascii_lowercase().as_str(),
+            "self" | "static" | "parent"
+        )
+        && eg.find_class(class_name).is_none()
+    {
+        autoload::ensure_symbol_loaded(eg, class_name)?;
+        if eg.exception.is_some() {
+            return Ok(Value::null());
+        }
+        if eg.find_class(class_name).is_none() {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                &format!("Class \"{class_name}\" not found"),
+            ));
+            return Ok(Value::null());
+        }
+    }
     let Some(resolved) = resolve_callback_with_cache(callback, eg, caller_class, cache_slot) else {
-        eg.exception = Some(crate::value::make_error_value(
-            "Error",
-            &format!("Call to undefined function {}()", callback.echo_to_string()),
-        ));
+        let message = match &static_target {
+            Some((class_name, method)) => {
+                let canonical = eg
+                    .find_class(class_name)
+                    .map_or_else(|| class_name.clone(), |class| class.name.clone());
+                format!("Call to undefined method {canonical}::{method}()")
+            }
+            None => format!("Call to undefined function {}()", callback.echo_to_string()),
+        };
+        eg.exception = Some(crate::value::make_error_value("Error", &message));
         return Ok(Value::null());
     };
     call_resolved_with_source_unpack(eg, resolved, args, source_file, strict_types, call_origin)
+}
+
+/// The `(class, method)` pair named by a compiler-owned static callable:
+/// `[Class::class, 'method']` or `'Class::method'`.
+fn source_static_callable_target(callback: &Value) -> Option<(String, String)> {
+    let callback = callback.dereferenced();
+    if let Some(text) = callback.as_str() {
+        let (class_name, method) = text.split_once("::")?;
+        return Some((
+            class_name.trim_start_matches('\\').to_string(),
+            method.to_string(),
+        ));
+    }
+    let array = callback.as_array()?;
+    if array.len() != 2 {
+        return None;
+    }
+    let class_name = array.get_value_at(0)?.dereferenced().as_str()?.to_string();
+    let method = array.get_value_at(1)?.dereferenced().as_str()?.to_string();
+    Some((class_name.trim_start_matches('\\').to_string(), method))
 }
 
 pub(crate) fn invoke_resolved_source_unpacked_call(
@@ -32348,7 +32670,9 @@ fn fn_preg_match_all(
         ret!(rv, Value::bool(false));
     };
 
-    let subject_len = subject.len() as i64;
+    let view = (!re.is_unicode()).then(|| PcreByteView::new(arg!(ed, 1), subject.clone()));
+    let mapped = view.as_ref().is_some_and(|view| view.mapped);
+    let subject_len = view.as_ref().map_or(subject.len(), PcreByteView::php_len) as i64;
     if raw_offset > subject_len {
         if has_matches {
             pcre_clear_matches_argument(ed, 2);
@@ -32361,8 +32685,8 @@ fn fn_preg_match_all(
     } else {
         raw_offset
     } as usize;
-    let subject = if re.is_unicode() {
-        match pcre::prepare_utf_subject(arg!(ed, 1), Cow::Owned(subject), offset) {
+    let subject = match view {
+        None => match pcre::prepare_utf_subject(arg!(ed, 1), Cow::Owned(subject), offset) {
             Ok(subject) => subject,
             Err(error) => {
                 if has_matches {
@@ -32372,9 +32696,8 @@ fn fn_preg_match_all(
                 pcre::set_last_error(eg, error);
                 ret!(rv, Value::bool(false));
             }
-        }
-    } else {
-        Cow::Owned(subject[offset..].to_string())
+        },
+        Some(view) => Cow::Owned(view.text[view.rust_offset(offset)..].to_string()),
     };
 
     if !has_matches {
@@ -32405,6 +32728,7 @@ fn fn_preg_match_all(
                         offset,
                         offset_capture,
                         unmatched_as_null,
+                        mapped,
                     );
                     for (name, slot) in caps.named_groups() {
                         if *slot == index {
@@ -32448,6 +32772,7 @@ fn fn_preg_match_all(
                 offset,
                 offset_capture,
                 unmatched_as_null,
+                mapped,
             );
             array.push(capture);
         }
@@ -32519,6 +32844,7 @@ fn fn_preg_split(
         ret!(rv, Value::bool(false));
     };
 
+    let mut mapped = false;
     let subject = if re.is_unicode() {
         match pcre::prepare_utf_subject(arg!(ed, 1), Cow::Owned(subject), 0) {
             Ok(subject) => subject,
@@ -32528,7 +32854,9 @@ fn fn_preg_split(
             }
         }
     } else {
-        Cow::Owned(subject)
+        let view = PcreByteView::new(arg!(ed, 1), subject);
+        mapped = view.mapped;
+        Cow::Owned(view.text)
     };
 
     let mut arr = PhpArray::new();
@@ -32541,13 +32869,14 @@ fn fn_preg_split(
         }
         if capture_offsets {
             let mut value = PhpArray::with_packed_capacity(2);
-            value.push(Value::string(part));
+            value.push(pcre_view_value(part, mapped));
             value.push(Value::long(offset));
             arr.push(Value::array(value));
         } else {
-            arr.push(Value::string(part));
+            arr.push(pcre_view_value(part, mapped));
         }
     };
+    let php_offset = |rust_offset: usize| pcre_php_offset(&subject, rust_offset, mapped) as i64;
 
     let split_limit = if limit <= 0 { i64::MAX } else { limit };
     let mut cursor = 0usize;
@@ -32562,11 +32891,11 @@ fn fn_preg_split(
         if delimiter.start < cursor {
             continue;
         }
-        push_part(&subject[cursor..delimiter.start], cursor as i64);
+        push_part(&subject[cursor..delimiter.start], php_offset(cursor));
         if capture_delimiters {
             for group in 1..captures.len() {
                 if let Some(group) = captures.get(group) {
-                    push_part(group.as_str(&subject), group.start as i64);
+                    push_part(group.as_str(&subject), php_offset(group.start));
                 } else {
                     push_part("", -1);
                 }
@@ -32575,7 +32904,7 @@ fn fn_preg_split(
         cursor = delimiter.end;
         splits += 1;
     }
-    push_part(&subject[cursor..], cursor as i64);
+    push_part(&subject[cursor..], php_offset(cursor));
     ret!(rv, Value::array(arr));
 }
 

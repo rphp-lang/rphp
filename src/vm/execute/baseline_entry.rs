@@ -161,6 +161,22 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         (*frame).return_value = &mut return_value;
         (*frame).opline = main_func.op_array.instructions.as_ptr();
     }
+    // Request globals such as `$argv` and `$_SERVER` already live in the
+    // global symbol table; the main scope's compiled variables are that table.
+    if !eg.globals.is_empty() || !eg.jit_auto_globals.is_empty() {
+        for (cv, name) in &main_func.op_array.main_scope_vars {
+            eg.materialize_auto_global(name);
+            if let Some(value) = eg.globals.get(name) {
+                let binding = clone_scope_binding(value);
+                // SAFETY: the frame was pushed above for exactly this op array,
+                // whose main-scope CV indices come from the same compilation.
+                unsafe {
+                    let slot = (*frame).cv_mut(*cv) as *mut Value;
+                    frame_slot_set(frame, slot, binding);
+                }
+            }
+        }
+    }
     eg.current_execute_data.set(frame);
 
     let mut execution = execute_ex(eg, frame);
@@ -3911,7 +3927,7 @@ pub(crate) fn initialize_suspended_callback_frame(
                         "{}(): Argument #{} (${parameter}) must be of type {}, {} given",
                         displayed_function_name(eg, callback.func_ptr),
                         index + 1,
-                        hint.diagnostic_display_name(),
+                        scoped_hint_diagnostic_name(eg, frame, hint, callee_class.as_deref()),
                         declared_type_error_value_name(&value)
                     ),
                 ));

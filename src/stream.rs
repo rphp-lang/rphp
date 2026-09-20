@@ -133,6 +133,9 @@ enum StandardStream {
     Input,
     Output,
     Error,
+    /// `php://output`: bytes go through the request output layer (and any
+    /// active output buffers) instead of straight to the process stdout.
+    PhpOutput,
 }
 
 /// Request-owned context data shared by a context resource and streams opened
@@ -190,6 +193,20 @@ pub struct StreamMetadata<'a> {
 }
 
 impl PhpStream {
+    /// Whether the stream's descriptor is an interactive terminal.
+    pub(crate) fn is_terminal(&self) -> bool {
+        use std::io::IsTerminal;
+        match &self.backend {
+            StreamBackend::File(file) => file.is_terminal(),
+            StreamBackend::Standard(StandardStream::Input) => std::io::stdin().is_terminal(),
+            StreamBackend::Standard(StandardStream::Output | StandardStream::PhpOutput) => {
+                std::io::stdout().is_terminal()
+            }
+            StreamBackend::Standard(StandardStream::Error) => std::io::stderr().is_terminal(),
+            StreamBackend::Memory(_) | StreamBackend::Temp(_) => false,
+        }
+    }
+
     pub(crate) fn standard_input() -> Self {
         Self::standard(StandardStream::Input)
     }
@@ -200,6 +217,14 @@ impl PhpStream {
 
     pub(crate) fn standard_error() -> Self {
         Self::standard(StandardStream::Error)
+    }
+
+    /// Whether writes must be routed through the request output layer.
+    pub(crate) fn writes_to_output_layer(&self) -> bool {
+        matches!(
+            self.backend,
+            StreamBackend::Standard(StandardStream::PhpOutput)
+        )
     }
 
     fn standard(stream: StandardStream) -> Self {
@@ -240,6 +265,18 @@ impl PhpStream {
                 "wb",
                 "php://stderr",
             ),
+            StandardStream::PhpOutput => (
+                StreamMode {
+                    read: false,
+                    write: true,
+                    append: false,
+                    create: false,
+                    truncate: false,
+                    exclusive: false,
+                },
+                "wb",
+                "php://output",
+            ),
         };
         Self {
             backend: StreamBackend::Standard(stream),
@@ -258,6 +295,13 @@ impl PhpStream {
     pub fn open(path: &str, mode: &str) -> io::Result<Self> {
         let requested_mode = mode;
 
+        match path {
+            "php://stdin" => return Ok(Self::standard(StandardStream::Input)),
+            "php://stdout" => return Ok(Self::standard(StandardStream::Output)),
+            "php://stderr" => return Ok(Self::standard(StandardStream::Error)),
+            "php://output" => return Ok(Self::standard(StandardStream::PhpOutput)),
+            _ => {}
+        }
         if path == "php://memory" {
             let mode = php_memory_stream_mode(requested_mode);
             return Ok(Self {
@@ -901,7 +945,7 @@ impl PhpStream {
                     }
                 }
                 StreamBackend::Temp(temp) => temp.write(buffer, self.mode.append),
-                StreamBackend::Standard(StandardStream::Output) => {
+                StreamBackend::Standard(StandardStream::Output | StandardStream::PhpOutput) => {
                     io::stdout().lock().write(buffer)
                 }
                 StreamBackend::Standard(StandardStream::Error) => io::stderr().lock().write(buffer),
@@ -945,7 +989,9 @@ impl PhpStream {
             StreamBackend::Memory(memory) => memory.flush(),
             StreamBackend::Temp(temp) => temp.flush(),
             StreamBackend::Standard(StandardStream::Input) => Ok(()),
-            StreamBackend::Standard(StandardStream::Output) => io::stdout().lock().flush(),
+            StreamBackend::Standard(StandardStream::Output | StandardStream::PhpOutput) => {
+                io::stdout().lock().flush()
+            }
             StreamBackend::Standard(StandardStream::Error) => io::stderr().lock().flush(),
         }
     }
@@ -1110,7 +1156,7 @@ impl PhpStream {
                 {
                     let path = match stream {
                         StandardStream::Input => "/dev/stdin",
-                        StandardStream::Output => "/dev/stdout",
+                        StandardStream::Output | StandardStream::PhpOutput => "/dev/stdout",
                         StandardStream::Error => "/dev/stderr",
                     };
                     return std::fs::metadata(path)

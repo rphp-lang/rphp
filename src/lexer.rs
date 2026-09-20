@@ -279,7 +279,7 @@ pub enum Token {
     LParen(usize),     // ( with source line
     RParen,            // )
     LBrace(usize),     // { with source line
-    RBrace,            // }
+    RBrace(usize),     // }
     Comma(usize),      // , with source line
     LBracket(usize),   // [ with source line
     RBracket,          // ]
@@ -969,7 +969,8 @@ impl<'a> Lexer<'a> {
                     self.pos += 1;
                 }
                 b'}' => {
-                    tokens.push(Token::RBrace);
+                    let line = self.brace_source_line();
+                    tokens.push(Token::RBrace(line));
                     self.pos += 1;
                 }
                 b',' => {
@@ -1241,7 +1242,7 @@ impl<'a> Lexer<'a> {
                 Token::RParen if matches!(delimiters.last(), Some(Delimiter::Parenthesis)) => {
                     delimiters.pop();
                 }
-                Token::RBrace if matches!(delimiters.last(), Some(Delimiter::Brace { .. })) => {
+                Token::RBrace(_) if matches!(delimiters.last(), Some(Delimiter::Brace { .. })) => {
                     delimiters.pop();
                 }
                 Token::RBracket if matches!(delimiters.last(), Some(Delimiter::Bracket)) => {
@@ -1581,7 +1582,7 @@ impl<'a> Lexer<'a> {
                 Token::LBracket(_) | Token::LBrace(_) | Token::AttributeStart(_) => {
                     delimiters.push(0);
                 }
-                Token::RParen | Token::RBracket | Token::RBrace => {
+                Token::RParen | Token::RBracket | Token::RBrace(_) => {
                     delimiters.pop();
                 }
                 Token::Comma(_) => {
@@ -1675,7 +1676,7 @@ impl<'a> Lexer<'a> {
     fn finish_php_segment(&mut self, tokens: &mut Vec<Token>) -> Result<(), String> {
         if !matches!(
             tokens.last(),
-            Some(Token::Semicolon(_) | Token::LBrace(_) | Token::RBrace)
+            Some(Token::Semicolon(_) | Token::LBrace(_) | Token::RBrace(_))
         ) {
             tokens.push(Token::Semicolon(
                 self.source_line_at(self.pos.saturating_sub(1)),
@@ -1833,7 +1834,9 @@ impl<'a> Lexer<'a> {
                     for token in prior {
                         match token {
                             Token::Const => return true,
-                            Token::Semicolon(_) | Token::LBrace(_) | Token::RBrace => return false,
+                            Token::Semicolon(_) | Token::LBrace(_) | Token::RBrace(_) => {
+                                return false;
+                            }
                             _ => {}
                         }
                     }
@@ -2501,7 +2504,7 @@ mod tests {
                 echo(1),
                 Token::Variable("x".into(), 1),
                 Token::Semicolon(1),
-                Token::RBrace,
+                Token::RBrace(1),
                 Token::Eof,
             ]
         );

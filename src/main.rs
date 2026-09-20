@@ -12,13 +12,16 @@ const HELP: &str = "\
 RPHP - experimental PHP-compatible runtime
 
 Usage:
-  rphp [OPTIONS] [FILE]
-  rphp -r <CODE>
+  rphp [OPTIONS] [-f] <FILE> [ARGS...]
+  rphp [OPTIONS] -r <CODE> [ARGS...]
+  rphp [OPTIONS] -- [ARGS...]
 
 Arguments:
   [FILE]       Read and execute a PHP source file
+  [ARGS...]    Arguments passed to the script through $argv
 
 Options:
+  -f <FILE>    Parse and execute FILE
   -r <CODE>    Execute PHP code without requiring an opening tag
   -n, --no-php-ini
                Ignore php.ini (RPHP does not load one yet)
@@ -48,6 +51,8 @@ enum CliAction {
 struct CliInvocation {
     action: CliAction,
     ini_settings: Vec<(String, String)>,
+    /// Script arguments published through `$argv` after the script name.
+    arguments: Vec<String>,
 }
 
 fn parse_ini_definition(definition: &str) -> Result<(String, String), String> {
@@ -102,6 +107,7 @@ fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
         break;
     }
 
+    let mut arguments = Vec::new();
     let action = if interactive {
         CliAction::InteractiveUnavailable
     } else {
@@ -112,22 +118,43 @@ fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
             [flag] if flag == "-r" => {
                 return Err("option '-r' requires a code argument".to_string());
             }
-            [flag, code] if flag == "-r" => CliAction::Inline(code.clone()),
-            [separator, file] if separator == "--" => CliAction::File(file.clone()),
-            [arg] if arg.starts_with('-') => return Err(format!("unsupported option '{arg}'")),
-            [file] => CliAction::File(file.clone()),
-            [first, ..] if first == "-r" => {
-                return Err("script arguments after '-r' are not supported yet".to_string());
+            // PHP drops one `--` after the code; everything else is argv.
+            [flag, code, rest @ ..] if flag == "-r" => {
+                arguments = match rest {
+                    [separator, rest @ ..] if separator == "--" => rest.to_vec(),
+                    rest => rest.to_vec(),
+                };
+                CliAction::Inline(code.clone())
+            }
+            // `--` ends the option list; the code then comes from standard
+            // input and everything after the separator belongs to the script.
+            [separator, rest @ ..] if separator == "--" => {
+                arguments = rest.to_vec();
+                CliAction::Stdin
+            }
+            [flag] if flag == "-f" => {
+                return Err("option '-f' requires a file argument".to_string());
+            }
+            [flag, file, rest @ ..] if flag == "-f" => {
+                arguments = match rest {
+                    [separator, rest @ ..] if separator == "--" => rest.to_vec(),
+                    rest => rest.to_vec(),
+                };
+                CliAction::File(file.clone())
             }
             [first, ..] if first.starts_with('-') => {
                 return Err(format!("unsupported option '{first}'"));
             }
-            _ => return Err("script arguments are not supported yet".to_string()),
+            [file, rest @ ..] => {
+                arguments = rest.to_vec();
+                CliAction::File(file.clone())
+            }
         }
     };
     Ok(CliInvocation {
         action,
         ini_settings,
+        arguments,
     })
 }
 
@@ -193,6 +220,7 @@ fn main() {
     let CliInvocation {
         action,
         ini_settings,
+        arguments,
     } = invocation;
     match &action {
         CliAction::Help => {
@@ -231,6 +259,10 @@ fn main() {
         }
     };
     let executed_file = matches!(action, CliAction::File(_)).then(|| source_file.clone());
+    let script_name = match &action {
+        CliAction::File(file) => Some(file.clone()),
+        _ => None,
+    };
     let source_offset_base = match &action {
         CliAction::Inline(code) if !code.starts_with("<?php") && !code.starts_with("<?") => 6,
         _ => 0,
@@ -293,6 +325,7 @@ fn main() {
         eg.register_compiler_halt_offset(compiler_halt_source, offset);
     }
     stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
+    stdlib::set_startup_config(&ini_settings);
     eg.generic_metadata = result.generic_metadata;
     eg.constant_attributes = result.constant_attributes;
     eg.constant_expressions = result.constant_expressions;
@@ -305,6 +338,7 @@ fn main() {
 
     // Register stdlib
     let _stdlib = stdlib::register_stdlib(&mut eg);
+    stdlib::register_request_globals(&mut eg, script_name.as_deref(), &arguments);
     let _coroutines = register_coroutine_api(&mut eg);
     // Register declared functions
     for (name, func) in &result.functions {
@@ -413,6 +447,7 @@ mod tests {
             Ok(CliInvocation {
                 action,
                 ini_settings: Vec::new(),
+                arguments: Vec::new(),
             })
         };
         assert_eq!(parse_cli_args(&args(&[])), invocation(CliAction::Stdin));
@@ -429,8 +464,8 @@ mod tests {
             invocation(CliAction::File("example.php".to_string()))
         );
         assert_eq!(
-            parse_cli_args(&args(&["--", "-example.php"])),
-            invocation(CliAction::File("-example.php".to_string()))
+            parse_cli_args(&args(&["-f", "example.php"])),
+            invocation(CliAction::File("example.php".to_string()))
         );
     }
 
@@ -449,6 +484,7 @@ mod tests {
                     ("zend.assertions".to_string(), "0".to_string()),
                     ("assert.exception".to_string(), "1".to_string()),
                 ],
+                arguments: Vec::new(),
             })
         );
         assert_eq!(
@@ -456,6 +492,7 @@ mod tests {
             Ok(CliInvocation {
                 action: CliAction::Inline("echo 1;".to_string()),
                 ini_settings: vec![("display_errors".to_string(), "1".to_string())],
+                arguments: Vec::new(),
             })
         );
     }
@@ -467,6 +504,7 @@ mod tests {
             Ok(CliInvocation {
                 action: CliAction::File("example.php".to_string()),
                 ini_settings: Vec::new(),
+                arguments: Vec::new(),
             })
         );
         assert_eq!(
@@ -476,6 +514,51 @@ mod tests {
             Ok(CliInvocation {
                 action: CliAction::InteractiveUnavailable,
                 ini_settings: vec![("memory_limit".to_string(), "4M".to_string())],
+                arguments: Vec::new(),
+            })
+        );
+    }
+
+    #[test]
+    fn passes_script_arguments_through_to_the_script() {
+        assert_eq!(
+            parse_cli_args(&args(&["script.php", "argument", "--flag", "-x"])),
+            Ok(CliInvocation {
+                action: CliAction::File("script.php".to_string()),
+                ini_settings: Vec::new(),
+                arguments: args(&["argument", "--flag", "-x"]),
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&args(&["--", "-script.php", "-n"])),
+            Ok(CliInvocation {
+                action: CliAction::Stdin,
+                ini_settings: Vec::new(),
+                arguments: args(&["-script.php", "-n"]),
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&args(&["script.php", "--", "kept"])),
+            Ok(CliInvocation {
+                action: CliAction::File("script.php".to_string()),
+                ini_settings: Vec::new(),
+                arguments: args(&["--", "kept"]),
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&args(&["-f", "script.php", "--", "first"])),
+            Ok(CliInvocation {
+                action: CliAction::File("script.php".to_string()),
+                ini_settings: Vec::new(),
+                arguments: args(&["first"]),
+            })
+        );
+        assert_eq!(
+            parse_cli_args(&args(&["-r", "echo 1;", "first", "second"])),
+            Ok(CliInvocation {
+                action: CliAction::Inline("echo 1;".to_string()),
+                ini_settings: Vec::new(),
+                arguments: args(&["first", "second"]),
             })
         );
     }
@@ -489,10 +572,6 @@ mod tests {
         assert_eq!(
             parse_cli_args(&args(&["-r"])),
             Err("option '-r' requires a code argument".to_string())
-        );
-        assert_eq!(
-            parse_cli_args(&args(&["script.php", "argument"])),
-            Err("script arguments are not supported yet".to_string())
         );
     }
 

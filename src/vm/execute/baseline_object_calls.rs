@@ -6088,11 +6088,16 @@ fn find_abstract_method_declaration(
             .into_iter().find(|(name,_)| name.eq_ignore_ascii_case(method)) {
             return Some((definition.name.clone(),name.to_string()));
         }
-        if let Some((name, _, _, _, _)) = definition.methods.iter().find(|(name, _, _, _, _)| {
-            name.eq_ignore_ascii_case(method)
-                && (definition.is_interface || definition.method_is_abstract(name))
-        }) {
-            return Some((definition.name.clone(), name.clone()));
+        // The nearest declaration wins: a concrete override anywhere below an
+        // abstract ancestor makes the method callable, so the walk stops at
+        // the first class or composed trait that declares it.
+        if let Some((name, _, _, _, _)) = definition
+            .methods
+            .iter()
+            .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method))
+        {
+            return (definition.is_interface || definition.method_is_abstract(name))
+                .then(|| (definition.name.clone(), name.clone()));
         }
         for trait_name in &definition.uses {
             let Some(trait_definition) = eg.find_class(trait_name) else {
@@ -6101,12 +6106,11 @@ fn find_abstract_method_declaration(
             if let Some((name, _, _, _, _)) = trait_definition
                 .methods
                 .iter()
-                .find(|(name, _, _, _, _)| {
-                    name.eq_ignore_ascii_case(method)
-                        && trait_definition.method_is_abstract(name)
-                })
+                .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case(method))
             {
-                return Some((definition.name.clone(), name.clone()));
+                return trait_definition
+                    .method_is_abstract(name)
+                    .then(|| (definition.name.clone(), name.clone()));
             }
         }
         current = definition

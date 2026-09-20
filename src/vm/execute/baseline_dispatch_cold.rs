@@ -1059,6 +1059,7 @@ fn caller_scope_operation(
                     let value = &*(*owner).get_op_ptr(cv, OpType::Cv, (*owner).op_array());
                     (!value.is_undef()).then(|| value.clone())
                 } else if dynamic_scope_is_global(owner) {
+                    eg.materialize_auto_global(name);
                     eg.globals
                         .get(name)
                         .filter(|value| !value.is_undef())
@@ -1139,11 +1140,29 @@ fn caller_scope_operation(
             CallerScopeOperation::Snapshot => {
                 let mut result = PhpArray::new();
                 let op_array = (*owner).op_array();
+                if dynamic_scope_is_global(owner) {
+                    // The request auto-globals precede every script variable
+                    // in PHP's global symbol table.
+                    for name in crate::stdlib::REQUEST_AUTO_GLOBAL_ORDER {
+                        let value = dynamic_scope_cv(owner, name)
+                            .map(|cv| (&*(*owner).get_op_ptr(cv, OpType::Cv, op_array)).clone())
+                            .filter(|value| !value.is_undef())
+                            .or_else(|| {
+                                eg.globals
+                                    .get(name)
+                                    .filter(|value| !value.is_undef())
+                                    .cloned()
+                            });
+                        if let Some(value) = value {
+                            result.set_str(name, value);
+                        }
+                    }
+                }
                 for (cv, name) in &op_array.all_cvs {
                     // `$this` is activation context, not a symbol-table entry.
                     // compact() may explicitly read it, but get_defined_vars()
                     // must not expose either a method or closure carrier CV.
-                    if name == "this" {
+                    if name == "this" || result.get_str(name).is_some() {
                         continue;
                     }
                     let value = &*(*owner).get_op_ptr(*cv, OpType::Cv, op_array);
@@ -2433,6 +2452,7 @@ fn op_check_default_type<'a>(
                 caller_op_array,
                 &caller_op_array.instructions[call_index],
                 (*frame).is_explicit_closure_invoke(),
+                callee_class.as_deref(),
             )
         };
         // Keep the default-expression source position as the Throwable origin;
@@ -2781,7 +2801,11 @@ fn op_call_user_func_array<'a>(
                 receiver.as_ref(),
             )
         });
-        if let Some(deprecation) = deprecation {
+        // A source-level `self::method(...$args)` is not a callable string;
+        // only explicit callables report the legacy scope deprecation.
+        if let Some(deprecation) = deprecation
+            && opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK == 0
+        {
             report_php_deprecation(eg, frame, op_array, opline, &deprecation)?;
         }
         if opline._pad & CALL_USER_FUNC_ARRAY_SOURCE_UNPACK == 0
@@ -3292,16 +3316,25 @@ fn static_property_class_id<const LATE_STATIC: bool>(
     raw_class: &str,
 ) -> u32 {
     if LATE_STATIC {
-        if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
-            unsafe { ((*frame).heap_bitmap >> 32) as u32 }
+        // The embedded scope is the late-called class. `self` inside a static
+        // trait method must resolve to the class that composed the trait,
+        // which differs from the called class once a subclass forwards the
+        // call, so only `static` may read the compact slot directly.
+        if raw_class.eq_ignore_ascii_case("static") {
+            if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
+                // SAFETY: dispatch supplies the live executing frame, and the
+                // compiler sets this flag only for compact frames whose upper
+                // heap-bitmap word holds the published late-static class ID.
+                unsafe { ((*frame).heap_bitmap >> 32) as u32 }
+            } else {
+                late_static_call_class_id(eg, frame)
+            }
         } else if raw_class.eq_ignore_ascii_case("parent") {
             eg.class_by_id(caller_class_id(frame, eg))
                 .and_then(|class| class.parent.as_deref())
                 .map_or(0, |parent| eg.class_id_of(parent))
         } else if raw_class.eq_ignore_ascii_case("self") {
             caller_class_id(frame, eg)
-        } else if raw_class.eq_ignore_ascii_case("static") {
-            late_static_call_class_id(eg, frame)
         } else {
             eg.class_id_of(raw_class)
         }
@@ -5410,6 +5443,7 @@ fn op_bind_global(
     if !op_array.main_scope_vars.is_empty() && !unsafe { (*cv_ptr).is_undef() } {
         return;
     }
+    eg.materialize_auto_global(&name);
     let binding = match eg.globals.get(&name) {
         Some(value) if value.is_owned_reference() => value.clone_owned_reference_alias(),
         Some(value) => Value::owned_reference(reference_initial_value(value.clone())),
@@ -5521,30 +5555,54 @@ fn op_global_dimension<'a>(
     unsafe {
         if opline.opcode == OpCode::FetchGlobals {
             let mut snapshot = PhpArray::with_hash_capacity(eg.globals.len() + scope_vars.len());
+            let main_scope = !op_array.main_scope_vars.is_empty();
 
-            for (name, value) in &eg.globals {
-                if name != "GLOBALS" && value.value_type() != ValueType::Undef {
-                    set_global_snapshot_entry(&mut snapshot, name, clone_scope_binding(value));
+            // PHP's symbol table lists the request auto-globals first, then
+            // script variables in declaration order. A root/main scope reads
+            // its live CVs; the detached globals snapshot backs everything
+            // else.
+            for name in crate::stdlib::REQUEST_AUTO_GLOBAL_ORDER {
+                let value = if main_scope {
+                    scope_vars
+                        .iter()
+                        .find(|(_, cv_name)| cv_name == name)
+                        .map(|(cv, _)| clone_scope_binding((*frame).cv(*cv)))
+                        .filter(|value| value.value_type() != ValueType::Undef)
+                } else {
+                    None
+                };
+                let value = value.or_else(|| {
+                    eg.globals
+                        .get(name)
+                        .filter(|value| value.value_type() != ValueType::Undef)
+                        .map(clone_scope_binding)
+                });
+                if let Some(value) = value {
+                    set_global_snapshot_entry(&mut snapshot, name, value);
                 }
             }
             // Function-local active global CVs share the exact cells already
             // cloned from `eg.globals`; inactive conditional declarations must
-            // not overlay them. Only a root/main scope needs its ordinary CVs
-            // published over the potentially stale globals snapshot.
-            if !op_array.main_scope_vars.is_empty() {
+            // not overlay them. Only a root/main scope publishes its ordinary
+            // CVs, which take precedence over the potentially stale snapshot.
+            if main_scope {
                 for (cv, name) in scope_vars {
-                    if name == "GLOBALS" {
+                    if name == "GLOBALS" || snapshot.get_str(name).is_some() {
                         continue;
                     }
                     let value = clone_scope_binding((*frame).cv(*cv));
-                    if value.value_type() == ValueType::Undef {
-                        let key = canonical_decimal_array_key(name)
-                            .map(ArrayKey::Int)
-                            .unwrap_or_else(|| ArrayKey::String(name.clone()));
-                        snapshot.remove(&key);
-                    } else {
+                    if value.value_type() != ValueType::Undef {
                         set_global_snapshot_entry(&mut snapshot, name, value);
                     }
+                }
+            }
+            for (name, value) in &eg.globals {
+                if name != "GLOBALS"
+                    && value.value_type() != ValueType::Undef
+                    && snapshot.get_str(name).is_none()
+                    && !(main_scope && scope_vars.iter().any(|(_, cv_name)| cv_name == name))
+                {
+                    set_global_snapshot_entry(&mut snapshot, name, clone_scope_binding(value));
                 }
             }
             let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
@@ -5657,6 +5715,7 @@ fn op_global_dimension<'a>(
                 }
             }
             OpCode::BindGlobalRef => {
+                eg.materialize_auto_global(&name);
                 let current_cv = tracked_scope_global_cv(op_array, &name).filter(|cv| {
                     tracked_global_binding_is_active(eg, op_array, &name, (*frame).cv(*cv))
                 });

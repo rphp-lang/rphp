@@ -83,12 +83,12 @@ fn reflection_class_get_name_returns_the_declared_qualified_name() {
 }
 
 #[test]
-fn reflection_doc_comments_truthfully_report_unretained_metadata() {
+fn reflection_doc_comments_retain_class_comments_and_report_unretained_member_metadata() {
     assert_eq!(
         run_php(
             "<?php /** class docs */ class Documented { /** property docs */ public int $value; /** method docs */ public function read(): void {} } $class = new ReflectionClass(Documented::class); $properties = $class->getProperties(); var_dump($class->getDocComment(), $class->getMethod('read')->getDocComment(), $properties[0]->getDocComment());"
         ),
-        "bool(false)\nbool(false)\nbool(false)\n"
+        "string(17) \"/** class docs */\"\nbool(false)\nbool(false)\n"
     );
 }
 

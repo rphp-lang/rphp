@@ -391,8 +391,10 @@ pub(super) fn fn_preg_grep(
                     break;
                 }
             }
-        } else {
+        } else if rendered.is_ascii() || subject_value.is_binary_string() {
             rendered
+        } else {
+            Cow::Owned(super::bytes_to_php_string(rendered.as_bytes()))
         };
         if regex.is_match(&subject) != invert {
             array_keyed_value(&mut result, key, value.clone_for_php_storage());
@@ -452,8 +454,25 @@ pub(super) fn replace_callback_value(
     ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<(Value, usize)>, VmError> {
-    let Some(subject) = super::internal_value_to_string(ed, eg, value)? else {
+    let Some(subject_value) = super::internal_value_to_string_value(ed, eg, value)? else {
         return Ok(None);
+    };
+    let unicode = regex.is_unicode();
+    let subject = if unicode {
+        let rendered = Cow::Borrowed(
+            subject_value
+                .as_str()
+                .expect("preg_replace_callback string conversion must produce a string"),
+        );
+        match prepare_utf_subject(&subject_value, rendered, 0) {
+            Ok(subject) => subject.into_owned(),
+            Err(error) => {
+                set_last_error(eg, error);
+                return Ok(Some((Value::null(), 0)));
+            }
+        }
+    } else {
+        super::bytes_to_php_string(&subject_value.php_string_bytes().unwrap_or_default())
     };
     let result = regex_callback::replace(
         regex,
@@ -462,9 +481,15 @@ pub(super) fn replace_callback_value(
         limit,
         flags & PREG_UNMATCHED_AS_NULL != 0,
         flags & PREG_OFFSET_CAPTURE != 0,
+        !unicode,
         eg,
     )?;
-    Ok(result.map(|(value, count)| (Value::string(value), count)))
+    Ok(result.map(|(value, count)| {
+        (
+            super::php_byte_result(super::pcre_engine_result_bytes(value, unicode), false),
+            count,
+        )
+    }))
 }
 
 pub(super) fn fn_preg_replace_callback_array(

@@ -1324,7 +1324,7 @@ impl<'a> Lexer<'a> {
         tokens.push(Token::Dollar(line));
         tokens.push(Token::LBrace(line));
         tokens.extend(expression.iter().cloned());
-        tokens.push(Token::RBrace);
+        tokens.push(Token::RBrace(line));
     }
 
     fn emit_array_access_tokens(tokens: &mut Vec<Token>, name: &str, index: &str, line: usize) {

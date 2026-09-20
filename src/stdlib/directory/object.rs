@@ -24,6 +24,8 @@ pub(in crate::stdlib) fn register_class(eg: &mut ExecutorGlobals) -> Vec<Box<Int
         name: "Directory".into(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,

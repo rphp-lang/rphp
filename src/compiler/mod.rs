@@ -1449,6 +1449,11 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             {
                 clear_cv(&mut mask, instruction.op1)
             }
+            // Argument unpacking promotes members of its source array (op2)
+            // to reference cells in place and may detach it first.
+            OpCode::AddCallUnpack if instruction.op2_type == OpType::Cv => {
+                clear_cv(&mut mask, instruction.op2)
+            }
             // Mutable/reference dimension traversal may detach the root or
             // publish a cell that a nested call mutates. A borrowed parameter
             // would then alias a caller-owned Rc without contributing an

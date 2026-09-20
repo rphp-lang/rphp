@@ -17,7 +17,7 @@ use super::generic_parameters::{
 use super::{
     attribute_construct, attribute_get_arguments, attribute_get_name, attribute_get_target,
     attribute_is_repeated, attribute_new_instance, attribute_to_string, class_constant_construct,
-    class_constant_to_string, class_construct, class_debug_info, class_file_name,
+    class_constant_to_string, class_construct, class_debug_info, class_end_line, class_file_name,
     class_get_attributes, class_get_constant, class_get_constants, class_get_constructor,
     class_get_default_properties, class_get_interface_names, class_get_interfaces,
     class_get_lazy_initializer, class_get_method, class_get_methods, class_get_name,
@@ -29,15 +29,16 @@ use super::{
     class_is_uninitialized_lazy_object, class_is_user_defined,
     class_mark_lazy_object_as_initialized, class_new_instance, class_new_instance_args,
     class_new_instance_without_constructor, class_new_lazy_ghost, class_new_lazy_proxy,
-    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_to_string, constant_construct,
-    constant_get_value, constant_to_string, deprecated_construct, enum_backed_case_construct,
-    enum_case_get_backing_value, enum_case_get_enum, enum_case_get_value, enum_construct,
-    enum_get_backing_type, enum_get_case, enum_get_cases, enum_has_case, enum_is_backed_reflection,
-    enum_unit_case_construct, function_construct, function_get_closure,
-    function_get_closure_called_class, function_get_closure_scope_class, function_get_closure_this,
-    function_get_extension_name, function_get_namespace_name, function_get_number_of_parameters,
-    function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
-    function_get_short_name, function_get_tentative_return_type, function_has_return_type,
+    class_reset_as_lazy_ghost, class_reset_as_lazy_proxy, class_start_line, class_to_string,
+    constant_construct, constant_get_value, constant_to_string, deprecated_construct,
+    enum_backed_case_construct, enum_case_get_backing_value, enum_case_get_enum,
+    enum_case_get_value, enum_construct, enum_get_backing_type, enum_get_case, enum_get_cases,
+    enum_has_case, enum_is_backed_reflection, enum_unit_case_construct, function_construct,
+    function_get_closure, function_get_closure_called_class, function_get_closure_scope_class,
+    function_get_closure_this, function_get_extension_name, function_get_namespace_name,
+    function_get_number_of_parameters, function_get_number_of_required_parameters,
+    function_get_parameters, function_get_return_type, function_get_short_name,
+    function_get_tentative_return_type, function_has_return_type,
     function_has_tentative_return_type, function_in_namespace, function_invoke,
     function_invoke_args, function_is_anonymous, function_is_closure, function_is_deprecated,
     function_returns_reference, function_to_string, generic_arguments, generic_runtime_modes,
@@ -83,6 +84,8 @@ fn register_internal_marker_attribute(eg: &mut ExecutorGlobals, name: &str, targ
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -159,6 +162,8 @@ fn register_reflection_class_kind(
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: parent.map(str::to_owned),
         implements: implements.iter().map(|name| (*name).to_string()).collect(),
         is_interface: false,
@@ -201,6 +206,10 @@ fn register_reflection_class_kind(
             .collect()
         } else if name == "ReflectionClass" {
             [
+                ("IS_IMPLICIT_ABSTRACT", 16),
+                ("IS_EXPLICIT_ABSTRACT", 64),
+                ("IS_FINAL", 32),
+                ("IS_READONLY", 65536),
                 ("SKIP_INITIALIZATION_ON_SERIALIZE", 8),
                 ("SKIP_DESTRUCTOR", 16),
             ]
@@ -221,6 +230,35 @@ fn register_reflection_class_kind(
                 is_final: false,
             })
             .collect()
+        } else if name == "ReflectionClassConstant" || name == "ReflectionFunction" {
+            let constants: &[(&str, i64)] = if name == "ReflectionFunction" {
+                &[("IS_DEPRECATED", 2048)]
+            } else {
+                &[
+                    ("IS_PUBLIC", 1),
+                    ("IS_PROTECTED", 2),
+                    ("IS_PRIVATE", 4),
+                    ("IS_FINAL", 32),
+                ]
+            };
+            constants
+                .iter()
+                .map(|(constant, value)| ClassConstantDefinition {
+                    attributes: Vec::new(),
+                    name: (*constant).to_string(),
+                    value: Value::long(*value),
+                    source_file: String::new(),
+                    evaluation_error: None,
+                    source_expression: None,
+                    callable_factory: None,
+                    evaluation_scope: None,
+                    value_is_deferred: false,
+                    visibility: Visibility::Public,
+                    declaring_class: name.to_string(),
+                    type_hint: ParamTypeHint::Int,
+                    is_final: false,
+                })
+                .collect()
         } else {
             vec![]
         },
@@ -242,6 +280,8 @@ fn register_reflection_interface(eg: &mut ExecutorGlobals, name: &str) {
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec!["Stringable".to_string()],
         is_interface: true,
@@ -288,6 +328,8 @@ fn register_generic_variance(eg: &mut ExecutorGlobals) {
         name: "ReflectionGenericVariance".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -340,6 +382,8 @@ fn register_property_hook_type(eg: &mut ExecutorGlobals) {
         name: "PropertyHookType".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         // BackedEnum already extends UnitEnum. Keeping only the direct edge
         // avoids presenting the inherited contract as a duplicate during
@@ -551,6 +595,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "Attribute".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -664,6 +710,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "Override".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -709,6 +757,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "SensitiveParameter".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -761,6 +811,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "Deprecated".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -838,6 +890,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "NoDiscard".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,
@@ -913,6 +967,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "ReflectionAttribute".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec!["Reflector".to_string()],
         is_interface: false,
@@ -1033,6 +1089,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         name: "ReflectionProperty".to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec!["Reflector".to_string()],
         is_interface: false,
@@ -1068,6 +1126,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
             ("IS_FINAL", 32),
             ("IS_ABSTRACT", 64),
             ("IS_READONLY", 128),
+            ("IS_PROTECTED_SET", 2048),
+            ("IS_PRIVATE_SET", 4096),
             ("IS_VIRTUAL", 512),
         ]
         .into_iter()
@@ -1148,14 +1208,22 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         &["Reflector"],
     );
     register_generic_variance(eg);
+    // PHP declares the concrete type reflections non-final; userland
+    // adapters (for example BetterReflection) subclass them.
     for class in [
         "ReflectionNamedType",
         "ReflectionUnionType",
         "ReflectionIntersectionType",
-        "ReflectionTypeParameterReference",
     ] {
-        register_reflection_class(eg, class, Some("ReflectionType"), false, true);
+        register_reflection_class(eg, class, Some("ReflectionType"), false, false);
     }
+    register_reflection_class(
+        eg,
+        "ReflectionTypeParameterReference",
+        Some("ReflectionType"),
+        false,
+        true,
+    );
 
     register_method!(
         "ReflectionFunction",
@@ -2535,6 +2603,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     for class in ["ReflectionClass", "ReflectionObject"] {
         register_method!(class, "getfilename", class_file_name, 1, 0, []);
+        register_method!(class, "getstartline", class_start_line, 1, 0, []);
+        register_method!(class, "getendline", class_end_line, 1, 0, []);
         register_method!(
             class,
             "getgenericargumentsforparentclass",

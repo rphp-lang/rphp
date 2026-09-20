@@ -359,6 +359,7 @@ pub enum Expr {
         uses: Vec<GenericAncestor>,
         trait_aliases: Vec<TraitAlias>,
         line: usize,
+        end_line: usize,
         call_line: usize,
     },
     PropertyAccess {
@@ -995,7 +996,11 @@ pub enum Stmt {
     },
     Class {
         line: usize,
+        /// Source line of the closing brace, for Reflection.
+        end_line: usize,
         attributes: Vec<Attribute>,
+        /// The doc comment immediately preceding the declaration.
+        doc_comment: Option<std::sync::Arc<str>>,
         name: String,
         parent: Option<GenericAncestor>,
         implements: Vec<GenericAncestor>,
@@ -1013,7 +1018,10 @@ pub enum Stmt {
     },
     Interface {
         line: usize,
+        end_line: usize,
         attributes: Vec<Attribute>,
+        /// The doc comment immediately preceding the declaration.
+        doc_comment: Option<std::sync::Arc<str>>,
         name: String,
         extends: Vec<GenericAncestor>,
         properties: Vec<ClassProperty>,
@@ -1023,7 +1031,10 @@ pub enum Stmt {
     },
     Trait {
         line: usize,
+        end_line: usize,
         attributes: Vec<Attribute>,
+        /// The doc comment immediately preceding the declaration.
+        doc_comment: Option<std::sync::Arc<str>>,
         name: String,
         properties: Vec<ClassProperty>,
         constants: Vec<ClassConstant>,
@@ -1094,7 +1105,10 @@ pub enum Stmt {
     },
     Enum {
         line: usize,
+        end_line: usize,
         attributes: Vec<Attribute>,
+        /// The doc comment immediately preceding the declaration.
+        doc_comment: Option<std::sync::Arc<str>>,
         name: String,
         backing_type: Option<TypeHint>,
         implements: Vec<GenericAncestor>,

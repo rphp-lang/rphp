@@ -3890,6 +3890,55 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     funcs.extend(iconv::register(eg));
 
     eg.seal_internal_class_ids();
+    // Embedders receive PHP's request globals for standard-input code; the
+    // CLI replaces them with the real script identity and arguments.
+    funcs.extend(runtime_info::register(eg));
+    reg_typed!(
+        "hash_algos",
+        fn_hash_algos,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array
+    );
+    reg_typed!(
+        "hash_file",
+        fn_hash_file,
+        4,
+        2,
+        ["algo", "filename", "binary", "options"],
+        [
+            ParamTypeHint::String,
+            ParamTypeHint::String,
+            ParamTypeHint::Bool,
+            ParamTypeHint::Array,
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    for name in ["hash_algos", "hash_file"] {
+        let pointer = eg
+            .find_function(name)
+            .expect("hash function was just registered");
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            if name == "hash_file" {
+                vec![
+                    None,
+                    None,
+                    Some(Value::bool(false)),
+                    Some(Value::array(PhpArray::new())),
+                ]
+            } else {
+                Vec::new()
+            },
+            "hash",
+        );
+    }
+    superglobals::register_request_globals(eg, None, &[]);
     funcs
 }
 

@@ -18,8 +18,12 @@ pub(super) fn replace(
     limit: usize,
     unmatched_as_null: bool,
     offset_capture: bool,
+    byte_view: bool,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<(String, usize)>, VmError> {
+    // A byte-view subject (non-`u` pattern) hands captures and takes callback
+    // results as PHP bytes; ASCII text is identical in both projections.
+    let mapped = byte_view && !subject.is_ascii();
     if limit == 0 {
         return Ok(Some((subject, 0)));
     }
@@ -41,7 +45,7 @@ pub(super) fn replace(
         let matches_value = if capture_free {
             debug_assert_eq!(caps.len(), 1);
             debug_assert!(caps.named_groups().is_empty());
-            let matched = Value::string(full_match.as_str(&subject));
+            let matched = super::pcre_view_value(full_match.as_str(&subject), mapped);
             if let Some(mut value) = reusable_capture_free_matches.take() {
                 if let Some(array) = value.as_array_mut_if_unique() {
                     array.set_int(0, matched);
@@ -73,6 +77,7 @@ pub(super) fn replace(
                     0,
                     offset_capture,
                     unmatched_as_null,
+                    mapped,
                 );
                 for (name, slot) in caps.named_groups() {
                     if *slot == index {
@@ -107,7 +112,17 @@ pub(super) fn replace(
         }
 
         result.push_str(&subject[previous_end..full_match.start]);
-        callback_result.append_echo_to(&mut result);
+        if byte_view {
+            match callback_result.php_string_bytes() {
+                Some(bytes) => result.push_str(&super::bytes_to_php_string(&bytes)),
+                None => {
+                    let rendered = callback_result.echo_to_string();
+                    result.push_str(&super::bytes_to_php_string(rendered.as_bytes()));
+                }
+            }
+        } else {
+            callback_result.append_echo_to(&mut result);
+        }
         previous_end = full_match.end;
         replacements += 1;
         Ok(true)

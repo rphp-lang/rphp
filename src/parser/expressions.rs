@@ -474,7 +474,7 @@ impl Parser {
             Token::Semicolon(_)
                 | Token::RParen
                 | Token::RBracket
-                | Token::RBrace
+                | Token::RBrace(_)
                 | Token::Comma(_)
                 | Token::Star
                 | Token::Eof
@@ -1259,7 +1259,7 @@ impl Parser {
                 let name = if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     let name = self.parse_expr()?;
-                    self.expect(&Token::RBrace)?;
+                    self.expect(&Token::RBrace(0))?;
                     name
                 } else {
                     // The outer postfix loop owns calls, dimensions and
@@ -1871,6 +1871,7 @@ impl Parser {
                         invalid_case_line,
                     ) =
                         self.parse_anonymous_class_body()?;
+                    let end_line = self.consumed_brace_line();
                     if let Some(line) = invalid_case_line {
                         attributes.push(Attribute::non_enum_case_marker(line));
                     }
@@ -1887,6 +1888,7 @@ impl Parser {
                         uses,
                         trait_aliases,
                         line,
+                        end_line,
                         call_line: line,
                     };
                     self.validate_new_expression_suffix(true, false, line)?;

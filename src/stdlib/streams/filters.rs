@@ -200,6 +200,8 @@ fn internal_class(name: &str, final_class: bool) -> ClassDef {
         name: name.into(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: None,
         implements: vec![],
         is_interface: false,

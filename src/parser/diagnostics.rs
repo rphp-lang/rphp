@@ -126,7 +126,7 @@ impl Parser {
             Token::LBracket(_) => "[",
             Token::RBracket => "]",
             Token::LBrace(_) => "{",
-            Token::RBrace => "}",
+            Token::RBrace(_) => "}",
             Token::Semicolon(_) => ";",
             Token::Comma(_) => ",",
             Token::Colon => ":",

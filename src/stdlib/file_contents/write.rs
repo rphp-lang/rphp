@@ -142,6 +142,37 @@ pub(in crate::stdlib) fn fn_file_put_contents(
     )? {
         return return_value(return_pointer, Value::bool(false));
     }
+    // `php://output` writes through the request output layer so active
+    // output buffers observe the bytes, exactly like `echo`.
+    if filename == "php://output" && source_resource.is_none() {
+        let mut bytes = Vec::new();
+        let mut append_value = |value: &Value| -> bool {
+            let value = value.dereferenced();
+            match value.value_type() {
+                ValueType::Object | ValueType::Closure => false,
+                ValueType::String => {
+                    bytes.extend_from_slice(&value.php_string_bytes().unwrap_or_default());
+                    true
+                }
+                _ => {
+                    bytes.extend_from_slice(value.echo_to_string().as_bytes());
+                    true
+                }
+            }
+        };
+        let converted = match data.as_array() {
+            Some(array) => array.values().all(|value| append_value(value)),
+            None => append_value(data),
+        };
+        if !converted {
+            return return_value(return_pointer, Value::bool(false));
+        }
+        eg.write_output(&bytes);
+        return return_value(
+            return_pointer,
+            i64::try_from(bytes.len()).map_or_else(|_| Value::bool(false), Value::long),
+        );
+    }
     let mut destination = match PhpStream::open(&filename, mode) {
         Ok(stream) => stream,
         Err(_) => return return_value(return_pointer, Value::bool(false)),
@@ -219,7 +250,9 @@ fn write_value_data(destination: &mut PhpStream, value: &Value) -> io::Result<us
         value
     };
     match value.value_type() {
-        ValueType::String => write_php_string(destination, value.as_str().unwrap_or_default()),
+        ValueType::String => {
+            write_bytes(destination, &value.php_string_bytes().unwrap_or_default())
+        }
         ValueType::Object | ValueType::Closure => Err(io::Error::new(
             io::ErrorKind::InvalidData,
             "array element cannot be converted to file data",

@@ -6,6 +6,14 @@ mod diagnostics;
 
 include!("parser/ast.rs");
 
+/// PHP's auto-global (superglobal) variable names.
+pub fn is_auto_global_name(name: &str) -> bool {
+    matches!(
+        name,
+        "_SERVER" | "_GET" | "_POST" | "_COOKIE" | "_FILES" | "_ENV" | "_REQUEST" | "_SESSION"
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum NamespaceDeclarationStyle {
     Bracketed,
@@ -29,6 +37,16 @@ pub struct Parser {
     /// Declaration-local yield validation, including dead source branches.
     reference_return_context: bool,
     generic_scopes: Vec<Vec<GenericParameter>>,
+    /// Superglobal names referenced inside each open function-like body.
+    /// PHP's auto-globals reach the global symbol table from any scope; the
+    /// parser desugars each use into an implicit leading `global` statement.
+    auto_global_scopes: Vec<Vec<String>>,
+    /// Token index where the statement being parsed began; class-like
+    /// declarations attach the doc comment that ends exactly there.
+    statement_start: usize,
+    /// Statement start carried across the attribute-group prefix of a
+    /// declaration, so the doc comment before `#[...]` still attaches.
+    pending_statement_start: Option<usize>,
     /// PHP compile-time semantic errors discovered while parsing must survive
     /// dead-branch elimination. The first one is replayed as a top-level AST
     /// marker after the full source has parsed successfully.

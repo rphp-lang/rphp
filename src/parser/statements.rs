@@ -48,6 +48,9 @@ impl Parser {
             class_scope_active: false,
             reference_return_context: false,
             generic_scopes: Vec::new(),
+            auto_global_scopes: Vec::new(),
+            statement_start: 0,
+            pending_statement_start: None,
             deferred_compile_error: None,
             deferred_compile_deprecations: Vec::new(),
             strict_types_allowed: true,
@@ -158,7 +161,7 @@ impl Parser {
                         return Err(self.memory_exhausted(line));
                     }
                 }
-                Token::RParen | Token::RBrace | Token::RBracket => {
+                Token::RParen | Token::RBrace(_) | Token::RBracket => {
                     depth = depth.saturating_sub(1);
                 }
                 _ => {}
@@ -230,6 +233,7 @@ impl Parser {
 
     fn parse_stmt(&mut self) -> Result<Stmt, String> {
         let strict_types_allowed = self.strict_types_allowed;
+        self.statement_start = self.pending_statement_start.take().unwrap_or(self.pos);
         if self.outermost_scope
             && self.namespace_style == Some(NamespaceDeclarationStyle::Bracketed)
             && !matches!(
@@ -285,10 +289,10 @@ impl Parser {
             Token::LBrace(_) => {
                 self.advance();
                 let mut body = Vec::new();
-                while self.peek() != Token::RBrace && !self.at_eof() {
+                while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
                     body.push(self.parse_stmt_in_scope(false)?);
                 }
-                self.expect(&Token::RBrace)?;
+                self.expect(&Token::RBrace(0))?;
                 Ok(Stmt::Block(body))
             }
             Token::ParseError(message, line) => {
@@ -385,10 +389,10 @@ impl Parser {
                 let body = if matches!(self.peek(), Token::LBrace(_)) {
                     self.advance();
                     let mut body = Vec::new();
-                    while self.peek() != Token::RBrace && !self.at_eof() {
+                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
                         body.push(self.parse_stmt_in_scope(false)?);
                     }
-                    self.expect(&Token::RBrace)?;
+                    self.expect(&Token::RBrace(0))?;
                     Some(body)
                 } else if self.peek() == Token::Colon {
                     self.advance();
@@ -470,13 +474,13 @@ impl Parser {
                     // Braced namespace: namespace App\Models { ... }
                     self.advance(); // consume '{'
                     let mut body = Vec::new();
-                    while self.peek() != Token::RBrace && self.peek() != Token::Eof {
+                    while !matches!(self.peek(), Token::RBrace(_)) && self.peek() != Token::Eof {
                         body.push(self.parse_stmt_in_namespace_scope()?);
                     }
                     if self.halted && self.at_eof() {
                         return Err(self.source_error("Unclosed '{'", 1));
                     }
-                    self.expect(&Token::RBrace)?;
+                    self.expect(&Token::RBrace(0))?;
                     Ok(Stmt::Namespace { name, body })
                 } else {
                     // Unbraced namespace: namespace App\Models; (rest of file belongs to this namespace)
@@ -484,7 +488,7 @@ impl Parser {
                     let mut body = Vec::new();
                     while self.peek() != Token::Eof
                         && self.peek() != Token::Namespace
-                        && self.peek() != Token::RBrace
+                        && !matches!(self.peek(), Token::RBrace(_))
                     {
                         body.push(self.parse_stmt_in_scope(true)?);
                     }
@@ -507,7 +511,7 @@ impl Parser {
                 let (first_name, grouped, name_line) = self.parse_use_name()?;
                 let mut imports = Vec::new();
                 if grouped {
-                    if self.peek() == Token::RBrace {
+                    if matches!(self.peek(), Token::RBrace(_)) {
                         return Err(self.group_use_missing_item_error(kind, "}", use_line));
                     }
                     if matches!(self.peek(), Token::Comma(_)) {
@@ -535,7 +539,7 @@ impl Parser {
                         } else {
                             kind
                         };
-                        if self.peek() == Token::RBrace {
+                        if matches!(self.peek(), Token::RBrace(_)) {
                             return Err(self.group_use_missing_item_error(
                                 item_kind, "}", use_line,
                             ));
@@ -588,7 +592,7 @@ impl Parser {
                             break;
                         }
                         self.advance();
-                        if self.peek() == Token::RBrace {
+                        if matches!(self.peek(), Token::RBrace(_)) {
                             break;
                         }
                         if matches!(self.peek(), Token::Comma(_)) {
@@ -604,7 +608,7 @@ impl Parser {
                             line,
                         ));
                     }
-                    self.expect(&Token::RBrace)?;
+                    self.expect(&Token::RBrace(0))?;
                 } else {
                     let mut fqn = first_name;
                     loop {
@@ -1062,7 +1066,7 @@ impl Parser {
                 };
                 let mut cases = Vec::new();
                 let mut has_default = false;
-                while !matches!(self.peek(), Token::RBrace | Token::EndSwitch) && !self.at_eof() {
+                while !matches!(self.peek(), Token::RBrace(_) | Token::EndSwitch) && !self.at_eof() {
                     match self.peek() {
                         Token::Case(_) => {
                             self.advance();
@@ -1073,7 +1077,7 @@ impl Parser {
                                 self.peek(),
                                 Token::Case(_)
                                     | Token::Default(_)
-                                    | Token::RBrace
+                                    | Token::RBrace(_)
                                     | Token::EndSwitch
                             ) && !self.at_eof()
                             {
@@ -1100,7 +1104,7 @@ impl Parser {
                                 self.peek(),
                                 Token::Case(_)
                                     | Token::Default(_)
-                                    | Token::RBrace
+                                    | Token::RBrace(_)
                                     | Token::EndSwitch
                             ) && !self.at_eof()
                             {
@@ -1120,7 +1124,7 @@ impl Parser {
                     self.expect(&Token::EndSwitch)?;
                     self.expect(&Token::Semicolon(0))?;
                 } else {
-                    self.expect(&Token::RBrace)?;
+                    self.expect(&Token::RBrace(0))?;
                 }
                 Ok(Stmt::Switch { expr, cases })
             }
@@ -1312,12 +1316,7 @@ impl Parser {
                 self.expect(&Token::RParen)?;
                 let return_type = self.parse_return_type(line, false)?;
                 let previous_reference_context = std::mem::replace(&mut self.reference_return_context, returns_by_ref);
-                self.expect(&Token::LBrace(0))?;
-                let mut body = Vec::new();
-                while self.peek() != Token::RBrace && !self.at_eof() {
-                    body.push(self.parse_stmt_in_scope(false)?);
-                }
-                self.expect(&Token::RBrace)?;
+                let body = self.parse_function_body()?;
                 self.pop_generic_scope();
                 self.class_scope_active = previous_class_scope;
                 self.reference_return_context = previous_reference_context;
@@ -1377,7 +1376,9 @@ impl Parser {
                 Ok(Stmt::Throw { expr, line })
             }
             Token::AttributeStart(_) => {
+                let statement_start = self.statement_start;
                 let attributes = self.parse_attribute_groups()?;
+                self.pending_statement_start = Some(statement_start);
                 let declaration = self.parse_stmt()?;
                 self.attach_attributes(declaration, attributes)
             }
@@ -1566,7 +1567,7 @@ impl Parser {
                             let name = if matches!(self.peek(), Token::LBrace(_)) {
                                 self.advance();
                                 let name = self.parse_expr()?;
-                                self.expect(&Token::RBrace)?;
+                                self.expect(&Token::RBrace(0))?;
                                 name
                             } else {
                                 self.parse_primary_atom()?
@@ -1959,10 +1960,10 @@ impl Parser {
         if matches!(self.peek(), Token::LBrace(_)) {
             self.advance(); // consume {
             let mut stmts = Vec::new();
-            while self.peek() != Token::RBrace && !self.at_eof() {
+            while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
                 stmts.push(self.parse_stmt_in_scope(false)?);
             }
-            self.expect(&Token::RBrace)?;
+            self.expect(&Token::RBrace(0))?;
             Ok(stmts)
         } else {
             // Single statement (no braces)

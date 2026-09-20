@@ -6135,6 +6135,18 @@ fn reflection_get_doc_comment(
             return return_value(rv, Value::string(comment));
         }
     }
+    if matches!(
+        receiver_class_name(ed).as_deref(),
+        Some("ReflectionClass" | "ReflectionObject" | "ReflectionEnum")
+    ) {
+        let comment = reflected_property(ed, "name")
+            .and_then(|value| value.as_str().map(str::to_owned))
+            .and_then(|name| eg.find_class(&name))
+            .and_then(|class| class.doc_comment.clone());
+        if let Some(comment) = comment {
+            return return_value(rv, Value::string(comment.as_ref()));
+        }
+    }
     // Other declaration kinds still deliberately discard comments. Returning
     // false is PHP's truthful "no retained doc comment" result.
     return_value(rv, Value::bool(false))
@@ -9777,6 +9789,53 @@ fn class_file_name(
         .and_then(|class| class.source_file.as_ref())
         .map_or_else(|| Value::bool(false), |file| Value::string(file.clone()));
     return_value(rv, value)
+}
+
+fn class_declaration_line(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    end: bool,
+) -> Result<(), VmError> {
+    let Some((GenericDeclarationKind::Class, owner)) = generic_target(ed) else {
+        return return_value(rv, Value::bool(false));
+    };
+    if eg.find_class(&owner).is_none()
+        && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &owner)?
+    {
+        return return_value(rv, Value::bool(false));
+    }
+    // Internal classes have no source file and report `false` like PHP.
+    let value = eg
+        .find_class(&owner)
+        .filter(|class| class.source_file.is_some())
+        .map_or_else(
+            || Value::bool(false),
+            |class| {
+                Value::long(if end {
+                    class.end_line
+                } else {
+                    class.declaration_line
+                } as i64)
+            },
+        );
+    return_value(rv, value)
+}
+
+fn class_start_line(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_declaration_line(ed, rv, eg, false)
+}
+
+fn class_end_line(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    class_declaration_line(ed, rv, eg, true)
 }
 
 fn method_file_name(

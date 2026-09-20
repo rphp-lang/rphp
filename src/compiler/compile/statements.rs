@@ -1804,9 +1804,7 @@ impl Compiler {
                         .is_some_and(|instruction| instruction.opcode == OpCode::FetchDimR)
                     {
                         deferred_fetches.push(
-                            self.instructions
-                                .pop()
-                                .expect("checked trailing dimension fetch"),
+                            self.pop_instruction().expect("checked trailing dimension fetch"),
                         );
                     }
                     deferred_fetches.reverse();
@@ -4278,9 +4276,7 @@ impl Compiler {
                         .is_some_and(|instruction| instruction.opcode == OpCode::FetchDimR)
                     {
                         deferred_fetches.push(
-                            self.instructions
-                                .pop()
-                                .expect("checked trailing dimension fetch"),
+                            self.pop_instruction().expect("checked trailing dimension fetch"),
                         );
                     }
                     deferred_fetches.reverse();
@@ -5403,8 +5399,10 @@ impl Compiler {
             }
             Stmt::Class {
                 line: class_line,
+                end_line,
                 attributes,
                 name,
+                doc_comment,
                 parent,
                 implements,
                 is_abstract,
@@ -6438,6 +6436,8 @@ impl Compiler {
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *class_line,
+                    end_line: *end_line,
+                    doc_comment: doc_comment.clone(),
                     parent: resolved_parent,
                     implements: resolved_implements,
                     is_interface: false,
@@ -6492,8 +6492,10 @@ impl Compiler {
             }
             Stmt::Interface {
                 line: interface_line,
+                end_line,
                 attributes,
                 name,
+                doc_comment,
                 extends,
                 properties,
                 constants,
@@ -6835,6 +6837,8 @@ impl Compiler {
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *interface_line,
+                    end_line: *end_line,
+                    doc_comment: doc_comment.clone(),
                     parent: None,
                     implements: resolved_extends,
                     is_interface: true,
@@ -6871,8 +6875,10 @@ impl Compiler {
             }
             Stmt::Trait {
                 line: trait_line,
+                end_line,
                 attributes,
                 name,
+                doc_comment,
                 properties,
                 constants,
                 methods,
@@ -7503,6 +7509,8 @@ impl Compiler {
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *trait_line,
+                    end_line: *end_line,
+                    doc_comment: doc_comment.clone(),
                     parent: None,
                     implements: vec![],
                     is_interface: false,
@@ -7555,8 +7563,10 @@ impl Compiler {
             }
             Stmt::Enum {
                 line: enum_line,
+                end_line,
                 attributes,
                 name,
+                doc_comment,
                 backing_type,
                 implements,
                 uses,
@@ -8258,6 +8268,8 @@ impl Compiler {
                     source_file: (!self.source_file.is_empty())
                         .then(|| self.source_file.clone()),
                     declaration_line: *enum_line,
+                    end_line: *end_line,
+                    doc_comment: doc_comment.clone(),
                     parent: None,
                     implements: resolved_implements,
                     is_interface: false,

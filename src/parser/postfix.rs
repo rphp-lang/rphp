@@ -67,7 +67,7 @@ impl Parser {
         let name = if matches!(self.peek(), Token::LBrace(_)) {
             self.advance();
             let name = self.parse_expr()?;
-            self.expect(&Token::RBrace)?;
+            self.expect(&Token::RBrace(0))?;
             name
         } else {
             self.parse_primary_atom()?
@@ -97,7 +97,7 @@ impl Parser {
                     if matches!(self.peek(), Token::LBrace(_)) {
                         self.advance();
                         let property = self.parse_expr()?;
-                        self.expect(&Token::RBrace)?;
+                        self.expect(&Token::RBrace(0))?;
                         expr = Expr::DynamicPropertyAccess {
                             object: Box::new(expr),
                             property: Box::new(property),
@@ -264,7 +264,7 @@ impl Parser {
         if matches!(self.peek(), Token::LBrace(_)) {
             self.advance();
             let constant = self.parse_expr()?;
-            self.expect(&Token::RBrace)?;
+            self.expect(&Token::RBrace(0))?;
             if matches!(self.peek(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
@@ -614,7 +614,7 @@ impl Parser {
                     let constant = if dynamic_name {
                         self.advance();
                         let constant = self.parse_expr()?;
-                        self.expect(&Token::RBrace)?;
+                        self.expect(&Token::RBrace(0))?;
                         constant
                     } else {
                         let token = self.advance();
@@ -653,7 +653,7 @@ impl Parser {
                     if matches!(self.peek(), Token::LBrace(_)) {
                         self.advance();
                         let member = self.parse_expr()?;
-                        self.expect(&Token::RBrace)?;
+                        self.expect(&Token::RBrace(0))?;
                         if matches!(self.peek(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             if self.consume_first_class_callable_placeholder() {

@@ -208,6 +208,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             ],
         ),
         ("fwrite", fn_fwrite, 3, 2, &["stream", "data", "length"]),
+        ("fputs", fn_fwrite, 3, 2, &["stream", "data", "length"]),
         ("fclose", fn_fclose, 1, 1, &["stream"]),
         ("fflush", fn_fflush, 1, 1, &["stream"]),
         (
@@ -588,12 +589,26 @@ pub(super) fn write_stream_bytes(
     id: i64,
     bytes: &[u8],
 ) -> Result<Option<std::io::Result<usize>>, VmError> {
-    let native = with_stream_io(eg, id, |stream| stream.write(bytes));
-    #[cfg(feature = "stream-registry")]
-    if native.is_none() {
-        return filters::with_source(eg, _frame, |eg| filters::write(eg, id, bytes));
+    let native = with_stream_io(eg, id, |stream| {
+        (!stream.writes_to_output_layer()).then(|| stream.write(bytes))
+    });
+    match native {
+        Some(Some(result)) => Ok(Some(result)),
+        Some(None) => {
+            eg.write_output(bytes);
+            Ok(Some(Ok(bytes.len())))
+        }
+        None => {
+            #[cfg(feature = "stream-registry")]
+            {
+                filters::with_source(eg, _frame, |eg| filters::write(eg, id, bytes))
+            }
+            #[cfg(not(feature = "stream-registry"))]
+            {
+                Ok(None)
+            }
+        }
     }
-    Ok(native)
 }
 
 // Like the write projection, keep the small native adapter in its caller.

@@ -727,13 +727,60 @@ fn test_unknown_modifier_rejected() {
 #[test]
 fn valid_unimplemented_modifier_is_distinct_from_unknown_modifier() {
     assert_eq!(
-        parse_php_regex("/a/A").unwrap_err(),
-        "Unsupported PCRE modifier 'A'"
+        parse_php_regex("/a/J").unwrap_err(),
+        "Unsupported PCRE modifier 'J'"
     );
     assert_eq!(
-        parse_php_regex("/a/Az").unwrap_err(),
+        parse_php_regex("/a/Jz").unwrap_err(),
         "Unknown modifier 'z'"
     );
+}
+
+fn php_regex(pattern: &str) -> Regex {
+    let (pattern, flags) = parse_php_regex(pattern).unwrap();
+    Regex::new(&pattern, flags).unwrap()
+}
+
+#[test]
+fn anchored_modifier_matches_only_at_the_search_position() {
+    let anchored = php_regex("/a/A");
+    assert!(anchored.is_match("ab"));
+    assert!(!anchored.is_match("ba"));
+    assert!(anchored.captures("ba").is_none());
+    let words = php_regex("/\\w+|\\s+/A");
+    assert_eq!(words.captures_iter("ab cd").len(), 3);
+    let repeated = php_regex("/a/A");
+    assert_eq!(repeated.captures_iter("aab").len(), 2);
+    assert_eq!(
+        repeated.replace_all_with("aab", |_, _| "x".to_string()),
+        "xxb"
+    );
+    assert_eq!(
+        repeated.replace_all_with("baa", |_, _| "x".to_string()),
+        "baa"
+    );
+    assert_eq!(php_regex("/,/A").split(",,a,", -1), vec!["", "", "a,"]);
+}
+
+#[test]
+fn unicode_properties_hex_escapes_and_grapheme_clusters() {
+    let letters = php_regex("/\\p{L}+/u");
+    assert_eq!(
+        letters.captures("café 42").unwrap().groups[0]
+            .as_ref()
+            .map(|m| m.end),
+        Some(5)
+    );
+    assert!(php_regex("/\\P{L}/u").is_match("1"));
+    assert!(php_regex("/\\p{^L}/u").is_match("1"));
+    assert!(!php_regex("/\\p{^L}/u").is_match("a"));
+    assert!(php_regex("/[\\p{Mn}\\x{200D}]/u").is_match("\u{301}"));
+    assert!(php_regex("/[\\x{1F1E6}-\\x{1F1FF}]{2}/u").is_match("\u{1F1E8}\u{1F1FF}"));
+    assert!(php_regex("/\\x41\\x{42}/").is_match("AB"));
+    assert!(php_regex("/^\\X$/u").is_match("e\u{301}"));
+    assert_eq!(php_regex("/\\X/u").captures_iter("a\u{301}b\r\nc").len(), 4);
+    let (pattern, flags) = parse_php_regex("/\\p{Nope}/u").unwrap();
+    assert!(Regex::new(&pattern, flags).is_err());
 }
 
 #[test]

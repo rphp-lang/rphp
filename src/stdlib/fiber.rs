@@ -267,6 +267,8 @@ fn internal_class(name: &str, parent: Option<&str>) -> ClassDef {
         name: name.to_string(),
         source_file: None,
         declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
         parent: parent.map(str::to_string),
         implements: Vec::new(),
         is_interface: false,
