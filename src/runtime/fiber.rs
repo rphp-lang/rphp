@@ -147,6 +147,48 @@ impl FiberRuntime {
             .map_or(0, |context| context.owned_object_references)
     }
 
+    /// Publish every cycle-capable value owned by the native Fiber sidecar.
+    /// PHP exposes these as ordinary Fiber ownership edges even though RPHP
+    /// keeps the callback, result and suspended VM stack outside PhpObject.
+    pub(crate) fn cycle_snapshot(&self, identity: usize) -> (Vec<Value>, Vec<usize>) {
+        let Some(context) = self.contexts.get(&identity) else {
+            return (Vec::new(), Vec::new());
+        };
+        let mut children = Vec::new();
+        let mut push = |value: &Value| {
+            if let Some(value) = value
+                .clone_cycle_handle()
+                .or_else(|| value.dereferenced().clone_cycle_handle())
+            {
+                children.push(value);
+            }
+        };
+        for value in &context.callback.prepend_args {
+            push(value);
+        }
+        for value in &context.callback.use_vars {
+            push(value);
+        }
+        if let Some(value) = &context.callback.bound_this {
+            push(value);
+        }
+        if let Some(static_vars) = &context.callback.closure_static_vars {
+            let static_vars = static_vars
+                .try_borrow()
+                .expect("cycle collection requires unborrowed Fiber closure statics");
+            for value in static_vars.values() {
+                push(value);
+            }
+        }
+        push(&context.result);
+        if let Some(suspension) = &context.suspension {
+            push(&suspension.value);
+        }
+        let (state_children, frames) = context.state.cycle_snapshot();
+        children.extend(state_children);
+        (children, frames)
+    }
+
     pub(crate) fn release(&mut self, identity: usize) {
         self.contexts.remove(&identity);
     }

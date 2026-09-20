@@ -7112,6 +7112,13 @@ impl Value {
                     .as_object_rc()
                     .expect("object cycle node requires an object owner");
                 let object = object_owner.try_borrow().ok()?;
+                if object.class_name.as_ref() == "Fiber" {
+                    // Fiber callback/result/stack edges live in the request's
+                    // native sidecar. Conservatively nominate the object when
+                    // a public handle disappears; the collector accounts for
+                    // the exact sidecar edges before deciding reachability.
+                    return Some(true);
+                }
                 if object.any_property_value(|value| value.cycle_node().is_some()) {
                     return Some(true);
                 }

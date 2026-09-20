@@ -1187,6 +1187,14 @@ impl FunctionArgumentState {
     pub(crate) fn clear(&mut self) {
         self.snapshots.clear();
     }
+
+    pub(crate) fn for_each_value(&self, mut visitor: impl FnMut(&Value)) {
+        for (_, snapshot) in &self.snapshots {
+            for value in &snapshot.values {
+                visitor(value);
+            }
+        }
+    }
 }
 
 pub(crate) enum ClassAliasRegistrationError {
@@ -2286,6 +2294,28 @@ impl ExecutorGlobals {
         self.fiber_runtime
             .as_deref()
             .map_or(0, |runtime| runtime.owned_object_references(identity))
+    }
+
+    pub(crate) fn fiber_cycle_children(&self, identity: usize) -> Vec<Value> {
+        let Some(runtime) = self.fiber_runtime.as_deref() else {
+            return Vec::new();
+        };
+        let (mut children, frames) = runtime.cycle_snapshot(identity);
+        for frame in frames {
+            let owner = self.dynamic_scope_owner(frame);
+            let Some(variables) = self.dynamic_variables.get(&owner) else {
+                continue;
+            };
+            for value in variables.values() {
+                if let Some(value) = value
+                    .clone_cycle_handle()
+                    .or_else(|| value.dereferenced().clone_cycle_handle())
+                {
+                    children.push(value);
+                }
+            }
+        }
+        children
     }
 
     pub(crate) fn force_close_fiber_object(

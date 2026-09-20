@@ -6,7 +6,7 @@ use std::marker::PhantomPinned;
 use crate::runtime::{ExecutorGlobals, FunctionArgumentState};
 use crate::value::Value;
 use crate::vm::execute::{VmError, cleanup_frame_slots};
-use crate::vm::frame::ExecuteData;
+use crate::vm::frame::{CALL_FRAME_SLOTS, ExecuteData};
 use crate::vm::function::{FunctionCommon, FunctionType, UserFunction};
 use crate::vm::stack::VmStack;
 
@@ -159,15 +159,13 @@ impl CoroutineExecutionState {
             .stacks
             .as_mut()
             .expect("a started coroutine must own checked-out storage");
-        unsafe {
-            cleanup_frame_chain(
-                &mut stacks.vm_stack,
-                &mut stacks.pending_call_stack,
-                &mut self.pending_named_variadic,
-                &mut self.pending_invoke_this,
-                self.current_execute_data,
-            );
-        }
+        cleanup_frame_chain(
+            &mut stacks.vm_stack,
+            &mut stacks.pending_call_stack,
+            &mut self.pending_named_variadic,
+            &mut self.pending_invoke_this,
+            self.current_execute_data,
+        );
         self.current_execute_data = std::ptr::null_mut();
         self.exception = None;
         self.finally_exceptions.clear();
@@ -176,6 +174,77 @@ impl CoroutineExecutionState {
         self.active_generator = None;
         self.pending_invoke_this = None;
         self.error_suppression_frames.clear();
+    }
+
+    /// Clone the cycle-capable PHP values owned by one inactive suspended
+    /// stack. The collector calls this only while the Fiber is not running,
+    /// so every frame and side table is stable for the duration of the scan.
+    pub(super) fn cycle_snapshot(&self) -> (Vec<Value>, Vec<usize>) {
+        let mut children = Vec::new();
+        let mut frame_identities = Vec::new();
+        let mut push = |value: &Value| {
+            if let Some(value) = value
+                .clone_cycle_handle()
+                .or_else(|| value.dereferenced().clone_cycle_handle())
+            {
+                children.push(value);
+            }
+        };
+
+        if let Some(exception) = &self.exception {
+            push(exception);
+        }
+        for exceptions in self.finally_exceptions.values() {
+            for exception in exceptions {
+                push(exception);
+            }
+        }
+        for values in self.pending_named_variadic.values() {
+            for (_, value) in values {
+                push(value);
+            }
+        }
+        self.function_argument_state.for_each_value(&mut push);
+        if let Some(generator) = &self.active_generator {
+            let generator = generator.borrow();
+            generator.for_each_cycle_child(&mut push);
+        }
+        if let Some(value) = &self.pending_invoke_this {
+            push(value);
+        }
+
+        // SAFETY: current_execute_data names the inactive stack owned by
+        // `self.stacks`. Frame geometry and the heap bitmap are immutable
+        // until the owning Fiber resumes or is force-closed.
+        unsafe {
+            let mut frame = self.current_execute_data;
+            while !frame.is_null() {
+                let mut activation = frame;
+                loop {
+                    frame_identities.push(activation as usize);
+                    let total = ((*activation).num_cvs + (*activation).num_temps) as usize;
+                    let slots = (activation as *const Value).add(CALL_FRAME_SLOTS);
+                    if total <= 64 {
+                        let mut bitmap = (*activation).owned_heap_bitmap();
+                        while bitmap != 0 {
+                            let index = bitmap.trailing_zeros() as usize;
+                            push(&*slots.add(index));
+                            bitmap &= bitmap - 1;
+                        }
+                    } else {
+                        for index in 0..total {
+                            push(&*slots.add(index));
+                        }
+                    }
+                    activation = (*activation).call;
+                    if activation.is_null() {
+                        break;
+                    }
+                }
+                frame = (*frame).prev_execute_data;
+            }
+        }
+        (children, frame_identities)
     }
 }
 
@@ -202,7 +271,7 @@ unsafe fn cleanup_pending_calls(
     }
 }
 
-pub(super) unsafe fn cleanup_frame_chain(
+pub(super) fn cleanup_frame_chain(
     vm_stack: &mut VmStack,
     pending_call_stack: &mut VmStack,
     pending_named_variadic: &mut HashMap<usize, Vec<(String, Value)>>,

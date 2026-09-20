@@ -253,6 +253,96 @@ echo "after-release\n";
 }
 
 #[test]
+fn cycle_collection_traces_values_owned_only_by_native_fiber_state() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class FiberCycleTracked {
+    public $peer;
+    public function __construct(private string $label) {}
+    public function __destruct() { echo $this->label, "\n"; }
+}
+
+$node = new FiberCycleTracked('callback');
+$fiber = new Fiber(function () use ($node): void {});
+$node->peer = $fiber;
+unset($node, $fiber);
+gc_collect_cycles();
+
+$fiber = null;
+$fiber = new Fiber(function () use (&$fiber): FiberCycleTracked {
+    $result = new FiberCycleTracked('result');
+    $result->peer = $fiber;
+    return $result;
+});
+$fiber->start();
+unset($fiber);
+gc_collect_cycles();
+
+function install_fiber_local_reference(&$slot): void {
+    $slot = new FiberCycleTracked('reference-local');
+}
+$fiber = null;
+$fiber = new Fiber(function () use (&$fiber): void {
+    install_fiber_local_reference($local);
+    $self = Fiber::getCurrent();
+    Fiber::suspend();
+});
+$fiber->start();
+unset($fiber);
+gc_collect_cycles();
+
+function suspend_with_dynamic_fiber_owner(): void {
+    $local = new FiberCycleTracked('dynamic-local');
+    $name = 'owner';
+    $$name = Fiber::getCurrent();
+    Fiber::suspend();
+}
+$fiber = new Fiber(function (): void {
+    get_defined_vars();
+    suspend_with_dynamic_fiber_owner();
+});
+$fiber->start();
+unset($fiber);
+gc_collect_cycles();
+"#,
+        ),
+        concat!(
+            "callback\n",
+            "result\n",
+            "reference-local\n",
+            "dynamic-local\n",
+        )
+    );
+}
+
+#[test]
+fn request_shutdown_reaches_cycles_created_by_cycle_destructors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ShutdownInnerCycle {
+    public $self;
+    public function __construct() { $this->self = $this; }
+    public function __destruct() { echo "inner\n"; }
+}
+class ShutdownOuterCycle {
+    public $self;
+    public function __construct() { $this->self = $this; }
+    public function __destruct() {
+        echo "outer\n";
+        new ShutdownInnerCycle();
+    }
+}
+register_shutdown_function(static function (): void { echo "shutdown\n"; });
+new ShutdownOuterCycle();
+"#,
+        ),
+        "shutdown\nouter\ninner\n"
+    );
+}
+
+#[test]
 fn force_close_chains_multiple_finally_exceptions_in_release_order() {
     assert_eq!(
         run_php(

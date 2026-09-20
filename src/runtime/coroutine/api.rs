@@ -46,15 +46,13 @@ fn invoke_scope_root(eg: &mut ExecutorGlobals, entry: &CoroutineEntry) -> Result
 
     let execution = execute_coroutine_frame(eg, frame, frame);
     let current = eg.current_execute_data.get();
-    unsafe {
-        cleanup_frame_chain(
-            &mut eg.vm_stack,
-            &mut eg.pending_call_stack,
-            &mut eg.pending_named_variadic,
-            &mut eg.pending_invoke_this,
-            current,
-        );
-    }
+    cleanup_frame_chain(
+        &mut eg.vm_stack,
+        &mut eg.pending_call_stack,
+        &mut eg.pending_named_variadic,
+        &mut eg.pending_invoke_this,
+        current,
+    );
     eg.current_execute_data.set(saved_execute_data);
 
     execution.map(|()| result)

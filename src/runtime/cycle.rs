@@ -50,11 +50,14 @@ impl CycleGraph {
         Some(identity)
     }
 
-    fn expand_value_edges(&mut self) {
+    fn expand_value_edges(&mut self, eg: &ExecutorGlobals) {
         let mut position = 0;
         while position < self.nodes.len() {
             let source = self.nodes[position].identity;
-            let children = self.nodes[position].value.cycle_child_handles();
+            let mut children = self.nodes[position].value.cycle_child_handles();
+            if self.nodes[position].kind == CycleNodeKind::Object {
+                children.extend(eg.fiber_cycle_children(source));
+            }
             for child in children {
                 let Some((target, _)) = child.cycle_node() else {
                     continue;
@@ -324,8 +327,51 @@ impl ExecutorGlobals {
             graph.add_node(iterator.map);
             graph.ordinary_edges.push((iterator.iterator_identity, map));
         }
-        graph.expand_value_edges();
+        graph.expand_value_edges(self);
         graph
+    }
+
+    /// Snapshot the object-store roots that remain after ordinary request
+    /// roots have been released.  Request shutdown invokes user destructors
+    /// for these objects without entering an explicit GC pass, so a destructor
+    /// may itself call `gc_collect_cycles()` just like Zend's object-store
+    /// destructor phase.
+    pub(crate) fn request_cycle_object_roots(&self) -> Vec<Value> {
+        let possible_roots = cycle_root_snapshot();
+        let has_destructor_root = possible_roots.iter().any(|value| {
+            let Some(identity) = value.object_identity() else {
+                return false;
+            };
+            self.has_fiber_context(identity)
+                || value.as_object().is_some_and(|object| {
+                    self.class_has_destructor(object.class_id, &object.class_name)
+                })
+        });
+        drop(possible_roots);
+        if !has_destructor_root {
+            return Vec::new();
+        }
+        let graph = self.build_cycle_graph();
+        let live = graph.live_identities();
+        let garbage = graph
+            .nodes
+            .iter()
+            .filter_map(|node| (!live.contains(&node.identity)).then_some(node.identity))
+            .collect::<HashSet<_>>();
+        let cyclic = graph.cyclic_identities(&garbage);
+        graph
+            .nodes
+            .into_iter()
+            .filter_map(|node| {
+                if node.kind != CycleNodeKind::Object || !cyclic.contains(&node.identity) {
+                    return None;
+                }
+                let has_destructor = node.value.as_object().is_some_and(|object| {
+                    self.class_has_destructor(object.class_id, &object.class_name)
+                });
+                (has_destructor || self.has_fiber_context(node.identity)).then_some(node.value)
+            })
+            .collect()
     }
 
     pub(crate) fn collect_cycles(&mut self) -> Result<usize, VmError> {
@@ -362,6 +408,12 @@ impl ExecutorGlobals {
             for index in destructor_order {
                 let node = &initial.nodes[index];
                 if node.kind == CycleNodeKind::Object {
+                    if self.has_fiber_context(node.identity) {
+                        self.force_close_fiber_object(
+                            node.identity,
+                            self.current_execute_data.get(),
+                        )?;
+                    }
                     run_cycle_object_destructor(self, &node.value)?;
                     if self.exception.is_some() {
                         return Ok(0);
@@ -398,6 +450,12 @@ impl ExecutorGlobals {
             released.extend(self.release_weak_object(identity));
         }
         drop(released);
+
+        for identity in &collected {
+            if self.has_fiber_context(*identity) {
+                self.release_fiber_object(*identity);
+            }
+        }
 
         for node in &current.nodes {
             if collected.contains(&node.identity) {

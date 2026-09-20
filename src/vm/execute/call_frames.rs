@@ -170,6 +170,18 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
 
 #[inline]
 fn destructor_identity(eg: &ExecutorGlobals, value: &Value) -> Option<usize> {
+    // A singleton request-owned reference is only a transparent CV wrapper:
+    // releasing this frame also releases the value stored in that cell.  An
+    // aliased reference, on the other hand, remains reachable through another
+    // PHP storage location and must not schedule its referent prematurely.
+    let value = if value.is_reference() {
+        if value.owned_reference_is_aliased() {
+            return None;
+        }
+        value.dereferenced()
+    } else {
+        value
+    };
     // Direct objects remain O(1) candidate boundaries. A plain Closure has no
     // PHP release callback of its own and must retain ordinary frame lifetime;
     // admitting every Closure here can close a Fiber captured by a suspension
@@ -1170,6 +1182,65 @@ pub(crate) fn run_request_static_destructors(
     }
 }
 
+/// Run the request-final object-store destructor phase to a fixed point.
+///
+/// Cyclic objects have already lost their ordinary frame/static roots, but
+/// their internal edges keep the Rust owners alive.  This phase deliberately
+/// does not hold the cycle-collector guard: a destructor is allowed to create
+/// a new cycle and collect it synchronously from a Fiber.  Newly published
+/// object-store roots are observed by the next pass.
+#[cold]
+pub(crate) fn run_request_cycle_destructors(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let mut visited = std::collections::HashSet::new();
+    let mut pending = eg.exception.take();
+    loop {
+        let roots = eg.request_cycle_object_roots();
+        let mut progressed = false;
+        for owner in roots {
+            let Some(identity) = owner.object_identity() else {
+                continue;
+            };
+            if !visited.insert(identity) {
+                continue;
+            }
+            progressed = true;
+            if eg.has_fiber_context(identity) {
+                eg.force_close_fiber_object(identity, logical_caller)?;
+            }
+            run_cycle_object_destructor(eg, &owner)?;
+            let Some(replacement) = eg.exception.take() else {
+                continue;
+            };
+            if let Some(displaced) = pending.take() {
+                append_replaced_exception(&replacement, &displaced, eg);
+            }
+            match crate::stdlib::dispatch_uncaught_exception_handler(
+                eg,
+                logical_caller,
+                &replacement,
+            ) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let effective = eg.exception.take().unwrap_or_else(|| replacement.clone());
+                    if effective.object_identity() != replacement.object_identity() {
+                        append_replaced_exception(&effective, &replacement, eg);
+                    }
+                    eg.exception = Some(effective);
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+        if !progressed {
+            eg.exception = pending;
+            return Ok(());
+        }
+    }
+}
+
 /// Invoke only the user-destructor phase for a cycle candidate. Cycle edges
 /// remain intact until every initially unreachable object has received this
 /// phase, because a destructor may resurrect any member of the component.
@@ -1297,7 +1368,7 @@ fn run_frame_destructors_filtered(
                 let Some(index) = representative_index else {
                     continue;
                 };
-                let representative = &*base.add(index);
+                let representative = (&*base.add(index)).dereferenced();
                 if live_generators_only {
                     let live_generator = representative
                         .dereferenced()
@@ -2013,6 +2084,7 @@ fn release_statement_temps(
                 let Some(representative) = representative else {
                     continue;
                 };
+                let representative = representative.dereferenced();
                 if representative.vm_release_strong_count() != Some(range_references) {
                     deferred.push(identity);
                     continue;

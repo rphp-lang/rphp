@@ -7,20 +7,19 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `exception-handler-finalization` checkpoint over `df1f54f8` adds **10 exact
-PHP 8.5 passes without loss**, reducing measured supported failures from **165
-to 155**. Replacement exception handlers now receive exceptions thrown by the
-previous handler without recatching the original fatal during shutdown.
-Shutdown callbacks, suspended-generator `finally` blocks, ordinary destructors
-and output-buffer callbacks retain PHP's distinct ordering. Chunked buffers
-disable a throwing handler without discarding its bytes, fatal `error_get_last`
-state is visible during shutdown, and internal callback traces and
-headers-already-sent origins use their canonical call boundary.
+The safety-bounded `fiber-native-cycle-finalization` checkpoint over
+`2d68171e` adds **5 exact PHP 8.5 passes without loss**, reducing measured
+supported failures from **155 to 150**. Cycle collection now traces callback,
+result, suspended-stack, argument, generator and dynamic-variable values held
+by a Fiber's native sidecar. Unreachable Fibers are force-closed before user
+destructors, singleton request references preserve destructor reachability,
+and request shutdown reaches cyclic garbage created by another cycle
+destructor without losing the active global scope.
 
-The 8,258-case supported ledger is **7,630 pass / 155 fail / 194 skip / 276
-unsupported / three XFAIL**. The stable 7,174-case core is **6,632 pass / 150
+The 8,258-case supported ledger is **7,635 pass / 150 fail / 194 skip / 276
+unsupported / three XFAIL**. The stable 7,174-case core is **6,637 pass / 145
 fail / 182 skip / 210 unsupported**, with no timeout or crash. Zend/lang is
-**5,162/142/115/180**, exact **+10/-0**; strings/array remains byte-identical at
+**5,167/137/115/180**, exact **+5/-0**; strings/array remains byte-identical at
 **1,470/8/67/30**. Five Cargo configurations and all-targets, exact no-loss,
 Composer/Symfony S0--S3, formatting, HTML data, PHPT runner tooling and the
 unsafe ratchet pass. Network-dependent tests run outside the restricted
@@ -28,14 +27,25 @@ development sandbox. Performance remains deferred to the aggregate
 correctness-sweep boundary.
 
 SHA-256 evidence: candidate
-`4921c84529842e6daee37a3fb9b845ad0c23aa88e4a0cb917ed0fdb6abc8fed6`;
-target manifest `4e34f834b046b52f495dd059c85ff7bee177e92ab420be731cf4cee3ac676954`;
+`92cca0a2d2995490342c5eabf3214c064f87e0387a44bc793bfdea14f5d1156f`;
 Zend/lang manifest/pass set
-`6a8103f05ed4d55e62a5fe3c2076a82a897dc29c9a699081cd9c21693d595923` /
-`6a2ca679e88de410e523a7120f498642db835904a257e2d5a254a1df34c3eff6`;
+`c1d8362c3d5f04ebd506d714805d17a1b8c7d94891584b482185c9d5e1dcc157` /
+`73c510d5c697ec6ea170575a074eb2bb56b63608a609f543d4abf7fe8723ff92`;
 strings/array manifest/pass set
 `c782b93935c1aaba8789c0bc84b3fe98f347c01d15cdc3e187cdb09412357115` /
 `e4b124b21d7f4fdac8e7b0c17c2cdac47b79db65b98b89c48811fdddd4c32c16`.
+
+The remaining Fiber failures that require suspending internal callbacks or
+generators are a separate runtime architecture boundary. Tokenizer/parser
+front-end work is also explicitly outside this stream.
+
+### Preceding exception-handler checkpoint
+
+The `exception-handler-finalization` checkpoint over `df1f54f8` added 10 exact
+PHP 8.5 passes without loss and reduced supported failure debt from 165 to 155.
+It aligned replacement exception handlers, shutdown/finally/destructor order,
+chunked output-handler failures, fatal error state, callback traces and
+headers-sent origins.
 
 ### Preceding class-constant checkpoint
 
