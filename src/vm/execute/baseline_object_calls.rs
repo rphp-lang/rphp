@@ -659,7 +659,6 @@ fn attach_constant_expression_origin(
 
 enum InstanceDefaultOrigin<'a> {
     User(*mut ExecuteData, &'a crate::compiler::OpArray, usize),
-    #[cfg(feature = "stream-registry")]
     Internal(*mut ExecuteData),
 }
 
@@ -668,7 +667,6 @@ impl InstanceDefaultOrigin<'_> {
     fn attach(&self, exception: &Value, definition: &crate::compiler::compile::DeferredPropertyDefault, eg: &ExecutorGlobals) {
         match self {
             Self::User(frame, op_array, ip) => attach_constant_expression_origin(exception, definition, eg, *frame, op_array, *ip),
-            #[cfg(feature = "stream-registry")]
             Self::Internal(frame) => attach_internal_constant_expression_trace(exception, *frame, eg),
         }
     }
@@ -823,7 +821,6 @@ fn materialize_deferred_instance_defaults(
 /// Internal protocols construct a real instance without calling its user
 /// constructor. Defaults use the same request-local materialization and type
 /// checks as NewObj, including deferred constant-expression failures.
-#[cfg(feature = "stream-registry")]
 #[cold]
 pub(crate) fn instantiate_protocol_object(
     eg: &mut ExecutorGlobals,

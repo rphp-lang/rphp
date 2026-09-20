@@ -2,6 +2,7 @@ mod common;
 
 use common::run_php;
 
+#[cfg(feature = "formatted-io")]
 #[test]
 fn byte_projections_casts_hashes_and_stream_writes_keep_utf8_identity() {
     assert_eq!(

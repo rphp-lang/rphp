@@ -500,10 +500,10 @@ pub(super) fn fn_file_put_contents(
             "memory" | "temp" => Ok(()),
             _ => Err(std::io::Error::from(std::io::ErrorKind::Unsupported)),
         };
-        return match written {
+        match written {
             Ok(()) => ret!(rv, Value::long(raw_bytes.len() as i64)),
             Err(_) => ret!(rv, Value::bool(false)),
-        };
+        }
     }
     let append = flags & 8 != 0;
     let locked = flags & 2 != 0;
