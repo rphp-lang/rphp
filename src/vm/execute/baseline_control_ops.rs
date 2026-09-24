@@ -1627,6 +1627,25 @@ fn op_include<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    let suppressed = opline._pad & crate::vm::instruction::INCLUDE_FLAG_ERROR_SUPPRESS != 0;
+    if suppressed {
+        eg.begin_error_suppression(frame as usize);
+    }
+    let outcome = op_include_inner(eg, frame, op_array, opline);
+    if suppressed && outcome.is_ok() {
+        eg.end_error_suppression(frame as usize);
+    }
+    outcome
+}
+
+#[cold]
+#[inline(never)]
+fn op_include_inner<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &crate::vm::instruction::Instruction,
+) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: opcode dispatch supplies a live frame and an operand descriptor
     // belonging to this op-array. Clone the dereferenced value before any
     // object conversion callback can re-enter and mutate the source slot.

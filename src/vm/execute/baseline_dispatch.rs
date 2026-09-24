@@ -6071,13 +6071,21 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     && opline.result_type == OpType::Unused
                     && opline._pad & CALL_FLAG_RETURN_EXPLICITLY_IGNORED == 0
                 {
-                    let reported = report_no_discard_user_call(
-                        eg,
-                        frame,
-                        user_callee_fast.expect("NoDiscard call plan belongs to a user function"),
-                        Some(call as usize),
-                        None,
-                    );
+                    let reported = if let Some(user) = user_callee_fast {
+                        report_no_discard_user_call(
+                            eg,
+                            frame,
+                            user,
+                            Some(call as usize),
+                            None,
+                        )
+                    } else {
+                        report_no_discard_internal_call(
+                            eg,
+                            frame,
+                            func_common_fast as *const FunctionCommon,
+                        )
+                    };
                     if let Err(error) = reported {
                         if suppressed_call {
                             eg.end_error_suppression(call as usize);

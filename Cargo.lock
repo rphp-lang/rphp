@@ -373,6 +373,7 @@ name = "rphp"
 version = "0.1.0-alpha.1"
 dependencies = [
  "fs2",
+ "libc",
  "libloading",
  "md5crypt",
  "memchr",

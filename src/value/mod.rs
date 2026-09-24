@@ -1466,6 +1466,35 @@ pub(crate) fn cycle_collection_status() -> CycleCollectionStatus {
     })
 }
 
+/// Remove dead weak roots before exposing allocator usage to userland.
+///
+/// The possible-root buffer is VM bookkeeping rather than a live PHP value.
+/// Rebuilding it here prevents a burst of already-reclaimed temporary
+/// objects from looking like a userland leak while preserving every live
+/// cycle candidate and its insertion order.
+#[cold]
+pub(crate) fn prune_dead_cycle_root_storage() {
+    CYCLE_ROOTS.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.collecting {
+            return;
+        }
+        let mut candidates = std::mem::take(&mut state.candidates);
+        candidates.retain(|candidate| candidate.strong_count() != 0);
+        if candidates.is_empty() {
+            state.indices = HashMap::default();
+            return;
+        }
+        candidates.shrink_to_fit();
+        state.indices = candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| (candidate.identity(), index))
+            .collect();
+        state.candidates = candidates;
+    });
+}
+
 pub(crate) fn cycle_root_snapshot() -> Vec<Value> {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
@@ -7722,6 +7751,14 @@ impl Value {
             ValueType::Long => self.as_long().map(|value| value as f64),
             ValueType::Double => self.as_double(),
             ValueType::Resource => None,
+            ValueType::String => {
+                let text = self.as_str()?.trim();
+                text.as_bytes()
+                    .iter()
+                    .any(u8::is_ascii_digit)
+                    .then(|| text.parse::<f64>().ok())
+                    .flatten()
+            }
             _ => self.to_double(),
         }
     }

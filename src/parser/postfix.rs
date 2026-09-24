@@ -292,6 +292,7 @@ impl Parser {
                     args,
                     generic_args: Vec::new(),
                     method_syntax: true,
+                    braced_member: true,
                     line,
                 });
             }
@@ -336,6 +337,7 @@ impl Parser {
                     args,
                     generic_args: Vec::new(),
                     method_syntax: true,
+                    braced_member: false,
                     line,
                 });
             }
@@ -384,6 +386,7 @@ impl Parser {
                     args,
                     generic_args: Vec::new(),
                     method_syntax: true,
+                    braced_member: false,
                     line,
                 });
             }
@@ -530,6 +533,7 @@ impl Parser {
                             args,
                             generic_args: Vec::new(),
                             method_syntax: false,
+                            braced_member: false,
                             line,
                         };
                     }
@@ -543,6 +547,7 @@ impl Parser {
                         args,
                         generic_args,
                         method_syntax: false,
+                        braced_member: false,
                         line,
                     };
                 }
@@ -677,6 +682,7 @@ impl Parser {
                                     args,
                                     generic_args: Vec::new(),
                                     method_syntax: true,
+                                    braced_member: true,
                                     line,
                                 };
                             }
@@ -715,6 +721,7 @@ impl Parser {
                                     args,
                                     generic_args: Vec::new(),
                                     method_syntax: true,
+                                    braced_member: false,
                                     line,
                                 };
                             }
@@ -757,6 +764,7 @@ impl Parser {
                                     args,
                                     generic_args: Vec::new(),
                                     method_syntax: true,
+                                    braced_member: false,
                                     line,
                                 };
                             }

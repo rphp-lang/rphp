@@ -76,21 +76,22 @@ use crate::vm::instruction::{
     ASSIGN_DIM_INCDEC_INCREMENT, ASSIGN_DIM_INDIRECT_REBUILD, ASSIGN_DIM_KEY_ALREADY_NORMALIZED,
     ASSIGN_DIM_REFERENCE, ASSIGN_DIM_RESULT_VALUE, ASSIGN_DIM_UNSET_REBUILD, ASSIGN_OBJ_CLONE_WITH,
     ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
-    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER,
-    CLONE_OBJ_WITH_PROPERTIES, EVAL_FLAG_ERROR_SUPPRESS, FETCH_CV_LIVE_UNPACK_SOURCE,
-    FETCH_DIM_COMPOUND, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL,
-    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED,
-    FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
-    FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
-    FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND, FETCH_OBJ_COMPOUND_RECEIVER,
-    FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
-    FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache,
-    Instruction, JMP_NZ_RELEASE_TEMPS, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
+    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, CALL_FLAG_BRACED_METHOD_NAME,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
+    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
+    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
+    EVAL_FLAG_ERROR_SUPPRESS, FETCH_CV_LIVE_UNPACK_SOURCE, FETCH_DIM_COMPOUND,
+    FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL, FETCH_DIM_ERROR_SUPPRESS,
+    FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC,
+    FETCH_DIM_ISSET, FETCH_DIM_MUTABLE, FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE,
+    FETCH_DIM_SILENT, FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME,
+    FETCH_DYNAMIC_SILENT, FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND,
+    FETCH_OBJ_COMPOUND_RECEIVER, FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS,
+    FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY, FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT,
+    INCLUDE_FLAG_ERROR_SUPPRESS, INSTANCEOF_DYNAMIC_STATIC_SCOPE, InlineCache, Instruction,
+    JMP_NZ_RELEASE_TEMPS, KnownScalarType, NEW_FLAG_DYNAMIC_CLASS_NAME,
     NEW_FLAG_DYNAMIC_STATIC_SCOPE, NEW_FLAG_NAMED_ARGUMENTS, NEW_FLAG_PREPARE_ONLY,
     NEW_FLAG_PREPARED, NEW_FLAG_UNPACKED_ARGUMENTS, NEW_FLAG_UNRESOLVED_LEXICAL_SCOPE,
     NEW_FLAG_VALIDATE_ONLY, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
@@ -12363,6 +12364,8 @@ impl Compiler {
                         instruction._pad |= CALL_FLAG_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::Eval {
                         instruction._pad |= EVAL_FLAG_ERROR_SUPPRESS;
+                    } else if instruction.opcode == OpCode::Include {
+                        instruction._pad |= INCLUDE_FLAG_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchCvR {
                         instruction._pad |= crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS;
                     } else if instruction.opcode == OpCode::FetchConst {
@@ -13763,6 +13766,7 @@ impl Compiler {
                 args,
                 generic_args,
                 method_syntax,
+                braced_member,
                 line,
             } => {
                 // Compile the callable expression (e.g. $var, $arr[0])
@@ -13808,6 +13812,7 @@ impl Compiler {
                     args,
                     generic_args,
                     false,
+                    *braced_member,
                     *line,
                 );
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
@@ -13925,6 +13930,7 @@ impl Compiler {
                     args,
                     generic_args,
                     true,
+                    false,
                     *line,
                 );
                 self.publish_nullsafe_receiver_patches(result, receiver_patches);
@@ -16089,6 +16095,7 @@ impl Compiler {
         args: &[CallArg],
         generic_args: &[TypeHint],
         static_member_syntax: bool,
+        braced_member: bool,
         line: usize,
     ) -> (u16, OpType) {
         let (callable, callable_type) = if args.iter().any(CallArg::contains_yield) {
@@ -16138,6 +16145,9 @@ impl Compiler {
         init.op1 = callable;
         init.op1_type = callable_type;
         init.extended_value = args.len() as u32;
+        if braced_member {
+            init._pad |= CALL_FLAG_BRACED_METHOD_NAME;
+        }
         self.push_instruction_at_line(init, line);
         if let Some(compiled_args) = compiled_args.as_deref() {
             self.emit_precompiled_runtime_call_args(args, compiled_args, 0, 0, None, true, true);

@@ -33,20 +33,20 @@ use super::instruction::{
     ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_INCDEC_DECREMENT, ASSIGN_DIM_INCDEC_INCREMENT,
     ASSIGN_DIM_INDIRECT_REBUILD, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_UNSET_REBUILD,
     ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
-    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK,
-    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
-    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
-    CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
-    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE,
-    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
-    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
-    CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
-    FETCH_DIM_COMPOUND, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL,
-    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED,
-    FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
-    FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET,
-    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
+    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, CALL_FLAG_BRACED_METHOD_NAME,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA,
+    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
+    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
+    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
+    CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
+    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
+    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER,
+    CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_COMPOUND, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
+    FETCH_DIM_EMPTY_TERMINAL, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG,
+    FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC, FETCH_DIM_ISSET,
+    FETCH_DIM_MUTABLE, FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT,
+    FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
     FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND, FETCH_OBJ_COMPOUND_RECEIVER,
     FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
     FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, FETCH_OBJ_UNSET, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
@@ -507,7 +507,7 @@ pub(crate) fn receiver_for_internal_call(internal_frame: *mut ExecuteData) -> Op
             return None;
         }
         let user = &*(function as *const UserFunction);
-        closure_bound_this(caller, &user.op_array, false)
+        closure_bound_this(caller, &user.op_array, false, None)
     }
 }
 
@@ -615,6 +615,7 @@ fn closure_bound_this(
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     is_static: bool,
+    dynamic_scope: Option<&ExecutorGlobals>,
 ) -> Option<Value> {
     if is_static {
         return None;
@@ -633,10 +634,24 @@ fn closure_bound_this(
                 .find(|(_, name)| name == "this")
                 .map(|(index, _)| *index)
         };
-        this_cv.and_then(|index| {
+        let receiver = this_cv.and_then(|index| {
             let value = &*(*frame).get_op_ptr(index, OpType::Cv, op_array);
             (value.value_type() == ValueType::Object).then(|| value.clone())
-        })
+        });
+        if receiver.is_some() {
+            return receiver;
+        }
+
+        let owner = dynamic_scope?.dynamic_scope_owner(frame as usize) as *mut ExecuteData;
+        if owner.is_null() || owner == frame {
+            return None;
+        }
+        let function = (*owner).func;
+        if function.is_null() || (*function).sig.this_offset != 1 || (*owner).num_cvs == 0 {
+            return None;
+        }
+        let receiver = (*owner).cv(0);
+        (receiver.value_type() == ValueType::Object).then(|| receiver.clone())
     }
 }
 
@@ -4374,7 +4389,7 @@ fn execute_full_call<'a>(
                     && crate::stdlib::callback_uses_legacy_scope(&value)
                 {
                     let lexical_class = get_caller_class(frame, eg);
-                    let receiver = closure_bound_this(frame, op_array, false);
+                    let receiver = closure_bound_this(frame, op_array, false, None);
                     let called_class = receiver
                         .as_ref()
                         .and_then(Value::as_object)

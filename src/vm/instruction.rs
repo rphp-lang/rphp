@@ -56,6 +56,11 @@ pub const CALL_FLAG_ERROR_SUPPRESS: u16 = 1 << 10;
 /// for PHP 8.5's `#[NoDiscard]` warning contract.
 pub const CALL_FLAG_RETURN_EXPLICITLY_IGNORED: u16 = 1 << 11;
 
+/// InitDynamicCall flag: the source member name used an explicit `{expr}`
+/// boundary. An unhandled non-string name retains PHP's legacy bare fatal
+/// rendering, although a surrounding catch still receives the Error object.
+pub const CALL_FLAG_BRACED_METHOD_NAME: u16 = 1 << 12;
+
 /// SendRef/SendVarEx flag: the source expression is the special `$GLOBALS`
 /// root. PHP permits reading that table by value but never exposing it through
 /// a reference parameter.
@@ -398,6 +403,11 @@ pub const FETCH_DYNAMIC_ERROR_SUPPRESS: u16 = 1 << 2;
 /// caller mask; a fatal compilation bailout keeps the suppressed mask active
 /// through request shutdown.
 pub const EVAL_FLAG_ERROR_SUPPRESS: u16 = 1;
+
+/// `Include` flag: the complete include/require operation is guarded by
+/// PHP's source-level `@` reporting mask.  The include-kind bits remain in
+/// `extended_value`, so this flag uses the otherwise-idle padding field.
+pub const INCLUDE_FLAG_ERROR_SUPPRESS: u16 = 1;
 
 /// `FetchDynamicVar` is the read half of one read-modify-write operation. The
 /// compiler supplies an owned TMP key, and the fetch replaces it with the

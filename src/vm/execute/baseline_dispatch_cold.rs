@@ -949,6 +949,28 @@ fn report_no_discard_user_call(
     )
 }
 
+#[cold]
+fn report_no_discard_internal_call(
+    eg: &mut ExecutorGlobals,
+    caller: *mut ExecuteData,
+    function: *const FunctionCommon,
+) -> Result<(), VmError> {
+    let mut name = displayed_function_name(eg, function);
+    if name.eq_ignore_ascii_case("DateTimeImmutable::setTimestamp") {
+        name = "DateTimeImmutable::setTimestamp".to_string();
+    }
+    let noun = if name.contains("::") { "method" } else { "function" };
+    let mut diagnostic = format!(
+        "The return value of {noun} {name}() should either be used or intentionally ignored by casting it as (void)"
+    );
+    if name.eq_ignore_ascii_case("DateTimeImmutable::setTimestamp") {
+        diagnostic.push_str(
+            ", as DateTimeImmutable::setTimestamp() does not modify the object itself",
+        );
+    }
+    report_user_call_diagnostic(eg, caller, None, &diagnostic, 512, "Warning")
+}
+
 fn scalar_dynamic_variable_name(value: &Value) -> Result<String, VmError> {
     Ok(match value.value_type() {
         ValueType::Undef | ValueType::Null | ValueType::False => String::new(),
@@ -2760,7 +2782,7 @@ fn op_call_user_func_array<'a>(
     let caller_class = get_caller_class(frame, eg);
     let uses_legacy_scope = crate::stdlib::callback_uses_legacy_scope(callback);
     let receiver = if uses_legacy_scope {
-        closure_bound_this(frame, op_array, false)
+        closure_bound_this(frame, op_array, false, None)
     } else {
         None
     };
@@ -5165,7 +5187,7 @@ fn resolve_static_property(
         }
         return Err(VmError::Fatal(format!(
             "Cannot access {} property {}::${}",
-            visibility_name, definition.declaring_class, property
+            visibility_name, class.name, property
         )));
     }
     let storage_slot = eg
@@ -5968,7 +5990,7 @@ fn op_create_closure(
         caller_class_id(frame, eg)
     };
     let is_static = (opline._pad & crate::vm::instruction::CLOSURE_FLAG_STATIC) != 0;
-    let bound_this = closure_bound_this(frame, op_array, is_static);
+    let bound_this = closure_bound_this(frame, op_array, is_static, None);
     let called_scope_class_id = bound_this
         .as_ref()
         .and_then(Value::as_object)

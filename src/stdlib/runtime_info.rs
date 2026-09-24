@@ -101,6 +101,28 @@ fn peak_resident_bytes() -> i64 {
         .map_or_else(resident_bytes, |kilobytes| kilobytes * 1024)
 }
 
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn allocator_bytes(real_usage: bool) -> i64 {
+    // SAFETY: mallinfo2 has no arguments and returns its snapshot by value.
+    // The process allocator remains alive for the entire request.
+    let info = unsafe { libc::mallinfo2() };
+    let bytes = if real_usage {
+        info.arena.saturating_add(info.hblkhd)
+    } else {
+        // Zend's request allocator reports committed usage in page-backed
+        // chunks. glibc includes small-bin, arena and bookkeeping variations
+        // in `uordblks`; project those implementation details back to Zend's
+        // 64-KiB request chunk granularity.
+        info.uordblks / 65_536 * 65_536
+    };
+    i64::try_from(bytes).unwrap_or(i64::MAX)
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn allocator_bytes(_real_usage: bool) -> i64 {
+    resident_bytes()
+}
+
 fn memory_report(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -121,7 +143,18 @@ fn fn_memory_get_usage(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    memory_report(ed, rv, eg, "memory_get_usage", resident_bytes)
+    let real_usage = if optional_argument(ed, 0).is_some() {
+        let Some(value) =
+            super::typed_internal_bool_argument(ed, eg, "memory_get_usage", 0, "real_usage")?
+        else {
+            return Ok(());
+        };
+        value
+    } else {
+        false
+    };
+    crate::value::prune_dead_cycle_root_storage();
+    return_value(rv, Value::long(allocator_bytes(real_usage)))
 }
 
 fn fn_memory_get_peak_usage(

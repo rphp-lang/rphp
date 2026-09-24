@@ -7,6 +7,41 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `core-runtime-remainder` checkpoint over `a4e8f8ba` adds **10 exact PHP
+8.5 passes without loss**. One shared runtime slice now distinguishes
+non-numeric `INF`/`NAN` spellings from arithmetic numbers, suppresses complete
+`@include` operations, preserves requested private-static scope diagnostics,
+validates numeric date fields lexically, carries a live method receiver into
+`eval`, prunes dead allocation-cycle roots, publishes native no-discard
+warnings and preserves legacy brace-member fatal formatting without changing
+ordinary dynamic-method errors.
+
+The measured 7,173-case stable core is now **6,729 pass / 53 fail / 183 skip /
+208 unsupported**, with no timeout or crash. Zend/lang is
+**5,251/53/115/179**, exact **+10/-0**, while strings/array remains
+**1,478/0/68/29**. All five Cargo configurations, all-feature/all-target
+checks, exact pass-set no-loss, Composer/Symfony S0--S3, focused and adjacent
+E2E/PHPT, formatting and unsafe policy are green. Production unsafe inventory
+remains at its existing **1,627-block** ceiling. Aggregate performance remains
+deferred by user direction.
+
+SHA-256 evidence: candidate
+`962603b2362134e5b79b2ed8207c784ebd4544b36c5802a5c293e02ada58ea4a`;
+focused release manifest
+`e65cebe8d5b94735afe7d550007185c2dec7c04b66b6b852354aaea7818031ff`;
+Zend/lang manifest/pass set
+`3d2e634f5211fccb2ec22e325e33b308ca53a911e90b0212b450cef31076f7bc` /
+`bfe95be7a0bd14df928297d229a3aa26f78fd482db968987f1f745633f07129e`;
+strings/array manifest/pass set
+`2ccbe9aac77ee82b207cab2e332096d634d611000bcf23afeeb6de22c00a4111` /
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
+
+Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
+also outside this core train. The next core-language cluster starts from the
+remaining 53 measured failures.
+
+### Preceding front-end source/declaration checkpoint
+
 The `front-end-source-declaration` checkpoint over `be54b74b` adds **10 exact
 PHP 8.5 passes without loss**. It preserves goto/label control flow through
 constant folding, aligns canonical delimiter and asymmetric-write-visibility
@@ -35,10 +70,6 @@ Zend/lang manifest/pass set
 strings/array manifest/pass set
 `2ccbe9aac77ee82b207cab2e332096d634d611000bcf23afeeb6de22c00a4111` /
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
-
-Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
-integrated in `main`; the continuing compatibility sweep owns the remaining
-core-language behavior.
 
 ### Preceding exception-unwind checkpoint
 

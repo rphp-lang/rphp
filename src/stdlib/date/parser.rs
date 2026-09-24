@@ -1456,6 +1456,39 @@ fn apply_relative_expression(
 
 fn absolute_diagnostics(input: &str, fields: &ParsedFields) -> DateParseDiagnostics {
     let mut diagnostics = DateParseDiagnostics::default();
+    // timelib accepts zero and calendar-overflow components for later
+    // normalization, but the two-digit numeric grammar itself stops at month
+    // 12 and day 31.  Keep this lexical error distinct from the ordinary
+    // "parsed date was invalid" normalization warning.
+    if let Some(position) = input
+        .as_bytes()
+        .windows(10)
+        .enumerate()
+        .find_map(|(start, window)| {
+            let numeric_date = window[0..4].iter().all(u8::is_ascii_digit)
+                && window[4] == b'-'
+                && window[5..7].iter().all(u8::is_ascii_digit)
+                && window[7] == b'-'
+                && window[8..10].iter().all(u8::is_ascii_digit);
+            if !numeric_date {
+                return None;
+            }
+            let month = (window[5] - b'0') * 10 + (window[6] - b'0');
+            let day = (window[8] - b'0') * 10 + (window[9] - b'0');
+            if month > 12 {
+                Some(start + 6)
+            } else if day > 31 {
+                Some(start + 9)
+            } else {
+                None
+            }
+        })
+    {
+        diagnostics
+            .errors
+            .push((position, "Unexpected character".to_string()));
+        return diagnostics;
+    }
     if let (Some(year), Some(month), Some(day)) =
         (fields.year_value, fields.month_value, fields.day_value)
     {
@@ -1751,9 +1784,13 @@ pub(super) fn parse_datetime(
     if !has_relative_expression && let Some(state) = parse_numeric_absolute(input, fallback.clone())
     {
         let fields = infer_fields(input);
+        let diagnostics = absolute_diagnostics(input, &fields);
+        if !diagnostics.errors.is_empty() {
+            return Err(diagnostics);
+        }
         return Ok(ParsedDateTime {
             state,
-            diagnostics: absolute_diagnostics(input, &fields),
+            diagnostics,
             relative: None,
             fields,
         });
@@ -1893,6 +1930,9 @@ pub(super) fn parse_datetime(
     {
         let fields = infer_fields(input);
         let diagnostics = absolute_diagnostics(input, &fields);
+        if !diagnostics.errors.is_empty() {
+            return Err(diagnostics);
+        }
         return Ok(ParsedDateTime {
             state,
             diagnostics,

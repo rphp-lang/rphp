@@ -484,6 +484,10 @@ pub enum Expr {
         /// through a callable pair. Retain their method-call spelling for
         /// compile-time diagnostics without changing dynamic dispatch.
         method_syntax: bool,
+        /// The source member name used an explicit `{expr}` boundary. PHP
+        /// retains a legacy bare fatal rendering for an unhandled non-string
+        /// name at this syntax while keeping the Error catchable.
+        braced_member: bool,
         line: usize,
     },
     DynamicStaticCall {

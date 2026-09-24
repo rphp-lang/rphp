@@ -1226,28 +1226,32 @@ fn op_new_obj_resolved<'a>(
     if is_throwable {
         attach_new_throwable_origin(object, eg, frame, op_array, ip);
     }
-    #[cfg(feature = "php-generics-reified")]
-    if let Some(binding) = eg.reified_bindings.last().copied().filter(|binding| {
-        eg.generic_metadata
-            .declaration(*binding)
-            .is_some_and(|declaration| {
-                declaration.kind == crate::generics::GenericDeclarationKind::Class
-                    && eg
-                        .generic_metadata
-                        .symbol(declaration.owner)
-                        .is_some_and(|owner| owner.eq_ignore_ascii_case(&name))
-            })
-    }) {
-        let object = unsafe { &*result_ptr };
-        eg.bind_reified_object(object, binding);
-    }
+    // SAFETY: result_ptr is the freshly published object for this NewObj
+    // instruction and remains rooted for both generic metadata projections.
     #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
-    if let Some(class) = eg.class_by_id(class_id) {
-        let object = unsafe { &*result_ptr };
-        for property in &class.properties {
-            if let Some(default) = &property.default {
-                eg.check_generic_property_value(object, &class.name, &property.name, default)
-                    .map_err(VmError::Fatal)?;
+    unsafe {
+        #[cfg(feature = "php-generics-reified")]
+        if let Some(binding) = eg.reified_bindings.last().copied().filter(|binding| {
+            eg.generic_metadata
+                .declaration(*binding)
+                .is_some_and(|declaration| {
+                    declaration.kind == crate::generics::GenericDeclarationKind::Class
+                        && eg
+                            .generic_metadata
+                            .symbol(declaration.owner)
+                            .is_some_and(|owner| owner.eq_ignore_ascii_case(&name))
+                })
+        }) {
+            eg.bind_reified_object(&*result_ptr, binding);
+        }
+        #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
+        if let Some(class) = eg.class_by_id(class_id) {
+            let object = &*result_ptr;
+            for property in &class.properties {
+                if let Some(default) = &property.default {
+                    eg.check_generic_property_value(object, &class.name, &property.name, default)
+                        .map_err(VmError::Fatal)?;
+                }
             }
         }
     }
@@ -6325,6 +6329,42 @@ fn throw_located_call_error<'a>(
     })
 }
 
+#[cold]
+#[inline(never)]
+fn throw_method_name_must_be_string<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    instruction_index: usize,
+    legacy_bare_unhandled: bool,
+) -> Result<ColdResult<'a>, VmError> {
+    let error = make_error_value("Error", "Method name must be a string");
+    attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
+    match throw_in_frame(eg, frame, error)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            Ok(ColdResult::NewFrame(new_frame, new_op_array))
+        }
+        ThrowResult::Unhandled(error) if legacy_bare_unhandled => {
+            let object = error.as_object();
+            let file = object
+                .as_ref()
+                .and_then(|object| object.get_property("file"))
+                .and_then(Value::as_str)
+                .filter(|file| !file.is_empty())
+                .unwrap_or("Unknown");
+            let line = object
+                .as_ref()
+                .and_then(|object| object.get_property("line"))
+                .and_then(Value::as_long)
+                .unwrap_or(0);
+            Err(VmError::Fatal(format!(
+                "Method name must be a string in {file} on line {line}"
+            )))
+        }
+        ThrowResult::Unhandled(error) => Ok(ColdResult::Unhandled(error)),
+    }
+}
+
 enum StaticCallTargetResolution<'a> {
     Resolved(*const FunctionCommon, bool, Option<Value>),
     Flow(ColdResult<'a>),
@@ -6381,11 +6421,12 @@ fn resolve_static_call_target<'a>(
         // therefore prefers __call over __callStatic. Global static syntax has
         // no receiver and continues directly to the static trampoline.
         let live_receiver = get_caller_class(frame, eg).and_then(|_| {
-            closure_bound_this(frame, op_array, false).filter(|receiver| {
+            closure_bound_this(frame, op_array, false, Some(eg))
+                .filter(|receiver| {
                 receiver
                     .as_object()
                     .is_some_and(|object| eg.class_is_a(&object.class_name, class))
-            })
+                })
         });
         match live_receiver
             .as_ref()
@@ -6854,7 +6895,9 @@ fn op_init_static_call<'a>(
         (common, target_is_instance, direct_receiver)
     };
     let closure_receiver = (target_is_instance && direct_receiver.is_none())
-        .then(|| closure_bound_this(frame, op_array, false))
+        .then(|| {
+            closure_bound_this(frame, op_array, false, Some(eg))
+        })
         .flatten();
     let live_receiver = direct_receiver.or(closure_receiver.as_ref());
     if method_is_non_static {
@@ -7053,7 +7096,7 @@ fn op_init_late_static_call<'a>(
             (direct.expect("checked direct late-static method"), None)
         } else {
             let live_receiver = get_caller_class(frame, eg).and_then(|_| {
-                closure_bound_this(frame, op_array, false).filter(|receiver| {
+                closure_bound_this(frame, op_array, false, None).filter(|receiver| {
                     receiver
                         .as_object()
                         .is_some_and(|object| eg.class_is_a(&object.class_name, &class))
@@ -7234,7 +7277,7 @@ fn op_init_late_static_call<'a>(
     let pending_call = unsafe { (*frame).call };
     let target_is_instance = !common.plan.is_static_method();
     let live_receiver = target_is_instance
-        .then(|| closure_bound_this(frame, op_array, false))
+        .then(|| closure_bound_this(frame, op_array, false, None))
         .flatten()
         .filter(|receiver| {
             receiver.as_object().is_some_and(|object| {
@@ -7468,7 +7511,7 @@ fn resolve_user_call_magic_fallback(
     caller_class: Option<&str>,
     ordinary: Option<crate::stdlib::ResolvedCallback>,
 ) -> Option<crate::stdlib::ResolvedCallback> {
-    let receiver = closure_bound_this(frame, op_array, false);
+    let receiver = closure_bound_this(frame, op_array, false, None);
     crate::stdlib::resolve_live_scoped_instance_callback(
         callback,
         eg,
@@ -7505,7 +7548,7 @@ fn resolve_user_call_at_opline_checked(
         return Ok(ordinary);
     }
     let lexical_class = get_caller_class(frame, eg);
-    let receiver = closure_bound_this(frame, op_array, false);
+    let receiver = closure_bound_this(frame, op_array, false, None);
     let called_class = receiver
         .as_ref()
         .and_then(Value::as_object)
@@ -7903,13 +7946,13 @@ fn op_init_dynamic_static_member_call<'a>(
         )?);
     };
     let Some(raw_method) = method_value.as_str() else {
-        return Ok(throw_located_call_error(
+        return throw_method_name_must_be_string(
             eg,
             frame,
             op_array,
             instruction_index,
-            "Method name must be a string",
-        )?);
+            opline._pad & CALL_FLAG_BRACED_METHOD_NAME != 0,
+        );
     };
     let method = raw_method
         .split_once('\0')
@@ -8003,7 +8046,7 @@ fn op_init_dynamic_static_member_call<'a>(
         {
             ordinary
         } else {
-            let receiver = closure_bound_this(frame, op_array, false);
+            let receiver = closure_bound_this(frame, op_array, false, None);
             crate::stdlib::resolve_live_scoped_instance_callback(
                 callback,
                 eg,
@@ -8179,14 +8222,13 @@ fn op_init_dynamic_call<'a>(
             });
         }
         let Some(raw_method) = callback_method.as_str() else {
-            let error = make_error_value("Error", "Method name must be a string");
-            attach_throwable_origin(&error, eg, frame, op_array, instruction_index);
-            return Ok(match throw_in_frame(eg, frame, error)? {
-                ThrowResult::Handled(new_frame, new_op_array) => {
-                    ColdResult::NewFrame(new_frame, new_op_array)
-                }
-                ThrowResult::Unhandled(exception) => ColdResult::Unhandled(exception),
-            });
+            return throw_method_name_must_be_string(
+                eg,
+                frame,
+                op_array,
+                instruction_index,
+                opline._pad & CALL_FLAG_BRACED_METHOD_NAME != 0,
+            );
         };
         let method = raw_method
             .split_once('\0')

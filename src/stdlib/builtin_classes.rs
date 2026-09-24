@@ -4643,6 +4643,14 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             ParamTypeHint::ClassName(class_name.to_string()),
             [None]
         );
+        if class_name == "DateTimeImmutable" {
+            funcs
+                .last_mut()
+                .expect("DateTimeImmutable::setTimestamp registered")
+                .common
+                .plan
+                .set_has_no_discard_attribute(true);
+        }
         reg_date_method!(
             class_name,
             "setTimezone",
