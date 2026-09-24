@@ -290,17 +290,20 @@ fn unrepresentable_float_interval_retains_source_unit_warning() {
 
 #[test]
 fn invalid_single_declare_body_preserves_internal_diagnostic_boundary() {
-    for (punctuation, token) in [
-        ("?", "Question"),
-        ("]", "RBracket"),
-        (")", "RParen"),
-        ("*", "Star"),
-    ] {
+    for (punctuation, token) in [("?", "Question"), ("*", "Star")] {
         let source = format!("<?php declare(ticks=1) {punctuation}");
         let tokens = rphp::lexer::Lexer::new(&source).tokenize().unwrap();
         assert_eq!(
             rphp::parser::Parser::new(tokens).parse().unwrap_err(),
             format!("Expected Semicolon, got {token}")
+        );
+    }
+    for punctuation in [']', ')'] {
+        let source = format!("<?php declare(ticks=1) {punctuation}");
+        let tokens = rphp::lexer::Lexer::new(&source).tokenize().unwrap();
+        assert_eq!(
+            rphp::parser::Parser::new(tokens).parse().unwrap_err(),
+            format!("Unmatched '{punctuation}' on line 1")
         );
     }
     let tokens = rphp::lexer::Lexer::new("<?php declare(ticks=1) echo ?;")

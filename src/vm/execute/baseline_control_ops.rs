@@ -751,7 +751,8 @@ fn execute_source_unit_inner(
                 || error.starts_with("Invalid indentation")
                 || error.starts_with("Invalid body indentation")
                 || error.starts_with("Unterminated comment starting line ")
-                || error.starts_with("Unclosed '{'")
+                || error.starts_with("Unclosed '")
+                || error.starts_with("Unmatched '")
             {
                 let location = format!(" in {canonical} on line ");
                 if let Some((message, line)) = error.rsplit_once(&location)
@@ -905,7 +906,17 @@ fn execute_source_unit_inner(
         eg.register_runtime_class_declaration(declaration_key, class_def)
             .map_err(VmError::Fatal)?;
     }
-    for class_def in compile_result.class_defs {
+    let eager_class_declaration_keys =
+        std::mem::take(&mut compile_result.eager_class_declaration_keys);
+    debug_assert_eq!(
+        compile_result.class_defs.len(),
+        eager_class_declaration_keys.len()
+    );
+    for (class_def, declaration_key) in compile_result
+        .class_defs
+        .into_iter()
+        .zip(eager_class_declaration_keys)
+    {
         if class_def.is_anonymous() {
             let class_parent_is_enum = class_def
                 .parent
@@ -918,6 +929,13 @@ fn execute_source_unit_inner(
                 }
                 return Err(VmError::Fatal(error));
             }
+            continue;
+        }
+        if eg.find_class(&class_def.name).is_some()
+            && let Some(declaration_key) = declaration_key
+        {
+            eg.register_runtime_class_declaration(declaration_key, class_def)
+                .map_err(VmError::Fatal)?;
             continue;
         }
         let class_is_enum = class_def.is_enum;

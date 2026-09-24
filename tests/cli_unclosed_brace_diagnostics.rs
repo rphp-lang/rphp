@@ -129,12 +129,18 @@ fn an_earlier_parse_error_keeps_priority_over_the_eof_brace() {
 }
 
 #[test]
-fn parenthesis_and_bracket_eof_diagnostics_remain_out_of_scope() {
-    for source in [b"<?php\n{\n(".as_slice(), b"<?php\n{\n[".as_slice()] {
+fn innermost_parenthesis_and_bracket_eof_diagnostics_take_priority() {
+    for (source, delimiter) in [
+        (b"<?php\n{\n(".as_slice(), '('),
+        (b"<?php\n{\n[".as_slice(), '['),
+    ] {
         let (status, stdout, stderr) = run_stdin(source);
         assert_eq!(status, 255);
         assert!(stdout.is_empty());
-        assert_eq!(stderr, "Parse error: Expected expression, got Eof\n");
+        assert_eq!(
+            stderr,
+            format!("Parse error: Unclosed '{delimiter}' in Standard input code on line 3\n")
+        );
         assert!(!stderr.contains("Unclosed '{'"));
     }
 }

@@ -3006,7 +3006,7 @@ impl Compiler {
     #[cold]
     #[inline(never)]
     fn emit_statement_tick(&mut self, stmt: &Stmt) {
-        if matches!(stmt, Stmt::Noop | Stmt::Block(_) | Stmt::Label(_) | Stmt::Namespace { .. }
+        if matches!(stmt, Stmt::Noop | Stmt::Block(_) | Stmt::Label { .. } | Stmt::Namespace { .. }
             | Stmt::Return { .. } | Stmt::Throw { .. } | Stmt::Break { .. }
             | Stmt::Continue { .. } | Stmt::Goto { .. } | Stmt::HaltCompiler { .. }) {
             return;
@@ -3056,9 +3056,9 @@ impl Compiler {
                     self.compile_stmt(statement)?;
                 }
             }
-            Stmt::Label(name) => {
+            Stmt::Label { name, line } => {
                 self.definitely_defined_cvs.clear();
-                self.define_label(name)?;
+                self.define_label(name, *line)?;
             }
             Stmt::Goto { name, line } => {
                 self.emit_goto(name, *line)?;
@@ -3277,8 +3277,13 @@ impl Compiler {
                 // effects. Compile only its live branch so mutually exclusive
                 // conditional declarations retain PHP's runtime identity
                 // instead of being registered eagerly as duplicates.
-                if self.tick_interval == 0 && let Ok(value) =
-                    self.eval_const_expr_in_source(condition, &self.known_constants)
+                if self.tick_interval == 0
+                    && !then_body
+                        .iter()
+                        .chain(else_body)
+                        .any(Stmt::contains_goto_or_label)
+                    && let Ok(value) =
+                        self.eval_const_expr_in_source(condition, &self.known_constants)
                 {
                     // Yield is a syntactic generator marker in PHP, including
                     // when it lives in the branch eliminated below. Record it

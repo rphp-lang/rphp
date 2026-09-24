@@ -988,6 +988,9 @@ impl Parser {
                 | Token::Public
                 | Token::Protected
                 | Token::Private
+                | Token::PublicSet(_)
+                | Token::ProtectedSet(_)
+                | Token::PrivateSet(_)
                 | Token::Final(_)
                 | Token::AttributeStart(_)
         )
@@ -1012,6 +1015,10 @@ impl Parser {
                 self.last_primary_line = Some(line);
                 parts.push(n);
             }
+            Token::Clone(line) => {
+                self.last_primary_line = Some(line);
+                parts.push("clone".to_string());
+            }
             Token::True => parts.push("true".to_string()),
             Token::False => parts.push("false".to_string()),
             Token::Null => parts.push("null".to_string()),
@@ -1026,6 +1033,7 @@ impl Parser {
             self.advance(); // consume '\'
             match self.advance() {
                 Token::Identifier(n, _) | Token::Enum { name: n, .. } => parts.push(n),
+                Token::Clone(_) => parts.push("clone".to_string()),
                 Token::True => parts.push("true".to_string()),
                 Token::False => parts.push("false".to_string()),
                 Token::Null => parts.push("null".to_string()),
@@ -1595,8 +1603,14 @@ impl Parser {
                     Ok(TypeHint::ClassName("static".to_string()))
                 }
             }
-            Token::LParen(_) => {
+            Token::LParen(line) => {
                 let first = self.parse_base_type_hint()?;
+                if self.peek() == Token::RParen {
+                    return Err(self.source_error(
+                        "syntax error, unexpected token \")\", expecting token \"&\"",
+                        line,
+                    ));
+                }
                 let intersection = self.maybe_parse_intersection_type(first)?;
                 self.expect(&Token::RParen)?;
                 Ok(intersection)
@@ -1681,6 +1695,15 @@ impl Parser {
         let mut promo_set_visibility = None;
         loop {
             match self.peek() {
+                Token::PublicSet(_) | Token::ProtectedSet(_) | Token::PrivateSet(_) => {
+                    promo_set_visibility = Some(match self.advance() {
+                        Token::PublicSet(_) => Visibility::Public,
+                        Token::ProtectedSet(_) => Visibility::Protected,
+                        Token::PrivateSet(_) => Visibility::Private,
+                        _ => unreachable!(),
+                    });
+                    continue;
+                }
                 Token::Public | Token::Protected | Token::Private => {
                     let vis = match self.advance() {
                         Token::Public => Visibility::Public,
@@ -1688,20 +1711,6 @@ impl Parser {
                         Token::Private => Visibility::Private,
                         _ => unreachable!(),
                     };
-                    if matches!(self.peek(), Token::LParen(_)) {
-                        self.advance();
-                        match self.advance() {
-                            Token::Identifier(name, _) if name.eq_ignore_ascii_case("set") => {}
-                            other => {
-                                return Err(format!(
-                                    "Expected set in asymmetric visibility, got {other:?}"
-                                ));
-                            }
-                        }
-                        self.expect(&Token::RParen)?;
-                        promo_set_visibility = Some(vis);
-                        continue;
-                    }
                     promo_visibility = Some(vis);
                     if matches!(self.peek(), Token::Identifier(ref s, _) if s == "readonly") {
                         self.advance();

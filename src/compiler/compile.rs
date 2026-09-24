@@ -274,6 +274,10 @@ pub struct CompileResult {
     /// reaches the matching declaration marker.
     pub runtime_functions: Vec<(String, String, UserFunction)>,
     pub class_defs: Vec<ClassDef>,
+    /// Executable declaration markers aligned with eager named class defs.
+    /// A source-unit loader may need to defer an otherwise eager declaration
+    /// when that name is already occupied before the unit executes.
+    pub eager_class_declaration_keys: Vec<Option<String>>,
     /// Named classes whose trait composition must happen at their executable
     /// declaration marker rather than during source-unit setup.
     pub runtime_class_defs: Vec<(String, ClassDef)>,
@@ -6190,6 +6194,7 @@ impl Compiler {
             runtime_class_declaration_names(&self.class_defs, &self.class_declaration_keys);
         debug_assert_eq!(self.class_defs.len(), self.class_declaration_keys.len());
         let mut class_defs = Vec::with_capacity(self.class_defs.len());
+        let mut eager_class_declaration_keys = Vec::with_capacity(self.class_defs.len());
         let mut runtime_class_defs = Vec::new();
         for (class_def, declaration) in self.class_defs.into_iter().zip(self.class_declaration_keys)
         {
@@ -6200,6 +6205,7 @@ impl Compiler {
             if declaration_is_runtime && let Some((declaration_key, _)) = declaration {
                 runtime_class_defs.push((declaration_key, class_def));
             } else {
+                eager_class_declaration_keys.push(declaration.as_ref().map(|(key, _)| key.clone()));
                 class_defs.push(class_def);
             }
         }
@@ -6262,6 +6268,7 @@ impl Compiler {
             functions,
             runtime_functions,
             class_defs,
+            eager_class_declaration_keys,
             runtime_class_defs,
             constant_attributes: self.constant_attributes.borrow().clone(),
             constant_expressions: self.constant_expressions.borrow().clone(),
@@ -6272,10 +6279,13 @@ impl Compiler {
 
     fn statement_statically_returns(&self, statement: &Stmt) -> bool {
         match statement {
-            Stmt::Block(body) => body.iter().any(|statement| {
-                matches!(statement, Stmt::Return { .. })
-                    || self.statement_statically_returns(statement)
-            }),
+            Stmt::Block(body) => {
+                !body.iter().any(Stmt::contains_goto_or_label)
+                    && body.iter().any(|statement| {
+                        matches!(statement, Stmt::Return { .. })
+                            || self.statement_statically_returns(statement)
+                    })
+            }
             Stmt::If {
                 condition,
                 then_body,
@@ -7549,6 +7559,18 @@ impl Compiler {
             Expr::Float(f) => Ok(Value::double(*f)),
             Expr::StringLiteral(s) => Ok(Value::string(s.clone())),
             Expr::BinaryStringLiteral(s) => Ok(Value::binary_string_from_storage(s.clone())),
+            // Heredoc and nowdoc retain their payload source line for eval and
+            // trace diagnostics. The wrapper is transparent to constant
+            // evaluation just as it is to ordinary expression lowering.
+            Expr::InterpolatedString { value, .. } => {
+                Self::eval_const_expr_with_context_and_enum_classes(
+                    value,
+                    known,
+                    file_context,
+                    precision,
+                    known_enum_classes,
+                )
+            }
             Expr::Bool(b) => Ok(Value::bool(*b)),
             Expr::Null => Ok(Value::null()),
             Expr::Constant { name, .. } | Expr::CompilerHaltOffsetConstant { name, .. } => {
@@ -11353,7 +11375,11 @@ impl Compiler {
                 eval.op1_type = source_type;
                 eval.result = result;
                 eval.result_type = OpType::Tmp;
-                eval.extended_value = u32::try_from(*line).unwrap_or(u32::MAX);
+                let trace_line = match source.as_ref() {
+                    Expr::InterpolatedString { line, .. } => *line,
+                    _ => *line,
+                };
+                eval.extended_value = u32::try_from(trace_line).unwrap_or(u32::MAX);
                 self.instructions.push(eval);
                 self.definitely_defined_cvs.clear();
                 (result, OpType::Tmp)
@@ -14511,9 +14537,23 @@ impl Compiler {
             Expr::Clone {
                 expr: inner,
                 with_properties,
+                source_args,
                 line,
                 ..
             } => {
+                if let Some(arguments) = source_args
+                    && !matches!(
+                        arguments.as_slice(),
+                        [CallArg::Positional(_)] | [CallArg::Positional(_), CallArg::Positional(_)]
+                    )
+                {
+                    return self.compile_expr(&Expr::FunctionCall {
+                        name: "\\clone".to_string(),
+                        args: arguments.clone(),
+                        generic_args: Vec::new(),
+                        line: *line,
+                    });
+                }
                 let (src_op, src_type) = self.compile_expr(inner);
                 let properties = with_properties
                     .as_ref()
@@ -14787,9 +14827,9 @@ impl Compiler {
             .any(|region| region.kind == GotoRegionKind::TryFinally && !target.contains(region))
     }
 
-    fn define_label(&mut self, name: &str) -> Result<(), String> {
+    fn define_label(&mut self, name: &str, line: usize) -> Result<(), String> {
         if self.labels.contains_key(name) {
-            return Err(format!("Label '{name}' already defined"));
+            return Err(self.goto_error(&format!("Label '{name}' already defined"), line));
         }
         let target = self.instructions.len() as u16;
         let target_regions = self.goto_regions.clone();
@@ -14892,7 +14932,10 @@ impl Compiler {
 
     fn finalize_gotos(&mut self) -> Result<(), String> {
         if let Some(patch) = self.goto_patches.first() {
-            return Err(format!("'goto' to undefined label '{}'", patch.label));
+            return Err(self.goto_error(
+                &format!("'goto' to undefined label '{}'", patch.label),
+                patch.line,
+            ));
         }
         // Resolve non-local transfers once, after forward labels and every
         // try/finally range are known. Ordinary loop backedges retain Jmp's

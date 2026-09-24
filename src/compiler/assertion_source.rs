@@ -1691,7 +1691,7 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 Some(level) => format!("continue {level};"),
                 None => "continue;".to_string(),
             }),
-            Stmt::Label(name) => Some(format!("{name}:")),
+            Stmt::Label { name, .. } => Some(format!("{name}:")),
             Stmt::Goto { name, .. } => Some(format!("goto {name};")),
             Stmt::Switch { expr, cases } => {
                 let mut output = format!("switch ({}) {{\n", render(expr, 0, false)?);
@@ -2423,9 +2423,12 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
             Expr::Clone {
                 expr,
                 with_properties,
+                source_args,
                 ..
             } => {
-                let arguments = if let Some(with_properties) = with_properties {
+                let arguments = if let Some(arguments) = source_args {
+                    render_arguments(arguments)?
+                } else if let Some(with_properties) = with_properties {
                     format!(
                         "{}, {}",
                         render(expr, 0, false)?,

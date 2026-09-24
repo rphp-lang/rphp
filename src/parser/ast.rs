@@ -551,6 +551,10 @@ pub enum Expr {
     Clone {
         expr: Box<Expr>,
         with_properties: Option<Box<Expr>>,
+        /// Parenthesized PHP 8.5 clone-call spelling, including named,
+        /// unpacked and surplus arguments retained for call validation and
+        /// assertion-source rendering. Unary clone keeps this absent.
+        source_args: Option<Vec<CallArg>>,
         line: usize,
     }, // clone $expr / clone($expr, $withProperties)
 }
@@ -580,12 +584,18 @@ impl Expr {
             Expr::Clone {
                 expr,
                 with_properties,
+                source_args,
                 ..
             } => {
-                expr.contains_yield()
-                    || with_properties
-                        .as_deref()
-                        .is_some_and(Expr::contains_yield)
+                source_args.as_ref().map_or_else(
+                    || {
+                        expr.contains_yield()
+                            || with_properties
+                                .as_deref()
+                                .is_some_and(Expr::contains_yield)
+                    },
+                    |arguments| arguments.iter().any(CallArg::contains_yield),
+                )
             }
             Expr::Ternary {
                 condition,
@@ -875,7 +885,10 @@ pub enum Stmt {
         line: usize,
     },
     Block(Vec<Stmt>),
-    Label(String),
+    Label {
+        name: String,
+        line: usize,
+    },
     Goto {
         name: String,
         line: usize,
@@ -1131,6 +1144,46 @@ pub enum Stmt {
 }
 
 impl Stmt {
+    /// Whether this statement contains a label or goto in the current
+    /// function. Nested declarations own a separate label namespace and are
+    /// deliberately not traversed.
+    pub(crate) fn contains_goto_or_label(&self) -> bool {
+        match self {
+            Stmt::Label { .. } | Stmt::Goto { .. } => true,
+            Stmt::Block(body)
+            | Stmt::While { body, .. }
+            | Stmt::DoWhile { body, .. }
+            | Stmt::Foreach { body, .. }
+            | Stmt::Namespace { body, .. } => body.iter().any(Stmt::contains_goto_or_label),
+            Stmt::If {
+                then_body,
+                else_body,
+                ..
+            } => then_body.iter().any(Stmt::contains_goto_or_label)
+                || else_body.iter().any(Stmt::contains_goto_or_label),
+            Stmt::For { init, body, .. } => init.iter().any(Stmt::contains_goto_or_label)
+                || body.iter().any(Stmt::contains_goto_or_label),
+            Stmt::Switch { cases, .. } => cases
+                .iter()
+                .any(|case| case.body.iter().any(Stmt::contains_goto_or_label)),
+            Stmt::TryCatch {
+                try_body,
+                catches,
+                finally_body,
+            } => try_body.iter().any(Stmt::contains_goto_or_label)
+                || catches
+                    .iter()
+                    .any(|catch| catch.body.iter().any(Stmt::contains_goto_or_label))
+                || finally_body.as_ref().is_some_and(|body| {
+                    body.iter().any(Stmt::contains_goto_or_label)
+                }),
+            Stmt::Declare { body, .. } => body
+                .as_deref()
+                .is_some_and(|body| body.iter().any(Stmt::contains_goto_or_label)),
+            _ => false,
+        }
+    }
+
     /// Whether this statement syntactically contains a yield belonging to the
     /// current function, including one in an unreachable branch.
     /// Nested function, method, closure and class bodies own independent
@@ -1250,7 +1303,7 @@ impl Stmt {
             Stmt::Block(body) => body.iter().any(Stmt::contains_yield),
             Stmt::Noop
             | Stmt::HaltCompiler { .. }
-            | Stmt::Label(_)
+            | Stmt::Label { .. }
             | Stmt::Goto { .. }
             | Stmt::Break { .. }
             | Stmt::Continue { .. }

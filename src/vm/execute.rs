@@ -466,6 +466,34 @@ pub(crate) fn lexical_class_name_for_internal_call(
     get_caller_class(caller_frame_for_internal_call(internal_frame)?, eg)
 }
 
+/// Recover the nearest user lexical scope through nested internal callback
+/// consumers. Engine callbacks such as `array_map(clone(...), ...)` retain
+/// the PHP call site's visibility even though two internal frames intervene.
+pub(crate) fn lexical_class_name_for_nested_internal_call(
+    eg: &ExecutorGlobals,
+    mut internal_frame: *mut ExecuteData,
+) -> Option<String> {
+    while !internal_frame.is_null() {
+        // SAFETY: synchronous internal dispatch retains every predecessor
+        // frame until the nested handler returns.
+        unsafe {
+            let physical = (*internal_frame).prev_execute_data;
+            let caller = eg.trace_caller(internal_frame as usize, physical);
+            if caller.is_null() {
+                return None;
+            }
+            let function = (*caller).func;
+            if !function.is_null()
+                && Function::from_common_ptr(function).fn_type() == FunctionType::User
+            {
+                return get_caller_class(caller, eg);
+            }
+            internal_frame = caller;
+        }
+    }
+    None
+}
+
 /// Recover the live `$this` of the user frame that invoked an internal
 /// callback consumer. Named methods reserve CV 0; class-scoped closures keep
 /// the same receiver in their compiler-recorded `this` CV.

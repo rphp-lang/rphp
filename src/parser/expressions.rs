@@ -1004,35 +1004,61 @@ impl Parser {
             }
             Token::Clone(line) => {
                 self.advance();
-                let (expr, with_properties) = if matches!(self.peek(), Token::LParen(_)) {
+                let (expr, with_properties, source_args) = if matches!(self.peek(), Token::LParen(_)) {
                     self.advance();
-                    let mut expr = self.parse_expr()?;
-                    let has_argument_separator = matches!(self.peek(), Token::Comma(_));
-                    let with_properties = if has_argument_separator {
-                        self.advance();
-                        if self.peek() == Token::RParen {
-                            None
-                        } else {
-                            let properties = Some(Box::new(self.parse_expr()?));
-                            if matches!(self.peek(), Token::Comma(_)) {
-                                self.advance();
+                    if self.consume_first_class_callable_placeholder() {
+                        return Ok(Expr::FirstClassFunctionCallable {
+                            name: "\\clone".to_string(),
+                            line,
+                        });
+                    }
+                    let argument_start = self.pos;
+                    let mut arguments = self.parse_call_args()?;
+                    let argument_end = self.pos.saturating_sub(1);
+                    let has_argument_separator = {
+                        let mut parens = 0usize;
+                        let mut brackets = 0usize;
+                        let mut braces = 0usize;
+                        self.tokens[argument_start..argument_end].iter().any(|token| {
+                            match token {
+                                Token::LParen(_) => parens += 1,
+                                Token::RParen => parens = parens.saturating_sub(1),
+                                Token::LBracket(_) => brackets += 1,
+                                Token::RBracket => brackets = brackets.saturating_sub(1),
+                                Token::LBrace(_) => braces += 1,
+                                Token::RBrace(_) => braces = braces.saturating_sub(1),
+                                Token::Comma(_) if parens == 0 && brackets == 0 && braces == 0 => {
+                                    return true;
+                                }
+                                _ => {}
                             }
-                            properties
-                        }
-                    } else {
-                        None
+                            false
+                        })
                     };
-                    self.expect(&Token::RParen)?;
+                    let mut expr = arguments
+                        .first()
+                        .and_then(|argument| match argument {
+                            CallArg::Positional(value) => Some(value.clone()),
+                            _ => None,
+                        })
+                        .unwrap_or(Expr::Null);
                     // Before PHP 8.5, whitespace-parenthesized clone operands
                     // could continue with property/method postfixes outside
                     // the grouping parentheses: `clone (new C)->property`.
                     // A comma identifies the new argument-list form instead.
-                    if !has_argument_separator {
+                    if !has_argument_separator
+                        && matches!(arguments.as_slice(), [CallArg::Positional(_)])
+                    {
                         expr = self.parse_postfix_chain(expr)?;
+                        arguments[0] = CallArg::Positional(expr.clone());
                     }
-                    (expr, with_properties)
+                    let with_properties = arguments.get(1).and_then(|argument| match argument {
+                        CallArg::Positional(value) => Some(Box::new(value.clone())),
+                        _ => None,
+                    });
+                    (expr, with_properties, Some(arguments))
                 } else {
-                    (self.parse_unary()?, None)
+                    (self.parse_unary()?, None, None)
                 };
                 // Assignment binds inside clone's operand in PHP's grammar:
                 // `clone $copy = new C` means `clone ($copy = new C)`.
@@ -1042,6 +1068,7 @@ impl Parser {
                 Ok(Expr::Clone {
                     expr: Box::new(expr),
                     with_properties,
+                    source_args,
                     line,
                 })
             }

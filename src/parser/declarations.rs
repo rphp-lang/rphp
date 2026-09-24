@@ -1638,75 +1638,39 @@ impl Parser {
                 }
                 Token::Public => {
                     self.advance();
-                    if matches!(self.peek(), Token::LParen(_))
-                        && matches!(self.peek_at(1), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("set"))
-                        && self.peek_at(2) == Token::RParen
-                    {
-                        self.advance();
-                        match self.advance() {
-                            Token::Identifier(_, _) => {}
-                            _ => unreachable!(),
-                        }
-                        self.advance();
-                        if modifiers.set_visibility.is_some() {
-                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
-                        }
-                        modifiers.set_visibility = Some(Visibility::Public);
-                    } else {
-                        if modifiers.has_visibility {
-                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
-                        }
-                        modifiers.has_visibility = true;
-                        modifiers.visibility = Visibility::Public;
+                    if modifiers.has_visibility {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
+                    modifiers.has_visibility = true;
+                    modifiers.visibility = Visibility::Public;
                 }
                 Token::Protected => {
                     self.advance();
-                    if matches!(self.peek(), Token::LParen(_))
-                        && matches!(self.peek_at(1), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("set"))
-                        && self.peek_at(2) == Token::RParen
-                    {
-                        self.advance();
-                        match self.advance() {
-                            Token::Identifier(_, _) => {}
-                            _ => unreachable!(),
-                        }
-                        self.advance();
-                        if modifiers.set_visibility.is_some() {
-                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
-                        }
-                        modifiers.set_visibility = Some(Visibility::Protected);
-                    } else {
-                        if modifiers.has_visibility {
-                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
-                        }
-                        modifiers.has_visibility = true;
-                        modifiers.visibility = Visibility::Protected;
+                    if modifiers.has_visibility {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
+                    modifiers.has_visibility = true;
+                    modifiers.visibility = Visibility::Protected;
                 }
                 Token::Private => {
                     self.advance();
-                    if matches!(self.peek(), Token::LParen(_))
-                        && matches!(self.peek_at(1), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("set"))
-                        && self.peek_at(2) == Token::RParen
-                    {
-                        self.advance();
-                        match self.advance() {
-                            Token::Identifier(_, _) => {}
-                            _ => unreachable!(),
-                        }
-                        self.advance();
-                        if modifiers.set_visibility.is_some() {
-                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
-                        }
-                        modifiers.set_visibility = Some(Visibility::Private);
-                    } else {
-                        if modifiers.has_visibility {
-                            record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
-                        }
-                        modifiers.has_visibility = true;
-                        modifiers.visibility = Visibility::Private;
+                    if modifiers.has_visibility {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
+                    modifiers.has_visibility = true;
+                    modifiers.visibility = Visibility::Private;
+                }
+                Token::PublicSet(_) | Token::ProtectedSet(_) | Token::PrivateSet(_) => {
+                    let visibility = match self.advance() {
+                        Token::PublicSet(_) => Visibility::Public,
+                        Token::ProtectedSet(_) => Visibility::Protected,
+                        Token::PrivateSet(_) => Visibility::Private,
+                        _ => unreachable!(),
+                    };
+                    if modifiers.set_visibility.is_some() {
+                        record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
+                    }
+                    modifiers.set_visibility = Some(visibility);
                 }
                 Token::Static(_) => {
                     self.advance();
@@ -2273,8 +2237,18 @@ impl Parser {
             Expr::YieldFrom { expr, .. } => {
                 Self::collect_free_vars(expr, bound, out);
             }
-            Expr::Clone { expr: inner, .. } => {
-                Self::collect_free_vars(inner, bound, out);
+            Expr::Clone {
+                expr: inner,
+                source_args,
+                ..
+            } => {
+                if let Some(arguments) = source_args {
+                    for argument in arguments {
+                        Self::collect_free_vars(argument.expr(), bound, out);
+                    }
+                } else {
+                    Self::collect_free_vars(inner, bound, out);
+                }
             }
         }
     }

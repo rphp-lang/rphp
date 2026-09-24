@@ -7,6 +7,41 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `front-end-source-declaration` checkpoint over `be54b74b` adds **10 exact
+PHP 8.5 passes without loss**. It preserves goto/label control flow through
+constant folding, aligns canonical delimiter and asymmetric-write-visibility
+diagnostics, retains heredoc/nowdoc payload origins without weakening constant
+expressions, defers occupied eager class declarations to their source marker,
+and exposes PHP's callable `clone()` surface with the operator's visibility and
+object-lifecycle rules.
+
+The stable 7,174-case core is now **6,719 pass / 63 fail / 182 skip / 210
+unsupported**, with no timeout or crash. Zend/lang is **5,241/63/115/180**, an
+exact **+10/-0**, and strings/array preserves all 1,478 accepted passes at
+**1,478/0/67/30**. Five Cargo configurations, all-feature/all-target checks,
+focused and adjacent E2E, exact pass-set no-loss, formatting and the unsafe
+policy are green. One audited raw predecessor-frame traversal is required for
+nested internal clone callbacks; the unsafe-block ceiling is therefore 1,627
+while unsafe functions remain below their ceiling. Aggregate performance
+optimization remains deferred by user direction.
+
+SHA-256 evidence: candidate
+`077cd58dc5337e40163aa4e0b98a46d5a86fb8bb655cc342ec1ffdf844048ccd`;
+focused manifest
+`55fab59e2aaab472eb534d0668270c5c9f5ae1eada12d7893a73cf87fe9fc0f5`;
+Zend/lang manifest/pass set
+`1364022d4aacd249f88d0672733fa872f1f54141b716c8e2f16cb105fcc645dd` /
+`fdf17b542159b58104d7ddd555f79abe515632f5a3a220c8ddab293a19d9bad4`;
+strings/array manifest/pass set
+`2ccbe9aac77ee82b207cab2e332096d634d611000bcf23afeeb6de22c00a4111` /
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
+
+Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
+integrated in `main`; the continuing compatibility sweep owns the remaining
+core-language behavior.
+
+### Preceding exception-unwind checkpoint
+
 The `exception-unwind-remainder` crash-safety checkpoint over `bce76888`
 adds **5 exact PHP 8.5 passes without loss**. Internal Throwable constructors
 now commit hook-visible fields in PHP order, and abandoning an array or
@@ -32,10 +67,6 @@ no-loss Zend/lang manifest concatenation
 `90885fea9774dbaf60427bb0f27553b5f935f78da42262a3e287fbeff2625b50`;
 strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
-
-Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
-integrated in `main`; the continuing compatibility sweep owns the remaining
-core-language behavior.
 
 ### Preceding core-language checkpoint
 

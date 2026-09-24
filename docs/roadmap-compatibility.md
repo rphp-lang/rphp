@@ -36,27 +36,32 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-language-remainder` checkpoint over `6857e056` adds **10 exact PHP
-8.5 passes without loss**. The 7,174-case stable core is **6,698/84/182/210**;
-Zend/lang reaches **5,220/84/115/180**, while strings/array remains
-**1,478/0/67/30**.
+The `front-end-source-declaration` checkpoint over `be54b74b` adds **10 exact
+PHP 8.5 passes without loss**. The 7,174-case stable core is
+**6,719/63/182/210**; Zend/lang reaches **5,241/63/115/180**, while
+strings/array remains **1,478/0/67/30**.
 
-The language slice aligns deferred `never` arrow validation, exact decimal
-numeric-string comparison, recursive-array sorting identity, incomplete INI
-diagnostics, callback arity precedence, dynamic-property evaluation order,
-buffered diagnostics, source-level property type spelling, line-comment closing
-tags and NUL-terminated magic-call names. Default Cargo tests, all five focused
-feature configurations/all-targets, exact no-loss families, Composer S0,
-formatting, PHPT runner and unsafe policy are green. Dependency-installing
-Symfony and network resolver gates cannot run in the restricted sandbox; the
-accepted parent S0--S3 packet remains the external evidence boundary.
+The shared front-end slice preserves goto labels across constant/dead-code
+lowering, emits canonical delimiter and asymmetric visibility diagnostics,
+retains heredoc/nowdoc trace origins while keeping literal documents constant,
+defers occupied eager declarations to their source marker and implements the
+callable `clone()` contract through ordinary callback machinery. Focused and
+adjacent E2E, all five Cargo configurations/all-targets, exact no-loss families,
+formatting and unsafe policy are green. The single new audited unsafe block
+walks synchronously live predecessor frames for nested internal clone callbacks.
 
-Continue the shared-cause stable-core sweep from **84 to zero**. Phar and PCRE
-remain outside this stream; Date/DateTime is available to the core sweep.
-Prefer a remaining cluster with at least ten expected passes. GC-cycle release
-and Fiber continuation architecture remain named lifetime holdouts. Preserve
-the exact 5,220 and 1,478 parent pass sets. Aggregate performance optimization
+Continue the shared-cause stable-core sweep from **63 to zero**. Phar and PCRE
+remain outside this stream; Date/DateTime is integrated and available to the
+core sweep. Prefer a remaining cluster with at least ten expected passes and
+preserve the exact 5,241 and 1,478 pass sets. Aggregate performance optimization
 stays deferred by user direction.
+
+### Preceding core-language checkpoint
+
+The `core-language-remainder` checkpoint over `6857e056` reduced the stable
+core debt from 94 to 84, exact +10/-0. It aligned deferred `never` validation,
+numeric-string comparison, recursive sorting identity, callback/diagnostic
+ordering, property type spelling, comments and magic-call names.
 
 ### Preceding core standard-library checkpoint
 

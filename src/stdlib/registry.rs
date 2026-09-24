@@ -560,6 +560,26 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("array_rand", fn_array_rand, 2, 1, "array", "num");
     reg_ref!("shuffle", fn_shuffle, 1, 1, 0b1, "array");
     reg_var!("array_map", fn_array_map, 2, "callback", "array", "arrays");
+    {
+        let mut function = Box::new(
+            make_internal_function(fn_clone, 2, 1, vec![])
+                .with_static_parameter_names(&["object", "withProperties"]),
+        );
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::ClassName("object".to_string()),
+            ParamTypeHint::Array,
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::ClassName("object".to_string());
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function("clone", pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![None, Some(Value::array(PhpArray::new()))],
+            "Core",
+        );
+        funcs.push(function);
+    }
     reg!(
         "array_filter",
         fn_array_filter,

@@ -249,9 +249,10 @@ impl Parser {
         }
         if let Token::Identifier(name, _) | Token::Enum { name, .. } = self.peek() {
             if self.peek_at(1) == Token::Colon {
+                let line = self.current_token_source_line();
                 self.advance();
                 self.advance();
-                return Ok(Stmt::Label(name));
+                return Ok(Stmt::Label { name, line });
             }
         }
         if let Token::Exit { line, .. } = self.peek()

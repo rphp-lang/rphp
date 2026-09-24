@@ -13454,6 +13454,174 @@ fn clone_object_var(value: &Value) -> Value {
     value.clone_for_php_storage()
 }
 
+/// PHP 8.5 exposes the clone operator through the ordinary callable surface.
+/// Keep the handler cold: source-level unary clone retains its dedicated VM
+/// opcode, while callbacks and named/unpacked calls enter here.
+#[cold]
+#[inline(never)]
+fn fn_clone(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    let source = arg!(ed, 0).dereferenced().clone();
+    if let Some(closure) = source.as_closure() {
+        ret!(rv, Value::closure(closure.clone()));
+    }
+    let Some(source_object) = source.as_object() else {
+        typed_internal_argument_error(eg, "clone", &source, 1, "object", "object");
+        return Ok(());
+    };
+    let class_name = source_object.class_name.to_string();
+    drop(source_object);
+
+    let uncloneable = matches!(
+        class_name.as_str(),
+        "Generator"
+            | "WeakReference"
+            | "InternalIterator"
+            | "ReflectionProperty"
+            | "Directory"
+            | "SplFileObject"
+            | "GlobIterator"
+    ) || eg.class_table.get(&class_name).is_some_and(|class| {
+        class.is_enum
+            || class.name == "IteratorIterator"
+            || class.name == "RecursiveIteratorIterator"
+            || class.parent.is_some()
+                && (eg.class_is_a(&class.name, "IteratorIterator")
+                    || eg.class_is_a(&class.name, "RecursiveIteratorIterator")
+                    || eg.class_is_a(&class.name, "SplFileObject")
+                    || eg.class_is_a(&class.name, "GlobIterator"))
+    });
+    if uncloneable {
+        eg.exception = Some(crate::value::make_error_value(
+            "Error",
+            &format!("Trying to clone an uncloneable object of class {class_name}"),
+        ));
+        return Ok(());
+    }
+
+    let lazy_state = eg.lazy_object_state(&source);
+    let source_is_proxy =
+        lazy_state.is_some_and(|state| state.strategy == crate::runtime::LazyObjectStrategy::Proxy);
+    let initialized = match lazy_state {
+        Some(state) if state.proxy_instance.is_none() => {
+            Some(reflection::initialize_lazy_object(eg, &source)?)
+        }
+        Some(_) => eg.lazy_proxy_instance(&source),
+        None => None,
+    };
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    let source = if source_is_proxy {
+        source
+    } else {
+        initialized.unwrap_or(source)
+    };
+    let mut cloned_object = source
+        .as_object()
+        .expect("validated clone source")
+        .clone_for_php();
+    prepare_array_object_clone(&source, &mut cloned_object, eg);
+    let clone = Value::object(cloned_object);
+    eg.clone_initialized_lazy_proxy(&source, &clone);
+    eg.clone_weak_map(&source, &clone);
+
+    {
+        let cloned = clone.as_object().expect("fresh clone object");
+        for (slot, property) in cloned.property_values.iter().enumerate() {
+            let Some(definition) = eg.instance_property_definition(cloned.class_id, slot) else {
+                continue;
+            };
+            if definition.is_typed() && property.is_owned_reference() {
+                property.add_reference_property_constraint(
+                    crate::value::ReferencePropertyConstraint {
+                        owner: cloned.instance_property_reference_owner(slot),
+                        declaring_class: definition.declaring_class.clone(),
+                        property: definition.name.clone(),
+                        type_scope: definition.type_scope.clone(),
+                        called_class: cloned.class_name.to_string(),
+                        type_hint: definition.type_hint.clone(),
+                    },
+                );
+            }
+        }
+    }
+    #[cfg(feature = "php-generics-reified")]
+    if let Some(binding) = eg.reified_object_binding(&source) {
+        eg.bind_reified_object(&clone, binding);
+    }
+
+    if let Some((visibility, _, defining_class)) = eg.find_method_info(&class_name, "__clone") {
+        let caller = crate::vm::execute::lexical_class_name_for_nested_internal_call(eg, ed);
+        if !eg.check_method_visibility(
+            caller.as_deref(),
+            &class_name,
+            "__clone",
+            &defining_class,
+            visibility,
+        ) {
+            let visibility = if visibility == Visibility::Private {
+                "private"
+            } else {
+                "protected"
+            };
+            let scope = caller.map_or_else(
+                || "global scope".to_string(),
+                |caller| format!("scope {caller}"),
+            );
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                &format!("Call to {visibility} method {defining_class}::__clone() from {scope}"),
+            ));
+            return Ok(());
+        }
+        if let Some(method) = eg.find_function(&format!("{class_name}::__clone")) {
+            let clone_identity = clone.object_identity().expect("fresh clone identity");
+            let readonly_properties = eg
+                .class_table
+                .get(&class_name)
+                .map(|class| class.readonly_props.iter().cloned().collect())
+                .unwrap_or_default();
+            eg.clone_readonly_reinitialization
+                .push((clone_identity, readonly_properties));
+            let result =
+                crate::vm::execute::call_function(eg, method, std::slice::from_ref(&clone));
+            let popped = eg.clone_readonly_reinitialization.pop();
+            debug_assert!(popped.is_some_and(|(identity, _)| identity == clone_identity));
+            result?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+    }
+
+    if let Some(updates) = arg_opt!(ed, 1) {
+        let Some(updates) = updates.as_array() else {
+            typed_internal_argument_error(eg, "clone", updates, 2, "withProperties", "array");
+            return Ok(());
+        };
+        if updates
+            .iter()
+            .any(|(_, value)| value.owned_reference_is_aliased())
+        {
+            eg.exception = Some(crate::value::make_error_value(
+                "Error",
+                "Cannot assign by reference when cloning with updated properties",
+            ));
+            return Ok(());
+        }
+        let mut object = clone.as_object_mut().expect("fresh clone object");
+        for (key, value) in updates.iter() {
+            let name = match key {
+                ArrayKey::Int(value) => value.to_string(),
+                ArrayKey::String(value) => value,
+            };
+            object.set_property(&name, value.clone_for_php_storage());
+        }
+    }
+
+    ret!(rv, clone);
+}
+
 fn set_object_var(result: &mut PhpArray, name: &str, value: Value) {
     if let Some(key) = crate::value::canonical_decimal_array_key(name) {
         result.set_int(key, value);
@@ -26011,13 +26179,11 @@ fn call_resolved_with_values_from_internal(
     args: &[Value],
     publish_live_trace_caller: bool,
 ) -> Result<Value, VmError> {
-    if resolved.is_magic_call
-        || resolved.common().fn_type != FunctionType::User
-        || reject_scope_introspection_callback(eg, resolved)
-    {
+    if resolved.is_magic_call || reject_scope_introspection_callback(eg, resolved) {
         return call_resolved_with_values(eg, resolved, args);
     }
-    if resolved.prepend_args.is_empty()
+    if resolved.common().fn_type == FunctionType::User
+        && resolved.prepend_args.is_empty()
         && resolved.use_vars.is_empty()
         && !resolved.has_context()
         && resolved.closure_static_vars.is_none()

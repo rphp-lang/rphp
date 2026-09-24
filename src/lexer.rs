@@ -146,6 +146,9 @@ pub enum Token {
     Public,          // public
     Protected,       // protected
     Private,         // private
+    PublicSet(usize),
+    ProtectedSet(usize),
+    PrivateSet(usize),
     This(usize),     // $this with source line (handled as special variable)
     Extends,         // extends
     Static(usize),   // static with source line
@@ -348,6 +351,29 @@ enum StringPart {
     DynamicArrayAccess(String, String, usize), // var_name, index variable, line
     Expression(Vec<Token>),
     DynamicVariable(Vec<Token>, usize),
+}
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum SourceDelimiterKind {
+    Parenthesis,
+    Brace,
+    Bracket,
+}
+
+#[derive(Clone, Copy)]
+struct SourceDelimiter {
+    kind: SourceDelimiterKind,
+    line: usize,
+}
+
+impl SourceDelimiterKind {
+    fn symbol(self) -> char {
+        match self {
+            Self::Parenthesis => '(',
+            Self::Brace => '{',
+            Self::Bracket => '[',
+        }
+    }
 }
 
 pub struct Lexer<'a> {
@@ -581,6 +607,8 @@ impl<'a> Lexer<'a> {
         let mut tokens = Vec::new();
         let mut assertion_scan_position = 0;
         let mut assertion_delimiters = AssertionDelimiterStack::default();
+        let mut source_delimiters: Vec<SourceDelimiter> = Vec::new();
+        let mut source_delimiter_error = false;
 
         let _ = self.skip_whitespace().map_err(|error| error.message)?;
 
@@ -609,8 +637,23 @@ impl<'a> Lexer<'a> {
             }
 
             if self.pos >= self.src.len() {
-                if let Some(error) = self.unclosed_brace_error(&tokens) {
-                    tokens.push(error);
+                if !source_delimiter_error {
+                    if let Some(delimiter) = source_delimiters.last().copied() {
+                        if delimiter.kind == SourceDelimiterKind::Brace {
+                            if let Some(error) = self.unclosed_brace_error(&tokens) {
+                                tokens.push(error);
+                            }
+                        } else {
+                            let terminal_line = self.source_line_at(self.src.len());
+                            let symbol = delimiter.kind.symbol();
+                            let message = if delimiter.line == terminal_line {
+                                format!("Unclosed '{symbol}'")
+                            } else {
+                                format!("Unclosed '{symbol}' on line {}", delimiter.line)
+                            };
+                            tokens.push(Token::ParseError(message, terminal_line));
+                        }
+                    }
                 }
                 tokens.extend(
                     self.deferred_compile_diagnostics
@@ -648,6 +691,10 @@ impl<'a> Lexer<'a> {
                 b'#' if self.peek_next() == Some(b'[') => {
                     let line = self.punctuation_source_line();
                     tokens.push(Token::AttributeStart(line));
+                    source_delimiters.push(SourceDelimiter {
+                        kind: SourceDelimiterKind::Bracket,
+                        line,
+                    });
                     self.pos += 2;
                 }
                 b'=' => {
@@ -694,10 +741,15 @@ impl<'a> Lexer<'a> {
                             continue;
                         }
                         match self.read_document_string() {
-                            Ok(interpolated) => {
+                            Ok((interpolated, content_line)) => {
                                 self.deferred_compile_diagnostics
                                     .extend(interpolated.diagnostics);
+                                tokens.push(Token::InterpolatedStringStart {
+                                    source: None,
+                                    line: content_line,
+                                });
                                 Self::emit_string_parts(&mut tokens, &interpolated.parts);
+                                tokens.push(Token::InterpolatedStringEnd);
                             }
                             Err(error) => {
                                 tokens.push(Token::ParseError(error.message, error.line));
@@ -950,19 +1002,50 @@ impl<'a> Lexer<'a> {
                 b'(' => {
                     let line = self.punctuation_source_line();
                     tokens.push(Token::LParen(line));
+                    source_delimiters.push(SourceDelimiter {
+                        kind: SourceDelimiterKind::Parenthesis,
+                        line,
+                    });
                     self.pos += 1;
                 }
                 b')' => {
+                    let line = self.source_line_at(self.pos);
+                    if let Some(message) = Self::close_source_delimiter(
+                        &mut source_delimiters,
+                        SourceDelimiterKind::Parenthesis,
+                        ')',
+                        line,
+                    ) {
+                        tokens.push(Token::ParseError(message, line));
+                        source_delimiter_error = true;
+                        self.pos = self.src.len();
+                        continue;
+                    }
                     tokens.push(Token::RParen);
                     self.pos += 1;
                 }
                 b'{' => {
                     let line = self.brace_source_line();
                     tokens.push(Token::LBrace(line));
+                    source_delimiters.push(SourceDelimiter {
+                        kind: SourceDelimiterKind::Brace,
+                        line,
+                    });
                     self.pos += 1;
                 }
                 b'}' => {
                     let line = self.brace_source_line();
+                    if let Some(message) = Self::close_source_delimiter(
+                        &mut source_delimiters,
+                        SourceDelimiterKind::Brace,
+                        '}',
+                        line,
+                    ) {
+                        tokens.push(Token::ParseError(message, line));
+                        source_delimiter_error = true;
+                        self.pos = self.src.len();
+                        continue;
+                    }
                     tokens.push(Token::RBrace(line));
                     self.pos += 1;
                 }
@@ -974,9 +1057,25 @@ impl<'a> Lexer<'a> {
                 b'[' => {
                     let line = self.punctuation_source_line();
                     tokens.push(Token::LBracket(line));
+                    source_delimiters.push(SourceDelimiter {
+                        kind: SourceDelimiterKind::Bracket,
+                        line,
+                    });
                     self.pos += 1;
                 }
                 b']' => {
+                    let line = self.source_line_at(self.pos);
+                    if let Some(message) = Self::close_source_delimiter(
+                        &mut source_delimiters,
+                        SourceDelimiterKind::Bracket,
+                        ']',
+                        line,
+                    ) {
+                        tokens.push(Token::ParseError(message, line));
+                        source_delimiter_error = true;
+                        self.pos = self.src.len();
+                        continue;
+                    }
                     tokens.push(Token::RBracket);
                     self.pos += 1;
                 }
@@ -1124,6 +1223,31 @@ impl<'a> Lexer<'a> {
                         tokens.push(Token::Identifier(ident, line));
                         continue;
                     }
+                    // PHP's asymmetric-write modifiers are adjacency
+                    // sensitive: `private(set)` is one grammar token, while
+                    // `private (set)` remains an ordinary visibility modifier
+                    // followed by a parenthesized type expression.
+                    if !is_member_name
+                        && self
+                            .src
+                            .get(self.pos..self.pos.saturating_add(5))
+                            .is_some_and(|suffix| suffix.eq_ignore_ascii_case(b"(set)"))
+                    {
+                        let set_visibility = if ident.eq_ignore_ascii_case("public") {
+                            Some(Token::PublicSet(line))
+                        } else if ident.eq_ignore_ascii_case("protected") {
+                            Some(Token::ProtectedSet(line))
+                        } else if ident.eq_ignore_ascii_case("private") {
+                            Some(Token::PrivateSet(line))
+                        } else {
+                            None
+                        };
+                        if let Some(token) = set_visibility {
+                            tokens.push(token);
+                            self.pos += 5;
+                            continue;
+                        }
+                    }
                     push_keyword!(ident.as_str(), ident, line, tokens, {
                         if mixed_keyword {
                             Self::push_mixed_keyword(ident, line, &mut tokens);
@@ -1199,6 +1323,31 @@ impl<'a> Lexer<'a> {
         }
 
         Ok(tokens)
+    }
+
+    fn close_source_delimiter(
+        delimiters: &mut Vec<SourceDelimiter>,
+        expected: SourceDelimiterKind,
+        closing: char,
+        closing_line: usize,
+    ) -> Option<String> {
+        let Some(delimiter) = delimiters.last().copied() else {
+            return Some(format!("Unmatched '{closing}'"));
+        };
+        if delimiter.kind == expected {
+            delimiters.pop();
+            return None;
+        }
+
+        let opening = delimiter.kind.symbol();
+        Some(if delimiter.line == closing_line {
+            format!("Unclosed '{opening}' does not match '{closing}'")
+        } else {
+            format!(
+                "Unclosed '{opening}' on line {} does not match '{closing}'",
+                delimiter.line
+            )
+        })
     }
 
     /// Zend reports an unterminated `{` at the end of the current source unit,
@@ -1895,6 +2044,25 @@ mod tests {
     }
 
     #[test]
+    fn delimiter_errors_use_canonical_php_messages() {
+        let cases = [
+            ("<?php (", "Unclosed '('", 1),
+            ("<?php [\n", "Unclosed '[' on line 1", 2),
+            ("<?php )", "Unmatched ')'", 1),
+            ("<?php ]", "Unmatched ']'", 1),
+            ("<?php }", "Unmatched '}'", 1),
+            ("<?php (]", "Unclosed '(' does not match ']'", 1),
+            ("<?php [\n)", "Unclosed '[' on line 1 does not match ')'", 2),
+            ("<?php {\n)", "Unclosed '{' on line 1 does not match ')'", 2),
+        ];
+
+        for (source, message, line) in cases {
+            let tokens = Lexer::new(source).tokenize().unwrap();
+            assert!(tokens.contains(&Token::ParseError(message.into(), line)));
+        }
+    }
+
+    #[test]
     fn halt_compiler_uses_the_directive_line_as_the_unclosed_brace_terminal() {
         let tokens = Lexer::new("<?php\nnamespace {\n__halt_compiler();\npayload")
             .tokenize()
@@ -2553,7 +2721,12 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::StringLiteral("$name\\n".into()),
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(3),
                 Token::Eof,
             ]
@@ -2574,6 +2747,10 @@ mod tests {
                 Token::StringLiteral("PHP".into()),
                 Token::Semicolon(1),
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::LParen(0),
                 Token::StringLiteral("Hello ".into()),
                 Token::Dot,
@@ -2581,6 +2758,7 @@ mod tests {
                 Token::Dot,
                 Token::StringLiteral("!".into()),
                 Token::RParen,
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(3),
                 Token::Eof,
             ]
@@ -2616,6 +2794,10 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::LParen(0),
                 Token::StringLiteral("value=".into()),
                 Token::Dot,
@@ -2630,6 +2812,7 @@ mod tests {
                 Token::RParen,
                 Token::RParen,
                 Token::RParen,
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(3),
                 Token::Eof,
             ]
@@ -2683,7 +2866,12 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::StringLiteral("first\n  second".into()),
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(4),
                 Token::Eof,
             ]
@@ -2712,10 +2900,20 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::StringLiteral("first".into()),
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(3),
                 echo(3),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 4,
+                },
                 Token::StringLiteral("second".into()),
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(5),
                 Token::Eof,
             ]
@@ -2803,7 +3001,12 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::StringLiteral("${".into()),
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(3),
                 Token::Eof,
             ]
@@ -2821,7 +3024,12 @@ mod tests {
             vec![
                 Token::OpenTag,
                 echo(1),
+                Token::InterpolatedStringStart {
+                    source: None,
+                    line: 2,
+                },
                 Token::StringLiteral("first\r\rsecond".into()),
+                Token::InterpolatedStringEnd,
                 Token::Semicolon(1),
                 Token::Eof,
             ]

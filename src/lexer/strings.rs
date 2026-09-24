@@ -164,7 +164,9 @@ impl<'a> Lexer<'a> {
         Ok((interpolated, source))
     }
 
-    pub(super) fn read_document_string(&mut self) -> Result<InterpolatedString, StringLexError> {
+    pub(super) fn read_document_string(
+        &mut self,
+    ) -> Result<(InterpolatedString, usize), StringLexError> {
         let opener = self.pos;
         let opener_line = self.source_line_at(opener);
         self.pos += 3;
@@ -269,12 +271,16 @@ impl<'a> Lexer<'a> {
         self.pos = document_end.marker_start + label.len();
 
         if nowdoc {
-            return Ok(InterpolatedString {
-                parts: vec![Self::literal_part(content, false)],
-                diagnostics: Vec::new(),
-            });
+            return Ok((
+                InterpolatedString {
+                    parts: vec![Self::literal_part(content, false)],
+                    diagnostics: Vec::new(),
+                },
+                content_start_line,
+            ));
         }
         Self::interpolate_string_content(&content, content_start_line, 1, None)
+            .map(|interpolated| (interpolated, content_start_line))
     }
 
     fn find_document_string_end(

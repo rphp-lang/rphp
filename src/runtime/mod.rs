@@ -5815,6 +5815,9 @@ impl ExecutorGlobals {
         declaration_key: &str,
     ) -> Result<Option<ClassDef>, String> {
         if let Some(class_def) = self.pending_runtime_classes.remove(declaration_key) {
+            if let Some(previous) = self.find_class(&class_def.name) {
+                return Err(Self::class_like_redeclaration_error(previous, &class_def));
+            }
             let class_key = class_def.name.to_ascii_lowercase();
             if self.active_runtime_class_relations.contains_key(&class_key) {
                 let class_name = class_def.name.clone();
