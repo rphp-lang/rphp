@@ -1324,7 +1324,18 @@ fn op_dynamic_variable<'a>(
         name
     };
     let owner = dynamic_scope_frame(eg, frame);
-    let direct_cv = dynamic_scope_cv(owner, &name);
+    // Includes share their caller's dynamic symbol table, but a name that is
+    // also a compiled variable of the included unit must first address that
+    // local CV. The include bridge seeds and writes those CVs back around the
+    // synchronous execution; names known only at runtime still fall through
+    // to the aliased caller/global symbol table.
+    let local_cv = (frame != owner)
+        .then(|| dynamic_scope_cv(frame, &name))
+        .flatten();
+    let (direct_frame, direct_cv) = local_cv.map_or_else(
+        || (owner, dynamic_scope_cv(owner, &name)),
+        |cv| (frame, Some(cv)),
+    );
     let global_scope = dynamic_scope_is_global(owner);
 
     if name == "this"
@@ -1348,7 +1359,16 @@ fn op_dynamic_variable<'a>(
     match opline.opcode {
         OpCode::FetchDynamicVar => {
             let value = if let Some(cv) = direct_cv {
-                unsafe { (&*(*owner).get_op_ptr(cv, OpType::Cv, (*owner).op_array())).clone() }
+                // SAFETY: `direct_cv` was resolved from `direct_frame`'s
+                // immutable live op-array and is consumed synchronously.
+                unsafe {
+                    (&*(*direct_frame).get_op_ptr(
+                        cv,
+                        OpType::Cv,
+                        (*direct_frame).op_array(),
+                    ))
+                    .clone()
+                }
             } else if global_scope {
                 eg.globals.get(&name).cloned().unwrap_or_else(Value::undef)
             } else {
@@ -1388,7 +1408,7 @@ fn op_dynamic_variable<'a>(
                 // SAFETY: direct_cv was resolved from this live owner frame;
                 // validation finishes before the dereferenced target write.
                 unsafe {
-                    let raw = (*owner).cv_mut(cv);
+                    let raw = (*direct_frame).cv_mut(cv);
                     if raw.is_reference() {
                         let constraints = raw.reference_property_constraints();
                         value = match prepare_reference_assignment_scalar(
@@ -1407,9 +1427,9 @@ fn op_dynamic_variable<'a>(
                                 )?);
                             }
                         };
-                        slot_set((*owner).get_op_mut(cv, OpType::Cv), value);
+                        slot_set((*direct_frame).get_op_mut(cv, OpType::Cv), value);
                     } else {
-                        frame_slot_set(owner, raw, value);
+                        frame_slot_set(direct_frame, raw, value);
                     }
                 }
             } else if global_scope {
@@ -1465,7 +1485,11 @@ fn op_dynamic_variable<'a>(
         }
         OpCode::UnsetDynamicVar => {
             if let Some(cv) = direct_cv {
-                unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), Value::undef()) };
+                // SAFETY: `direct_cv` belongs to the live `direct_frame`; the
+                // slot write uses the frame's heap-ownership bookkeeping.
+                unsafe {
+                    frame_slot_set(direct_frame, (*direct_frame).cv_mut(cv), Value::undef())
+                };
             } else if global_scope {
                 globals_set(&mut eg.globals, &name, Value::undef());
                 eg.mark_global_dirty(name);
@@ -1476,13 +1500,13 @@ fn op_dynamic_variable<'a>(
         OpCode::BindDynamicVarRef => {
             let mut binding = if let Some(cv) = direct_cv {
                 unsafe {
-                    let slot = (*owner).cv_mut(cv);
+                    let slot = (*direct_frame).cv_mut(cv);
                     if slot.is_owned_reference() {
                         slot.clone_owned_reference_alias()
                     } else {
                         let owned = Value::owned_reference(reference_initial_value(slot.clone()));
                         let alias = owned.clone_owned_reference_alias();
-                        frame_slot_set(owner, slot, owned);
+                        frame_slot_set(direct_frame, slot, owned);
                         alias
                     }
                 }
@@ -1539,7 +1563,15 @@ fn op_dynamic_variable<'a>(
                 }
             };
             if let Some(cv) = direct_cv {
-                unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), binding.clone_owned_reference_alias()) };
+                // SAFETY: `direct_cv` belongs to the live `direct_frame`; the
+                // reference alias is installed before either frame can retire.
+                unsafe {
+                    frame_slot_set(
+                        direct_frame,
+                        (*direct_frame).cv_mut(cv),
+                        binding.clone_owned_reference_alias(),
+                    )
+                };
             } else if global_scope {
                 globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
                 eg.mark_global_dirty(name);
@@ -1568,7 +1600,15 @@ fn op_dynamic_variable<'a>(
             // suspended request-scope CV when this function returns.
             eg.mark_global_dirty(name.clone());
             if let Some(cv) = direct_cv {
-                unsafe { frame_slot_set(owner, (*owner).cv_mut(cv), binding.clone_owned_reference_alias()) };
+                // SAFETY: `direct_cv` belongs to the live `direct_frame`; the
+                // global reference alias is installed synchronously.
+                unsafe {
+                    frame_slot_set(
+                        direct_frame,
+                        (*direct_frame).cv_mut(cv),
+                        binding.clone_owned_reference_alias(),
+                    )
+                };
             } else if !global_scope {
                 globals_set(
                     eg.dynamic_variables.entry(owner as usize).or_default(),

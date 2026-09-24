@@ -2213,7 +2213,10 @@ impl Compiler {
                 nullsafe: false,
                 line: _,
             } => {
-                let (object, object_type) = self.compile_property_modify_base(object);
+                let (object, object_type, deferred) = self.prepare_property_modify_base(object);
+                for (fetch, line) in deferred {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 let property = self.add_literal(Value::string(property.clone()));
                 Ok(CoalesceWrite::ObjectProperty {
                     object,
@@ -2228,7 +2231,10 @@ impl Compiler {
                 nullsafe: false,
                 line: _,
             } => {
-                let (object, object_type) = self.compile_property_modify_base(object);
+                let (object, object_type, deferred) = self.prepare_property_modify_base(object);
+                for (fetch, line) in deferred {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 let (property, property_type) = self.compile_dynamic_property_name(property);
                 Ok(CoalesceWrite::ObjectProperty {
                     object,
@@ -3218,6 +3224,16 @@ impl Compiler {
                         right,
                         right_type,
                     )
+                } else if matches!(target, Expr::DynamicVariable { .. }) {
+                    // PHP resolves a variable-variable compound destination
+                    // after the RHS. The RHS may change the expression that
+                    // names the destination (or create that destination by
+                    // reference), so neither its name nor its value can be
+                    // snapshotted before RHS evaluation.
+                    let (right, right_type) = self.compile_expr(expr);
+                    let (left, left_type, writeback) = self
+                        .compile_foreach_reference_source(target, false, true, false)?;
+                    (left, left_type, writeback, right, right_type)
                 } else {
                     let (left, left_type, writeback) =
                         self.compile_foreach_reference_source(target, false, true, false)?;

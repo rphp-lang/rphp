@@ -2161,6 +2161,9 @@ fn complete_finally_marker<'a>(
                     if (*frame).has_heap_slots {
                         release_return_foreach_sources(eg, frame, op_array)?;
                     }
+                    if eg.exception.is_none() {
+                        validate_reference_return_after_finally(eg, frame, op_array)?;
+                    }
                     if let Some(exception) = eg.exception.take() {
                         let return_target = (*frame).return_value;
                         if !return_target.is_null() {
@@ -2247,6 +2250,108 @@ fn complete_finally_marker<'a>(
         }
     }
     Ok(ColdResult::Done)
+}
+
+/// A by-reference return exposes the live cell selected by `return`. A
+/// `finally` block can mutate that cell after the Return opcode's initial type
+/// check, so validate and coerce the final dereferenced value at the actual
+/// frame-commit boundary.
+///
+/// # Safety
+///
+/// `frame` must be the live activation currently stopped at its finally-end
+/// marker. Its function metadata and caller-owned return slot must remain live
+/// for the duration of this synchronous check.
+#[cold]
+#[inline(never)]
+unsafe fn validate_reference_return_after_finally(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+) -> Result<(), VmError> {
+    // SAFETY: the finally marker runs with its activation live and the
+    // caller-provided return slot remains owned until this function returns.
+    let function = &*(*frame).func;
+    if !function.sig.returns_reference {
+        return Ok(());
+    }
+    let return_target = (*frame).return_value;
+    let hint = &function.sig.return_type_hint;
+    if return_target.is_null() || matches!(hint, ParamTypeHint::None) {
+        return Ok(());
+    }
+
+    let source = (&*return_target).dereferenced().clone();
+    let callee_class = return_type_callee_class(
+        eg,
+        frame,
+        function as *const FunctionCommon,
+        hint,
+    );
+    let preparation = prepare_return_type_value(
+        &source,
+        hint,
+        eg,
+        op_array.strict_types,
+        frame,
+        callee_class.as_deref(),
+    )?;
+    let opline = &*(*frame).opline;
+    match preparation {
+        ReturnTypePreparation::Exact => {}
+        ReturnTypePreparation::Coerced(value, diagnostic) => {
+            if let Some(diagnostic) = diagnostic {
+                report_scalar_coercion_diagnostic(
+                    eg,
+                    frame,
+                    op_array,
+                    opline,
+                    &source,
+                    diagnostic,
+                )?;
+                if let Some(replaced) = eg.exception.take() {
+                    if matches!(
+                        diagnostic,
+                        ScalarCoercionDiagnostic::FloatToInt
+                            | ScalarCoercionDiagnostic::FloatStringToInt
+                    ) {
+                        let outcome = format!(
+                            "{} returned",
+                            declared_type_error_value_name(&source)
+                        );
+                        let error = return_type_error_value(
+                            eg,
+                            frame,
+                            function as *const FunctionCommon,
+                            op_array,
+                            opline,
+                            hint,
+                            &outcome,
+                        );
+                        append_replaced_exception(&error, &replaced, eg);
+                        eg.exception = Some(error);
+                    } else {
+                        eg.exception = Some(replaced);
+                    }
+                    return Ok(());
+                }
+            }
+            (&mut *return_target).assign_dereferenced(value);
+        }
+        ReturnTypePreparation::Invalid => {
+            let outcome = format!("{} returned", declared_type_error_value_name(&source));
+            eg.exception = Some(return_type_error_value(
+                eg,
+                frame,
+                function as *const FunctionCommon,
+                op_array,
+                opline,
+                hint,
+                &outcome,
+            ));
+        }
+    }
+    Ok(())
 }
 
 

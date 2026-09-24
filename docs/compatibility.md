@@ -7,38 +7,43 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-runtime-remainder` checkpoint over `a4e8f8ba` adds **10 exact PHP
-8.5 passes without loss**. One shared runtime slice now distinguishes
-non-numeric `INF`/`NAN` spellings from arithmetic numbers, suppresses complete
-`@include` operations, preserves requested private-static scope diagnostics,
-validates numeric date fields lexically, carries a live method receiver into
-`eval`, prunes dead allocation-cycle roots, publishes native no-discard
-warnings and preserves legacy brace-member fatal formatting without changing
-ordinary dynamic-method errors.
+The `lvalue-error-order-remainder` checkpoint over `7355a04d` adds **6 exact
+PHP 8.5 passes without loss**. Nested dynamic properties now evaluate their
+outer member names before failing inner reads; reference writes own undefined
+receiver errors; variable-variable compound targets resolve after RHS side
+effects; include/eval dynamic names update local compiled variables; and typed
+reference returns are checked again after `finally` mutates the live cell.
 
-The measured 7,173-case stable core is now **6,729 pass / 53 fail / 183 skip /
+The measured 7,173-case stable core is now **6,735 pass / 47 fail / 183 skip /
 208 unsupported**, with no timeout or crash. Zend/lang is
-**5,251/53/115/179**, exact **+10/-0**, while strings/array remains
-**1,478/0/68/29**. All five Cargo configurations, all-feature/all-target
-checks, exact pass-set no-loss, Composer/Symfony S0--S3, focused and adjacent
-E2E/PHPT, formatting and unsafe policy are green. Production unsafe inventory
-remains at its existing **1,627-block** ceiling. Aggregate performance remains
-deferred by user direction.
+**5,257/47/115/179**, exact **+6/-0**, while strings/array remains
+**1,478/0/68/29**. The complete default Cargo suite, exact pass-set no-loss,
+focused and adjacent E2E/PHPT, formatting and unsafe policy are green.
+Production unsafe inventory remains at its accepted **1,627-block** ceiling;
+performance remains deferred by user direction.
 
 SHA-256 evidence: candidate
-`962603b2362134e5b79b2ed8207c784ebd4544b36c5802a5c293e02ada58ea4a`;
+`042f8fd63fc853d3c6e407dd423fdd43c449ba026fd16b376fc029108f968793`;
 focused release manifest
-`e65cebe8d5b94735afe7d550007185c2dec7c04b66b6b852354aaea7818031ff`;
+`49e3af802dea9cc1fac2cf21c594eee296ce1f25aec078278d263cc07b6218a3`;
 Zend/lang manifest/pass set
-`3d2e634f5211fccb2ec22e325e33b308ca53a911e90b0212b450cef31076f7bc` /
-`bfe95be7a0bd14df928297d229a3aa26f78fd482db968987f1f745633f07129e`;
+`29992a872628a664f92e5efc5c9da07ed6256e54bf7c146dd977d5b6cdbf9227` /
+`0675ef938e7a0bc63a621282201afba9b4ec72942ba90a76b4165392754a2c42`;
 strings/array manifest/pass set
-`2ccbe9aac77ee82b207cab2e332096d634d611000bcf23afeeb6de22c00a4111` /
+`553c4264af40c40831b11ee865af906b975dd792ca6384afe433f5371bf8f2d9` /
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
 
 Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
 also outside this core train. The next core-language cluster starts from the
-remaining 53 measured failures.
+remaining 47 measured failures.
+
+### Preceding core runtime checkpoint
+
+The `core-runtime-remainder` checkpoint over `a4e8f8ba` added **10 exact PHP
+8.5 passes without loss** by aligning special-float arithmetic, complete
+include suppression, private-static diagnostics, numeric date grammar, eval
+receiver scope, allocation-cycle accounting, native no-discard warnings and
+brace-member method errors.
 
 ### Preceding front-end source/declaration checkpoint
 

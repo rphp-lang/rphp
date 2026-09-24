@@ -9718,6 +9718,59 @@ impl Compiler {
         (operand, operand_type)
     }
 
+    /// Compile the expressions that name a nested property chain before
+    /// traversing the chain itself. PHP evaluates an outer dynamic member
+    /// name before it reports a failed read from an inner member.
+    fn prepare_property_read_base(
+        &mut self,
+        expr: &Expr,
+    ) -> (u16, OpType, Vec<(Instruction, usize)>) {
+        match expr {
+            Expr::PropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let (object, object_type, mut deferred) = self.prepare_property_read_base(object);
+                let property = self.add_literal(Value::string(property.clone()));
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = OpType::Const;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                deferred.push((fetch, *line));
+                (result, OpType::Tmp, deferred)
+            }
+            Expr::DynamicPropertyAccess {
+                object,
+                property,
+                nullsafe: false,
+                line,
+            } => {
+                let (object, object_type, mut deferred) = self.prepare_property_read_base(object);
+                let (property, property_type) = self.compile_dynamic_property_name(property);
+                let result = self.alloc_tmp();
+                let mut fetch = Instruction::new(OpCode::FetchObjR);
+                fetch.op1 = object;
+                fetch.op1_type = object_type;
+                fetch.op2 = property;
+                fetch.op2_type = property_type;
+                fetch.result = result;
+                fetch.result_type = OpType::Tmp;
+                deferred.push((fetch, *line));
+                (result, OpType::Tmp, deferred)
+            }
+            _ => {
+                let (operand, operand_type) = self.compile_expr(expr);
+                (operand, operand_type, Vec::new())
+            }
+        }
+    }
+
     /// PHP folds a fully constant array used as a dynamic object-property
     /// name and emits its conversion warning with the compilation unit's
     /// diagnostics, before any source statement executes. Arrays containing
@@ -10790,6 +10843,24 @@ impl Compiler {
                     )
                 } else {
                     match target.as_ref() {
+                        Expr::DynamicVariable { .. } => {
+                            // Variable-variable compound destinations are
+                            // named only after the RHS has run. This mirrors
+                            // statement lowering and preserves RHS changes to
+                            // both the name expression and referenced cell.
+                            let (right, right_type) = self.compile_expr(expr);
+                            let (left, left_type, writeback) = match self
+                                .compile_foreach_reference_source(target, false, true, false)
+                            {
+                                Ok(source) => source,
+                                Err(error) => {
+                                    self.deferred_error = Some(error);
+                                    let null = self.add_literal(Value::null());
+                                    return (null, OpType::Const);
+                                }
+                            };
+                            (left, left_type, writeback, right, right_type)
+                        }
                         Expr::PropertyAccess {
                             object,
                             property,
@@ -13301,7 +13372,12 @@ impl Compiler {
                 nullsafe,
                 line,
             } => {
-                let (obj_op, obj_type) = self.compile_expr(object);
+                let (obj_op, obj_type, deferred_fetches) = if *nullsafe {
+                    let (object, object_type) = self.compile_expr(object);
+                    (object, object_type, Vec::new())
+                } else {
+                    self.prepare_property_read_base(object)
+                };
                 let mut receiver_patches = self.take_nullsafe_receiver_patches(obj_op, obj_type);
                 let tmp = self.alloc_tmp();
                 let nullsafe_patch = if *nullsafe {
@@ -13319,6 +13395,9 @@ impl Compiler {
                     None
                 };
                 let (property_op, property_type) = self.compile_dynamic_property_name(property);
+                for (fetch, line) in deferred_fetches {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 let mut fetch = Instruction::new(OpCode::FetchObjR);
                 fetch.op1 = obj_op;
                 fetch.op1_type = obj_type;
