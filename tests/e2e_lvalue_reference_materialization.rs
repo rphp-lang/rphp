@@ -79,6 +79,79 @@ echo json_encode([$seed, $append, $static, $constructed]), "\n";
 }
 
 #[test]
+fn known_constructor_reference_parameters_initialize_undefined_variables_silently() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class KnownConstructorReference {
+    public function __construct($value, &$reference) {
+        $reference = 'initialized';
+    }
+}
+set_error_handler(function ($severity, $message) {
+    echo $message, "\n";
+    return true;
+});
+unset($byValue, $byReference);
+new KnownConstructorReference($byValue, $byReference);
+var_dump($byValue, $byReference);
+"#,
+        ),
+        concat!(
+            "Undefined variable $byValue\n",
+            "Undefined variable $byValue\n",
+            "NULL\n",
+            "string(11) \"initialized\"\n",
+        )
+    );
+}
+
+#[test]
+fn reference_assignment_rebinds_the_persistent_static_cell() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$calls = 0;
+function temporary_reference_value() {
+    global $calls;
+    return 'value:' . ++$calls;
+}
+function retained_static_reference() {
+    static $value;
+    if (!isset($value)) {
+        $value =& temporary_reference_value();
+    }
+    return $value;
+}
+function &activation_local_static_reference() {
+    static $value = '1';
+    $local = $value;
+    $value =& $local;
+    return $value;
+}
+set_error_handler(function ($severity, $message) {
+    echo $message, "\n";
+    return true;
+});
+echo retained_static_reference(), "\n";
+echo retained_static_reference(), "\n";
+echo 'calls:', $calls, "\n";
+$first =& activation_local_static_reference();
+$first .= '2';
+echo $first, ':', activation_local_static_reference();
+"#,
+        ),
+        concat!(
+            "Only variables should be assigned by reference\n",
+            "value:1\n",
+            "value:1\n",
+            "calls:1\n",
+            "12:1",
+        )
+    );
+}
+
+#[test]
 fn runtime_reference_selection_rejects_temporary_and_string_dimensions() {
     assert_eq!(
         run_php(

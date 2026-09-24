@@ -1567,11 +1567,11 @@ where
             eg.publish_detached_trace_caller(frame as usize, trace_caller as usize);
         }
     }
-    let pending_argument_error = supplied_preentry_error.or(generated_preentry_error.as_ref());
     if let Some((file, line, _, _)) = trace_origin.as_ref() {
         eg.publish_detached_trace_origin(frame as usize, file.clone(), *line);
     }
     let mut return_value = Value::null();
+    let mut generated_argument_type_error = None;
     let capture_source_start = num_args.saturating_sub(capture_count);
     let first_surplus_argument = signature.public_arity();
     let mut trace_arguments = (user_callee.is_some()
@@ -1696,6 +1696,158 @@ where
             }
         }
 
+        // Source opcodes validate user arguments while executing their Send*
+        // sequence. Engine-dispatched callbacks enter here after that sequence,
+        // so apply the same declared-type contract before the callback body.
+        // Internal callback consumers are weak call sites in PHP: scalar
+        // coercions are written back into the fresh frame, while class and
+        // compound mismatches retain the internal caller in the Throwable
+        // trace assembled below.
+        if user_callee.is_some()
+            && supplied_preentry_error.is_none()
+            && generated_preentry_error.is_none()
+        {
+            let callee_class = lexical_class_name_for_frame(eg, frame);
+            let fixed_arity = if signature.is_variadic {
+                signature.public_arity() as usize
+            } else {
+                signature.param_type_hints.len()
+            };
+            for (index, hint) in signature
+                .param_type_hints
+                .iter()
+                .take(fixed_arity)
+                .enumerate()
+            {
+                if matches!(hint, ParamTypeHint::None) {
+                    continue;
+                }
+                let cv_index = signature.param_cv_index(index as u32);
+                let slot = (*frame).cv_mut(cv_index) as *mut Value;
+                let source = (*slot).dereferenced().clone();
+                if source.is_undef() {
+                    continue;
+                }
+                match prepare_call_argument(
+                    &source,
+                    hint,
+                    eg,
+                    false,
+                    callee_class.as_deref(),
+                )? {
+                    CallArgumentPreparation::Exact => {}
+                    CallArgumentPreparation::Coerced(prepared, _) => {
+                        if signature.is_param_by_ref(index as u32) && (*slot).is_reference() {
+                            slot_set((*slot).as_ref_ptr(), prepared);
+                        } else {
+                            frame_slot_set(frame, slot, prepared);
+                        }
+                    }
+                    CallArgumentPreparation::Invalid => {
+                        let error = eg.exception.take().unwrap_or_else(|| {
+                            let parameter = signature
+                                .param_names
+                                .get(index)
+                                .map(|name| &**name)
+                                .unwrap_or("unknown");
+                            make_error_value(
+                                "TypeError",
+                                &format!(
+                                    "{}(): Argument #{} (${parameter}) must be of type {}, {} given",
+                                    displayed_function_name(eg, func_ptr),
+                                    index + 1,
+                                    scoped_hint_diagnostic_name(
+                                        eg,
+                                        frame,
+                                        hint,
+                                        callee_class.as_deref(),
+                                    ),
+                                    declared_type_error_value_name(&source),
+                                ),
+                            )
+                        });
+                        eg.exception = Some(error.clone());
+                        generated_argument_type_error = Some(error);
+                        break;
+                    }
+                }
+            }
+
+            if generated_argument_type_error.is_none()
+                && signature.is_variadic
+                && public_num_args > fixed_arity
+                && let Some(hint) = signature.param_type_hints.get(fixed_arity)
+                && !matches!(hint, ParamTypeHint::None)
+            {
+                let variadic_cv = signature.variadic_cv_index;
+                let values = (*frame)
+                    .cv(variadic_cv)
+                    .as_array()
+                    .map(|array| {
+                        (0..array.len())
+                            .filter_map(|position| {
+                                array
+                                    .get_value_at(position)
+                                    .map(|value| value.dereferenced().clone())
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .unwrap_or_default();
+                let by_reference = signature.is_param_by_ref(fixed_arity as u32);
+                for (position, source) in values.into_iter().enumerate() {
+                    match prepare_call_argument(
+                        &source,
+                        hint,
+                        eg,
+                        false,
+                        callee_class.as_deref(),
+                    )? {
+                        CallArgumentPreparation::Exact => {}
+                        CallArgumentPreparation::Coerced(prepared, _) => {
+                            let variadic = (*frame).cv_mut(variadic_cv);
+                            if let Some(array) = variadic.as_array_mut() {
+                                if by_reference
+                                    && array
+                                        .get_value_at(position)
+                                        .is_some_and(Value::is_reference)
+                                {
+                                    let _ = array.assign_dereferenced_at(position, prepared);
+                                } else {
+                                    let _ = array.set_value_at(position, prepared);
+                                }
+                            }
+                        }
+                        CallArgumentPreparation::Invalid => {
+                            let argument_index = fixed_arity + position;
+                            let error = eg.exception.take().unwrap_or_else(|| {
+                                make_error_value(
+                                    "TypeError",
+                                    &format!(
+                                        "{}(): Argument #{} must be of type {}, {} given",
+                                        displayed_function_name(eg, func_ptr),
+                                        argument_index + 1,
+                                        scoped_hint_diagnostic_name(
+                                            eg,
+                                            frame,
+                                            hint,
+                                            callee_class.as_deref(),
+                                        ),
+                                        declared_type_error_value_name(&source),
+                                    ),
+                                )
+                            });
+                            eg.exception = Some(error.clone());
+                            generated_argument_type_error = Some(error);
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        let pending_argument_error = supplied_preentry_error
+            .or(generated_preentry_error.as_ref())
+            .or(generated_argument_type_error.as_ref());
         if let Some(throwable) = pending_argument_error {
             let ignore_arguments = crate::stdlib::ini_default(eg, "zend.exception_ignore_args")
                 .as_deref()

@@ -166,6 +166,32 @@ restore_error_handler();
 }
 
 #[test]
+fn callback_reference_warnings_name_the_declaring_method() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferenceWarningParent {
+    public function mutate(&$value): void {}
+}
+class ReferenceWarningChild extends ReferenceWarningParent {}
+
+$callback = [new ReferenceWarningChild(), 'mutate'];
+$closure = function (&$value): void {};
+set_error_handler(function($_severity, $message) { echo $message, "\n"; });
+call_user_func($callback, 1);
+call_user_func_array($callback, [1]);
+call_user_func([$closure, '__invoke'], 1);
+"#,
+        ),
+        concat!(
+            "ReferenceWarningParent::mutate(): Argument #1 ($value) must be passed by reference, value given\n",
+            "ReferenceWarningParent::mutate(): Argument #1 ($value) must be passed by reference, value given\n",
+            "Closure::__invoke(): Argument #1 ($value) must be passed by reference, value given\n",
+        ),
+    );
+}
+
+#[test]
 fn forward_static_call_preserves_compatible_called_scope() {
     assert_eq!(
         run_php(

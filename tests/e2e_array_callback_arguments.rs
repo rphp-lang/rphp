@@ -206,6 +206,82 @@ try {
 }
 
 #[test]
+fn array_walk_validates_user_callback_types_at_the_internal_boundary() {
+    assert_eq!(
+        run_php_with_source_context(
+            r#"<?php declare(strict_types=1);
+function weak_numeric_walk(int $value): void {
+    echo gettype($value), ':', $value, "\n";
+}
+class TypedWalkValue {}
+function typed_object_walk(TypedWalkValue $value, int $key): void {
+    echo 'ok:', $key, "\n";
+}
+
+$numeric = ['12'];
+array_walk($numeric, 'weak_numeric_walk');
+
+$objects = [new TypedWalkValue(), 1];
+try {
+    array_walk($objects, 'typed_object_walk');
+} catch (TypeError $error) {
+    echo $error->getMessage(), "\n";
+    foreach ($error->getTrace() as $frame) {
+        echo $frame['function'], ':', isset($frame['file']) ? 'file' : 'internal', "\n";
+    }
+}
+"#,
+            "typed-array-walk.php",
+            ".",
+        ),
+        concat!(
+            "integer:12\n",
+            "ok:0\n",
+            "typed_object_walk(): Argument #1 ($value) must be of type TypedWalkValue, int given\n",
+            "typed_object_walk:internal\n",
+            "array_walk:file\n",
+        )
+    );
+}
+
+#[test]
+fn detached_callbacks_validate_variadics_scope_and_by_value_reference_inputs() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+trait ScopedCallbackTrait {
+    public function run(self ...$values): void {
+        array_map(function (self $value): self {
+            echo get_class($value), "\n";
+            return $value;
+        }, $values);
+    }
+}
+class ScopedCallbackValue { use ScopedCallbackTrait; }
+$object = new ScopedCallbackValue();
+$object->run($object);
+
+function collect_callback_strings(string ...$values): void {
+    echo json_encode($values), "\n";
+}
+array_map('collect_callback_strings', [123]);
+
+$source = '12';
+$items = [&$source];
+array_map(function (int $value) use (&$source): void {
+    echo gettype($value), ':', gettype($source), ':', $source, "\n";
+}, $items);
+"#,
+        ),
+        concat!(
+            "ScopedCallbackValue\n",
+            "[\"123\"]\n",
+            "integer:string:12\n",
+        )
+    );
+}
+
+#[test]
 fn recursive_walk_accepts_objects_and_userdata_for_leaf_values() {
     assert_eq!(
         run_php(

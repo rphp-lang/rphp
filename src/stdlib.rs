@@ -25932,18 +25932,20 @@ where
             value
         }
     });
-    crate::vm::execute::call_function_owned_iter_with_context_from(
-        eg,
-        ed,
-        resolved.func_ptr,
-        num_args,
-        args,
-        resolved.called_scope_class_id,
-        resolved.closure_scope_class_id,
-        resolved.bound_this.clone(),
-        resolved.use_vars.len(),
-        resolved.closure_static_vars.clone(),
-    )
+    with_internal_trace_origin(ed, eg, |eg| {
+        crate::vm::execute::call_function_owned_iter_with_context_from(
+            eg,
+            ed,
+            resolved.func_ptr,
+            num_args,
+            args,
+            resolved.called_scope_class_id,
+            resolved.closure_scope_class_id,
+            resolved.bound_this.clone(),
+            resolved.use_vars.len(),
+            resolved.closure_static_vars.clone(),
+        )
+    })
 }
 
 fn call_resolved_owned_iter_with_named<I>(
@@ -27127,7 +27129,7 @@ fn fn_call_user_func(
     // directly into the callback frame. No intermediate argument vectors.
     let result = if let Some(arr) = variadic_val.as_array() {
         if callback_has_hard_reference_parameters(&resolved) {
-            let callback_name = callable_display_name(callback, eg);
+            let callback_name = resolved_callback_diagnostic_name(callback, &resolved, eg);
             if !report_callback_reference_warnings(eg, ed, &resolved, arr, true, &callback_name)? {
                 eg.replace_detached_return_discarded(previous_discarded);
                 return Ok(());
@@ -27215,6 +27217,21 @@ pub(crate) fn callable_display_name(value: &Value, eg: &ExecutorGlobals) -> Stri
             format!("{class}::__invoke")
         }),
         _ => value.echo_to_string(),
+    }
+}
+
+/// Render the callable named by an argument diagnostic after resolution.
+/// Inherited methods use their declaring class in PHP diagnostics, while a
+/// magic fallback still names the callable spelling supplied by userland.
+pub(crate) fn resolved_callback_diagnostic_name(
+    value: &Value,
+    resolved: &ResolvedCallback,
+    eg: &ExecutorGlobals,
+) -> String {
+    if resolved.is_magic_call {
+        callable_display_name(value, eg)
+    } else {
+        crate::vm::execute::displayed_function_name(eg, resolved.func_ptr)
     }
 }
 
@@ -27857,7 +27874,7 @@ impl UserSortCallbackState {
     fn new(callback: &Value, resolved: &ResolvedCallback, eg: &ExecutorGlobals) -> Self {
         Self {
             reference_warning_name: callback_has_hard_reference_parameters(resolved)
-                .then(|| callable_display_name(callback, eg)),
+                .then(|| resolved_callback_diagnostic_name(callback, resolved, eg)),
             warned_bool_return: false,
         }
     }
@@ -28232,7 +28249,7 @@ fn report_array_walk_userdata_reference_warning(
     {
         return Ok(true);
     }
-    let display_name = callable_display_name(callback, eg);
+    let display_name = resolved_callback_diagnostic_name(callback, resolved, eg);
     let parameter = resolved
         .signature()
         .param_names
@@ -32408,7 +32425,7 @@ fn fn_call_user_func_array(
     if callback_has_hard_reference_parameters(&resolved)
         && let Some(arguments) = args_val.as_array()
     {
-        let callback_name = callable_display_name(callback, eg);
+        let callback_name = resolved_callback_diagnostic_name(callback, &resolved, eg);
         if !report_callback_reference_warnings(eg, ed, &resolved, arguments, false, &callback_name)?
         {
             return Ok(());

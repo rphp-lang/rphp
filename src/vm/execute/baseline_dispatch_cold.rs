@@ -148,7 +148,23 @@ fn report_send_user_reference_warning(
         if init.opcode == OpCode::InitUserCall {
             let callback =
                 &*(*frame).get_op_ptr(init.op1 as u32, init.op1_type, op_array);
-            crate::stdlib::callable_display_name(callback.dereferenced(), eg)
+            let callback = callback.dereferenced();
+            let invokes_closure = callback.value_type() == ValueType::Closure
+                || callback.as_array().is_some_and(|parts| {
+                    parts.len() == 2
+                        && parts
+                            .get_value_at(0)
+                            .is_some_and(|owner| owner.value_type() == ValueType::Closure)
+                        && parts
+                            .get_value_at(1)
+                            .and_then(Value::as_str)
+                            .is_some_and(|method| method.eq_ignore_ascii_case("__invoke"))
+                });
+            if invokes_closure {
+                crate::stdlib::callable_display_name(callback, eg)
+            } else {
+                displayed_function_name(eg, func_common as *const FunctionCommon)
+            }
         } else {
             displayed_function_name(eg, func_common as *const FunctionCommon)
         }
@@ -2899,7 +2915,11 @@ fn op_call_user_func_array<'a>(
                 )?
             } else {
                 if crate::stdlib::callback_has_hard_reference_parameters(&resolved) {
-                    let display_name = crate::stdlib::callable_display_name(callback, eg);
+                    let display_name = crate::stdlib::resolved_callback_diagnostic_name(
+                        callback,
+                        &resolved,
+                        eg,
+                    );
                     report_callback_array_reference_warnings(
                         eg,
                         frame,
@@ -2957,7 +2977,11 @@ fn op_call_user_func_array<'a>(
             Some(cache_slot),
         ) {
             if crate::stdlib::callback_has_hard_reference_parameters(&resolved) {
-                let display_name = crate::stdlib::callable_display_name(callback, eg);
+                let display_name = crate::stdlib::resolved_callback_diagnostic_name(
+                    callback,
+                    &resolved,
+                    eg,
+                );
                 report_callback_array_reference_warnings(
                     eg,
                     frame,
@@ -5978,6 +6002,37 @@ fn op_bind_static(
         run_prepared_value_destructor(eg, destructor)?;
     }
     Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn rebind_active_static_cv(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    cv: u32,
+    previous_identity: Option<usize>,
+    binding: &Value,
+) {
+    let Some(previous_identity) = previous_identity else {
+        return;
+    };
+    let Some((_, name, _)) = op_array
+        .static_vars
+        .iter()
+        .find(|(static_cv, _, _)| *static_cv == cv)
+    else {
+        return;
+    };
+    eg.with_function_static_vars_mut(frame as usize, &op_array.name, |statics| {
+        let Some(stored) = statics.get(name) else {
+            return;
+        };
+        if stored.reference_identity() != Some(previous_identity) {
+            return;
+        }
+        statics.insert(name.clone(), binding.clone_owned_reference_alias());
+    });
 }
 
 #[inline(never)]

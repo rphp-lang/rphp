@@ -15741,6 +15741,8 @@ impl Compiler {
         let prepare_ip = self.instructions.len();
         self.push_instruction_at_line(prepare, line);
         let unpacked = args.iter().any(|arg| matches!(arg, CallArg::Unpack(_)));
+        let known_reference_signature =
+            known_class.and_then(|class| self.known_constructor_reference_signature(class));
         let mut invoke = Instruction::new(OpCode::NewObj);
         invoke.op1 = result;
         invoke.op1_type = OpType::Tmp;
@@ -15764,6 +15766,37 @@ impl Compiler {
             invoke._pad |= NEW_FLAG_UNPACKED_ARGUMENTS;
             self.push_instruction_at_line(invoke, line);
             self.emit_constructor_argument_release(result + 1, self.next_tmp, call_line);
+            return (result, OpType::Tmp);
+        }
+        // A source-local constructor exposes its immutable reference
+        // signature before runtime class linking. Keep simple positional
+        // operands behind the already-emitted NewObj boundary, but select
+        // SendRef directly so an undefined variable passed to `&$parameter`
+        // is initialized silently rather than read and warned first.
+        let direct_known_signature = known_reference_signature.filter(|_| {
+            args.iter().all(|argument| {
+                matches!(argument, CallArg::Positional(_))
+                    && matches!(
+                        argument.expr(),
+                        Expr::Variable { .. }
+                            | Expr::Integer(_)
+                            | Expr::Float(_)
+                            | Expr::StringLiteral(_)
+                            | Expr::BinaryStringLiteral(_)
+                            | Expr::Bool(_)
+                            | Expr::Null
+                    )
+            })
+        });
+        if let Some((ref_args, variadic_ref_start)) = direct_known_signature {
+            let prepare = &mut self.instructions[prepare_ip];
+            prepare._pad = flags;
+            prepare.extended_value = args.len() as u32;
+            self.emit_call_args(args, 1, ref_args, variadic_ref_start, false, true);
+            let mut call = Instruction::new(OpCode::DoFcall);
+            call.result = self.alloc_tmp();
+            call.result_type = OpType::Tmp;
+            self.push_instruction_at_line(call, call_line);
             return (result, OpType::Tmp);
         }
         // Property and static-property arguments also need the runtime
@@ -15963,6 +15996,45 @@ impl Compiler {
             }
             let Some(parent) = class.parent.as_deref() else {
                 return Some(true);
+            };
+            current = parent.trim_start_matches('\\');
+        }
+    }
+
+    fn known_constructor_reference_signature(
+        &self,
+        class_name: &str,
+    ) -> Option<(u64, Option<usize>)> {
+        let mut current = class_name.trim_start_matches('\\');
+        let mut seen = HashSet::new();
+        loop {
+            if !seen.insert(current.to_ascii_lowercase()) {
+                return None;
+            }
+            let Some(class) = self.class_defs.iter().find(|class| {
+                class
+                    .name
+                    .trim_start_matches('\\')
+                    .eq_ignore_ascii_case(current)
+            }) else {
+                return self
+                    .known_value_constructors
+                    .contains(&current.to_ascii_lowercase())
+                    .then_some((0, None));
+            };
+            if let Some((_, _, _, _, constructor)) = class
+                .methods
+                .iter()
+                .find(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__construct"))
+            {
+                let signature = &constructor.common.sig;
+                let variadic_ref_start = (signature.is_variadic
+                    && signature.is_param_by_ref(signature.public_arity()))
+                .then_some(signature.public_arity() as usize);
+                return Some((signature.ref_args, variadic_ref_start));
+            }
+            let Some(parent) = class.parent.as_deref() else {
+                return Some((0, None));
             };
             current = parent.trim_start_matches('\\');
         }

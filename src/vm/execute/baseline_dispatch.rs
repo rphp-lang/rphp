@@ -2858,6 +2858,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             binding.mark_internal_reference_alias();
                         }
                         let destination = (*frame).cv_mut(opline.result as u32) as *mut Value;
+                        let previous_identity = (&*destination).reference_identity();
+                        // Rebinding a static CV to an ordinary local variable
+                        // is activation-local: the persistent static table
+                        // keeps its original cell for the next invocation.
+                        // A temporary RHS has no other variable owner, so PHP
+                        // retains that promoted cell in the static table.
+                        if opline.op1_type != OpType::Cv {
+                            rebind_active_static_cv(
+                                eg,
+                                frame,
+                                op_array,
+                                u32::from(opline.result),
+                                previous_identity,
+                                &binding,
+                            );
+                        }
                         let destructor = value_may_require_direct_vm_release(&*destination)
                             .then(|| prepare_replaced_value_destructor(eg, &*destination))
                             .flatten();

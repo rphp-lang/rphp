@@ -2477,7 +2477,8 @@ fn filter_var_scalar(
             if super::callback_has_hard_reference_parameters(&resolved) {
                 let mut arguments = PhpArray::with_packed_capacity(1);
                 arguments.push(argument.clone());
-                let callback_name = super::callable_display_name(callback, eg);
+                let callback_name =
+                    super::resolved_callback_diagnostic_name(callback, &resolved, eg);
                 if !super::report_callback_reference_warnings(
                     eg,
                     ed,

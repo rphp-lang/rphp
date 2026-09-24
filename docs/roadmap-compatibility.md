@@ -36,23 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `lvalue-error-order-remainder` checkpoint over `7355a04d` adds **6 exact
-PHP 8.5 passes without loss**. The measured 7,173-case stable core is
-**6,735/47/183/208**; Zend/lang reaches **5,257/47/115/179**, while
+The `call-reference-remainder` checkpoint over `f9cd2834` adds **4 exact PHP
+8.5 passes without loss**. The measured 7,173-case stable core is
+**6,739/43/183/208**; Zend/lang reaches **5,261/43/115/179**, while
 strings/array remains **1,478/0/68/29**.
 
-The shared compiler/runtime slice preserves PHP ordering for nested dynamic
-property reads, reference-property failures and variable-variable compound
-writes; include/eval symbol scopes now connect dynamic names to local compiled
-variables, and typed reference returns are revalidated after `finally` mutates
-their live cell. The complete default Cargo suite, exact no-loss families,
-focused/adjacent regressions, formatting and unsafe policy are green; unsafe
-blocks stay at the accepted 1,627 ceiling.
+The shared compiler/runtime slice validates detached callback fixed and
+variadic types in the correct trait scope, preserves caller references across
+by-value coercion, aligns resolved reference-warning names, materializes known
+constructor reference arguments and distinguishes temporary from activation-
+local static reference rebinding. Five Cargo configurations, all-targets,
+exact no-loss families, Composer/Symfony S0--S3, focused/adjacent regressions,
+formatting and unsafe policy are green; unsafe blocks stay at the accepted
+1,627 ceiling.
 
-Continue the shared-cause stable-core sweep from **47 to zero**. Phar, PCRE and
-Date/DateTime remain outside this stream. Preserve the exact 5,257 and 1,478
+Continue the shared-cause stable-core sweep from **43 to zero**. Phar, PCRE and
+Date/DateTime remain outside this stream. Preserve the exact 5,261 and 1,478
 pass sets. Aggregate performance optimization stays deferred by user
 direction.
+
+### Preceding lvalue error-order checkpoint
+
+The `lvalue-error-order-remainder` checkpoint over `7355a04d` reduced the
+stable-core debt from 53 to 47, exact +6/-0, by aligning lvalue error ordering,
+include/eval symbol updates and typed-reference return validation.
 
 ### Preceding core runtime checkpoint
 
