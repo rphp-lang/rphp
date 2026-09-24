@@ -49,6 +49,14 @@
 
 ## Test environment hygiene
 
+- Run local PHPT packets inside an aggregate memory boundary (for example a
+  user-systemd service with `MemoryMax=6G`, `MemorySwapMax=0`) and at most four
+  workers on a 32 GiB development machine. The Linux runner additionally
+  limits each target's address space to 2 GiB and terminates its whole process
+  group, including `PHP_BINARY`/`shell_exec` children. Keep timeouts and
+  resource-limit failures visible; never retry an OOM test without these
+  limits or count it as a pass. An interrupted runner may leave descendants,
+  so inspect host processes before starting a replacement packet.
 - Run network, DNS and socket integration tests in the ordinary host
   environment, not in the restricted command sandbox. In particular,
   `tests/e2e_coroutine_resolver.rs` can time out when the sandbox blocks its

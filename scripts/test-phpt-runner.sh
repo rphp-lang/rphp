@@ -7,6 +7,7 @@ php_bin=${RPHP_PHPT_REFERENCE_PHP:-php}
 if command -v "$php_bin" >/dev/null 2>&1; then
     php_bin=$(command -v "$php_bin")
 fi
+"$php_bin" "$script_root/tests/php-src/runner-process.php"
 fixture_copy=$(mktemp -d "${TMPDIR:-/tmp}/rphp-phpt-runner-fixtures.XXXXXX")
 wrapper_fixture=$(mktemp -d "${TMPDIR:-/tmp}/rphp-phpt-wrapper-fixtures.XXXXXX")
 trap 'rm -rf -- "$fixture_copy" "$wrapper_fixture"' EXIT HUP INT TERM

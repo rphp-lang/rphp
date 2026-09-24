@@ -2,6 +2,57 @@
 
 declare(strict_types=1);
 
+/** @return array{list<string>, bool} */
+function isolated_target_command(array $command): array
+{
+    if (PHP_OS_FAMILY !== 'Linux') {
+        return [$command, false];
+    }
+    if (!function_exists('posix_kill')) {
+        throw new RuntimeException('Linux PHPT isolation requires the PHP POSIX extension');
+    }
+    $tools = [];
+    foreach (['setsid', 'prlimit'] as $name) {
+        foreach (explode(PATH_SEPARATOR, getenv('PATH') ?: '/usr/bin:/bin') as $directory) {
+            $path = $directory . DIRECTORY_SEPARATOR . $name;
+            if (is_file($path) && is_executable($path)) {
+                $tools[$name] = $path;
+                break;
+            }
+        }
+        if (!isset($tools[$name])) {
+            throw new RuntimeException("Linux PHPT isolation requires {$name}");
+        }
+    }
+    $memoryMiB = getenv('RPHP_PHPT_MAX_MEMORY_MB');
+    $memoryMiB = $memoryMiB === false ? '2048' : $memoryMiB;
+    if (!ctype_digit($memoryMiB) || (int) $memoryMiB < 16 || (int) $memoryMiB > 32768) {
+        throw new RuntimeException('RPHP_PHPT_MAX_MEMORY_MB must be between 16 and 32768');
+    }
+    // The limit is inherited by shell_exec()/PHP_BINARY children as well.
+    // PHP's own memory_limit cannot protect the host from runtime bugs.
+    return [[
+        $tools['setsid'],
+        $tools['prlimit'],
+        '--as=' . ((int) $memoryMiB * 1024 * 1024),
+        '--core=0',
+        '--',
+        ...$command,
+    ], true];
+}
+
+function terminate_target_tree($process, ?int $group, int $signal): void
+{
+    if ($group !== null) {
+        // setsid makes the proc_open child the leader of this private group.
+        // Signal it even after the leader exits: descendants may retain pipes.
+        @posix_kill(-$group, $signal);
+    }
+    if (proc_get_status($process)['running']) {
+        proc_terminate($process, $signal);
+    }
+}
+
 /**
  * @return array{output: string, exit_code: int, timeout: bool, crash: bool, duration_ms: int}
  */
@@ -12,6 +63,7 @@ function run_process(
     string $stdin,
     float $timeout,
 ): array {
+    [$command, $isolated] = isolated_target_command($command);
     $descriptors = [
         0 => ['pipe', 'r'],
         1 => ['pipe', 'w'],
@@ -35,25 +87,30 @@ function run_process(
     $output = '';
     $timedOut = false;
     $lastStatus = proc_get_status($process);
+    $group = $isolated ? $lastStatus['pid'] : null;
     while ($lastStatus['running']) {
-        $chunk = stream_get_contents($pipes[1]);
+        // Bound each drain so a continuously writing target cannot postpone
+        // the wall-clock deadline indefinitely.
+        $chunk = stream_get_contents($pipes[1], 65536);
         if ($chunk !== false) {
             $output .= $chunk;
         }
         if ((hrtime(true) - $start) / 1_000_000_000 > $timeout) {
             $timedOut = true;
-            proc_terminate($process);
+            terminate_target_tree($process, $group, 15);
             usleep(20_000);
-            $status = proc_get_status($process);
-            if ($status['running']) {
-                proc_terminate($process, 9);
-            }
+            // Escalate for the entire group even if its leader already died.
+            terminate_target_tree($process, $group, 9);
             break;
         }
         usleep(5_000);
         $lastStatus = proc_get_status($process);
     }
-    stream_set_blocking($pipes[1], true);
+    if ($group !== null) {
+        terminate_target_tree($process, $group, 9);
+    }
+    // Never block waiting for EOF from an inherited descriptor after timeout
+    // or normal parent exit. All available bytes are still collected.
     $tail = stream_get_contents($pipes[1]);
     if ($tail !== false) {
         $output .= $tail;

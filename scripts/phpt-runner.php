@@ -49,6 +49,8 @@ usage:
 
 PATH is relative to --suite-root and may name a PHPT file or a directory.
 Known upstream XFAIL outcomes are reported separately from compatibility fails.
+Linux targets run in private process groups with a 2048 MiB address-space cap
+(RPHP_PHPT_MAX_MEMORY_MB overrides it). Descendants are stopped with the target.
 USAGE);
     exit(2);
 }
