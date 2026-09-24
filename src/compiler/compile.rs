@@ -14575,6 +14575,14 @@ impl Compiler {
                     return self.compile_reference_yield(value.as_deref(), key.as_deref(), *line);
                 }
                 let mut instr = Instruction::new(OpCode::Yield);
+                // PHP evaluates an explicit key before the yielded value.
+                // Besides visible side effects, object handles allocated by
+                // either expression expose this ordering through var_dump().
+                if let Some(key_expr) = key {
+                    let (key_op, key_type) = self.compile_expr(key_expr);
+                    instr.op2 = key_op;
+                    instr.op2_type = key_type;
+                }
                 // op1 = yielded value
                 if let Some(val_expr) = value {
                     let (val_op, val_type) = self.compile_expr(val_expr);
@@ -14585,17 +14593,11 @@ impl Compiler {
                     instr.op1 = null_idx;
                     instr.op1_type = OpType::Const;
                 }
-                // op2 = key (if yield $key => $value)
-                if let Some(key_expr) = key {
-                    let (key_op, key_type) = self.compile_expr(key_expr);
-                    instr.op2 = key_op;
-                    instr.op2_type = key_type;
-                }
                 // result = value received from send()
                 let tmp = self.alloc_tmp();
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
-                self.instructions.push(instr);
+                self.push_instruction_at_line(instr, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::YieldFrom {

@@ -1147,6 +1147,51 @@ try {
 }
 
 #[test]
+fn static_property_operations_autoload_and_propagate_callback_exceptions() {
+    let output = run_php(
+        r#"<?php
+spl_autoload_register(function ($name) {
+    echo "load:$name|";
+    if ($name === 'LoadedStaticState') {
+        eval('class LoadedStaticState { public static $value = 4; }');
+        return;
+    }
+    throw new Exception("missing:$name");
+});
+
+echo LoadedStaticState::$value, '|';
+LoadedStaticState::$value = 9;
+echo LoadedStaticState::$value, "\n";
+
+$operations = [
+    fn() => MissingStaticRead::$value,
+    fn() => MissingStaticWrite::$value = 1,
+    fn() => isset(MissingStaticIsset::$value),
+    function () { unset(MissingStaticUnset::$value); },
+];
+foreach ($operations as $operation) {
+    try {
+        $operation();
+    } catch (Exception $error) {
+        echo $error->getMessage(), "\n";
+    }
+}
+"#,
+    );
+
+    assert_eq!(
+        output,
+        concat!(
+            "load:LoadedStaticState|4|9\n",
+            "load:MissingStaticRead|missing:MissingStaticRead\n",
+            "load:MissingStaticWrite|missing:MissingStaticWrite\n",
+            "load:MissingStaticIsset|missing:MissingStaticIsset\n",
+            "load:MissingStaticUnset|missing:MissingStaticUnset\n",
+        )
+    );
+}
+
+#[test]
 fn closure_autoloader_can_be_unregistered_by_the_same_value() {
     let output = run_php(
         r#"<?php

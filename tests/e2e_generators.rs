@@ -1760,6 +1760,66 @@ var_dump($weak->get());
 }
 
 #[test]
+fn explicit_yield_key_precedes_value_and_preserves_non_scalar_keys() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function allocation($label) {
+    echo $label, "\n";
+    return (object) ['label' => $label];
+}
+function keyedGenerator() {
+    yield allocation('key') => allocation('value');
+}
+foreach (keyedGenerator() as $key => $value) {
+    echo $key->label, ':', $value->label, "\n";
+}
+"#,
+        ),
+        "key\nvalue\nkey:value\n"
+    );
+}
+
+#[test]
+fn force_closed_generator_errors_keep_yield_site_and_release_caller() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function directYield() {
+    try {
+        yield;
+    } finally {
+        yield;
+    }
+}
+function delegatedYield() {
+    try {
+        yield from [1];
+    } finally {
+        yield from [2];
+    }
+}
+foreach (['directYield', 'delegatedYield'] as $factory) {
+    try {
+        $generator = $factory();
+        $generator->rewind();
+        unset($generator);
+    } catch (Throwable $error) {
+        $trace = $error->getTrace();
+        echo $error->getLine(), ':', $trace[0]['line'] ?? 0, ':', $trace[0]['function'], "\n";
+    }
+}
+"#,
+        ),
+        // In-memory E2E sources intentionally have no public file/line. The
+        // important invariant here is that the force-close error retains the
+        // released generator as frame zero instead of an opaque internal
+        // boundary; the upstream file-backed PHPTs assert exact line origins.
+        "0:0:directYield\n0:0:delegatedYield\n"
+    );
+}
+
+#[test]
 fn force_close_runs_private_finally_without_aborting_a_shared_delegate() {
     assert_eq!(
         run_php(

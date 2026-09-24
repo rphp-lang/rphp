@@ -5703,7 +5703,7 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
-Current AMD64 stable-core status is 6,709 pass / 73 fail / 182 skip / 210
+Current AMD64 stable-core status is 6,743 pass / 39 fail / 183 skip / 208
 unsupported. Date/DateTime is integrated; separate workstreams own Phar and
 PCRE. The core sweep continues from the remaining failure manifest, with
 performance intentionally deferred to the final aggregate pass.

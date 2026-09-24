@@ -2441,6 +2441,7 @@ pub(crate) fn resume_generator_from_fiber(
 pub(crate) fn force_close_generator(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
+    logical_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     use crate::vm::generator::YieldFromDelegate;
 
@@ -2473,7 +2474,11 @@ pub(crate) fn force_close_generator(
         chain.push(generator);
     }
     while let Some(generator) = chain.pop() {
-        let close_result = force_close_generator_activation(eg, &generator);
+        let close_result = force_close_generator_activation(
+            eg,
+            &generator,
+            logical_caller_at_current_site,
+        );
         // Force-close runs only after the last public Generator owner has
         // disappeared. The internal GeneratorRef can outlive that object
         // briefly while release bookkeeping unwinds; do not let that private
@@ -2494,6 +2499,7 @@ pub(crate) fn force_close_generator(
 fn force_close_generator_activation(
     eg: &mut ExecutorGlobals,
     gen_ref: &crate::vm::generator::GeneratorRef,
+    logical_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     use crate::vm::generator::GeneratorState;
 
@@ -2525,6 +2531,12 @@ fn force_close_generator_activation(
         .flatten();
 
     let (frame, saved_execute_data) = materialize_generator_frame(eg, gen_ref);
+    if logical_caller_at_current_site {
+        eg.publish_detached_trace_caller_at_current_site(
+            frame as usize,
+            saved_execute_data as usize,
+        );
+    }
     eg.current_execute_data.set(frame);
     let release_result = release_force_closed_generator_temps(
         eg,

@@ -39,6 +39,13 @@ fn foreach_owned_iterator(value: &Value) -> *const Value {
     object.get_property_slot(0).expect("protocol consumer retains its Iterator") as *const Value
 }
 
+#[inline]
+fn foreach_state_owns_iterator(value: &Value) -> bool {
+    value.as_object().is_some_and(|object| {
+        object.class_name.is_empty() && object.get_property_slot(0).is_some()
+    })
+}
+
 /// The private envelope has exactly one edge and cannot have PHP hooks.
 /// Prove a bounded callback-free child shape, independently of Rc counts:
 /// multiple consumers can retire together and hold every remaining alias.
@@ -1478,7 +1485,16 @@ fn op_foreach_init<'a>(
         }
         // Position 0 means the generator was already started and must not be
         // resumed again before its first value is consumed.
-        set_foreach_iteration_state(frame, opline, Some(arr_val.clone()), 0);
+        // Zend materializes a private iterator owner even for Generator
+        // foreach. Its object-store handle is observable because objects
+        // yielded as keys/values receive the following handles. Reuse the
+        // same one-slot ownership envelope as other Iterator consumers.
+        set_foreach_iteration_state(
+            frame,
+            opline,
+            Some(foreach_iterator_owner(arr_val, eg, false)),
+            0,
+        );
     } else {
         if uses_user_iterator_protocol(arr_val, eg) {
             if crate::stdlib::uses_native_iterator_protocol(arr_val, eg) {
@@ -1755,7 +1771,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         // The private owner slot never escapes or changes while this TMP
         // is live. End its RefCell guard before invoking callbacks: a thrown
         // exception can retire the TMP. No source read follows that transfer.
-        let source = if cursor < 0 {
+        let source = if cursor < 0 || foreach_state_owns_iterator(iteration_state) {
             &*foreach_owned_iterator(iteration_state)
         } else {
             iteration_state.dereferenced()

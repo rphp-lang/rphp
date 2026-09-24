@@ -794,7 +794,11 @@ fn run_final_object_destructor_tree_inner(
         // changing replacement chaining for ordinary object destructors.
         let saved_execute_data = eg.current_execute_data.get();
         eg.current_execute_data.set(logical_caller);
-        let close_result = force_close_generator(eg, &generator);
+        let close_result = force_close_generator(
+            eg,
+            &generator,
+            logical_caller_at_current_site,
+        );
         eg.current_execute_data.set(saved_execute_data);
         close_result?;
         ran_destructor = true;
@@ -1476,6 +1480,24 @@ fn run_frame_destructors_filtered(
                         .dereferenced()
                         .as_object()
                         .and_then(|object| object.generator.clone())
+                        .or_else(|| {
+                            // Generator foreach keeps Zend's observable
+                            // iterator-consumer handle in the same private
+                            // one-slot owner used by other Iterator paths.
+                            // During uncaught-exception unwinding, look
+                            // through that engine-only envelope so the
+                            // suspended generator still closes before the
+                            // fatal diagnostic.
+                            representative.as_object().and_then(|object| {
+                                object
+                                    .class_name
+                                    .is_empty()
+                                    .then(|| object.get_property_slot(0))
+                                    .flatten()
+                                    .and_then(Value::as_object)
+                                    .and_then(|source| source.generator.clone())
+                            })
+                        })
                         .is_some_and(|generator| {
                             generator.borrow().state
                                 != crate::vm::generator::GeneratorState::Completed

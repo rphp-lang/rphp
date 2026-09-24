@@ -7,6 +7,39 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+The `generator-autoload-boundaries` checkpoint over `7844e409` adds **4 exact
+PHP 8.5 passes without loss**. Explicit generator keys are evaluated before
+their values and preserve non-scalar-key diagnostics; force-closed generator
+`finally` errors retain the suspended yield site and release caller; generator
+`foreach` exposes PHP's hidden iterator ownership during cleanup; and ordinary
+static-property reads, writes, references, `isset()` and `unset()` invoke SPL
+autoload before resolving the owner while propagating callback exceptions.
+
+The measured 7,173-case stable core is now **6,743 pass / 39 fail / 183 skip /
+208 unsupported**, with no timeout or crash. Zend/lang is
+**5,265/39/115/179**, exact **+4/-0**, while strings/array remains
+**1,478/0/68/29**. All five Cargo configurations and all-targets, exact
+pass-set no-loss, focused E2E/PHPT, Composer/Symfony S0--S3, formatting and
+unsafe-policy gates are green. Aggregate performance remains deferred by user
+direction.
+
+SHA-256 evidence: candidate
+`75b88e352d649391ca7fd53a00701f8ee51f0b307a60e9b2297331683fa7bb2d`;
+Zend/lang pass set
+`63dfbdcee6db19533e109aed760f4c81f6ebc0b5734e45cf10ce50c0b5518482`;
+strings/array pass set
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
+combined pass set
+`b79e05913667b3b8b2fa507656bbd7817bd81a5458e857dd82477e83a39002a`;
+concatenated stable-core manifests
+`e8fe497874584254f80eaa711fcdad2d986324ab23799566eb4104b306e63ad9`.
+
+Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
+also outside this core train. The next core-language cluster starts from the
+remaining 39 measured failures.
+
+### Preceding callback/reference checkpoint
+
 The `call-reference-remainder` checkpoint over `f9cd2834` adds **4 exact PHP
 8.5 passes without loss**. Engine-dispatched user callbacks now validate weak
 fixed and variadic argument contracts before the body with the correct bound

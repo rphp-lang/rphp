@@ -3182,6 +3182,37 @@ fn static_property_throw<'a>(
     })
 }
 
+/// Resolve an ordinary static-property owner through SPL autoload before the
+/// property lookup turns the missing class into an `Error`.  The caller owns
+/// the evaluated class/property spellings across this callback boundary.
+#[cold]
+#[inline(never)]
+fn autoload_static_property_owner<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    raw_class: &str,
+) -> Result<Option<ColdResult<'a>>, VmError> {
+    if raw_class.is_empty()
+        || matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        )
+        || eg.find_class(raw_class).is_some()
+    {
+        return Ok(None);
+    }
+    let _ = crate::stdlib::autoload::ensure_symbol_loaded(eg, raw_class)?;
+    let Some(exception) = eg.exception.take() else {
+        return Ok(None);
+    };
+    Ok(Some(match throw_in_frame(eg, frame, exception)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    }))
+}
+
 #[cold]
 #[inline(never)]
 fn class_constant_throw<'a>(
@@ -3295,6 +3326,23 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         .as_ref()
         .map_or_else(|| class_name_val.as_str().unwrap_or(""), |(name, _)| name);
     let prop = prop_name_val.as_str().unwrap_or("");
+    // Autoload can re-enter userland and mutate captured caller variables.
+    // PHP has already evaluated both operands at this point, so preserve
+    // their spellings before invoking the callback.
+    let autoload_operands = (eg.find_class(raw_class).is_none()
+        && !matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        ))
+    .then(|| (raw_class.to_string(), prop.to_string()));
+    let (raw_class, prop) = autoload_operands
+        .as_ref()
+        .map_or((raw_class, prop), |(class, property)| {
+            (class.as_str(), property.as_str())
+        });
+    if let Some(result) = autoload_static_property_owner(eg, frame, raw_class)? {
+        return Ok(result);
+    }
     let class_id = dynamic_owner_value.as_ref().map_or_else(
         || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
         |(_, class_id)| *class_id,
@@ -4043,6 +4091,21 @@ fn op_unset_static_prop<'a>(
     let raw_class = dynamic_owner_value
         .as_ref()
         .map_or_else(|| class_value.as_str().unwrap_or(""), |(name, _)| name);
+    let property = property_value.as_str().unwrap_or("");
+    let autoload_operands = (eg.find_class(raw_class).is_none()
+        && !matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        ))
+    .then(|| (raw_class.to_string(), property.to_string()));
+    let (raw_class, property) = autoload_operands
+        .as_ref()
+        .map_or((raw_class, property), |(class, property)| {
+            (class.as_str(), property.as_str())
+        });
+    if let Some(result) = autoload_static_property_owner(eg, frame, raw_class)? {
+        return Ok(result);
+    }
     // SAFETY: dispatch passes an opline from this immutable instruction slice.
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
@@ -4087,7 +4150,6 @@ fn op_unset_static_prop<'a>(
             format!("Class \"{}\" not found", raw_class),
         )?);
     };
-    let property = property_value.as_str().unwrap_or("");
     Ok(static_property_throw(
         eg,
         frame,
@@ -4260,6 +4322,20 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         .as_ref()
         .map_or_else(|| class_name.as_str().unwrap_or(""), |(name, _)| name);
     let property = property_name.as_str().unwrap_or("");
+    let autoload_operands = (eg.find_class(raw_class).is_none()
+        && !matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        ))
+    .then(|| (raw_class.to_string(), property.to_string()));
+    let (raw_class, property) = autoload_operands
+        .as_ref()
+        .map_or((raw_class, property), |(class, property)| {
+            (class.as_str(), property.as_str())
+        });
+    if let Some(result) = autoload_static_property_owner(eg, frame, raw_class)? {
+        return Ok(result);
+    }
     let ip = unsafe {
         (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize
     };
@@ -4516,6 +4592,20 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
         .as_ref()
         .map_or_else(|| class_name.as_str().unwrap_or(""), |(name, _)| name);
     let property = property_name.as_str().unwrap_or("");
+    let autoload_operands = (eg.find_class(raw_class).is_none()
+        && !matches!(
+            raw_class.to_ascii_lowercase().as_str(),
+            "self" | "parent" | "static"
+        ))
+    .then(|| (raw_class.to_string(), property.to_string()));
+    let (raw_class, property) = autoload_operands
+        .as_ref()
+        .map_or((raw_class, property), |(class, property)| {
+            (class.as_str(), property.as_str())
+        });
+    if let Some(result) = autoload_static_property_owner(eg, frame, raw_class)? {
+        return Ok(result);
+    }
     let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
     let cache = &mut *(op_array.cache.as_ptr().add(ip)
         as *mut crate::vm::instruction::InlineCache);
