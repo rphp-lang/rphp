@@ -387,35 +387,36 @@ forms, grep/invert and quote; all **54,844** output lines are byte-identical to
 PHP 8.5.11. The on-demand builtin audit reports PCRE **11 present / 0 missing /
 0 shape mismatch / 0 metadata mismatch**.
 
-The frozen-source Cargo matrix passes default **6,148**, no-default **5,814**,
-erased **6,219**, reified **6,241** and all-features **6,292** tests, plus
+The frozen-source Cargo matrix passes default **6,169**, no-default **5,835**,
+erased **6,240**, reified **6,262** and all-features **6,313** tests, plus
 all-targets. Composer and Symfony S0--S3, formatting, public-data hygiene and
 unsafe policy are green; production unsafe inventory remains at its accepted
 **1,627 blocks / 289 functions**. Exact broad no-loss preserves the complete
-**5,284** Zend/lang and **1,478** strings/array parent pass sets.
+post-rebase **5,287** Zend/lang and **1,478** strings/array parent pass sets.
 
 The fixed-parent 128-pair regex packet keeps `preg_match` without groups at
-**+0.02%**, no-literal and UTF-8 count lanes at **+0.46%/+0.45%**, and group
-miss at **+2.14%**. Callback grouped and match-all output improve by roughly
-48%; callback variants improve by 0.35--2.27% and fixed-prefix count by 24.65%.
-Independent controls are bounded by **+1.25%**. All benchmark outputs are
-exact. Native PCRE2 machine-code JIT remains the sole PCRE implementation
-non-claim; this native interpreter does not pretend to provide it.
+**-2.17%**, no-literal and UTF-8 count lanes at **+2.28%/-0.40%**, and group
+miss at **-3.96%**. Callback grouped and match-all output improve by
+**52.53%/47.91%**; the other callback variants range from **-3.89%** to
+**+1.41%**, and fixed-prefix count improves by **26.10%**. Independent controls
+are bounded by **+0.29%**. All benchmark outputs are exact. Native PCRE2
+machine-code JIT remains the sole PCRE implementation non-claim; this native
+interpreter does not pretend to provide it.
 
 SHA-256 evidence: candidate
-`30c253e0603f585a8da403f8e7d969eb596e2fb261357ca9114a3f1cd426aec7`;
+`f1879d280ca1adc73a629c98ddc3a289c6a052da507f1ac2ad2b1ea40b7c8d62`;
 PCRE manifest/summary
 `40adafe84226b6b941e6f0c7e1c174d989e21c88902b32a7d766c3b4dca33166` /
-`efcb6f9aafe9b45007cc7189634e65cfd2cf1e21c13f87beec508b6b59d55c95`;
+`95bc229128288c761878239e9f02b13998da2fa1c3ee66686fc537254ce85dd6`;
 generated output/script
 `27bef8ee981e7f690965af2720dec2f5908f7b6f6873ef3b0036f7acad3c3a0c` /
 `189309c6d7b42f762ef3b7bcb1cfeb73a949f1fdad7cc323f11511a173c3d8cb`;
 matrix/regex-performance/control-performance
-`eac45f2d1f4d49801780c85d2a2c81a326b575b158a94b61e34af148799829ae` /
-`325264fdd3022739d944b6803e820940cdf503231cc18ad1a22ddc1d91efdf4c` /
-`3ae8d5ba58d7531ae3d458870949c6245480d685eb9a9669730cb1b44fc5f768`;
+`f67adaf283377e2f658e34232f4365aa71180882d49bd0acb80fc22001b6e18e` /
+`567ef9c7c072c5cf2297cb28ab6408b0749d530e9e1e62aea34c233adc93b2cf` /
+`6a62c355238dc931849ee474da5a7e82483bacf525c1913e52d1e223c11bdfc0`;
 Zend/lang and strings/array pass sets
-`ecd19962f268e4d56a894d4b382ec3eb6cf8146b3a6ec216dbb7f1fb42ffacc3` /
+`44ed6c01431aa811e14d285c0d3db0f8659140fd4965cc3d82cb5d247010c333` /
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
 
 ### Preceding mutable-iteration checkpoint

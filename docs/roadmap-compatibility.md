@@ -249,23 +249,24 @@ is byte-identical to PHP 8.5.11. Focused coverage is **116/116** regex units and
 **99/99** PCRE-facing E2E/CLI cases.
 
 Five Cargo configurations, all-targets, Composer/Symfony S0--S3, unsafe
-policy, and exact no-loss pass sets (**5,284** Zend/lang and **1,478**
-strings/array) are green. Guarded fixed-parent performance keeps control lanes
-within **+1.25%**; `preg_match` without groups is **+0.02%**, count lanes are
-within **+0.46%**, and grouped/callback output lanes materially improve.
+policy, and exact post-rebase no-loss pass sets (**5,287** Zend/lang and
+**1,478** strings/array) are green. Guarded fixed-parent performance keeps
+control lanes within **+0.29%**; `preg_match` without groups is **-2.17%**, the
+largest pay-use increase is the no-literal count lane at **+2.28%**, and
+grouped and match-all output lanes materially improve.
 
 SHA-256 evidence: candidate
-`30c253e0603f585a8da403f8e7d969eb596e2fb261357ca9114a3f1cd426aec7`;
+`f1879d280ca1adc73a629c98ddc3a289c6a052da507f1ac2ad2b1ea40b7c8d62`;
 PCRE manifest/summary
 `40adafe84226b6b941e6f0c7e1c174d989e21c88902b32a7d766c3b4dca33166` /
-`efcb6f9aafe9b45007cc7189634e65cfd2cf1e21c13f87beec508b6b59d55c95`;
+`95bc229128288c761878239e9f02b13998da2fa1c3ee66686fc537254ce85dd6`;
 generated differential output/script
 `27bef8ee981e7f690965af2720dec2f5908f7b6f6873ef3b0036f7acad3c3a0c` /
 `189309c6d7b42f762ef3b7bcb1cfeb73a949f1fdad7cc323f11511a173c3d8cb`;
 matrix/regex-performance/control-performance evidence
-`eac45f2d1f4d49801780c85d2a2c81a326b575b158a94b61e34af148799829ae` /
-`325264fdd3022739d944b6803e820940cdf503231cc18ad1a22ddc1d91efdf4c` /
-`3ae8d5ba58d7531ae3d458870949c6245480d685eb9a9669730cb1b44fc5f768`.
+`f67adaf283377e2f658e34232f4365aa71180882d49bd0acb80fc22001b6e18e` /
+`567ef9c7c072c5cf2297cb28ab6408b0749d530e9e1e62aea34c233adc93b2cf` /
+`6a62c355238dc931849ee474da5a7e82483bacf525c1913e52d1e223c11bdfc0`.
 
 ### Preceding mutable-iteration checkpoint
 
