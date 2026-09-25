@@ -387,37 +387,42 @@ forms, grep/invert and quote; all **54,844** output lines are byte-identical to
 PHP 8.5.11. The on-demand builtin audit reports PCRE **11 present / 0 missing /
 0 shape mismatch / 0 metadata mismatch**.
 
-The frozen-source Cargo matrix passes default **6,169**, no-default **5,835**,
-erased **6,240**, reified **6,262** and all-features **6,313** tests, plus
-all-targets. Composer and Symfony S0--S3, formatting, public-data hygiene and
-unsafe policy are green; production unsafe inventory remains at its accepted
-**1,627 blocks / 289 functions**. Exact broad no-loss preserves the complete
-post-rebase **5,287** Zend/lang and **1,478** strings/array parent pass sets.
+The complete combined Cargo matrix immediately before the final disjoint core
+rebase passes default **6,205**, no-default **5,871**, erased **6,276**,
+reified **6,298** and all-features **6,349** tests, plus all-targets. After the
+rebase onto `c914d242`, all **215/215** PCRE-focused cases and the
+all-feature/all-target compile gate pass again. Composer and Symfony S0--S3,
+formatting, public-data hygiene and unsafe policy are green; production unsafe
+inventory remains at its accepted **1,627 blocks / 289 functions**. Exact
+broad no-loss preserves the complete post-rebase **5,295** Zend/lang and
+**1,478** strings/array parent pass sets.
 
-The fixed-parent 128-pair regex packet keeps `preg_match` without groups at
-**-2.17%**, no-literal and UTF-8 count lanes at **+2.28%/-0.40%**, and group
-miss at **-3.96%**. Callback grouped and match-all output improve by
-**52.53%/47.91%**; the other callback variants range from **-3.89%** to
-**+1.41%**, and fixed-prefix count improves by **26.10%**. Independent controls
-are bounded by **+0.29%**. All benchmark outputs are exact. Native PCRE2
-machine-code JIT remains the sole PCRE implementation non-claim; this native
-interpreter does not pretend to provide it.
+The final current-parent 128-pair regex packet puts `preg_match` without groups
+at **-10.46%**, group miss at **-7.71%**, no-literal count at **+1.13%** and
+UTF-8 count at **-0.15%**. Callback grouped improves by **48.16%**, match-all
+output by **46.96%**, fixed-prefix count by **24.64%**, and all three ordinary
+callback lanes improve by **7.48--16.83%**. Independent controls are bounded
+between **-0.41%** and **+1.06%**. All benchmark outputs are exact. Native
+PCRE2 machine-code JIT remains the sole PCRE implementation non-claim; this
+native interpreter does not pretend to provide it.
 
 SHA-256 evidence: candidate
-`f1879d280ca1adc73a629c98ddc3a289c6a052da507f1ac2ad2b1ea40b7c8d62`;
+`e3222dc3bb835c49726d7d17b921d0e5b6d3b8420f36b222dec1570792d4632b`;
 PCRE manifest/summary
 `40adafe84226b6b941e6f0c7e1c174d989e21c88902b32a7d766c3b4dca33166` /
-`95bc229128288c761878239e9f02b13998da2fa1c3ee66686fc537254ce85dd6`;
+`983ef6dbb36fbea4220fa3dfa3eb43e4ff704415807f41c0e420f261fa21c837`;
 generated output/script
 `27bef8ee981e7f690965af2720dec2f5908f7b6f6873ef3b0036f7acad3c3a0c` /
 `189309c6d7b42f762ef3b7bcb1cfeb73a949f1fdad7cc323f11511a173c3d8cb`;
-matrix/regex-performance/control-performance
-`f67adaf283377e2f658e34232f4365aa71180882d49bd0acb80fc22001b6e18e` /
-`567ef9c7c072c5cf2297cb28ab6408b0749d530e9e1e62aea34c233adc93b2cf` /
-`6a62c355238dc931849ee474da5a7e82483bacf525c1913e52d1e223c11bdfc0`;
+combined matrix and final current-parent regex/control performance packets
+`e5037c5505c25ca207239243d3ac64ae036bf4757cfff2201ff24828594d2024` /
+`f869ad937290fd312c284a31437678f400fd70b3dfb70e09b94bff55c4b0b3d9` /
+`0f2f8975daaaaed801866e1c4fe55e5f356de453e5ba9e25d779dee22673ddbc`;
 Zend/lang and strings/array pass sets
-`44ed6c01431aa811e14d285c0d3db0f8659140fd4965cc3d82cb5d247010c333` /
-`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
+`d58064be481e0945a85e1fbad59ae9090bfe71e3214c4613d8611cb9958f23e3` /
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
+builtin-audit report
+`c292879f174d3e81a729d1cd96b942ec0ea58694dbaf557c0bf80a5b69d08c62`.
 
 ### Preceding mutable-iteration checkpoint
 
