@@ -113,7 +113,7 @@ fn allocator_bytes(real_usage: bool) -> i64 {
         // chunks. glibc includes small-bin, arena and bookkeeping variations
         // in `uordblks`; project those implementation details back to Zend's
         // 64-KiB request chunk granularity.
-        info.uordblks / 65_536 * 65_536
+        info.uordblks.saturating_add(info.hblkhd) / 65_536 * 65_536
     };
     i64::try_from(bytes).unwrap_or(i64::MAX)
 }
@@ -121,6 +121,10 @@ fn allocator_bytes(real_usage: bool) -> i64 {
 #[cfg(not(all(target_os = "linux", target_env = "gnu")))]
 fn allocator_bytes(_real_usage: bool) -> i64 {
     resident_bytes()
+}
+
+pub(crate) fn current_allocator_bytes() -> i64 {
+    allocator_bytes(false)
 }
 
 fn memory_report(

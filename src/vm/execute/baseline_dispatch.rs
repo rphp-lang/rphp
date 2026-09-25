@@ -11527,6 +11527,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
 
             OpCode::CreateClosure => {
                 op_create_closure(eg, frame, op_array, opline);
+                let instruction = (opline_ptr as usize
+                    - op_array.instructions.as_ptr() as usize)
+                    / std::mem::size_of::<Instruction>();
+                let file = if op_array.source_file.is_empty() {
+                    op_array.name.as_str()
+                } else {
+                    op_array.source_file.as_str()
+                };
+                crate::stdlib::enforce_memory_limit(
+                    eg,
+                    std::mem::size_of::<crate::value::PhpClosure>(),
+                    file,
+                    op_array.source_line(instruction).unwrap_or(0),
+                )?;
             }
 
             OpCode::CreateFirstClassCallable => {

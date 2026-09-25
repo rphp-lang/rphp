@@ -36,24 +36,28 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `call-reference-remainder` checkpoint over `f9cd2834` adds **4 exact PHP
-8.5 passes without loss**. The measured 7,173-case stable core is
-**6,739/43/183/208**; Zend/lang reaches **5,261/43/115/179**, while
-strings/array remains **1,478/0/68/29**.
+The `lifecycle-remainder` checkpoint over `200287aa` adds **11 exact passes
+against the guarded parent, 10 against the historical accepted set, with no
+loss**. The complete 7,174-case stable core is **6,753 pass / 29 fail / 183
+skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
+**5,275/29/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
+`new_oom.phpt` is now explicitly counted and times out on both protected
+binaries; the previous 7,173-case ledger omitted it.
 
-The shared compiler/runtime slice validates detached callback fixed and
-variadic types in the correct trait scope, preserves caller references across
-by-value coercion, aligns resolved reference-warning names, materializes known
-constructor reference arguments and distinguishes temporary from activation-
-local static reference rebinding. Five Cargo configurations, all-targets,
-exact no-loss families, Composer/Symfony S0--S3, focused/adjacent regressions,
-formatting and unsafe policy are green; unsafe blocks stay at the accepted
-1,627 ceiling.
+The slice aligns callback references, generator consumer traces, static
+Reflection storage, failed-write destruction, recursive unset diagnostics,
+memory-limit boundaries and simple backtick/deprecation handling. Five Cargo
+configurations passed with final frozen-source focused/feature refreshes;
+all-targets, exact no-loss, Composer/Symfony S0--S3 and unsafe/public hygiene
+are green. Production unsafe blocks remain at the 1,627 ceiling. Exact hashes
+and non-claims are recorded in [compatibility status](compatibility.md).
 
-Continue the shared-cause stable-core sweep from **43 to zero**. Phar, PCRE and
-Date/DateTime remain outside this stream. Preserve the exact 5,261 and 1,478
-pass sets. Aggregate performance optimization stays deferred by user
-direction.
+Continue the core sweep from **29 failures plus the OOM timeout**. The largest
+remaining cluster is Fiber suspension through internal/destructor callbacks;
+the remaining GC, lifetime, reference and object-projection cases stay visible.
+Phar, PCRE and Date/DateTime remain outside this stream. Preserve the exact
+5,275 and 1,478 pass sets. Aggregate performance remains deferred by user
+direction; test memory/process containment is mandatory now.
 
 ### Preceding lvalue error-order checkpoint
 
@@ -5703,10 +5707,11 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
-Current AMD64 stable-core status is 6,743 pass / 39 fail / 183 skip / 208
-unsupported. Date/DateTime is integrated; separate workstreams own Phar and
-PCRE. The core sweep continues from the remaining failure manifest, with
-performance intentionally deferred to the final aggregate pass.
+Current AMD64 stable-core status is 6,753 pass / 29 fail / 183 skip / 208
+unsupported / 1 explicitly contained OOM timeout / 0 crash. Date/DateTime is
+integrated; separate workstreams own Phar and PCRE. The core sweep continues
+from the remaining failure manifest, with performance intentionally deferred
+to the final aggregate pass.
 
 ## Cross-roadmap integration
 

@@ -178,10 +178,58 @@ try {
     $builtin = $error->getTrace()[1];
     echo $builtin['file'], '|', get_debug_type($builtin['args'][0]), '|';
 }
+
 "#,
             "/virtual/finalization.php",
             "/virtual",
         ),
         "0:__destruct|1:headers_sent|/virtual/finalization.php|null|"
+    );
+}
+
+#[test]
+fn missing_static_property_owner_releases_rhs_before_dispatching_the_error() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class MissingStaticOwnerValue {
+    public function __destruct() { echo 'destroy|'; }
+}
+try { MissingStaticOwner::$value = new MissingStaticOwnerValue; }
+catch (Error $error) { echo 'caught|'; }
+echo 'done';
+"#,
+        ),
+        "destroy|caught|done"
+    );
+}
+
+#[test]
+fn recursive_unset_keeps_the_declared_debug_slot_during_nested_destructors() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class RecursiveUnsetNode {
+    public $parent = null;
+    public $children = [];
+    public function add(RecursiveUnsetNode $node): void {
+        $node->parent = $this;
+        $this->children[] = $node;
+    }
+    public function __destruct() {
+        if ($this->parent !== null) var_dump($this->parent);
+        unset($this->children);
+    }
+}
+$root = new RecursiveUnsetNode;
+$root->add(new RecursiveUnsetNode);
+"#,
+        ),
+        concat!(
+            "object(RecursiveUnsetNode)#1 (2) {\n",
+            "  [\"parent\"]=>\n",
+            "  NULL\n",
+            "}\n",
+        )
     );
 }

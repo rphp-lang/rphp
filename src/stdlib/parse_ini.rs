@@ -99,6 +99,10 @@ struct ParsedQuantity {
     warning: Option<String>,
 }
 
+pub(super) fn parse_ini_quantity_value(shorthand: &str) -> i64 {
+    parse_quantity(shorthand).value
+}
+
 /// Parse the byte-oriented quantity grammar used by PHP's public
 /// `ini_parse_quantity()` function. This is intentionally separate from the
 /// INI expression parser below: quantities have base prefixes and K/M/G

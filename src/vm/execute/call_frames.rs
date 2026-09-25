@@ -844,15 +844,17 @@ fn run_final_object_destructor_tree_inner(
             {
                 #[cfg(feature = "resource-lifetime")]
                 let _resource_release_scope = crate::resource_handle::ResourceReleaseScope::new(false);
-                let _ = if live_internal_caller {
+                let destructor_result = if live_internal_caller {
                     let result = call_magic_method_from_live_internal_caller(
                         eg,
                         logical_caller,
                         &owner,
                         "__destruct",
                         &[],
-                    )?;
-                    restore_live_internal_destructor_trace(eg, logical_caller, &owner);
+                    );
+                    if result.is_ok() {
+                        restore_live_internal_destructor_trace(eg, logical_caller, &owner);
+                    }
                     result
                 } else {
                     call_magic_method_from_logical_caller(
@@ -863,8 +865,9 @@ fn run_final_object_destructor_tree_inner(
                         &owner,
                         "__destruct",
                         &[],
-                    )?
+                    )
                 };
+                let _ = destructor_result?;
                 ran_destructor = true;
                 if eg.exception.is_some() {
                     if detach_lazy_state {
@@ -879,6 +882,9 @@ fn run_final_object_destructor_tree_inner(
     // A destructor may resurrect its receiver. Its properties remain live in
     // that case and must not be retired by the original release operation.
     if owner.vm_release_strong_count() != Some(expected_references) {
+        if let Some(mut object) = owner.as_object_mut() {
+            object.finish_releasing_unset_properties();
+        }
         return Ok(ran_destructor);
     }
 
@@ -1365,6 +1371,34 @@ pub(crate) fn run_cycle_object_destructor(
         let _ = call_magic_method(eg, owner, "__destruct", &[])?;
     }
     Ok(())
+}
+
+/// Return the receiver of the nearest active user destructor in the frame
+/// chain. Nested helper calls remain part of that activation, while a child
+/// destructor shadows its parent and therefore observes the parent's
+/// transient unset tombstones during recursive release.
+#[cold]
+pub(crate) fn active_destructor_receiver_identity(
+    eg: &ExecutorGlobals,
+    mut frame: *mut ExecuteData,
+) -> Option<usize> {
+    // SAFETY: callers pass the current live frame chain. Each frame, function
+    // descriptor and method receiver remains live for this synchronous walk.
+    unsafe {
+        while !frame.is_null() {
+            let function = (*frame).func;
+            if !function.is_null()
+                && (*function).sig.this_offset == 1
+                && displayed_frame_function_name(eg, frame)
+                    .rsplit_once("::")
+                    .is_some_and(|(_, method)| method.eq_ignore_ascii_case("__destruct"))
+            {
+                return (*frame).cv(0).object_identity();
+            }
+            frame = (*frame).prev_execute_data;
+        }
+    }
+    None
 }
 
 /// Run user destructors for direct object handles whose remaining references

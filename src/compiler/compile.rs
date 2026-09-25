@@ -10474,11 +10474,34 @@ impl Compiler {
                 let idx = self.add_literal(Value::interned_binary_string_from_storage(s.clone()));
                 (idx, OpType::Const)
             }
-            Expr::BacktickLiteral { source: _, line } => {
-                // The frontend retains backtick syntax for cold AST rendering,
-                // but this checkpoint does not claim shell execution. Lower an
-                // actually reached expression to a normal catchable Error while
-                // unreachable short-circuit branches remain side-effect free.
+            Expr::BacktickLiteral { source, line } => {
+                // Emit this only when the expression is compiled. Assertion
+                // source capture also sees eliminated operands, whose syntax
+                // does not produce this compiler diagnostic in PHP.
+                self.compile_deprecations
+                    .borrow_mut()
+                    .push(CompileDeprecation {
+                        message:
+                            "The backtick (`) operator is deprecated, use shell_exec() instead"
+                                .to_string(),
+                        file: self.source_file.clone(),
+                        line: *line,
+                        warning: false,
+                    });
+                if !source
+                    .as_bytes()
+                    .iter()
+                    .any(|byte| matches!(byte, b'$' | b'\\'))
+                {
+                    return self.compile_expr(&Expr::FunctionCall {
+                        name: "\\shell_exec".to_string(),
+                        args: vec![CallArg::Positional(Expr::StringLiteral(source.clone()))],
+                        generic_args: Vec::new(),
+                        line: *line,
+                    });
+                }
+                // Interpolated and escaped shell source is a separate runtime
+                // contract; retained assertion source does not execute it.
                 let unsupported = Expr::Throw {
                     expr: Box::new(Expr::New {
                         class_name: "Error".to_string(),

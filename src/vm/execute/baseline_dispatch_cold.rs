@@ -4252,25 +4252,6 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
     let source = unsafe {
         &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array)
     };
-    let source = if source.is_reference() {
-        unsafe { &*source.as_ref_ptr() }
-    } else {
-        source
-    };
-    let mut value = if opline._pad & ASSIGN_PROP_MOVE_SOURCE != 0
-        && matches!(opline.result_type, OpType::Tmp | OpType::Var)
-    {
-        unsafe {
-            let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
-            if (&*source).is_reference() {
-                clone_static_property_value(&*source)
-            } else {
-                frame_tmp_take!(frame, source)
-            }
-        }
-    } else {
-        clone_static_property_value(source)
-    };
     // SAFETY: dispatch supplies a live frame and the compiler-validated
     // property-name operand for this static-property assignment instruction.
     let property_name =
@@ -4291,7 +4272,9 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             && cache.typed_static_property_tag()
                 == crate::vm::instruction::InlineCache::TYPED_PROPERTY_INT;
         if class_id != 0 && cache.class_id == class_id && (flags == 3 || exact_int) {
-            if flags == 3 || value.value_type() == ValueType::Long {
+            let source_type = source.dereferenced().value_type();
+            if flags == 3 || source_type == ValueType::Long {
+                let value = take_or_clone_static_assignment_source(frame, op_array, opline);
                 return commit_cached_static_property_value(
                     eg,
                     frame,
@@ -4347,6 +4330,18 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
         |(_, class_id)| *class_id,
     );
+    if class_id == 0 {
+        let scoped = raw_class.to_ascii_lowercase();
+        let message = if matches!(scoped.as_str(), "self" | "parent" | "static") {
+            format!("Cannot access \"{scoped}\" when no class scope is active")
+        } else {
+            format!("Class \"{raw_class}\" not found")
+        };
+        return static_property_owner_error_after_rhs_release(
+            eg, frame, op_array, opline, message,
+        );
+    }
+    let mut value = take_or_clone_static_assignment_source(frame, op_array, opline);
     if opline._pad & STATIC_PROP_DYNAMIC_NAME == 0
         && class_id != 0
         && cache.class_id == class_id
@@ -4500,6 +4495,61 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         cache.mark_direct_static_trait_access();
     }
     Ok(result)
+}
+
+#[inline]
+fn take_or_clone_static_assignment_source(
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> Value {
+    // SAFETY: dispatch provides a live frame and a compiler-validated operand.
+    // Constants are read from the immutable op array; only owned Tmp/Var
+    // slots may be moved, and reference cells are cloned through their target.
+    unsafe {
+        let source = &*(*frame).get_op_ptr(
+            opline.result as u32,
+            opline.result_type,
+            op_array,
+        );
+        if source.is_reference() {
+            clone_static_property_value(&*source.as_ref_ptr())
+        } else if opline._pad & ASSIGN_PROP_MOVE_SOURCE != 0
+            && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+        {
+            let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            frame_tmp_take!(frame, source)
+        } else {
+            clone_static_property_value(source)
+        }
+    }
+}
+
+#[cold]
+fn static_property_owner_error_after_rhs_release<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    message: String,
+) -> Result<ColdResult<'a>, VmError> {
+    let value = take_or_clone_static_assignment_source(frame, op_array, opline);
+    let release = prepare_replaced_value_release(eg, &value);
+    drop(value);
+    let original = make_error_value("Error", &message);
+    run_prepared_value_destructor(eg, release)?;
+    let thrown = if let Some(replacement) = eg.exception.take() {
+        append_replaced_exception(&replacement, &original, eg);
+        replacement
+    } else {
+        original
+    };
+    Ok(match throw_in_frame(eg, frame, thrown)? {
+        ThrowResult::Handled(new_frame, new_op_array) => {
+            ColdResult::NewFrame(new_frame, new_op_array)
+        }
+        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+    })
 }
 
 #[cold]

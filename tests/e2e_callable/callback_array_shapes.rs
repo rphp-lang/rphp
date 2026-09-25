@@ -131,6 +131,25 @@ echo call_user_func_array($multiply, [6]);
 }
 
 #[test]
+fn callback_array_cells_may_reference_the_receiver_and_method_name() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReferencedCallbackTarget {
+    public function read(): string { return 'called'; }
+}
+$target = new ReferencedCallbackTarget;
+$method = 'read';
+$targetCell =& $target;
+$methodCell =& $method;
+echo call_user_func([$targetCell, $methodCell]);
+"#,
+        ),
+        "called"
+    );
+}
+
+#[test]
 fn test_call_user_func_array_instance_and_static_methods() {
     let out = run_php(
         r#"<?php

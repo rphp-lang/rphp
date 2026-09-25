@@ -9560,6 +9560,27 @@ fn reflected_property_scope(ed: *mut ExecuteData) -> Option<String> {
     reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned))
 }
 
+fn reflected_static_property_storage(
+    ed: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+    target: &Value,
+    property: &str,
+) -> Option<usize> {
+    if reflection_property_modifiers(ed, eg) & 16 == 0 {
+        return None;
+    }
+    let owner = target
+        .as_str()
+        .map(str::to_owned)
+        .or_else(|| reflected_property_scope(ed))?;
+    let class = eg.find_class(&owner)?;
+    let index = class
+        .static_properties
+        .iter()
+        .position(|definition| definition.name == property)?;
+    eg.static_property_storage_slot(class.class_id, index)
+}
+
 fn reflected_property_access_object(
     eg: &mut ExecutorGlobals,
     mut object: Value,
@@ -9701,9 +9722,15 @@ fn property_is_initialized(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed, eg) else {
+    let Some((target, property)) = reflected_property_target(ed, eg) else {
         return return_value(rv, Value::bool(false));
     };
+    if let Some(storage) = reflected_static_property_storage(ed, eg, &target, &property) {
+        let initialized = eg
+            .static_property_value(storage)
+            .is_some_and(|value| !value.is_undef());
+        return return_value(rv, Value::bool(initialized));
+    }
     let reflected_scope = reflected_property_scope(ed);
     let initialized = if let Some(target) = reflected_property_object(ed, eg, 1) {
         let key = target
@@ -9729,9 +9756,16 @@ fn property_get_value(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed, eg) else {
+    let Some((target, property)) = reflected_property_target(ed, eg) else {
         return return_value(rv, Value::null());
     };
+    if let Some(storage) = reflected_static_property_storage(ed, eg, &target, &property) {
+        let value = eg
+            .static_property_value(storage)
+            .cloned()
+            .unwrap_or_else(Value::null);
+        return return_value(rv, value);
+    }
     let reflected_scope = reflected_property_scope(ed);
     let value = if let Some(target) = reflected_property_object(ed, eg, 1) {
         let key = target
@@ -9756,11 +9790,15 @@ fn property_set_value(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, property)) = reflected_property_target(ed, eg) else {
+    let Some((target, property)) = reflected_property_target(ed, eg) else {
         return Ok(());
     };
     let reflected_scope = reflected_property_scope(ed);
     let value = with_argument(ed, 2, Clone::clone);
+    if let Some(storage) = reflected_static_property_storage(ed, eg, &target, &property) {
+        eg.set_static_property_value(storage, value);
+        return Ok(());
+    }
     if let Some(target) = reflected_property_object(ed, eg, 1) {
         let key = target
             .as_object()

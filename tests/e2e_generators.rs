@@ -1631,6 +1631,29 @@ try {
     );
 }
 
+#[test]
+fn implicit_generator_consumer_keeps_its_internal_trace_frame() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+ini_set('zend.exception_ignore_args', '0');
+function failingConsumerGenerator() {
+    sin(...[0]);
+    throw new Exception('boom');
+    yield;
+}
+try { iterator_to_array(failingConsumerGenerator()); }
+catch (Throwable $error) {
+    foreach ($error->getTrace() as $frame) {
+        echo $frame['function'], ':', count($frame['args'] ?? []), '|';
+    }
+}
+"#,
+        ),
+        "failingConsumerGenerator:0|iterator_to_array:1|"
+    );
+}
+
 // ── send() on fresh generator (P1 fix) ──
 
 #[test]

@@ -2224,6 +2224,35 @@ impl PhpObject {
         }
     }
 
+    /// Replace a declared property with the transient marker PHP exposes while
+    /// releasing the old value during `unset()`.  The marker remains `Undef`
+    /// for ordinary reads, but object diagnostics still count the property
+    /// until recursive destructors have finished.
+    pub(crate) fn begin_unset_property_release(&mut self, key: &str) -> bool {
+        let Some(slot) = self.property_layout.slot(key) else {
+            return false;
+        };
+        let handle = self.lifecycle & OBJECT_HANDLE_MASK;
+        if handle != 0 {
+            self.property_values[slot].remove_reference_property_constraint(
+                instance_property_reference_owner(handle, slot),
+            );
+        }
+        self.property_values[slot] = Value::releasing_unset_property();
+        true
+    }
+
+    /// Retire every transient unset marker after this object's destructor
+    /// activation (including nested releases triggered by its frame cleanup)
+    /// has fully unwound.
+    pub(crate) fn finish_releasing_unset_properties(&mut self) {
+        for value in &mut self.property_values {
+            if value.is_releasing_unset_property() {
+                *value = Value::explicitly_unset_property();
+            }
+        }
+    }
+
     pub fn for_each_property(&self, mut visitor: impl FnMut(&str, &Value)) {
         for &slot in self.property_layout.iteration_slots() {
             let Some(value) = self.property_values.get(slot) else {
@@ -6182,6 +6211,12 @@ impl Value {
     /// its initial uninitialized sentinel. Magic accessors observe the former,
     /// while typed-property initialization rules still own the latter.
     const EXPLICITLY_UNSET_PROPERTY_FLAG: u32 = 1 << 15;
+    /// During `unset($object->property)`, Zend removes the value before
+    /// destructing it but keeps the declared property in the object's debug
+    /// property count until that release completes.  This transient marker
+    /// preserves that recursive-observation boundary without making the
+    /// property readable.
+    const RELEASING_UNSET_PROPERTY_FLAG: u32 = 1 << 16;
 
     #[inline]
     pub fn undef() -> Self {
@@ -6197,6 +6232,15 @@ impl Value {
         Self {
             data: ValueData { long: 0 },
             type_info: ValueType::Undef as u32 | Self::EXPLICITLY_UNSET_PROPERTY_FLAG,
+            _not_send: PhantomData,
+        }
+    }
+
+    #[inline]
+    pub(crate) fn releasing_unset_property() -> Self {
+        Self {
+            data: ValueData { long: 0 },
+            type_info: ValueType::Undef as u32 | Self::RELEASING_UNSET_PROPERTY_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7920,6 +7964,11 @@ impl Value {
     #[inline]
     pub(crate) fn is_explicitly_unset_property(&self) -> bool {
         self.is_undef() && self.type_info & Self::EXPLICITLY_UNSET_PROPERTY_FLAG != 0
+    }
+
+    #[inline]
+    pub(crate) fn is_releasing_unset_property(&self) -> bool {
+        self.is_undef() && self.type_info & Self::RELEASING_UNSET_PROPERTY_FLAG != 0
     }
 
     /// PHP truthiness — matches PHP's casting rules for (bool).

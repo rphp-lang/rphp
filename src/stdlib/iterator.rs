@@ -83,17 +83,72 @@ fn resolve_iterator(source: &Value, eg: &mut ExecutorGlobals) -> Result<Option<V
     }
 }
 
-fn protocol(eg: &mut ExecutorGlobals, iterator: &Value, method: &str) -> Result<Value, VmError> {
+fn protocol(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    iterator: &Value,
+    method: &str,
+) -> Result<Value, VmError> {
+    if iterator
+        .as_object()
+        .is_some_and(|object| object.class_name.as_ref() == "Generator")
+        && let Some(resolved) = resolve_object_public_method(eg, iterator, method)
+    {
+        let result = call_resolved_with_values_from_internal(ed, eg, &resolved, &[], true)?;
+        if eg.exception.is_some() {
+            normalize_generator_consumer_trace(ed, eg);
+        }
+        return Ok(result);
+    }
     Ok(
         call_object_protocol_method(eg, iterator, "Iterator", method, &[])?
             .unwrap_or_else(Value::null),
     )
 }
 
+#[cold]
+#[inline(never)]
+fn normalize_generator_consumer_trace(ed: *mut ExecuteData, eg: &mut ExecutorGlobals) {
+    let Some(exception) = eg.exception.as_ref() else {
+        return;
+    };
+    let Some(object) = exception.as_object() else {
+        return;
+    };
+    let trace_key = crate::runtime::throwable_private_property_key(eg, &object, "trace");
+    let first = object
+        .get_property(&trace_key)
+        .and_then(Value::as_array)
+        .and_then(|trace| trace.get_value_at(0))
+        .cloned();
+    drop(object);
+    let Some(first) = first else {
+        return;
+    };
+    let options = if ini_default(eg, "zend.exception_ignore_args")
+        .as_deref()
+        .is_some_and(ini_boolean)
+    {
+        2
+    } else {
+        0
+    };
+    let suffix = collect_live_debug_backtrace(ed, options, 0, eg, true);
+    let mut trace = PhpArray::with_packed_capacity(1 + suffix.len());
+    trace.push(first);
+    for entry in suffix.values() {
+        trace.push(entry.clone());
+    }
+    if let Some(mut object) = exception.as_object_mut() {
+        object.set_property(trace_key, Value::array(trace));
+    }
+}
+
 // Keep one advancement/error-order body for all consumers. A borrowed visitor
 // needs neither allocation nor three copies of the public protocol loop.
 #[inline(never)]
 fn walk(
+    ed: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     source: &Value,
     values: bool,
@@ -116,7 +171,7 @@ fn walk(
         None
     };
     if !native {
-        protocol(eg, &iterator, "rewind")?;
+        protocol(ed, eg, &iterator, "rewind")?;
     }
     let mut first = true;
     let projection = match (keys, values) {
@@ -141,12 +196,12 @@ fn walk(
             entry
         } else {
             if !first {
-                protocol(eg, &iterator, "next")?;
+                protocol(ed, eg, &iterator, "next")?;
             }
             if eg.exception.is_some() {
                 break;
             }
-            let valid = protocol(eg, &iterator, "valid")?;
+            let valid = protocol(ed, eg, &iterator, "valid")?;
             if eg.exception.is_some() || !valid.is_truthy() {
                 break;
             }
@@ -154,7 +209,7 @@ fn walk(
                 if let Some(generator) = &reference_generator {
                     generator.borrow().value.clone_closure_capture()
                 } else {
-                    protocol(eg, &iterator, "current")?
+                    protocol(ed, eg, &iterator, "current")?
                 }
             } else {
                 Value::null()
@@ -163,7 +218,7 @@ fn walk(
                 break;
             }
             let key = if keys {
-                protocol(eg, &iterator, "key")?
+                protocol(ed, eg, &iterator, "key")?
             } else {
                 Value::null()
             };
@@ -218,7 +273,7 @@ pub(super) fn to_array(
 }
 
 fn to_array_from_iterator(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
     source: Value,
@@ -256,7 +311,7 @@ fn to_array_from_iterator(
             }
         }
     } else {
-        walk(eg, &source, true, preserve, &mut insert)?;
+        walk(ed, eg, &source, true, preserve, &mut insert)?;
     }
     if eg.exception.is_some() {
         ret!(rv, Value::null());
@@ -284,7 +339,7 @@ pub(super) fn count(
         {
             ret!(rv, Value::long(count as i64));
         }
-        walk(eg, &iterator, false, false, &mut |_, _, _| {
+        walk(ed, eg, &iterator, false, false, &mut |_, _, _| {
             count += 1;
             Ok(true)
         })?;
@@ -323,7 +378,7 @@ pub(super) fn apply(
     let empty = PhpArray::new();
     let arguments = arguments.as_array().unwrap_or(&empty);
     let mut count = 0;
-    walk(eg, &source, false, false, &mut |eg, _, _| {
+    walk(ed, eg, &source, false, false, &mut |eg, _, _| {
         let result =
             call_resolved_borrowed_with_php_array_at(eg, &resolved, arguments, true, None)?;
         if eg.exception.is_some() {

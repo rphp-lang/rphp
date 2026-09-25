@@ -3853,6 +3853,7 @@ foreach ([
     try { $probe(); }
     catch (TypeError $error) { echo $error->getMessage(), "\n"; }
 }
+
 "#,
         ),
         concat!(
@@ -3862,4 +3863,16 @@ foreach ([
             "shell_exec(): Argument #1 ($command) must be of type string, float given\n",
         )
     );
+}
+
+#[test]
+fn memory_limit_rejects_a_limit_below_current_allocator_usage() {
+    let output = run_php(
+        r#"<?php
+$payload = str_repeat('x', 5 * 1024 * 1024);
+ini_set('memory_limit', '3M');
+"#,
+    );
+    assert!(output.contains("Failed to set memory limit to 3145728 bytes"));
+    assert!(output.contains("Current memory usage is "));
 }

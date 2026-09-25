@@ -58,11 +58,11 @@ catch (Error $error) { echo get_class($error), ':', $error->getMessage(), "\n"; 
 "#,
         ),
         concat!(
+            "\nDeprecated: The backtick (`) operator is deprecated, use shell_exec() instead in  on line 13\n",
             "assert(false && ($copy = \\clone($object, ['one' => mark([])])))\n",
             "assert(false && ($copy = \\clone($object)))\n",
             "assert(false && ($output = `printf unreachable`))\n",
             "hits=0\n",
-            "Error:Backtick shell execution is not supported\n",
         )
     );
 }

@@ -336,15 +336,20 @@ mod internal_caller_source_line_tests {
 fn internal_user_caller_snapshot(
     ed: *mut ExecuteData,
     argument_index: Option<u16>,
+    include_current: bool,
 ) -> Option<InternalUserCallerSnapshot> {
     if ed.is_null() {
         return None;
     }
-    // SAFETY: an internal handler runs beneath its live caller, whose opline
-    // is one instruction past DoFcall. The immutable send sequence and caller
-    // frame therefore remain valid until this handler returns.
+    // SAFETY: the supplied frame and its callers remain live throughout this
+    // synchronous walk. Internal handlers inspect their caller's immutable
+    // send sequence; output diagnostics may start with the live frame itself.
     unsafe {
-        let mut caller = (*ed).prev_execute_data;
+        let mut caller = if include_current {
+            ed
+        } else {
+            (*ed).prev_execute_data
+        };
         // Engine-invoked native methods have no source operands of their own.
         // A diagnostic inherits the nearest user site; direct-argument
         // classification must never cross such an internal activation.
@@ -1429,7 +1434,7 @@ fn fn_array_key_exists_named(
         && key_value.as_double().is_some()
         && !source.is_immutable_array_literal()
         && source.cycle_strong_count() == Some(1)
-        && internal_user_caller_snapshot(ed, Some(1))
+        && internal_user_caller_snapshot(ed, Some(1), false)
             .is_some_and(|snapshot| snapshot.has_direct_argument)
     {
         ret!(rv, Value::bool(false));
@@ -16804,7 +16809,7 @@ pub(crate) fn dispatch_pending_uncaught_exception_handlers(
 }
 
 pub(super) fn internal_call_source(ed: *mut ExecuteData) -> (String, usize) {
-    internal_user_caller_snapshot(ed, None)
+    internal_user_caller_snapshot(ed, None, false)
         .map(|snapshot| (snapshot.file, snapshot.line))
         .unwrap_or_default()
 }
@@ -17295,7 +17300,41 @@ pub(crate) fn write_php_output(
     if eg.output_buffer_chunk_ready() {
         flush_ready_output_buffers(eg, caller)?;
     }
+    let (file, line) = caller.map_or_else(Default::default, user_frame_source);
+    enforce_memory_limit(eg, data.len(), &file, line)?;
     Ok(())
+}
+
+#[cold]
+#[inline(never)]
+fn user_frame_source(frame: *mut ExecuteData) -> (String, usize) {
+    internal_user_caller_snapshot(frame, None, true)
+        .map(|snapshot| (snapshot.file, snapshot.line))
+        .unwrap_or_default()
+}
+
+#[cold]
+#[inline(never)]
+pub(crate) fn enforce_memory_limit(
+    eg: &ExecutorGlobals,
+    attempted: usize,
+    file: &str,
+    line: usize,
+) -> Result<(), VmError> {
+    let limit = ini_default(eg, "memory_limit")
+        .map(|value| parse_ini::parse_ini_quantity_value(&value))
+        .unwrap_or(-1);
+    if limit <= 0 {
+        return Ok(());
+    }
+    let current = runtime_info::current_allocator_bytes();
+    if current <= limit {
+        return Ok(());
+    }
+    Err(VmError::Fatal(format!(
+        "Allowed memory size of {limit} bytes exhausted (tried to allocate {} bytes) in {file} on line {line}",
+        attempted.max(1)
+    )))
 }
 
 #[cold]
@@ -20528,6 +20567,11 @@ fn var_dump_value_inner(
                 ))
             } else {
                 let class = eg.class_by_id(object.class_id);
+                let active_destructor = crate::vm::execute::active_destructor_receiver_identity(
+                    eg,
+                    eg.current_execute_data.get(),
+                );
+                let count_releasing_unset = active_destructor != val.object_identity();
                 let mut property_count = if let Some(class) = class {
                     class
                         .properties
@@ -20535,9 +20579,11 @@ fn var_dump_value_inner(
                         .enumerate()
                         .filter(|(slot, _)| {
                             !class.properties[*slot].is_virtual_hook_property()
-                                && object
-                                    .get_property_slot(*slot)
-                                    .is_some_and(|value| value.value_type() != ValueType::Undef)
+                                && object.get_property_slot(*slot).is_some_and(|value| {
+                                    value.value_type() != ValueType::Undef
+                                        || (count_releasing_unset
+                                            && value.is_releasing_unset_property())
+                                })
                         })
                         .count()
                 } else {
@@ -22910,10 +22956,28 @@ fn resume_generator_method(
     gen_ref: &crate::vm::generator::GeneratorRef,
     send_value: Value,
 ) -> Result<(), VmError> {
-    let saved_execute_data = eg.current_execute_data.replace(ed);
-    eg.publish_detached_trace_caller(ed as usize, saved_execute_data as usize);
+    let saved_execute_data = eg.current_execute_data.get();
+    let implicit_iterator_consumer = if saved_execute_data.is_null() {
+        false
+    } else {
+        matches!(
+            crate::vm::execute::displayed_frame_function_name(eg, saved_execute_data).as_str(),
+            "iterator_to_array" | "iterator_count" | "iterator_apply"
+        )
+    };
+    let resume_caller = if implicit_iterator_consumer {
+        saved_execute_data
+    } else {
+        ed
+    };
+    eg.current_execute_data.set(resume_caller);
+    if !implicit_iterator_consumer {
+        eg.publish_detached_trace_caller(ed as usize, saved_execute_data as usize);
+    }
     let outcome = crate::vm::execute::resume_generator(eg, gen_ref, send_value);
-    eg.discard_detached_trace_caller(ed as usize);
+    if !implicit_iterator_consumer {
+        eg.discard_detached_trace_caller(ed as usize);
+    }
     eg.current_execute_data.set(saved_execute_data);
     match outcome? {
         crate::vm::execute::GeneratorResumeOutcome::Advanced => Ok(()),
@@ -25040,6 +25104,7 @@ fn resolve_callback(
     eg: &ExecutorGlobals,
     caller_class: Option<&str>,
 ) -> Option<ResolvedCallback> {
+    let val = val.dereferenced();
     match val.value_type() {
         ValueType::Closure => {
             let closure = val.as_closure().unwrap();
@@ -25135,7 +25200,7 @@ fn resolve_callback(
             }
 
             // Case 1: Closure descriptor array [func_name_string, use_val1, ...]
-            if let Some(func_name) = arr.get_value_at(0)?.as_str() {
+            if let Some(func_name) = arr.get_value_at(0)?.dereferenced().as_str() {
                 if func_name.starts_with("__closure_") {
                     let func_ptr = eg.find_function(func_name)?;
                     let use_vars: Vec<Value> = arr.values().skip(1).cloned().collect();
@@ -25156,8 +25221,8 @@ fn resolve_callback(
             if arr.len() != 2 {
                 return None;
             }
-            let obj_val = arr.get_value_at(0)?;
-            let method_val = arr.get_value_at(1)?;
+            let obj_val = arr.get_value_at(0)?.dereferenced();
+            let method_val = arr.get_value_at(1)?.dereferenced();
             let method_name = method_val.as_str()?;
             // A qualified array method (`self::m`, `parent::m`, `A::m`)
             // belongs to PHP 8.5's deprecated legacy-callable grammar. Leave
@@ -31726,6 +31791,23 @@ fn fn_ini_set(
             ),
         )?;
         ret!(rv, Value::bool(false));
+    }
+
+    if option == "memory_limit" {
+        let requested = parse_ini::parse_ini_quantity_value(&value);
+        let current = runtime_info::current_allocator_bytes();
+        if requested > 0 && requested < current {
+            report_internal_diagnostic(
+                eg,
+                ed,
+                2,
+                "Warning",
+                &format!(
+                    "Failed to set memory limit to {requested} bytes (Current memory usage is {current} bytes)"
+                ),
+            )?;
+            ret!(rv, Value::bool(false));
+        }
     }
 
     if option == "zend.assertions" {

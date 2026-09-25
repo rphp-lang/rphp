@@ -7,36 +7,54 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `generator-autoload-boundaries` checkpoint over `7844e409` adds **4 exact
-PHP 8.5 passes without loss**. Explicit generator keys are evaluated before
-their values and preserve non-scalar-key diagnostics; force-closed generator
-`finally` errors retain the suspended yield site and release caller; generator
-`foreach` exposes PHP's hidden iterator ownership during cleanup; and ordinary
-static-property reads, writes, references, `isset()` and `unset()` invoke SPL
-autoload before resolving the owner while propagating callback exceptions.
+The `lifecycle-remainder` checkpoint over `200287aa` adds **11 exact PHP 8.5
+passes without loss against the guarded parent**, or **10 new passes without
+loss against the previously accepted pass set**. It aligns callback reference
+descriptors, internal generator-consumer traces, static Reflection storage,
+failed-write RHS destruction, recursive unset diagnostics, memory-limit
+admission at output/closure boundaries and simple backtick execution with
+compile-time deprecation ordering.
 
-The measured 7,173-case stable core is now **6,743 pass / 39 fail / 183 skip /
-208 unsupported**, with no timeout or crash. Zend/lang is
-**5,265/39/115/179**, exact **+4/-0**, while strings/array remains
-**1,478/0/68/29**. All five Cargo configurations and all-targets, exact
-pass-set no-loss, focused E2E/PHPT, Composer/Symfony S0--S3, formatting and
-unsafe-policy gates are green. Aggregate performance remains deferred by user
-direction.
+The complete measured 7,174-case stable core is **6,753 pass / 29 fail / 183
+skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
+**5,275/29/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+The newly explicit timeout is `Zend/tests/new_oom.phpt`, absent from the
+previous 7,173-row ledger and timing out on both protected binaries. It is not
+a pass or a newly introduced timeout. The guarded parent has 6,742 passes:
+its allocator-sensitive `bug79514.phpt` fails under the current environment,
+while the candidate preserves that previously accepted pass. Every path in
+both the guarded and historical accepted pass sets remains a pass.
 
-SHA-256 evidence: candidate
-`75b88e352d649391ca7fd53a00701f8ee51f0b307a60e9b2297331683fa7bb2d`;
-Zend/lang pass set
-`63dfbdcee6db19533e109aed760f4c81f6ebc0b5734e45cf10ce50c0b5518482`;
-strings/array pass set
+Five Cargo configurations passed during the checkpoint. The final frozen-source
+refresh passed 472 focused tests in default and no-default builds, full erased
+(6,160), reified (6,182) and all-features (6,233) tests, all-feature/all-target
+checks, exact full PHPT no-loss, Composer/Symfony S0--S3, formatting and unsafe
+policy (1,627 production blocks). Host test packets are memory-bounded; PHPT
+deadlines terminate descendant process groups and impose per-test memory caps.
+Performance remains deferred by user direction. Interpolated/escaped backtick
+execution and general allocation-limit/OOM equivalence are not claimed.
+
+SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
+candidate `ed3b745eb45d1ef5945a9f219fe40628da1385139fb23ab51b9a8c3a681cc2dd`;
+guarded parent/candidate full manifests
+`4efdcda81f6b8cc29fa4ddfd1e46c4cf79cda3a04b20bb4e63884f1a9dcc9080` /
+`908ebeec66b1f5d2beb439bdc42b51de60e69585a10b837a271821e1177cfded`;
+candidate Zend/lang pass set
+`59ab2ee8a231e818d5cadd490bc7da5f6cd8a31377166ef5a151aef07c3425fe`;
+unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
-combined pass set
-`b79e05913667b3b8b2fa507656bbd7817bd81a5458e857dd82477e83a39002a`;
-concatenated stable-core manifests
-`e8fe497874584254f80eaa711fcdad2d986324ab23799566eb4104b306e63ad9`.
+combined candidate pass set
+`2a9b9416cd0e2e44c927984346f4b595a5c32eb72b593db42c124fd4fad2efea`.
 
-Phar and PCRE remain owned by their separate workstreams. Date/DateTime is
-also outside this core train. The next core-language cluster starts from the
-remaining 39 measured failures.
+Phar and PCRE remain owned by separate workstreams; Date/DateTime is also
+outside this core train. Continue from 29 measured failures and the explicit
+OOM timeout, without treating skips or unsupported cases as compatibility.
+
+### Preceding generator/autoload checkpoint
+
+The `generator-autoload-boundaries` checkpoint over `7844e409` added four
+exact passes for generator key order, force-close/foreach lifetime diagnostics
+and autoloaded static-property access, preserving all earlier passes.
 
 ### Preceding callback/reference checkpoint
 

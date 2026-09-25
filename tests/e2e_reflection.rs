@@ -2447,6 +2447,7 @@ foreach ([UnitState::class, ExitCode::class] as $name) {
         echo "\n";
     }
 }
+
 foreach ([
     [ReflectionEnumUnitCase::class, UnitState::class, 'Ready'],
     [ReflectionEnumUnitCase::class, ExitCode::class, 'Good'],
@@ -2493,6 +2494,30 @@ foreach ([
             "Class \"stdClass\" is not an enum\n",
             "Enum case UnitState::Ready is not a backed case\n",
             "Constant UnitState::missing does not exist\n",
+        )
+    );
+}
+
+#[test]
+fn reflection_property_reads_and_writes_canonical_static_storage() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ReflectedStaticStorage {
+    private static array $value = ['initial'];
+    public static function read(): array { return self::$value; }
+}
+$property = new ReflectionProperty(ReflectedStaticStorage::class, 'value');
+var_dump($property->isInitialized(), $property->getValue());
+$property->setValue(null, ['changed']);
+var_dump(ReflectedStaticStorage::read(), $property->getValue());
+"#,
+        ),
+        concat!(
+            "bool(true)\n",
+            "array(1) {\n  [0]=>\n  string(7) \"initial\"\n}\n",
+            "array(1) {\n  [0]=>\n  string(7) \"changed\"\n}\n",
+            "array(1) {\n  [0]=>\n  string(7) \"changed\"\n}\n",
         )
     );
 }

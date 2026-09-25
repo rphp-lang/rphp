@@ -3531,8 +3531,24 @@ fn op_unset_obj<'a>(
         if hidden_parent_private {
             object.as_object_mut().unwrap().remove_dynamic_property(&key);
         } else {
-            object.as_object_mut().unwrap().unset_property(&key);
+            let active_destructor = active_destructor_receiver_identity(eg, frame)
+                .is_some_and(|identity| object.object_identity() == Some(identity));
+            let declared_release = active_destructor
+                && release.is_some()
+                && object
+                    .as_object_mut()
+                    .unwrap()
+                    .begin_unset_property_release(&key);
+            if !declared_release {
+                object.as_object_mut().unwrap().unset_property(&key);
+            }
             eg.mark_initializing_lazy_property_written(object, &key);
+            let released = run_prepared_value_destructor(eg, release);
+            released?;
+            if let Some(result) = take_magic_exception(eg, frame)? {
+                return Ok(result);
+            }
+            return Ok(ColdResult::Done);
         }
         run_prepared_value_destructor(eg, release)?;
         if let Some(result) = take_magic_exception(eg, frame)? {
