@@ -221,6 +221,47 @@ fn linear_replacement_preserves_full_match_limits_utf8_and_empty_retry() {
 }
 
 #[test]
+fn linear_execution_falls_back_when_the_caller_tightens_resource_limits() {
+    let recursion_limited = Regex::new("(\\d*)", RegexFlags::default()).unwrap();
+    assert_eq!(
+        recursion_limited.try_visit_captures_with_limits(
+            "ab2c3u",
+            MatchLimits {
+                recursion: 1,
+                ..MatchLimits::default()
+            },
+            |_| true,
+        ),
+        Err(MatchLimitError::Recursion)
+    );
+
+    // This non-capturing grouped shape is admitted by the capture-free linear
+    // matcher under the defaults. An explicit recursion limit must instead use
+    // the canonical matcher so every public consumer observes the same error.
+    let recursion_limited = Regex::new("(?:a+)", RegexFlags::default()).unwrap();
+    let limits = MatchLimits {
+        recursion: 1,
+        ..MatchLimits::default()
+    };
+    assert_eq!(
+        recursion_limited.is_match_with_limits("aaa", limits),
+        Err(MatchLimitError::Recursion)
+    );
+    assert!(matches!(
+        recursion_limited.captures_with_limits("aaa", limits),
+        Err(MatchLimitError::Recursion)
+    ));
+    assert_eq!(
+        recursion_limited.replace_limit_with_limits("aaa", "x", usize::MAX, limits),
+        Err(MatchLimitError::Recursion)
+    );
+    assert_eq!(
+        recursion_limited.count_matches_with_limits("aaa", limits),
+        Err(MatchLimitError::Recursion)
+    );
+}
+
+#[test]
 fn test_subject_chars_maps_utf8_boundaries() {
     let (chars, offsets) = subject_chars("až🙂");
 

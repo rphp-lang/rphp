@@ -475,7 +475,7 @@ enum NewlineConvention {
 /// Request-scoped execution limits applied by the public `preg_*` boundary.
 /// The custom engine keeps these independent from parsing so one cached AST
 /// can be reused after an `ini_set()` changes a limit.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct MatchLimits {
     pub backtrack: usize,
     pub recursion: usize,
@@ -937,6 +937,11 @@ impl CaptureView<'_> {
 
 impl Regex {
     #[inline]
+    fn linear_execution_uses_default_limits(&self, limits: MatchLimits) -> bool {
+        self.effective_limits(limits) == MatchLimits::default()
+    }
+
+    #[inline]
     fn effective_limits(&self, mut limits: MatchLimits) -> MatchLimits {
         if let Some(features) = self.symbols.features.as_deref() {
             features.clamp_limits(&mut limits);
@@ -1089,7 +1094,10 @@ impl Regex {
         subject: &str,
         limits: MatchLimits,
     ) -> Result<bool, MatchLimitError> {
-        if !self.uses_backreferences && linear::is_boolean_supported(&self.ast) {
+        if self.linear_execution_uses_default_limits(limits)
+            && !self.uses_backreferences
+            && linear::is_boolean_supported(&self.ast)
+        {
             return Ok(linear::is_match(self, subject));
         }
         let chars: Vec<char> = subject.chars().collect();
@@ -1166,7 +1174,8 @@ impl Regex {
         subject: &str,
         limits: MatchLimits,
     ) -> Result<Option<Captures>, MatchLimitError> {
-        if self.num_groups == 0
+        if self.linear_execution_uses_default_limits(limits)
+            && self.num_groups == 0
             && let Some(first) = linear::try_first_match(self, subject)
         {
             return Ok(first.map(|full_match| Captures {
@@ -1257,7 +1266,8 @@ impl Regex {
         if limit == 0 {
             return Ok((subject.to_string(), 0));
         }
-        if self.num_groups == 0
+        if self.linear_execution_uses_default_limits(limits)
+            && self.num_groups == 0
             && node_definitely_consumes(&self.ast)
             && linear::is_supported(&self.ast)
         {
@@ -1381,7 +1391,8 @@ impl Regex {
         subject: &str,
         limits: MatchLimits,
     ) -> Result<usize, MatchLimitError> {
-        if self.num_groups == 0
+        if self.linear_execution_uses_default_limits(limits)
+            && self.num_groups == 0
             && linear::is_supported(&self.ast)
             && let Some(count) = linear::try_count_matches(self, subject)
         {
@@ -1425,7 +1436,9 @@ impl Regex {
     where
         F: for<'capture> FnMut(CaptureView<'capture>) -> bool,
     {
-        if linear::is_capture_visitor_supported(&self.ast) {
+        if self.linear_execution_uses_default_limits(limits)
+            && linear::is_capture_visitor_supported(&self.ast)
+        {
             let result: Result<usize, std::convert::Infallible> =
                 linear::try_visit_captures(self, subject, |capture| Ok(visitor(capture)));
             return Ok(result.unwrap());
