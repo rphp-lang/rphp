@@ -4206,6 +4206,7 @@ impl Compiler {
             }
             Stmt::ArrayPush { var, expr, line } => {
                 // $var[] = expr
+                let first_tmp = self.next_tmp as u16;
                 let cv_idx = self.resolve_cv(var);
                 let (val_op, val_type) = self.compile_expr(expr);
                 let mut instr = Instruction::new(OpCode::ArrayPushOp);
@@ -4214,9 +4215,19 @@ impl Compiler {
                 instr.op2_type = val_type;
                 instr.op2 = val_op;
                 self.push_instruction_at_line(instr, *line);
+                let end_tmp = self.next_tmp as u16;
+                if end_tmp > first_tmp {
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.push_instruction_at_line(release, *line);
+                }
                 self.definitely_defined_cvs.insert(cv_idx);
             }
             Stmt::ArrayAppend { target, expr } => {
+                let first_tmp = self.next_tmp as u16;
                 let deferred_object = match target {
                     Expr::PropertyAccess {
                         object,
@@ -4325,6 +4336,18 @@ impl Compiler {
                     append.op2_type = value_type;
                     self.push_instruction_at_line(append, expression_source_line(target));
                     self.emit_array_append_source_writeback(writeback, array, array_type);
+                }
+                let end_tmp = self.next_tmp as u16;
+                if end_tmp > first_tmp {
+                    // Append keeps the stored value, not the call operands
+                    // that produced it. Match ordinary indexed assignment's
+                    // statement lifetime after the complete root writeback.
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = end_tmp;
+                    release.op2_type = OpType::Tmp;
+                    self.push_instruction_at_line(release, expression_source_line(target));
                 }
             }
             Stmt::BindArrayAppendReference { var, target } => {

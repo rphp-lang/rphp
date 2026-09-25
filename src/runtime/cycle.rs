@@ -10,7 +10,7 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use crate::value::{CycleNodeKind, Value, begin_cycle_collection, cycle_root_snapshot};
-use crate::vm::execute::{VmError, run_cycle_object_destructor};
+use crate::vm::execute::{VmError, append_replaced_exception, run_cycle_object_destructor};
 
 use super::ExecutorGlobals;
 
@@ -378,6 +378,10 @@ impl ExecutorGlobals {
         let Some(mut guard) = begin_cycle_collection() else {
             return Ok(0);
         };
+        self.release_gc_destructor_owner(self.current_execute_data.get())?;
+        if self.exception.is_some() {
+            return Ok(0);
+        }
 
         let collector_started = Instant::now();
         let mut initial = self.build_cycle_graph();
@@ -402,6 +406,7 @@ impl ExecutorGlobals {
             .any(|index| initial.nodes[*index].kind == CycleNodeKind::Object);
         let mut collector_time = Duration::ZERO;
         let mut destructor_time = Duration::ZERO;
+        let mut pending_exception = None;
         let collector_resumed = if has_destructors {
             let destructor_started = Instant::now();
             collector_time = destructor_started.duration_since(collector_started);
@@ -414,11 +419,29 @@ impl ExecutorGlobals {
                             self.current_execute_data.get(),
                         )?;
                     }
-                    run_cycle_object_destructor(self, &node.value)?;
-                    if self.exception.is_some() {
-                        return Ok(0);
+                    if !self.run_gc_destructor_in_fiber(&node.value)? {
+                        run_cycle_object_destructor(self, &node.value)?;
+                    }
+                    if let Some(exception) = self.exception.take() {
+                        // A destructor failure does not abandon the remaining
+                        // garbage. Retire every selected destructor, chaining
+                        // later failures ahead of the earlier exception.
+                        if let Some(previous) = pending_exception.as_ref() {
+                            append_replaced_exception(&exception, previous, self);
+                        }
+                        pending_exception = Some(exception);
                     }
                 }
+            }
+            // A parked engine worker is not an extra PHP root after this
+            // collection. A public reference keeps it resumable; otherwise
+            // retire it now, before returning to the collecting activation.
+            self.release_gc_destructor_owner(std::ptr::null_mut())?;
+            if let Some(exception) = self.exception.take() {
+                if let Some(previous) = pending_exception.as_ref() {
+                    append_replaced_exception(&exception, previous, self);
+                }
+                pending_exception = Some(exception);
             }
             let resumed = Instant::now();
             destructor_time = resumed.duration_since(destructor_started);
@@ -482,6 +505,7 @@ impl ExecutorGlobals {
             if ran { destructor_time } else { Duration::ZERO },
             if ran { free_time } else { Duration::ZERO },
         );
+        self.exception = pending_exception;
         Ok(count)
     }
 }

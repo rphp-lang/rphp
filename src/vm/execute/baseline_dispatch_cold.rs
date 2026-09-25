@@ -25,12 +25,12 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
             }
             frame = &mut *frame.prev_execute_data;
         }
-        let vars = {
+        let (vars, main_scope) = {
             let op_array = frame.op_array();
             if !op_array.main_scope_vars.is_empty() {
-                op_array.main_scope_vars.clone()
+                (op_array.main_scope_vars.clone(), true)
             } else {
-                op_array.global_vars.clone()
+                (op_array.global_vars.clone(), false)
             }
         };
         for (cv, name) in &vars {
@@ -60,7 +60,10 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
                 }
             }
         }
-        if !vars.is_empty() {
+        // An intermediate function may bind only a subset of the dirty
+        // names. Keep the remainder live until the main symbol table has
+        // observed the callback's new reference identities.
+        if main_scope {
             eg.dirty_globals.clear();
         }
     }

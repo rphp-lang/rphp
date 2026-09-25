@@ -31913,11 +31913,14 @@ fn fn_gc_disable(
 }
 
 fn fn_gc_collect_cycles(
-    _ed: *mut ExecuteData,
+    ed: *mut ExecuteData,
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let collected = eg.collect_cycles()?;
+    let caller = eg.current_execute_data.replace(ed);
+    let collected = eg.collect_cycles();
+    eg.current_execute_data.set(caller);
+    let collected = collected?;
     ret!(rv, Value::long(collected as i64));
 }
 

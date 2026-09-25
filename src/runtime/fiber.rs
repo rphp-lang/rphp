@@ -14,10 +14,13 @@ use crate::stdlib::ResolvedCallback;
 use crate::value::{PhpObject, Value, make_error_value};
 use crate::vm::execute::{
     VmError, cleanup_detached_frame_chain, execute_coroutine_frame,
-    initialize_suspended_callback_frame, inject_suspended_exception, write_coroutine_result,
+    initialize_suspended_callback_frame, inject_suspended_exception, sync_dirty_globals_to_frame,
+    write_coroutine_result,
 };
 use crate::vm::frame::{CALL_FRAME_SLOTS, ExecuteData};
 use crate::vm::function::FunctionType;
+
+mod gc;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FiberStatus {
@@ -84,6 +87,7 @@ struct FiberContext {
     owned_object_references: usize,
     boundary_execute_data: *mut ExecuteData,
     suspension: Option<FiberSuspension>,
+    gc_trace_frame: Option<Box<ExecuteData>>,
     _pinned: std::marker::PhantomPinned,
 }
 
@@ -101,6 +105,7 @@ impl FiberContext {
             owned_object_references: 0,
             boundary_execute_data: std::ptr::null_mut(),
             suspension: None,
+            gc_trace_frame: None,
             _pinned: std::marker::PhantomPinned,
         }
     }
@@ -110,6 +115,8 @@ pub(crate) struct FiberRuntime {
     contexts: HashMap<usize, Pin<Box<FiberContext>>>,
     active: Vec<usize>,
     pool: CoroutineStackPool,
+    gc_current: Option<Value>,
+    gc_trace_function: Option<Box<crate::vm::function::InternalFunction>>,
 }
 
 impl FiberRuntime {
@@ -118,6 +125,8 @@ impl FiberRuntime {
             contexts: HashMap::new(),
             active: Vec::new(),
             pool: CoroutineStackPool::default(),
+            gc_current: None,
+            gc_trace_function: None,
         }
     }
 
@@ -457,6 +466,27 @@ impl FiberRuntime {
 
             let is_start = matches!(&input, FiberInput::Start(_));
             let is_force_close = matches!(&input, FiberInput::ForceClose(_));
+            // The GC worker is a real engine activation, but never a user-call
+            // target. Its context-owned, zero-slot frame remains pinned across
+            // suspension and points at a caller only during this invocation.
+            let root_caller = if let Some(worker) = (*context).gc_trace_frame.as_mut() {
+                worker.prev_execute_data = logical_caller;
+                worker.as_mut() as *mut ExecuteData
+            } else {
+                logical_caller
+            };
+            if (*context).gc_trace_frame.is_some() {
+                // This engine activation is still observable when a parked
+                // worker is force-closed without a PHP caller. Mark it as a
+                // synthetic frame so trace walking does not mistake that
+                // caller-less boundary for the main script.
+                eg.publish_synthetic_trace_frame(
+                    root_caller as usize,
+                    "Unknown".to_string(),
+                    0,
+                    "gc_destructor_fiber".to_string(),
+                );
+            }
             let trace_callsite = {
                 let caller =
                     (!logical_caller.is_null()).then(|| (*logical_caller).prev_execute_data);
@@ -494,7 +524,7 @@ impl FiberRuntime {
                     &(*context).callback,
                     &arguments,
                     result,
-                    logical_caller,
+                    root_caller,
                 ) {
                     Ok(frame) => frame,
                     Err(error) => {
@@ -511,6 +541,9 @@ impl FiberRuntime {
                         (&mut *runtime).pool.recycle(stacks);
                         if let Some((caller, opline)) = trace_callsite {
                             (*caller).opline = opline;
+                        }
+                        if (*context).gc_trace_frame.is_some() {
+                            eg.discard_detached_trace_origin(root_caller as usize);
                         }
                         return Err(error);
                     }
@@ -580,7 +613,7 @@ impl FiberRuntime {
 
             let boundary = (*context).boundary_execute_data;
             if !is_start {
-                eg.publish_detached_trace_caller(boundary as usize, logical_caller as usize);
+                eg.publish_detached_trace_caller(boundary as usize, root_caller as usize);
                 eg.publish_detached_trace_origin(boundary as usize, "Unknown".to_string(), 0);
             }
 
@@ -659,6 +692,13 @@ impl FiberRuntime {
             assert_eq!(active, Some(identity));
             eg.discard_detached_trace_caller(boundary as usize);
             (*context).state.exchange(eg);
+            if let Some(worker) = (*context).gc_trace_frame.as_mut() {
+                eg.discard_detached_trace_origin(root_caller as usize);
+                worker.prev_execute_data = std::ptr::null_mut();
+            }
+            if !logical_caller.is_null() {
+                sync_dirty_globals_to_frame(eg, &mut *logical_caller);
+            }
             if let Some((caller, opline)) = trace_callsite {
                 (*caller).opline = opline;
             }
@@ -685,6 +725,15 @@ impl FiberRuntime {
             (*context).owned_object_references = 0;
             (*context).state.cleanup_frames();
             (*context).boundary_execute_data = std::ptr::null_mut();
+            if (*context).gc_trace_frame.is_some() {
+                // The completed engine callback must not become an extra GC
+                // root merely because its coordinator can serve another
+                // destructor later in this collection pass.
+                (*context).callback.prepend_args.clear();
+                (*context).callback.use_vars.clear();
+                (*context).callback.bound_this = None;
+                (*context).callback.closure_static_vars = None;
+            }
             let stacks = (*context)
                 .state
                 .stacks

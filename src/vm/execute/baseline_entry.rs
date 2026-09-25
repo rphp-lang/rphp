@@ -10,6 +10,7 @@ fn finish_request_shutdown(
     #[cfg(feature = "resource-lifetime")]
     let _resource_release_scope = eg.exception.as_ref()
         .map(|_| crate::resource_handle::ResourceReleaseScope::defer());
+    eg.release_gc_destructor_owner(frame)?;
     if let Err(error) = run_request_cycle_destructors(eg, frame) {
         return Err(error);
     }
@@ -1392,6 +1393,15 @@ where
             let mut fallback = None;
             while !scope.is_null() {
                 let frame = &mut *scope;
+                // Internal activations (including explicit GC) carry only
+                // FunctionCommon plus an internal tail, never a UserFunction
+                // op-array. Skip them before inspecting lexical bindings.
+                if frame.func.is_null()
+                    || Function::from_common_ptr(frame.func).fn_type() != FunctionType::User
+                {
+                    scope = frame.prev_execute_data;
+                    continue;
+                }
                 sync_dirty_globals_to_frame(eg, frame);
                 let scope_op_array = frame.op_array();
                 if fallback.is_none() && !scope_op_array.global_vars.is_empty() {

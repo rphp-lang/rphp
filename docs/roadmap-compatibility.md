@@ -36,28 +36,33 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `lifecycle-remainder` checkpoint over `200287aa` adds **11 exact passes
-against the guarded parent, 10 against the historical accepted set, with no
-loss**. The complete 7,174-case stable core is **6,753 pass / 29 fail / 183
-skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,275/29/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
-`new_oom.phpt` is now explicitly counted and times out on both protected
-binaries; the previous 7,173-case ledger omitted it.
+The `core-continuation-remainder` checkpoint over `091d3d47` adds **9 exact
+passes without loss**. The complete 7,174-case stable core is **6,762 pass /
+20 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
+**5,284/20/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
+The shared `new_oom.phpt` timeout stays explicit, never a pass.
 
-The slice aligns callback references, generator consumer traces, static
-Reflection storage, failed-write destruction, recursive unset diagnostics,
-memory-limit boundaries and simple backtick/deprecation handling. Five Cargo
-configurations passed with final frozen-source focused/feature refreshes;
-all-targets, exact no-loss, Composer/Symfony S0--S3 and unsafe/public hygiene
-are green. Production unsafe blocks remain at the 1,627 ceiling. Exact hashes
-and non-claims are recorded in [compatibility status](compatibility.md).
+The slice aligns GC destructor Fiber contexts and force-close traces, operand
+lifetimes, callback global publication, tick switching and Fiber stack-size
+admission. Eleven original byte-exact PHP oracles, five complete Cargo
+configurations, all-targets, exact no-loss, Composer/Symfony S0--S3 and
+unsafe/public hygiene pass. No new unsafe blocks were introduced. Exact hashes,
+counts and non-claims are recorded in [compatibility status](compatibility.md).
 
-Continue the core sweep from **29 failures plus the OOM timeout**. The largest
-remaining cluster is Fiber suspension through internal/destructor callbacks;
-the remaining GC, lifetime, reference and object-projection cases stay visible.
+Continue the core sweep from **20 failures plus the OOM timeout**, prioritizing
+temporary-owner cleanup and return/finally completion, then the remaining
+GC, native-callback suspension, reference and object-projection boundaries.
 Phar, PCRE and Date/DateTime remain outside this stream. Preserve the exact
-5,275 and 1,478 pass sets. Aggregate performance remains deferred by user
-direction; test memory/process containment is mandatory now.
+5,284 and 1,478 pass sets. Aggregate performance remains deferred by user
+direction. Host gates must retain aggregate memory/process containment and
+automatic build cleanup.
+
+### Preceding lifecycle checkpoint
+
+The `lifecycle-remainder` checkpoint over `200287aa` reduced historical failure
+debt from 39 to 29 without loss and restored the complete 7,174-case ledger,
+including the shared OOM timeout. It aligned callback references, generator
+traces, Reflection storage, failed-write destruction and related diagnostics.
 
 ### Preceding lvalue error-order checkpoint
 

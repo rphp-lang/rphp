@@ -10785,8 +10785,37 @@ impl Compiler {
                     _ => {}
                 }
 
+                let first_operand_tmp = self.next_tmp as u16;
+                let first_operand_instruction = self.instructions.len();
                 let (l_op, l_type) = self.compile_expr(left);
                 let (r_op, r_type) = self.compile_expr(right);
+                // These producers cannot create an owned heap value. Keep
+                // proven scalar arithmetic/comparison chains in their
+                // existing compact form; every other producer is conservatively
+                // retired at the operand boundary below.
+                let heap_operands =
+                    self.instructions[first_operand_instruction..]
+                        .iter()
+                        .any(|instruction| {
+                            !matches!(
+                                instruction.opcode,
+                                OpCode::Mod
+                                    | OpCode::Sub
+                                    | OpCode::Mul
+                                    | OpCode::Div
+                                    | OpCode::Pow
+                                    | OpCode::ShiftLeft
+                                    | OpCode::ShiftRight
+                                    | OpCode::BoolNot
+                                    | OpCode::IsEqual
+                                    | OpCode::IsNotEqual
+                                    | OpCode::IsIdentical
+                                    | OpCode::IsNotIdentical
+                                    | OpCode::IsSmaller
+                                    | OpCode::IsSmallerOrEqual
+                                    | OpCode::Spaceship
+                            )
+                        });
                 let tmp = self.alloc_tmp();
 
                 let opcode = match op {
@@ -10829,6 +10858,21 @@ impl Compiler {
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 self.push_instruction_at_line(instr, *line);
+
+                if heap_operands && tmp > first_operand_tmp {
+                    // Binary operators consume their operand temporaries,
+                    // not just the eventual expression result. Retaining an
+                    // object-valued call until frame teardown would keep weak
+                    // references alive and move destructor exceptions past
+                    // the surrounding try/echo boundary.
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_operand_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = tmp;
+                    release.op2_type = OpType::Tmp;
+                    release._pad |= RELEASE_TEMPS_SUBEXPRESSION;
+                    self.push_instruction_at_line(release, *line);
+                }
 
                 (tmp, OpType::Tmp)
             }

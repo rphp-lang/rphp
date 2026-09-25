@@ -85,6 +85,37 @@ fn virtual_closure_alias(
     })
 }
 
+/// A proven Long comparison may have the canonical operand-lifetime marker
+/// before its branch. No object destructor can run on this guarded path;
+/// side exits still resume at the comparison and execute the marker normally.
+fn scalar_comparison_branch(
+    op_array: &OpArray,
+    comparison_ip: usize,
+    region_end: usize,
+    passthrough_ips: &mut Vec<usize>,
+) -> Option<usize> {
+    let next_ip = comparison_ip.checked_add(1)?;
+    let next = op_array.instructions.get(next_ip)?;
+    if next.opcode != OpCode::ReleaseTemps {
+        return Some(next_ip);
+    }
+    let comparison = op_array.instructions.get(comparison_ip)?;
+    if next_ip.checked_add(1)? > region_end
+        || next._pad != crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION
+        || next.op1_type != OpType::Tmp
+        || next.op2_type != OpType::Tmp
+        || next.result_type != OpType::Unused
+        || u32::from(next.op1) < op_array.num_cvs
+        || next.op1 >= next.op2
+        || u32::from(next.op2) > op_array.num_cvs.checked_add(op_array.num_temps)?
+        || (next.op1..next.op2).contains(&comparison.result)
+    {
+        return None;
+    }
+    passthrough_ips.push(next_ip);
+    next_ip.checked_add(1)
+}
+
 pub fn detect_long_ops_loop(
     op_array: &OpArray,
     header_ip: usize,
@@ -377,7 +408,8 @@ fn detect_long_ops_region_inner(
         }
         let op = match instruction.opcode {
             OpCode::IsSmaller => {
-                let branch = *op_array.instructions.get(ip + 1)?;
+                let branch_ip = scalar_comparison_branch(op_array, ip, backedge_ip, &mut passthrough_ips)?;
+                let branch = *op_array.instructions.get(branch_ip)?;
                 if instruction.op1_type != OpType::Cv
                     || instruction.op2_type != OpType::Cv
                     || instruction.result_type != OpType::Tmp
@@ -392,7 +424,7 @@ fn detect_long_ops_region_inner(
                 add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
                 add_mask_slot(&mut bool_output_mask, instruction.result, total_slots)?;
                 if let Some((lhs, rhs, result, destination, next_ip)) =
-                    conditional_add_assign(op_array, ip + 2, branch.op2 as usize)
+                    conditional_add_assign(op_array, branch_ip + 1, branch.op2 as usize)
                 {
                     add_mask_slot(&mut long_input_mask, lhs, total_slots)?;
                     add_mask_slot(&mut long_input_mask, rhs, total_slots)?;
@@ -401,7 +433,7 @@ fn detect_long_ops_region_inner(
                     has_add = true;
                     has_assign = true;
                     let condition_resume_ip = ip;
-                    ip += 4;
+                    ip = branch_ip + 3;
                     QuickLongOp::ConditionalAddAssign {
                         condition: QuickLongCondition::Lt {
                             lhs: instruction.op1,
@@ -414,7 +446,7 @@ fn detect_long_ops_region_inner(
                         destination,
                         next_target: QuickLongTarget::unresolved(next_ip)?,
                         condition_resume_ip,
-                        add_resume_ip: condition_resume_ip + 2,
+                        add_resume_ip: branch_ip + 1,
                     }
                 } else {
                     let op = QuickLongOp::BranchUnlessLt {
@@ -422,10 +454,10 @@ fn detect_long_ops_region_inner(
                         rhs: QuickLongOperand::Slot(instruction.op2),
                         condition_tmp: Some(instruction.result),
                         false_target: QuickLongTarget::unresolved(branch.op2 as usize)?,
-                        next_target: QuickLongTarget::unresolved(ip + 2)?,
+                        next_target: QuickLongTarget::unresolved(branch_ip + 1)?,
                         resume_ip: ip,
                     };
-                    ip += 2;
+                    ip = branch_ip + 1;
                     op
                 }
             }
@@ -779,7 +811,8 @@ fn detect_long_ops_region_inner(
                     }
                     _ => return None,
                 };
-                let branch = *op_array.instructions.get(ip + 1)?;
+                let branch_ip = scalar_comparison_branch(op_array, ip, backedge_ip, &mut passthrough_ips)?;
+                let branch = *op_array.instructions.get(branch_ip)?;
                 if instruction.result_type != OpType::Tmp
                     || branch.opcode != OpCode::JmpZ
                     || branch.op1_type != OpType::Tmp
@@ -795,7 +828,7 @@ fn detect_long_ops_region_inner(
                 add_mask_slot(&mut bool_output_mask, instruction.result, total_slots)?;
 
                 if let Some((add_lhs, add_rhs, result, destination, next_ip)) =
-                    conditional_add_assign(op_array, ip + 2, branch.op2 as usize)
+                    conditional_add_assign(op_array, branch_ip + 1, branch.op2 as usize)
                 {
                     add_mask_slot(&mut long_input_mask, add_lhs, total_slots)?;
                     add_mask_slot(&mut long_input_mask, add_rhs, total_slots)?;
@@ -804,7 +837,7 @@ fn detect_long_ops_region_inner(
                     has_add = true;
                     has_assign = true;
                     let condition_resume_ip = ip;
-                    ip += 4;
+                    ip = branch_ip + 3;
                     QuickLongOp::ConditionalAddAssign {
                         condition: QuickLongCondition::Eq { lhs, rhs },
                         condition_tmp: Some(instruction.result),
@@ -814,7 +847,7 @@ fn detect_long_ops_region_inner(
                         destination,
                         next_target: QuickLongTarget::unresolved(next_ip)?,
                         condition_resume_ip,
-                        add_resume_ip: condition_resume_ip + 2,
+                        add_resume_ip: branch_ip + 1,
                     }
                 } else {
                     let op = QuickLongOp::BranchUnlessEq {
@@ -822,10 +855,10 @@ fn detect_long_ops_region_inner(
                         rhs,
                         condition_tmp: Some(instruction.result),
                         false_target: QuickLongTarget::unresolved(branch.op2 as usize)?,
-                        next_target: QuickLongTarget::unresolved(ip + 2)?,
+                        next_target: QuickLongTarget::unresolved(branch_ip + 1)?,
                         resume_ip: ip,
                     };
-                    ip += 2;
+                    ip = branch_ip + 1;
                     op
                 }
             }
@@ -886,7 +919,8 @@ fn detect_long_ops_region_inner(
             OpCode::IsSmallerOrEqual => {
                 let lhs = quick_long_operand(op_array, instruction.op1_type, instruction.op1)?;
                 let rhs = quick_long_operand(op_array, instruction.op2_type, instruction.op2)?;
-                let branch = *op_array.instructions.get(ip + 1)?;
+                let branch_ip = scalar_comparison_branch(op_array, ip, backedge_ip, &mut passthrough_ips)?;
+                let branch = *op_array.instructions.get(branch_ip)?;
                 if instruction.result_type != OpType::Tmp
                     || branch.opcode != OpCode::JmpZ
                     || branch.op1_type != OpType::Tmp
@@ -906,10 +940,10 @@ fn detect_long_ops_region_inner(
                     rhs,
                     condition_tmp: Some(instruction.result),
                     false_target: QuickLongTarget::unresolved(branch.op2 as usize)?,
-                    next_target: QuickLongTarget::unresolved(ip + 2)?,
+                    next_target: QuickLongTarget::unresolved(branch_ip + 1)?,
                     resume_ip: ip,
                 };
-                ip += 2;
+                ip = branch_ip + 1;
                 op
             }
             OpCode::IsIdentical | OpCode::IsNotIdentical => {

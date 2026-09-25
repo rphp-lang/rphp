@@ -227,6 +227,29 @@ for ($i = 0; $i < 100; $i++) {
         assert_eq!(arguments.outputs[2], QuickDoubleSource::Constant(2.0));
     }
 
+    #[test]
+    fn comparison_cleanup_stays_inside_its_region_and_preserves_the_condition() {
+        use crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION;
+        let mut main = compile_main("<?php $values = ['entry' => 3]; if ($values['entry'] >= 2) echo 'yes';");
+        let release_ip = main.op_array.instructions.iter().position(|instruction| {
+            instruction.opcode == OpCode::ReleaseTemps
+                && instruction._pad == RELEASE_TEMPS_SUBEXPRESSION
+        }).unwrap();
+        let comparison_ip = release_ip - 1;
+        let end = main.op_array.instructions.len() - 1;
+        let mut passthrough = Vec::new();
+        assert_eq!(scalar_comparison_branch(&main.op_array, comparison_ip, end, &mut passthrough), Some(release_ip + 1));
+        assert_eq!(passthrough, [release_ip]);
+        assert!(scalar_comparison_branch(&main.op_array, comparison_ip, release_ip, &mut Vec::new()).is_none());
+
+        let original = main.op_array.instructions[release_ip];
+        main.op_array.instructions[release_ip].op1 = 0;
+        assert!(scalar_comparison_branch(&main.op_array, comparison_ip, end, &mut Vec::new()).is_none());
+        main.op_array.instructions[release_ip] = original;
+        main.op_array.instructions[release_ip].op2 = main.op_array.instructions[comparison_ip].result + 1;
+        assert!(scalar_comparison_branch(&main.op_array, comparison_ip, end, &mut Vec::new()).is_none());
+    }
+
     fn induction_plan(source: &str) -> QuickLongInductionLoop {
         let main = compile_main(source);
         main.op_array

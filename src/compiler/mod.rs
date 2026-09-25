@@ -1949,6 +1949,11 @@ fn build_conditional_scalar_double_function_plan(
     let (when_true_ip, when_false_ip) = if let Some(target) = fused_jump_target {
         (ip + 2, target)
     } else {
+        let branch_ip = if branch_ip != ip {
+            scalar_result_consumer(&function.op_array, ip)?
+        } else {
+            branch_ip
+        };
         let branch = instructions.get(branch_ip)?;
         if branch.opcode != OpCode::JmpZ {
             return None;
@@ -2734,6 +2739,11 @@ fn build_conditional_scalar_long_function_plan(
         // and skip over it on fall-through.
         (ip + 2, target)
     } else {
+        let branch_ip = if branch_ip != ip {
+            scalar_result_consumer(&function.op_array, ip)?
+        } else {
+            branch_ip
+        };
         let branch = instructions.get(branch_ip)?;
         if branch.opcode != OpCode::JmpZ {
             return None;
@@ -4480,6 +4490,11 @@ pub(crate) fn build_scalar_string_function_plan(
     let (when_true_ip, when_false_ip) = if let Some(target) = fused_jump_target {
         (ip + 2, target)
     } else {
+        let branch_ip = if branch_ip != ip {
+            scalar_result_consumer(&function.op_array, ip)?
+        } else {
+            branch_ip
+        };
         let branch = instructions.get(branch_ip)?;
         if branch.opcode != OpCode::JmpZ {
             return None;
@@ -5387,6 +5402,11 @@ pub(super) fn build_captured_typed_long_function_plan(
 
     let mut operations = Vec::new();
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
+        // All admitted inputs and intermediate results are scalar values;
+        // baseline fallback retains the canonical cleanup on a guard miss.
+        if instruction.opcode == OpCode::ReleaseTemps {
+            continue;
+        }
         if instruction.opcode == OpCode::Return {
             if instruction.extended_value == 0 {
                 return None;
@@ -5799,6 +5819,31 @@ fn register_long_plan_property(
     Some(property)
 }
 
+/// Locate a guarded scalar result's consumer past operand cleanup without
+/// erasing the canonical instruction indices used by caches and side exits.
+fn scalar_result_consumer(op_array: &OpArray, producer_ip: usize) -> Option<usize> {
+    let producer = op_array.instructions.get(producer_ip)?;
+    let consumer_ip = producer_ip.checked_add(1)?;
+    let consumer = op_array.instructions.get(consumer_ip)?;
+    if consumer.opcode != OpCode::ReleaseTemps {
+        return Some(consumer_ip);
+    }
+    // Proven integer operands have no PHP release side effects. Keep the
+    // arithmetic/condition result live and retain the actual cache/jump IPs.
+    if consumer._pad != crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION
+        || consumer.op1_type != OpType::Tmp
+        || consumer.op2_type != OpType::Tmp
+        || consumer.result_type != OpType::Unused
+        || u32::from(consumer.op1) < op_array.num_cvs
+        || consumer.op1 >= consumer.op2
+        || u32::from(consumer.op2) > op_array.num_cvs.checked_add(op_array.num_temps)?
+        || (consumer.op1..consumer.op2).contains(&producer.result)
+    {
+        return None;
+    }
+    consumer_ip.checked_add(1)
+}
+
 /// Recognize small, side-effect-free integer property methods once, after
 /// opcode specialization. The resulting plan is independent of class and
 /// property names; runtime inline caches provide the guarded numeric slots.
@@ -5836,7 +5881,8 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
         // $this->p = $this->p +/- scalar
         if instruction.opcode == OpCode::FetchObjR && ip + 2 < instructions.len() {
             let arithmetic = &instructions[ip + 1];
-            let assign = &instructions[ip + 2];
+            let assign_ip = scalar_result_consumer(op_array, ip + 1)?;
+            let assign = instructions.get(assign_ip)?;
             if matches!(
                 arithmetic.opcode,
                 OpCode::Add
@@ -5871,7 +5917,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                         &mut properties,
                         &mut property_indices,
                         fetched_name,
-                        ip + 2,
+                        assign_ip,
                         3,
                     )?;
                     operations.push(
@@ -5884,7 +5930,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                             LongPropertyOp::Add { property, rhs }
                         },
                     );
-                    ip += 3;
+                    ip = assign_ip + 1;
                     continue;
                 }
             }
@@ -5893,15 +5939,17 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
         // if ($candidate < $this->p) $this->p = $candidate (and max mirror)
         if instruction.opcode == OpCode::FetchObjR && ip + 3 < instructions.len() {
             let comparison = &instructions[ip + 1];
-            let branch = &instructions[ip + 2];
-            let assign = &instructions[ip + 3];
+            let branch_ip = scalar_result_consumer(op_array, ip + 1)?;
+            let branch = instructions.get(branch_ip)?;
+            let assign_ip = branch_ip + 1;
+            let assign = instructions.get(assign_ip)?;
             if matches!(
                 comparison.opcode,
                 OpCode::IsSmaller | OpCode::IsSmallerOrEqual
             ) && branch.opcode == OpCode::JmpZ
                 && branch.op1_type == comparison.result_type
                 && branch.op1 == comparison.result
-                && branch.op2 as usize == ip + 4
+                && branch.op2 as usize == assign_ip + 1
                 && assign.opcode == OpCode::AssignObjProp
             {
                 let fetched_name = property_name(op_array, instruction)?;
@@ -5944,7 +5992,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                         &mut properties,
                         &mut property_indices,
                         fetched_name,
-                        ip + 3,
+                        assign_ip,
                         3,
                     )?;
                     operations.push(if is_min {
@@ -5958,7 +6006,7 @@ fn build_long_property_method_plan(function: &UserFunction) -> Option<Box<LongPr
                             candidate,
                         }
                     });
-                    ip += 4;
+                    ip = assign_ip + 1;
                     continue;
                 }
             }

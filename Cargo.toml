@@ -62,7 +62,7 @@ xxhash-rust = { version = "0.8", features = ["xxh3"] }
 
 [target.'cfg(unix)'.dependencies]
 # Owned directory cursors must retain dot entries and rewind the open handle.
-rustix = { version = "1.1.4", default-features = false, features = ["std", "fs"] }
+rustix = { version = "1.1.4", default-features = false, features = ["std", "fs", "param"] }
 
 [target.'cfg(all(target_os = "linux", target_env = "gnu"))'.dependencies]
 # PHP's non-real memory report describes live allocator payload rather than

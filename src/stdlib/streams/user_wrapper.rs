@@ -1157,6 +1157,14 @@ pub(crate) fn close(eg: &mut ExecutorGlobals, resource: i64) -> Result<Option<bo
     }
     let result = invoke_callback(eg, &object, method, vec![]);
     discard_resource(eg, resource);
+    // Closing the resource can remove the receiver's last native owner.
+    // Retire that owner before running the ordinary PHP release planner;
+    // a consumed WeakReference::get() temporary must not be required to
+    // keep the wrapper alive until the root-frame destructor pass.
+    drop(stream);
+    let release = crate::vm::execute::prepare_replaced_value_destructor(eg, &object);
+    drop(object);
+    crate::vm::execute::run_prepared_value_destructor(eg, release)?;
     result.map(|_| Some(true))
 }
 

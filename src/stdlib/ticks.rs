@@ -10,6 +10,13 @@ const ACTIVE: &str = "active";
 const COUNTER: &str = "counter";
 const NEXT: &str = "next";
 
+pub(super) fn is_executing(eg: &ExecutorGlobals) -> bool {
+    eg.static_vars
+        .get(STATE)
+        .and_then(|state| state.get(ACTIVE))
+        .is_some_and(|active| active.to_long_val() != 0)
+}
+
 fn state(eg: &mut ExecutorGlobals) -> &mut std::collections::HashMap<String, Value> {
     if !eg.static_vars.contains_key(STATE) {
         eg.static_vars.insert(

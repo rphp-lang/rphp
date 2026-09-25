@@ -2504,6 +2504,20 @@ impl ExecutorGlobals {
         }
     }
 
+    /// Name an engine-owned activation which is deliberately absent from the
+    /// public function table. Unlike public functions, it has no lowercase
+    /// lookup key for trace rendering to fall back to.
+    #[cold]
+    pub(crate) fn register_internal_activation_display_name(
+        &mut self,
+        function: *const FunctionCommon,
+        name: &'static str,
+    ) {
+        self.internal_function_display_names
+            .get_or_insert_with(|| Box::new(InternalFunctionMap::default()))
+            .insert(function, std::borrow::Cow::Borrowed(name));
+    }
+
     // Literal registration spellings live for the process lifetime. Only the
     // request-local pointer association needs storage; do not copy the label.
     #[cold]

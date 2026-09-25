@@ -23,6 +23,30 @@ fn fiber_error(eg: &mut ExecutorGlobals, message: &str) {
     eg.exception = Some(make_error_value("FiberError", message));
 }
 
+fn reject_tick_switch(eg: &mut ExecutorGlobals) -> bool {
+    if !super::ticks::is_executing(eg) {
+        return false;
+    }
+    fiber_error(eg, "Cannot switch fibers in current execution context");
+    true
+}
+
+#[cfg(unix)]
+fn stack_size_is_admissible(eg: &mut ExecutorGlobals) -> bool {
+    let requested = super::ini_default(eg, "fiber.stack_size")
+        .map(|value| super::parse_ini::parse_ini_quantity_value(&value))
+        .unwrap_or(2 * 1024 * 1024);
+    let minimum = rustix::param::page_size() * 2;
+    if requested >= minimum as i64 {
+        return true;
+    }
+    eg.exception = Some(make_error_value(
+        "Exception",
+        &format!("Fiber stack size is too small, it needs to be at least {minimum} bytes"),
+    ));
+    false
+}
+
 fn receiver_identity(execute_data: *mut ExecuteData) -> usize {
     argument(execute_data, 0)
         .object_identity()
@@ -64,9 +88,16 @@ fn fiber_start(
     return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if reject_tick_switch(eg) {
+        return Ok(());
+    }
     let identity = receiver_identity(execute_data);
     if eg.fiber_status(identity) != Some(FiberStatus::Created) {
         fiber_error(eg, "Cannot start a fiber that has already been started");
+        return Ok(());
+    }
+    #[cfg(unix)]
+    if !stack_size_is_admissible(eg) {
         return Ok(());
     }
     let arguments = argument(execute_data, 1)
@@ -86,6 +117,9 @@ fn fiber_resume(
     return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
+    if reject_tick_switch(eg) {
+        return Ok(());
+    }
     let identity = receiver_identity(execute_data);
     if eg.fiber_status(identity) != Some(FiberStatus::Suspended) {
         fiber_error(eg, "Cannot resume a fiber that is not suspended");
@@ -110,11 +144,6 @@ fn fiber_throw(
     return_value: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let identity = receiver_identity(execute_data);
-    if eg.fiber_status(identity) != Some(FiberStatus::Suspended) {
-        fiber_error(eg, "Cannot resume a fiber that is not suspended");
-        return Ok(());
-    }
     let exception = argument(execute_data, 1);
     let throwable = exception
         .as_object()
@@ -127,6 +156,14 @@ fn fiber_throw(
                 exception.dereferenced().type_name()
             ),
         ));
+        return Ok(());
+    }
+    if reject_tick_switch(eg) {
+        return Ok(());
+    }
+    let identity = receiver_identity(execute_data);
+    if eg.fiber_status(identity) != Some(FiberStatus::Suspended) {
+        fiber_error(eg, "Cannot resume a fiber that is not suspended");
         return Ok(());
     }
     let outcome = eg.run_fiber(identity, FiberInput::Throw(exception), execute_data)?;
@@ -234,6 +271,9 @@ fn fiber_suspend(
 ) -> Result<(), VmError> {
     if !eg.has_active_fiber() {
         fiber_error(eg, "Cannot suspend outside of a fiber");
+        return Ok(());
+    }
+    if reject_tick_switch(eg) {
         return Ok(());
     }
     if eg.active_fiber_is_force_closing() {

@@ -10960,7 +10960,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 }
                             }
                         }
-                        eg.dirty_globals.clear();
+                        if !op_array.main_scope_vars.is_empty() {
+                            eg.dirty_globals.clear();
+                        }
                     }
     
                     resume_activation!(frame, op_array);
@@ -11401,10 +11403,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             }
                         }
                     }
-                    // Clear dirty set once consumed by a scope that tracks globals.
-                    // Intermediate frames without main_scope_vars/global_vars leave
-                    // dirty_globals intact so changes propagate up to main scope.
-                    if !op_array.main_scope_vars.is_empty() || !op_array.global_vars.is_empty() {
+                    // Intermediate functions can bind only a subset of the
+                    // dirty names. Main scope must still see the other names.
+                    if !op_array.main_scope_vars.is_empty() {
                         eg.dirty_globals.clear();
                     }
                 }
