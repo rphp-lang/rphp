@@ -980,6 +980,7 @@ impl Regex {
     }
 
     /// Compile a regex pattern with given flags.
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     pub fn new(pattern: &str, flags: RegexFlags) -> Result<Self, String> {
         let mut parser = Parser::new(pattern, flags);
         let ast = parser.parse()?;
@@ -1162,6 +1163,7 @@ impl Regex {
             .flatten()
     }
 
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     pub(crate) fn captures_with_limits(
         &self,
         subject: &str,
@@ -1249,6 +1251,7 @@ impl Regex {
             .unwrap_or_else(|_| (subject.to_string(), 0))
     }
 
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     pub(crate) fn replace_limit_with_limits(
         &self,
         subject: &str,
@@ -1420,6 +1423,7 @@ impl Regex {
     /// Limit-aware streaming visitor for `preg_match_all()` and `preg_split()`.
     /// Capture storage is reused between matches, so adding resource errors
     /// does not turn the ordinary projection path into an eager allocation.
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     pub(crate) fn try_visit_captures_with_limits<F>(
         &self,
         subject: &str,
@@ -1524,6 +1528,7 @@ impl Regex {
     }
 
     #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     fn try_visit_backtracking_captures<E, F>(
         &self,
         subject: &str,
@@ -2712,6 +2717,7 @@ fn node_length_range(node: &Node) -> Option<(usize, usize)> {
     }
 }
 
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
 fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
     if ctx.budget.has_error() {
         return None;
@@ -3165,6 +3171,7 @@ fn match_capture_end(
 
 /// Helper: match a group node, setting the group capture after the inner match succeeds
 /// and before matching the rest.
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
 fn match_seq_from_with_group(
     inner: &Node,
     rest: &[Node],
@@ -3287,6 +3294,7 @@ fn capture_needs_streaming_continuation(node: &Node) -> bool {
     }
 }
 
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
 fn collect_match_states_from(
     node: &Node,
     state: BacktrackState,
@@ -4329,6 +4337,7 @@ fn match_control_quantifier(
     result
 }
 
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
 fn match_quantifier(
     inner: &Node,
     min: usize,
@@ -5212,6 +5221,7 @@ impl Parser {
         }
     }
 
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     fn parse_sequence(&mut self) -> Result<Node, String> {
         let mut nodes = Vec::new();
         while let Some(c) = self.peek() {
@@ -5960,6 +5970,7 @@ impl Parser {
         Err("Unterminated character class".into())
     }
 
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     fn parse_star_group(&mut self) -> Result<Node, String> {
         let mut verb = String::new();
         while let Some(c) = self.peek() {
@@ -6224,6 +6235,7 @@ impl Parser {
         ))
     }
 
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
     fn parse_group(&mut self) -> Result<Node, String> {
         self.advance(); // consume '('
 
