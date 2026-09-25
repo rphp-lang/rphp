@@ -1,17 +1,10 @@
-//! Custom PCRE-compatible backtracking regex engine.
+//! Repository-owned PCRE2 10.42-compatible backtracking regex engine.
 //!
-//! Supports the subset of PCRE commonly used in PHP:
-//! - Literals, `.` (any char), `^`, `$`
-//! - Character classes `[abc]`, `[a-z]`, `[^abc]`, `\d`, `\w`, `\s`, `\D`, `\W`, `\S`, `\b`, `\B`
-//! - Quantifiers `*`, `+`, `?`, `{n}`, `{n,}`, `{n,m}` (greedy by default, lazy with `?`)
-//! - Grouping `(...)`, non-capturing `(?:...)`, named `(?P<name>...)`, `(?<name>...)`
-//! - Alternation `|`
-//! - Backreferences `\1`..`\99`
-//! - Lookahead `(?=...)`, `(?!...)`
-//! - Lookbehind `(?<=...)`, `(?<!...)`
-//! - Escape sequences `\n`, `\r`, `\t`, `\\`, `\/`
-//!
-//! Flags: `i` (case-insensitive), `m` (multiline), `s` (dotall), `x` (extended/comments), `U` (ungreedy), `u` (UTF-8), `S` (study hint)
+//! This is the native engine behind RPHP's PHP 8.5 `preg_*` surface. It owns
+//! parsing, Unicode tables, matching, capture/backtracking state and execution
+//! limits; it does not link to, invoke or use FFI to an external PCRE library.
+//! The interpreter deliberately exposes the public no-JIT PCRE contract rather
+//! than claiming PCRE2's machine-code JIT implementation.
 
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};

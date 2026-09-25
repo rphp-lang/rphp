@@ -1,8 +1,9 @@
 //! Cold PHP 8.5 PCRE surface that builds on the shared regex engine.
 //!
-//! The engine intentionally remains a separately bounded compatibility layer:
-//! these handlers expose the missing collection/callback/error contracts
-//! without claiming complete PCRE2 syntax, backtracking limits or JIT.
+//! The handlers complete the public `preg_*` callable, collection, callback,
+//! projection, diagnostic and request-local limit contracts on top of RPHP's
+//! own PCRE2 10.42-compatible interpreter. No external PCRE engine or FFI is
+//! used, and native machine-code JIT is deliberately not claimed.
 
 use std::borrow::Cow;
 use std::rc::Rc;

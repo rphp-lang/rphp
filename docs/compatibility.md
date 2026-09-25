@@ -53,8 +53,9 @@ final evidence packet `f90b066b6b40b3093d91e8ece5278e847777c6c0d679c1b33c45fee22
 Zero supported stable-core failures is not complete PHP compatibility: skips,
 unsupported cases and the contained `new_oom` timeout remain non-passes.
 Randomizer/the rest of ext/random, other image formats/user-wrapper dispatch
-and arbitrary native callback suspension are not claimed. The PCRE engine,
-Phar and Date/DateTime implementations are unchanged. Next admission requires
+and arbitrary native callback suspension are not claimed. PCRE is completed
+independently by the native-PCRE checkpoint below; Phar and Date/DateTime are
+unchanged. Next admission requires
 request-owned allocation limits and safe OOM finalization: 35 tests are excluded
 solely by `memory_limit`. The isolated 15-case diagnostic remains 3 pass, 4 fail,
 3 timeout and 5 crash against 15 reference passes; startup-only INI admission
@@ -158,7 +159,6 @@ The `core-failed-expression-remainder` checkpoint over `3336438e` added two
 exact passes without loss, reaching 6,773 passes and 9 failures. It preserved
 failed source-unit/static-initializer operand retirement and nested string-write
 diagnostic priority with the complete correctness gates.
-
 ### Preceding suspended-state checkpoint
 
 The `core-suspended-state-remainder` checkpoint over `95ad53db` added three
@@ -360,39 +360,63 @@ exact PHP 8.5 passes without loss and reduced supported failure debt from 107
 to 104. Array unset and internal by-reference output replacement now preserve
 PHP destructor ordering and live call state.
 
-### Parallel PCRE recursive-construct checkpoint
+### Native PCRE completion checkpoint
 
-The independently implemented Rust PCRE engine now supports request-local
-execution limits, ungreedy mode, recursive and named subroutine calls,
-`(?(DEFINE)...)`, capture/recursion conditionals, apostrophe group names, and
-PHP-compatible POSIX classes in UTF-8 mode. It does not link to or delegate to
-PCRE2.
+The independently implemented Rust engine now covers the complete reachable
+PHP 8.5 no-JIT PCRE surface. It owns pattern parsing, Unicode data, byte and
+UTF-8 execution, capture/backtracking state, recursion/subroutines, control
+verbs, request-local limits, replacement grammar, callback invocation,
+collection projections and `preg_last_error()` state. It neither links to nor
+delegates through FFI to an external PCRE2 implementation. All eleven public
+functions have exact Reflection-visible names, arity, defaults, reference
+arguments and type metadata, so `extension_loaded('pcre')` is admitted.
 
-Against the exact `aaf4aa4b` parent, the complete `ext/pcre` corpus moves from
-**113 pass / 33 fail / 15 skip / 2 unsupported / 2 timeout** to **130 pass /
-20 fail / 12 skip / 2 unsupported / 1 timeout**, exact **+17/-0** with no
-crash. Regex unit tests are **77/77**, the extension E2E is **8/8**, and the
-five Cargo configurations plus all-targets are green.
+Against php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`, the frozen 165-case
+`ext/pcre` packet is **149 pass / 0 fail / 14 skip / 2 unsupported / 0 timeout /
+0 crash**. The 149 attempted reachable cases all pass. The 14 skips are PCRE
+version branches, locale availability, foreign-extension requirements or JIT
+requirements; RPHP deliberately publishes the no-JIT contract. The two
+unsupported tests require the unrelated `sendmail_path` and `smtp` CLI
+directives. They are not counted as PCRE successes.
 
-The fixed-parent 32-pair CPU-2 medians are startup **-0.823%**, ordinary
-**+0.712%**, existing `preg_match` **-1.506%**, existing `preg_replace`
-**-4.755%**, and the recursive-subroutine lane versus PHP 8.5 **-62.434%**.
-`preg_filter` and `preg_grep` remain materially slower than PHP, and duplicate
-names/`J`, `\K`, replacement grammar and the remaining resource-exhaustion
-timeout are explicit follow-up boundaries. This checkpoint is not a claim of
-complete PCRE compatibility.
+Original coverage is **116/116** regex units plus **53/53** general regex,
+**16/16** extension, **4/4** call-boundary, **5/5** UTF/byte and **21/21**
+RegexIterator CLI cases. A generated cross-product of 52 patterns and 35
+subjects covers match flags and modes, split flags, six replacement/filter
+forms, grep/invert and quote; all **54,844** output lines are byte-identical to
+PHP 8.5.11. The on-demand builtin audit reports PCRE **11 present / 0 missing /
+0 shape mismatch / 0 metadata mismatch**.
+
+The frozen-source Cargo matrix passes default **6,148**, no-default **5,814**,
+erased **6,219**, reified **6,241** and all-features **6,292** tests, plus
+all-targets. Composer and Symfony S0--S3, formatting, public-data hygiene and
+unsafe policy are green; production unsafe inventory remains at its accepted
+**1,627 blocks / 289 functions**. Exact broad no-loss preserves the complete
+**5,284** Zend/lang and **1,478** strings/array parent pass sets.
+
+The fixed-parent 128-pair regex packet keeps `preg_match` without groups at
+**+0.02%**, no-literal and UTF-8 count lanes at **+0.46%/+0.45%**, and group
+miss at **+2.14%**. Callback grouped and match-all output improve by roughly
+48%; callback variants improve by 0.35--2.27% and fixed-prefix count by 24.65%.
+Independent controls are bounded by **+1.25%**. All benchmark outputs are
+exact. Native PCRE2 machine-code JIT remains the sole PCRE implementation
+non-claim; this native interpreter does not pretend to provide it.
 
 SHA-256 evidence: candidate
-`8d266cb9cb5a07567194c4cf9c0f231e4b1a52aa6d7c079a4d42b9bd68d96479`;
-candidate manifest/pass set
-`396fc64a50d049f124c43b6021da17971897d7b5e2e8b770549118cf9e5e065e` /
-`1fb595e5a8f3849ddba5a3b6a8ebe4e1c10567b3d3ae9906059975f56efd069a`;
-parent manifest/pass set
-`16ce5ddacc750e12242736e7a45a24c7da8533e8548077f190c788849ed3803a` /
-`7047beca67aff6e46fccb2d3853cd944d9f00e62349b15ed7d94ccbc3197db45`;
-matrix/performance summaries
-`ea2b26f73fbf4ba1eb9fab253ecd11f46cb9125676833b7dd778234aea3d1fd7` /
-`e51860ce305b5900bac289ed9447354b37abae931844e37ebb1045815bb4cf99`.
+`30c253e0603f585a8da403f8e7d969eb596e2fb261357ca9114a3f1cd426aec7`;
+PCRE manifest/summary
+`40adafe84226b6b941e6f0c7e1c174d989e21c88902b32a7d766c3b4dca33166` /
+`efcb6f9aafe9b45007cc7189634e65cfd2cf1e21c13f87beec508b6b59d55c95`;
+generated output/script
+`27bef8ee981e7f690965af2720dec2f5908f7b6f6873ef3b0036f7acad3c3a0c` /
+`189309c6d7b42f762ef3b7bcb1cfeb73a949f1fdad7cc323f11511a173c3d8cb`;
+matrix/regex-performance/control-performance
+`eac45f2d1f4d49801780c85d2a2c81a326b575b158a94b61e34af148799829ae` /
+`325264fdd3022739d944b6803e820940cdf503231cc18ad1a22ddc1d91efdf4c` /
+`3ae8d5ba58d7531ae3d458870949c6245480d685eb9a9669730cb1b44fc5f768`;
+Zend/lang and strings/array pass sets
+`ecd19962f268e4d56a894d4b382ec3eb6cf8146b3a6ec216dbb7f1fb42ffacc3` /
+`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`.
 
 ### Preceding mutable-iteration checkpoint
 
