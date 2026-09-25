@@ -326,11 +326,24 @@ fn detect_long_ops_region_inner(
             continue;
         }
         if instruction.opcode == OpCode::ReleaseTemps {
-            if instruction.op1_type != OpType::Tmp
+            if instruction.is_completed_internal_cv_release() {
+                // These fixed JSON argument projections never materialize a
+                // reference or destructor-bearing Value in this region. The
+                // call guard rejects by-reference/unsupported callees before
+                // mutation; their baseline replay still executes the cleanup.
+                if u32::from(instruction.op2) > op_array.num_cvs
+                    || (instruction.op1..instruction.op2).any(|slot| {
+                        json_projections.deferred_argument_mask & (1u64 << slot) == 0
+                    })
+                {
+                    return None;
+                }
+            } else if instruction.op1_type != OpType::Tmp
                 || instruction.op2_type != OpType::Tmp
                 || instruction.result_type != OpType::Unused
                 || instruction.op1 > instruction.op2
                 || u32::from(instruction.op2) > total_slots
+                || instruction._pad & crate::vm::instruction::RELEASE_TEMPS_INTERNAL_CVS != 0
             {
                 return None;
             }

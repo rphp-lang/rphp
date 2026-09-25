@@ -1037,10 +1037,29 @@ fn dynamic_scope_cv(
 }
 
 fn dynamic_scope_is_global(frame: *mut ExecuteData) -> bool {
-    // Included frames are first resolved to their owner. The remaining root
-    // frame is the request-global script scope; ordinary function frames have
-    // a live predecessor.
-    unsafe { !frame.is_null() && (*frame).prev_execute_data.is_null() }
+    // SAFETY: dynamic-scope owners are live user frames; op-array metadata
+    // outlives this lookup. Includes are resolved to their owner first.
+    // A detached callback remains local even without a predecessor.
+    unsafe {
+        !frame.is_null() && (*frame).prev_execute_data.is_null() && {
+            let op_array = (*frame).op_array();
+            op_array.name == "<main>" || op_array.name == *op_array.source_file
+        }
+    }
+}
+
+fn assign_dynamic_scope_variable(
+    eg: &mut ExecutorGlobals,
+    frame: usize,
+    name: &str,
+    value: Value,
+) {
+    let variables = eg.dynamic_scope_variables_mut(frame);
+    if let Some(slot) = variables.get_mut(name) {
+        assignment_slot_set(slot, value);
+    } else {
+        variables.insert(name, value);
+    }
 }
 
 pub(crate) fn caller_scope_is_global(
@@ -1154,11 +1173,7 @@ fn caller_scope_operation(
                     eg.mark_global_dirty(name.to_string());
                 } else {
                     if rebind {
-                        globals_set(
-                            eg.dynamic_variables.entry(owner as usize).or_default(),
-                            name,
-                            value,
-                        );
+                        eg.dynamic_scope_variables_mut(owner as usize).insert(name, value);
                     } else {
                         let constraints = eg
                             .dynamic_variables
@@ -1170,11 +1185,7 @@ fn caller_scope_operation(
                             Ok(value) => value,
                             Err(error) => return CallerScopeResult::Written(Err(error)),
                         };
-                        globals_assign(
-                            eg.dynamic_variables.entry(owner as usize).or_default(),
-                            name,
-                            value,
-                        );
+                        assign_dynamic_scope_variable(eg, owner as usize, name, value);
                     }
                 }
                 CallerScopeResult::Written(Ok(true))
@@ -1212,17 +1223,17 @@ fn caller_scope_operation(
                         result.set_str(name, value.clone());
                     }
                 }
-                let extra = if dynamic_scope_is_global(owner) {
-                    Some(&eg.globals)
-                } else {
-                    eg.dynamic_variables.get(&(owner as usize))
-                };
-                if let Some(extra) = extra {
-                    for (name, value) in extra {
-                        if name != "this" && !value.is_undef() && result.get_str(name).is_none() {
-                            result.set_str(name, value.clone());
-                        }
+                let mut add_extra = |name: &str, value: &Value| {
+                    if name != "this" && !value.is_undef() && result.get_str(name).is_none() {
+                        result.set_str(name, value.clone());
                     }
+                };
+                if dynamic_scope_is_global(owner) {
+                    for (name, value) in &eg.globals {
+                        add_extra(name, value);
+                    }
+                } else if let Some(extra) = eg.dynamic_variables.get(&(owner as usize)) {
+                    extra.for_each(add_extra);
                 }
                 CallerScopeResult::Variables(result)
             }
@@ -1498,8 +1509,7 @@ fn op_dynamic_variable<'a>(
                         )?);
                     }
                 };
-                let variables = eg.dynamic_variables.entry(owner as usize).or_default();
-                globals_assign(variables, &name, value);
+                assign_dynamic_scope_variable(eg, owner as usize, &name, value);
             }
         }
         OpCode::UnsetDynamicVar => {
@@ -1543,7 +1553,7 @@ fn op_dynamic_variable<'a>(
                 globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
                 binding
             } else {
-                let variables = eg.dynamic_variables.entry(owner as usize).or_default();
+                let variables = eg.dynamic_scope_variables_mut(owner as usize);
                 let binding = variables.get(&name).map_or_else(
                     || Value::owned_reference(Value::null()),
                     |value| {
@@ -1554,7 +1564,7 @@ fn op_dynamic_variable<'a>(
                         }
                     },
                 );
-                globals_set(variables, &name, binding.clone_owned_reference_alias());
+                variables.insert(&name, binding.clone_owned_reference_alias());
                 binding
             };
             if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
@@ -1595,11 +1605,8 @@ fn op_dynamic_variable<'a>(
                 globals_set(&mut eg.globals, &name, binding.clone_owned_reference_alias());
                 eg.mark_global_dirty(name);
             } else {
-                globals_set(
-                    eg.dynamic_variables.entry(owner as usize).or_default(),
-                    &name,
-                    binding.clone_owned_reference_alias(),
-                );
+                eg.dynamic_scope_variables_mut(owner as usize)
+                    .insert(&name, binding.clone_owned_reference_alias());
             }
         }
         OpCode::BindDynamicGlobal => {
@@ -1629,11 +1636,8 @@ fn op_dynamic_variable<'a>(
                     )
                 };
             } else if !global_scope {
-                globals_set(
-                    eg.dynamic_variables.entry(owner as usize).or_default(),
-                    &name,
-                    binding.clone_owned_reference_alias(),
-                );
+                eg.dynamic_scope_variables_mut(owner as usize)
+                    .insert(&name, binding.clone_owned_reference_alias());
             }
         }
         _ => unreachable!("dynamic-variable helper called for another opcode"),

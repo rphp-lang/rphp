@@ -11708,8 +11708,8 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             (1u64 << end) - 1
                         };
-                        let below_first = if first == 0 {
-                            0
+                        let below_first = if first == 64 {
+                            u64::MAX
                         } else {
                             (1u64 << first) - 1
                         };

@@ -1010,7 +1010,7 @@ pub struct ExecutorGlobals {
     /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
     /// slot. Keep those rare entries in a frame-keyed cold symbol table while
     /// statically known names continue to live directly in their CVs.
-    pub(crate) dynamic_variables: HashMap<usize, HashMap<String, crate::value::Value>>,
+    pub(crate) dynamic_variables: HashMap<usize, crate::value::DynamicPropertyMap>,
     /// Included code executes in its caller's variable scope. This sparse map
     /// aliases an include frame to the owning caller frame without changing
     /// the ordinary ExecuteData layout.
@@ -2392,14 +2392,14 @@ impl ExecutorGlobals {
             let Some(variables) = self.dynamic_variables.get(&owner) else {
                 continue;
             };
-            for value in variables.values() {
+            variables.for_each(|_, value| {
                 if let Some(value) = value
                     .clone_cycle_handle()
                     .or_else(|| value.dereferenced().clone_cycle_handle())
                 {
                     children.push(value);
                 }
-            }
+            });
         }
         children
     }
@@ -2513,6 +2513,18 @@ impl ExecutorGlobals {
     pub(crate) fn alias_dynamic_scope(&mut self, frame: usize, owner: usize) {
         let owner = self.dynamic_scope_owner(owner);
         self.dynamic_scope_owners.insert(frame, owner);
+    }
+
+    pub(crate) fn dynamic_scope_variables_mut(
+        &mut self,
+        frame: usize,
+    ) -> &mut crate::value::DynamicPropertyMap {
+        // The same ordered string-key storage as dynamic properties keeps
+        // function-local symbol destruction in PHP insertion order. This is
+        // allocated only for names without a compiled CV.
+        self.dynamic_variables
+            .entry(frame)
+            .or_insert_with(|| crate::value::DynamicPropertyMap::with_capacity(0))
     }
 
     #[inline]
@@ -11710,10 +11722,8 @@ mod sparse_call_cleanup_tests {
                     eg.dynamic_scope_owners.insert(frame, 3);
                 }
                 if mask & 2 != 0 {
-                    eg.dynamic_variables.insert(
-                        frame,
-                        HashMap::from([("slot".into(), Value::long(frame as i64))]),
-                    );
+                    eg.dynamic_scope_variables_mut(frame)
+                        .insert("slot", Value::long(frame as i64));
                 }
                 if mask & 4 != 0 {
                     eg.finally_exceptions

@@ -3070,6 +3070,7 @@ impl Compiler {
                 for expr in expressions {
                     let release_dimension_temps = matches!(expr, Expr::ArrayAccess { .. });
                     let first_tmp = self.next_tmp as u16;
+                    let first_cv = self.next_cv;
                     let (operand, op_type) = self.compile_expr(expr);
                     let mut echo = Instruction::new(OpCode::Echo);
                     echo.op1 = operand;
@@ -3078,7 +3079,8 @@ impl Compiler {
                         .map_err(|_| "Echo source line exceeds bytecode range".to_string())?;
                     self.push_instruction_at_line(echo, *line);
                     let end_tmp = self.next_tmp as u16;
-                    if release_dimension_temps && end_tmp > first_tmp {
+                    let released_cvs = self.emit_completed_internal_cv_release(first_cv);
+                    if (release_dimension_temps && end_tmp > first_tmp) || released_cvs {
                         // A dimension read can retain protocol operands and a
                         // returned reference cell until its consuming echo is
                         // complete. Retire that bounded expression range, but
@@ -3096,6 +3098,7 @@ impl Compiler {
             }
             Stmt::Assign { var, expr } => {
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 // Detect $x .= expr pattern → emit AssignConcat (in-place string append)
                 let cv_idx = self.resolve_cv(var);
                 let compact_concat_rhs = match expr {
@@ -3141,7 +3144,8 @@ impl Compiler {
                     && moved_source.is_some_and(|(operand, op_type)| {
                         matches!(op_type, OpType::Tmp | OpType::Var) && operand == first_tmp
                     });
-                if end_tmp > first_tmp && !sole_tmp_moved_by_assignment {
+                let released_cvs = self.emit_completed_internal_cv_release(first_cv);
+                if (end_tmp > first_tmp && !sole_tmp_moved_by_assignment) || released_cvs {
                     // Assignment consumes or moves its RHS result, but calls
                     // may also leave argument/materialization temporaries in
                     // the caller frame. They cease to be PHP roots at this
@@ -3160,9 +3164,12 @@ impl Compiler {
             }
             Stmt::CoalesceAssign { target, expr } => {
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 let (_, _, hit_jump) = self.compile_coalesce_assign_expression(target, expr)?;
                 let end_tmp = self.next_tmp as u16;
-                if end_tmp > first_tmp {
+                let cleanup_start = self.instructions.len() as u16;
+                let released_cvs = self.emit_completed_internal_cv_release(first_cv);
+                if end_tmp > first_tmp || released_cvs {
                     // The target path and conditional RHS share one statement
                     // lifetime. In particular, object-valued dimension keys
                     // cease to be roots before the surrounding try advances,
@@ -3172,15 +3179,24 @@ impl Compiler {
                     release.op1_type = OpType::Tmp;
                     release.op2 = end_tmp;
                     release.op2_type = OpType::Tmp;
+                    if released_cvs {
+                        release._pad |= RELEASE_TEMPS_NESTED_OBJECTS;
+                    }
                     self.push_instruction_at_line(release, expression_source_line(target));
                     let continuation = self.instructions.len() as u16;
                     let hit = &mut self.instructions[hit_jump];
-                    hit._pad |= JMP_NZ_RELEASE_TEMPS;
-                    hit.extended_value = u32::from(first_tmp) | (u32::from(end_tmp) << 16);
-                    hit.op2 = continuation;
+                    if released_cvs {
+                        hit.op2 = cleanup_start;
+                    } else {
+                        hit._pad |= JMP_NZ_RELEASE_TEMPS;
+                        hit.extended_value = u32::from(first_tmp) | (u32::from(end_tmp) << 16);
+                        hit.op2 = continuation;
+                    }
                 }
             }
             Stmt::CompoundAssign { target, op, expr } => {
+                let first_cv = self.next_cv;
+                let first_tmp = self.next_tmp as u16;
                 // Resolve the mutable target once so object/index side effects
                 // match PHP compound-assignment evaluation order.
                 let direct_cv = if let Expr::Variable { name, .. } = target {
@@ -3204,6 +3220,7 @@ impl Compiler {
                     append.op2_type = right_type;
                     self.push_instruction_at_line(append, incdec_target_source_line(target));
                     self.definitely_defined_cvs.insert(cv);
+                    self.emit_completed_reference_expression(first_cv, first_tmp);
                     return Ok(());
                 }
                 let (left, left_type, mut writeback, right, right_type) = if let Some(cv) = direct_cv {
@@ -3275,6 +3292,7 @@ impl Compiler {
                     self.instructions.push(operation);
                 }
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
+                self.emit_completed_reference_expression(first_cv, first_tmp);
                 if let Some(cv) = direct_cv {
                     self.definitely_defined_cvs.insert(cv);
                 }
@@ -3320,7 +3338,7 @@ impl Compiler {
                     // Compile condition
                     let condition_first_tmp = self.next_tmp as u16;
                     let condition_instruction_start = self.instructions.len();
-                    let (cond_op, cond_type) = self.compile_expr(condition);
+                    let (cond_op, cond_type) = self.compile_condition_expression(condition);
                     let condition_end_tmp = self.next_tmp as u16;
                     let condition_needs_temp_release = condition_end_tmp > condition_first_tmp
                         && self.instructions[condition_instruction_start..]
@@ -3693,10 +3711,12 @@ impl Compiler {
                 // Compile expression for side effects (e.g. function call), discard result
                 let release_nested_objects = self.is_zend_frameless_internal_call(expr);
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 let (result, result_type) = self.compile_expr(expr);
                 self.discard_unused_expr_result(result, result_type);
                 let end_tmp = self.next_tmp as u16;
-                if end_tmp > first_tmp {
+                let released_cvs = self.emit_completed_internal_cv_release(first_cv);
+                if end_tmp > first_tmp || released_cvs {
                     let mut release = Instruction::new(OpCode::ReleaseTemps);
                     release.op1 = first_tmp;
                     release.op1_type = OpType::Tmp;
@@ -3713,7 +3733,7 @@ impl Compiler {
             Stmt::While { condition, body } => {
                 // Loop start: compile condition
                 let loop_start = self.instructions.len();
-                let (cond_op, cond_type) = self.compile_expr(condition);
+                let (cond_op, cond_type) = self.compile_condition_expression(condition);
                 let loop_exit_definitions = self.definitely_defined_cvs.clone();
 
                 // JmpZ condition, <after_loop>
@@ -3792,7 +3812,7 @@ impl Compiler {
                 }
 
                 // Compile condition, JmpNZ back to loop start
-                let (cond_op, cond_type) = self.compile_expr(condition);
+                let (cond_op, cond_type) = self.compile_condition_expression(condition);
                 let mut jmpnz = Instruction::new(OpCode::JmpNZ);
                 jmpnz.op1 = cond_op;
                 jmpnz.op1_type = cond_type;
@@ -3826,10 +3846,13 @@ impl Compiler {
 
                 let jmpz_idx = if let Some((cond, preceding)) = condition.split_last() {
                     for expression in preceding {
+                        let first_cv = self.next_cv;
+                        let first_tmp = self.next_tmp as u16;
                         let (result, result_type) = self.compile_expr(expression);
                         self.discard_unused_expr_result(result, result_type);
+                        self.emit_completed_reference_expression(first_cv, first_tmp);
                     }
-                    let (cond_op, cond_type) = self.compile_expr(cond);
+                    let (cond_op, cond_type) = self.compile_condition_expression(cond);
                     let idx = self.instructions.len();
                     let mut jmpz = Instruction::new(OpCode::JmpZ);
                     jmpz.op1 = cond_op;
@@ -3871,8 +3894,11 @@ impl Compiler {
 
                 // Compile update expression (discard result)
                 for upd in update {
+                    let first_cv = self.next_cv;
+                    let first_tmp = self.next_tmp as u16;
                     let (result, result_type) = self.compile_expr(upd);
                     self.discard_unused_expr_result(result, result_type);
+                    self.emit_completed_reference_expression(first_cv, first_tmp);
                 }
 
                 // Jmp back to loop start
@@ -4117,6 +4143,7 @@ impl Compiler {
             } => {
                 // $var[index] = expr
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 let diagnostic_snapshot = if var != "GLOBALS"
                     && self.dimension_index_may_invoke_error_handler(index)
                 {
@@ -4151,6 +4178,7 @@ impl Compiler {
                 }
                 self.push_instruction_at_line(instr, *line);
                 let diagnostic_abort_target = self.instructions.len() as u32;
+                self.emit_completed_reference_expression(first_cv, first_tmp);
                 let end_tmp = self.next_tmp as u16;
                 if end_tmp > first_tmp {
                     let mut release = Instruction::new(OpCode::ReleaseTemps);
@@ -4175,6 +4203,8 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                let first_cv = self.next_cv;
+                let first_tmp = self.next_tmp as u16;
                 let mut path = self.compile_deferred_mutable_array_path(
                     root, indices, true, false, *line,
                 )?;
@@ -4195,6 +4225,7 @@ impl Compiler {
 
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
+                self.emit_completed_reference_expression(first_cv, first_tmp);
                 if let Expr::Variable { name, .. } = root {
                     let cv = self.resolve_cv(name);
                     self.definitely_defined_cvs.insert(cv);
@@ -4203,6 +4234,7 @@ impl Compiler {
             Stmt::ArrayPush { var, expr, line } => {
                 // $var[] = expr
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 let cv_idx = self.resolve_cv(var);
                 let (val_op, val_type) = self.compile_expr(expr);
                 let (val_op, val_type) = if val_type == OpType::Cv {
@@ -4230,8 +4262,9 @@ impl Compiler {
                     instr._pad |= ARRAY_ELEMENT_MOVE_SOURCE;
                 }
                 self.push_instruction_at_line(instr, *line);
+                let released_cvs = self.emit_completed_internal_cv_release(first_cv);
                 let end_tmp = self.next_tmp as u16;
-                if end_tmp > first_tmp {
+                if end_tmp > first_tmp || released_cvs {
                     let mut release = Instruction::new(OpCode::ReleaseTemps);
                     release.op1 = first_tmp;
                     release.op1_type = OpType::Tmp;
@@ -4243,6 +4276,7 @@ impl Compiler {
             }
             Stmt::ArrayAppend { target, expr } => {
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 let deferred_object = match target {
                     Expr::PropertyAccess {
                         object,
@@ -4352,8 +4386,9 @@ impl Compiler {
                     self.push_instruction_at_line(append, expression_source_line(target));
                     self.emit_array_append_source_writeback(writeback, array, array_type);
                 }
+                let released_cvs = self.emit_completed_internal_cv_release(first_cv);
                 let end_tmp = self.next_tmp as u16;
-                if end_tmp > first_tmp {
+                if end_tmp > first_tmp || released_cvs {
                     // Append keeps the stored value, not the call operands
                     // that produced it. Match ordinary indexed assignment's
                     // statement lifetime after the complete root writeback.
@@ -4658,6 +4693,8 @@ impl Compiler {
             }
             Stmt::Unset(targets) => {
                 for target in targets {
+                    let first_cv = self.next_cv;
+                    let first_tmp = self.next_tmp as u16;
                     match target {
                         Expr::CompileError { message, line } => {
                             return Err(self.goto_error(message, *line));
@@ -4689,6 +4726,7 @@ impl Compiler {
                             unset.op1 = key;
                             unset.op1_type = key_type;
                             self.push_instruction_at_line(unset, *line);
+                            self.emit_completed_reference_expression(first_cv, first_tmp);
                         }
                         Expr::ArrayAccess { line, .. } => {
                             let mut root = target;
@@ -4706,6 +4744,7 @@ impl Compiler {
                                 unset.op1 = key;
                                 unset.op1_type = key_type;
                                 self.instructions.push(unset);
+                                self.emit_completed_reference_expression(first_cv, first_tmp);
                                 continue;
                             }
                             let path = self.compile_mutable_array_path_with_unset_order(
@@ -4735,6 +4774,7 @@ impl Compiler {
                             self.push_instruction_at_line(unset, *line);
                             self.rebuild_mutable_array_path_after_unset(&path, *line);
                             self.write_back_mutable_array_root(&path);
+                            self.emit_completed_reference_expression(first_cv, first_tmp);
                             if unset.result_type == OpType::Tmp {
                                 let mut release = Instruction::new(OpCode::ReleaseTemps);
                                 release.op1 = unset.result;
@@ -4784,8 +4824,9 @@ impl Compiler {
                             unset.op2 = property;
                             unset.op2_type = OpType::Const;
                             self.push_instruction_at_line(unset, *line);
+                            let released_cvs = self.emit_completed_internal_cv_release(first_cv);
                             let end_tmp = self.next_tmp as u16;
-                            if end_tmp > first_tmp {
+                            if end_tmp > first_tmp || released_cvs {
                                 let mut release = Instruction::new(OpCode::ReleaseTemps);
                                 release.op1 = first_tmp;
                                 release.op1_type = OpType::Tmp;
@@ -4835,8 +4876,9 @@ impl Compiler {
                             unset.op2 = property;
                             unset.op2_type = property_type;
                             self.push_instruction_at_line(unset, *line);
+                            let released_cvs = self.emit_completed_internal_cv_release(first_cv);
                             let end_tmp = self.next_tmp as u16;
-                            if end_tmp > first_tmp {
+                            if end_tmp > first_tmp || released_cvs {
                                 let mut release = Instruction::new(OpCode::ReleaseTemps);
                                 release.op1 = first_tmp;
                                 release.op1_type = OpType::Tmp;
@@ -4874,6 +4916,7 @@ impl Compiler {
                                 unset._pad |= STATIC_PROP_DYNAMIC_NAME;
                             }
                             self.push_instruction_at_line(unset, line);
+                            self.emit_completed_reference_expression(first_cv, first_tmp);
                         }
                         _ => return Err("unset() requires a variable".into()),
                     }
@@ -5018,6 +5061,7 @@ impl Compiler {
                 line,
             } => {
                 let first_tmp = self.next_tmp as u16;
+                let first_cv = self.next_cv;
                 let (obj_op, obj_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
                 let (val_op, val_type) = self.compile_expr(expr);
@@ -5042,8 +5086,9 @@ impl Compiler {
                     assign._pad |= crate::vm::instruction::OBJ_PROP_HOOK_BYPASS;
                 }
                 self.push_instruction_at_line(assign, *line);
+                let released_cvs = self.emit_completed_internal_cv_release(first_cv);
                 let end_tmp = self.next_tmp as u16;
-                if end_tmp > first_tmp {
+                if end_tmp > first_tmp || released_cvs {
                     // FetchCvR materializes the receiver and by-value source
                     // for a property statement. Both cease to be roots after
                     // the write (the source itself may already have moved).
@@ -5061,6 +5106,8 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                let first_cv = self.next_cv;
+                let first_tmp = self.next_tmp as u16;
                 let (val_op, val_type) = self.compile_expr(expr);
                 let (resolved, dynamic_static_scope) =
                     self.resolve_static_member_owner(class_name);
@@ -5081,6 +5128,7 @@ impl Compiler {
                     assign._pad |= ASSIGN_PROP_MOVE_SOURCE;
                 }
                 self.push_instruction_at_line(assign, *line);
+                self.emit_completed_reference_expression(first_cv, first_tmp);
             }
             Stmt::AssignObjArrayDim {
                 object,
@@ -5089,6 +5137,8 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                let first_cv = self.next_cv;
+                let first_tmp = self.next_tmp as u16;
                 let (obj_op, obj_type, deferred_fetches) =
                     self.prepare_property_modify_base(object);
                 let (idx_op, idx_type) = self.compile_expr(index);
@@ -5127,6 +5177,7 @@ impl Compiler {
                 writeback.result_type = OpType::Tmp;
                 writeback._pad |= ASSIGN_OBJ_MODIFY;
                 self.push_instruction_at_line(writeback, *line);
+                self.emit_completed_reference_expression(first_cv, first_tmp);
             }
             Stmt::Include {
                 path,
@@ -5370,6 +5421,8 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                let first_cv = self.next_cv;
+                let first_tmp = self.next_tmp as u16;
                 let contains_reference = targets.iter().any(ListTarget::contains_reference);
                 let (source, source_type, writeback, diagnose_nonreferenceable) =
                     self.compile_list_assignment_source(
@@ -5390,6 +5443,14 @@ impl Compiler {
                     diagnose_nonreferenceable,
                 )?;
                 self.emit_foreach_reference_source_writeback(writeback, source, source_type);
+                if self.emit_completed_internal_cv_release(first_cv) {
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = self.next_tmp as u16;
+                    release.op2_type = OpType::Tmp;
+                    self.push_instruction_at_line(release, *line);
+                }
             }
             Stmt::Global(vars) => {
                 for target in vars {

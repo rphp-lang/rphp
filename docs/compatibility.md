@@ -7,62 +7,70 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-gc-ini-admission` checkpoint over `4348f131` implements startup
-`zend.enable_gc`, its integer-prefix boolean rules and synchronization of
-runtime controls with the published INI value. Startup-disabled GC leaves its
-root buffer uninitialized until first enablement; later runtime disablement
-retains that buffer. A sparse weak registry preserves shutdown destructors
-without admitting old cycles through WeakMap expansion or mere enablement.
+The `core-reference-retirement` checkpoint over `0e280362` retires private
+compiler reference CVs after their consumer completes, including failed
+expressions and condition/loop boundaries. Real aliases, COW owners, pending
+arguments and suspended activations remain live. Detached callbacks keep local
+dynamic symbols local, in insertion/destruction order. Existing native planners
+admit the new cleanup marker only for proven virtual argument projections;
+public CVs and unproved aliases still require canonical execution.
 
-This admits **54 unchanged PHPT cases** previously rejected solely for that
-directive: **35 pass / 18 fail / 1 extension skip**, with no timeout or crash.
-The 18 failures are also present on the immutable parent with the expanded
-runner; they are newly exposed debt, not lost passes. The complete 7,174-case
-stable core is **6,813 pass / 22 fail / 184 skip / 154 unsupported / 1 timeout /
-0 crash**, exact **+35/-0**. Zend/lang is **5,335/22/116/125 plus 1 timeout**;
-strings/array remains **1,478/0/68/29**. All 6,778 accepted parent passes remain
-passes; no other status changed. The known `Zend/tests/new_oom.phpt` timeout
-stays explicit and is never counted as a pass.
+The complete 7,174-case stable core is **6,822 pass / 13 fail / 184 skip /
+154 unsupported / 1 timeout / 0 crash**, exact **+9/-0**. Zend/lang is
+**5,344/13/116/125 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,813 accepted parent passes remain passes; no other status changed.
+The eleven supplying GC cases yield **9 pass / 2 remaining failures**;
+`gc_023` and `gc_033` remain explicit graph/admission holdouts. The broader
+54-case packet is **44 pass / 9 fail / 1 extension skip**. The known
+`Zend/tests/new_oom.phpt` timeout stays visible and is never a pass.
 
-Twenty-five original CLI tests and two new unit regressions cover configuration,
-request isolation, automatic/explicit collection, weak references, COW roots,
-shutdown order and resurrection. The focused/adjacent packet passes **242/242**;
-**252/252** original CLI comparisons, including 199 preceding cases, match PHP
-8.5.11 stdout, stderr and exit status byte-exactly. The frozen-source Cargo
-matrix passes under `test-fast` with debug assertions and overflow checks:
-default **6,298**, no-default **5,964**, erased **6,369**, reified **6,391**,
-all-features **6,442**; ignored counts remain 15/15/15/15/18.
-All-feature/all-target checks, runner self-tests, exact PHPT no-loss,
-Composer/Symfony S0--S3, formatting, public hygiene and unsafe policy pass.
-Production unsafe inventory remains **1,627 blocks / 289 functions**, with
-unchanged ceilings. Host gates retain the 6 GiB/no-swap limit, two build/test
-workers and at most four PHPT workers; automatic cleanup ran between variants.
+Sixty-nine original CLI regressions, three compiler proof tests and a new
+instruction-marker unit cover successful/failed retirement, aliases, wide
+frames, callback re-entry and suspension. **307/307** original comparisons
+match PHP 8.5.11 stdout, stderr and exit status byte-exactly. Existing generic
+and x86 native-region suites pass **31/31 + 34/34**, with negative proofs that
+reject retirement of public roots. The frozen-source `test-fast` matrix keeps
+debug assertions and overflow checks: default **6,371**, no-default **6,036**,
+erased **6,442**, reified **6,464**, all-features **6,515**; ignored counts
+remain 15/15/15/15/18. All-feature/all-target checks, exact PHPT no-loss,
+Composer/Symfony S0--S3, formatting and unsafe policy/self-tests pass.
+Unsafe inventory stays **1,627 blocks / 289 functions**, with unchanged
+ceilings. Host gates retain the 6 GiB/no-swap limit, two build/test workers,
+at most four PHPT workers and automatic cleanup between variants.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `eb2b4de7227ee78d52ffe5d026d1ff4a97723f016aad0a529625ce23514a59c9`;
+candidate `4c5a81454bad855deaf6c7bc44d8c7b218d04244dd111ad81ac09329b450c820`;
 parent/candidate full manifests
-`1bbd2b24d725d1b7718d135a09ea05b7e803da239ad7a97125659285ccf1d769` /
-`2a9681894a430478d65e97206baf2b1056b24ae385653d2e91bdfa49676ad977`;
-54-case focused manifest
-`5e4df3c796ddc64af8057f2e2ab628bb19658071dbe802a801cf4a5ade97b344`;
+`2a9681894a430478d65e97206baf2b1056b24ae385653d2e91bdfa49676ad977` /
+`04d9a9bd862f9ceefd3c0fb33571e7198708945f3f369126a97ceaf7303936e3`;
+eleven-case manifest
+`ff4ababcfd720f982bb2eaac699a929ddfd6ef47cf076a4e09e82978966d9078`;
 Zend/lang pass set
-`c13e93219ba3ffeef7d4fd8c292e9789a489ba796fb4960a58c39e8d5909f30a`;
+`d82c24d808a4ef9d49524a0fa11ad1486118a051bda24ea7a25b98bda5f58ee5`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`c48b8dba836f986c0ca58d751e85f85c1d820671c77c035f472f9cf1ab8b787a`;
-configuration/shutdown oracle packets
-`baf63df0fd670af5127623835a53c7f6fe2e153e048316c57308a1b16c09bc20` /
-`f3c28fa74e4acd586b0350cddbcb7c2778f94e1d967ceb1491f5c645637d3bb3`.
+`36a29ff9812811d6e7976b58b0d9aa1b3f85f6b81e1f918f7051e31a0ef7306a`;
+no-loss summary
+`92755d428eda15075d7290468a756999a3cffaa507a515720f4931489fb1bbf2`;
+final evidence packet
+`ecb5def8603ba8de0d1e923675a422361f77996eb5ac4fb0164aeab964623fe0`.
 
-Performance remains deferred by user direction. General INI restoration,
-allocation-limit equivalence and arbitrary native-callback suspension are not
-claimed. Four existing library failures (Random, PCRE, SPL serialization and
-`getimagesize()`) remain outside this stream. Next address the newly visible
-11-case nested-reference retirement cluster; original probes distinguish
-completed compiler-owned references from genuinely live call/suspension roots.
-Phar, PCRE, Date/DateTime and general libraries remain outside this train.
-Skips and unsupported cases are not passes.
+Performance remains deferred by user direction. The remaining failures are
+**nine core** (six GC, delegated-generator collection, constant arrays and
+self-target foreach) plus **four library** cases (Random, PCRE, SPL
+serialization and `getimagesize()`). Follow-up original reductions distinguish
+post-destructor counts from untracked promoted containers and live PHP roots;
+do not merge these mechanisms without proof. Tokenizer/parser, Phar, PCRE,
+Date/DateTime and general libraries are outside this train. Skips, unsupported
+cases and allocation-limit equivalence remain non-claims.
+
+### Preceding GC configuration checkpoint
+
+The `core-gc-ini-admission` checkpoint over `4348f131` admitted 54 unchanged
+GC-configured PHPTs, adding 35 exact passes without loss. It aligned startup and
+runtime GC enablement, root-buffer initialization and shutdown destructors,
+reaching 6,813 passes and 22 failures.
 
 ### Preceding native-callback checkpoint
 

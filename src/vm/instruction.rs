@@ -492,6 +492,10 @@ pub const RELEASE_TEMPS_SUBEXPRESSION: u16 = 1 << 3;
 /// evaluation fails. The receiver is the TMP immediately preceding op1; this
 /// dependency remains visible to cold unwind without growing the frame ABI.
 pub const RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS: u16 = 1 << 4;
+/// Compiler-only reference CVs whose consuming expression has completed.
+/// These ranges contain no PHP variable bindings. Exception cleanup retires
+/// them alongside the enclosing statement's TMPs, not pending call operands.
+pub const RELEASE_TEMPS_INTERNAL_CVS: u16 = 1 << 5;
 
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;
@@ -666,6 +670,18 @@ impl Instruction {
     pub fn is_plain_subexpression_release(&self) -> bool {
         self.opcode == OpCode::ReleaseTemps
             && self._pad & !RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS == RELEASE_TEMPS_SUBEXPRESSION
+    }
+
+    /// This identifies the marker, not permission to elide it. A planner
+    /// must separately prove every CV is an unmaterialized private operand.
+    #[inline]
+    pub fn is_completed_internal_cv_release(&self) -> bool {
+        self.opcode == OpCode::ReleaseTemps
+            && self._pad == RELEASE_TEMPS_SUBEXPRESSION | RELEASE_TEMPS_INTERNAL_CVS
+            && self.op1_type == OpType::Cv
+            && self.op2_type == OpType::Cv
+            && self.result_type == OpType::Unused
+            && self.op1 < self.op2
     }
 
     pub fn new(opcode: OpCode) -> Self {
@@ -1304,6 +1320,38 @@ mod expression_release_tests {
     use super::*;
 
     #[test]
+    fn private_cv_retirement_requires_exact_mode_and_nonempty_cv_range() {
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release._pad = RELEASE_TEMPS_SUBEXPRESSION | RELEASE_TEMPS_INTERNAL_CVS;
+        release.op1_type = OpType::Cv;
+        release.op2_type = OpType::Cv;
+        release.op1 = 3;
+        release.op2 = 5;
+        assert!(release.is_completed_internal_cv_release());
+        for extra in [
+            RELEASE_TEMPS_NESTED_OBJECTS,
+            RELEASE_TEMPS_ON_RETURN,
+            1 << 15,
+        ] {
+            let mut invalid = release;
+            invalid._pad |= extra;
+            assert!(!invalid.is_completed_internal_cv_release());
+        }
+        let mut invalid = release;
+        invalid.op1_type = OpType::Tmp;
+        assert!(!invalid.is_completed_internal_cv_release());
+        invalid = release;
+        invalid.op2_type = OpType::Tmp;
+        assert!(!invalid.is_completed_internal_cv_release());
+        invalid = release;
+        invalid.result_type = OpType::Cv;
+        assert!(!invalid.is_completed_internal_cv_release());
+        invalid = release;
+        invalid.op2 = invalid.op1;
+        assert!(!invalid.is_completed_internal_cv_release());
+    }
+
+    #[test]
     fn constructor_unwind_metadata_preserves_only_operand_retirement() {
         let mut release = Instruction::new(OpCode::ReleaseTemps);
         for flags in [
@@ -1316,6 +1364,7 @@ mod expression_release_tests {
                 RELEASE_TEMPS_NESTED_OBJECTS,
                 RELEASE_TEMPS_ON_RETURN,
                 RELEASE_TEMPS_RETURN_COMPLETION_SITE,
+                RELEASE_TEMPS_INTERNAL_CVS,
                 1 << 15,
             ] {
                 release._pad = flags | extra;

@@ -486,7 +486,7 @@ fn frame_requires_vm_release(
     // SAFETY: callers pass the live activation that is about to be retired;
     // its compiler-sized slot range and ownership bitmap remain valid.
     unsafe {
-        if !(*frame).has_heap_slots {
+        if !(*frame).has_heap_slots && !eg.dynamic_variables.contains_key(&(frame as usize)) {
             return false;
         }
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
@@ -518,6 +518,9 @@ fn frame_requires_vm_release(
             for index in 0..total {
                 requires_release |= inspect_release(&*base.add(index));
             }
+        }
+        if let Some(variables) = eg.dynamic_variables.get(&(frame as usize)) {
+            variables.for_each(|_, value| requires_release |= inspect_release(value));
         }
         requires_release
     }
@@ -1449,12 +1452,57 @@ fn run_frame_destructors_filtered(
     // SAFETY: `frame` is the live activation being released. Its compiler-sized
     // CV/TMP range remains allocated until destructor dispatch completes.
     unsafe {
-        if !(*frame).has_heap_slots {
+        let variables = eg.dynamic_variables.get(&(frame as usize));
+        if !(*frame).has_heap_slots && variables.is_none() {
             return Ok(());
         }
 
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
+        if let Some(variables) = variables {
+            // Dynamic symbols are real local owners, not a detached global
+            // mirror. Plan their retirement together with the CV/TMP roots,
+            // so a shared reference is freed only when every alias belongs to
+            // this frame. No table borrow survives destructor re-entry.
+            let visit_roots = |visit: &mut dyn FnMut(&Value)| {
+                if total <= 64 {
+                    for index in HeapSlotIter::new((*frame).owned_heap_bitmap()) {
+                        visit(&*base.add(index as usize));
+                    }
+                } else {
+                    for index in 0..total {
+                        if (*base.add(index)).needs_cleanup() {
+                            visit(&*base.add(index));
+                        }
+                    }
+                }
+                variables.for_each(|_, value| visit(value));
+            };
+            let (mut seen_arrays, mut seen_references, mut seen_closures) =
+                retained_temp_containers(visit_roots);
+            let mut candidates = Vec::new();
+            let mut seen_generators = std::collections::HashSet::new();
+            let mut child_index = HashMap::new();
+            visit_roots(&mut |value| {
+                collect_destructor_children(
+                    eg, value, &mut candidates, &mut seen_arrays,
+                    &mut seen_references, &mut seen_closures,
+                    &mut seen_generators, &mut child_index,
+                );
+            });
+            if live_generators_only {
+                candidates.retain(|(_, _, value)| value_is_live_generator_release(value));
+            }
+            let logical_caller = if detached_caller_at_current_site {
+                frame
+            } else {
+                eg.trace_caller(frame as usize, (*frame).prev_execute_data)
+            };
+            return run_collected_value_destructors(
+                eg, candidates, logical_caller, false,
+                detached_caller_at_current_site, false,
+            ).map(|_| ());
+        }
         // Count actual PHP release candidates before allocating the slot
         // snapshot or resolving trace metadata. Owned scalar references and
         // native resources often make a frame heap-bearing without requiring
@@ -1543,36 +1591,8 @@ fn run_frame_destructors_filtered(
                     continue;
                 };
                 let representative = (&*base.add(index)).dereferenced();
-                if live_generators_only {
-                    let live_generator = representative
-                        .dereferenced()
-                        .as_object()
-                        .and_then(|object| object.generator.clone())
-                        .or_else(|| {
-                            // Generator foreach keeps Zend's observable
-                            // iterator-consumer handle in the same private
-                            // one-slot owner used by other Iterator paths.
-                            // During uncaught-exception unwinding, look
-                            // through that engine-only envelope so the
-                            // suspended generator still closes before the
-                            // fatal diagnostic.
-                            representative.as_object().and_then(|object| {
-                                object
-                                    .class_name
-                                    .is_empty()
-                                    .then(|| object.get_property_slot(0))
-                                    .flatten()
-                                    .and_then(Value::as_object)
-                                    .and_then(|source| source.generator.clone())
-                            })
-                        })
-                        .is_some_and(|generator| {
-                            generator.borrow().state
-                                != crate::vm::generator::GeneratorState::Completed
-                        });
-                    if !live_generator {
-                        continue;
-                    }
+                if live_generators_only && !value_is_live_generator_release(representative) {
+                    continue;
                 }
                 if representative.vm_release_strong_count() != Some(frame_references) {
                     deferred.push(identity);
@@ -1615,6 +1635,24 @@ fn run_frame_destructors_filtered(
         }
     }
     Ok(())
+}
+
+#[cold]
+fn value_is_live_generator_release(value: &Value) -> bool {
+    value.dereferenced().as_object()
+        .and_then(|object| object.generator.clone())
+        .or_else(|| {
+            // Private foreach consumers keep the Generator in one slot.
+            value.as_object().and_then(|object| {
+                object.class_name.is_empty()
+                    .then(|| object.get_property_slot(0)).flatten()
+                    .and_then(Value::as_object)
+                    .and_then(|source| source.generator.clone())
+            })
+        })
+        .is_some_and(|generator| {
+            generator.borrow().state != crate::vm::generator::GeneratorState::Completed
+        })
 }
 
 #[inline]
@@ -2357,6 +2395,18 @@ fn release_failed_expression_temps(
         if marker.opcode != OpCode::ReleaseTemps {
             continue;
         }
+        if marker._pad & RELEASE_TEMPS_INTERNAL_CVS != 0 {
+            // A throw abandons these private bindings, just as successful
+            // expression completion does. OPERANDS never clears the caller's
+            // pending argument chain; its existing unwind owns that cleanup.
+            release_statement_temps(
+                eg, frame, usize::from(marker.op1), usize::from(marker.op2),
+                STATEMENT_TEMPS_OPERANDS, false,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
         if marker._pad & RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS != 0
             && usize::from(marker.op1) > first
             && usize::from(marker.op2) <= end
@@ -2925,7 +2975,6 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 #[cfg(test)]
 mod sparse_vm_frame_pop_tests {
     use super::{ExecuteData, ExecutorGlobals, Value, VmError, pop_vm_call_frame};
-    use std::collections::HashMap;
     use std::ptr::null_mut;
 
     fn empty_internal(
@@ -2953,9 +3002,8 @@ mod sparse_vm_frame_pop_tests {
                     eg.dynamic_scope_owners.insert(frame as usize, outer as usize);
                 }
                 if mask & 4 != 0 {
-                    eg.dynamic_variables.insert(frame as usize, HashMap::from([
-                        ("held".into(), Value::string("retained")),
-                    ]));
+                    eg.dynamic_scope_variables_mut(frame as usize)
+                        .insert("held", Value::string("retained"));
                 }
             }
             pop_vm_call_frame(&mut eg, inner);

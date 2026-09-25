@@ -36,34 +36,41 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-gc-ini-admission` checkpoint over `4348f131` admits 54 unchanged
-`zend.enable_gc` cases after implementing effective startup/runtime state:
-**35 pass / 18 pre-existing exposed failures / 1 extension skip**. The complete
-7,174-case stable core is **6,813 pass / 22 fail / 184 skip / 154 unsupported /
-1 timeout / 0 crash**, exact **+35/-0**. Zend/lang is **5,335/22/116/125 plus
-1 timeout**; strings/array remains **1,478/0/68/29**. No other status changed;
-the known `new_oom.phpt` timeout stays visible, never a pass.
+The `core-reference-retirement` checkpoint over `0e280362` retires completed
+compiler-private reference owners while preserving real aliases, COW storage,
+pending calls and suspended activations. The complete 7,174-case stable core is
+**6,822 pass / 13 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
+exact **+9/-0**. Zend/lang is **5,344/13/116/125 plus 1 timeout**;
+strings/array stays **1,478/0/68/29**. No other status changed. The known
+`new_oom.phpt` timeout stays visible, never a pass.
 
-The slice preserves the startup-disabled root-buffer boundary and request-final
-destructors without allowing weak-object traversal to admit old roots. Twenty-
-five original CLI tests, two new units, 252 exact oracle comparisons and 242
-focused/adjacent tests support it. Five Cargo configurations, all-targets,
-runner tests, exact no-loss, Composer/Symfony S0--S3 and unsafe/public hygiene
-pass. Unsafe inventory remains 1,627 blocks / 289 functions with unchanged
-ceilings and ignored counts. Exact hashes and results are in
+The eleven-case GC cluster gains nine; `gc_023` and `gc_033` remain explicit
+graph/admission holdouts rather than reasons to broaden operand retirement.
+Sixty-nine original CLI regressions, three compiler proofs, one new unit and
+307 exact oracle comparisons support the slice. Five Cargo configurations,
+all-targets, exact no-loss, Composer/Symfony S0--S3 and unsafe policy/self-tests
+pass, including restored native-region admission with public-root rejection.
+Unsafe inventory remains 1,627 blocks / 289 functions with unchanged ceilings
+and ignored counts. Exact hashes and results are in
 [compatibility status](compatibility.md).
 
-The next core cluster is **11 nested-reference retirement failures**:
-`Zend/tests/gc/gc_007`, `gc_009`, `gc_012`, `gc_018`, `gc_019`, `gc_020`,
-`gc_021`, `gc_023`, `gc_033`, `gc_035` and `gc_047` (all `.phpt`). Original
-probes show completed compiler-only CV references retaining cycles until frame
-exit; prove operand retirement without weakening live alias, COW, callback or
-suspended-frame ownership. Keep destructor-count, constant-array and generator
-holdouts separate until their causes are established. Four earlier library
-failures remain outside this stream. Phar, PCRE, Date/DateTime and general
-libraries are not owned here. Preserve all 5,335 and 1,478 accepted passes.
-Performance remains deferred; host gates retain the 6 GiB/no-swap limit, two
-build/test workers, bounded PHPT parallelism and automatic cleanup.
+The next core remainder has **nine failures**: `gc_017`, `gc_023`, `gc_028`,
+`gc_029`, `gc_033`, `gc_045`, `generators/gc_with_yield_from`,
+`constant_arrays` and `foreach/foreach_002` (all under `Zend/tests`, `.phpt`).
+Original reductions separate post-destructor counting, promoted-container
+ownership, delegated-frame cleanup and reference-copy boundaries; verify each
+mechanism before changing it. Four library failures remain outside this stream.
+Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
+here. Preserve every one of the 5,344 and 1,478 accepted passes. Performance
+remains deferred; host gates retain the 6 GiB/no-swap limit, two build/test
+workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding GC configuration checkpoint
+
+The `core-gc-ini-admission` checkpoint over `4348f131` admitted 54 unchanged
+GC-configured PHPTs, adding 35 exact passes without loss and reaching 6,813
+passes and 22 failures. It aligned startup/runtime enablement, root-buffer
+initialization and request-final destructors.
 
 ### Preceding native-callback checkpoint
 

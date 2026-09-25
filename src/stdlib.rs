@@ -19754,9 +19754,7 @@ fn php_visible_ownership(
         }
     }
     for values in eg.dynamic_variables.values() {
-        for value in values.values() {
-            counter.visit(value);
-        }
+        values.for_each(|_, value| counter.visit(value));
     }
     for value in eg.constant_table.borrow().values() {
         counter.visit(value);

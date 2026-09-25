@@ -97,12 +97,13 @@ use crate::vm::instruction::{
     NEW_FLAG_VALIDATE_ONLY, OBJ_PROP_FUNC_ARG, OBJ_PROP_HOOK_BYPASS, OBJ_PROP_REFERENCE_BIND,
     OBJ_PROP_TEMPORARY_RECEIVER, OpType, PROPERTY_INCDEC_DECREMENT, PROPERTY_INCDEC_INCREMENT,
     REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
-    RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS, RELEASE_TEMPS_NESTED_OBJECTS, RELEASE_TEMPS_ON_RETURN,
-    RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION, SEND_FLAG_GLOBALS,
-    SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
-    SEND_FLAG_TEMPORARY_WRITE_ERROR, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
-    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
-    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS, RELEASE_TEMPS_INTERNAL_CVS, RELEASE_TEMPS_NESTED_OBJECTS,
+    RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION,
+    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
+    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_TEMPORARY_WRITE_ERROR,
+    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
+    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
+    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use crate::vm::opcode::OpCode;
 
@@ -10377,6 +10378,93 @@ impl Compiler {
         // itself, after the operation and any writeback have completed.
         self.emit_consumed_operand_release(first, result, line);
         self.emit_consumed_operand_release(result.saturating_add(1), self.next_tmp as u16, line);
+    }
+
+    /// Writable expression operands use private CVs so they can carry a
+    /// reference across argument evaluation, callbacks and suspension. They
+    /// stop being owners only after the entire consumer has completed. Keep
+    /// PHP CVs interleaved in the same allocation interval completely intact.
+    fn emit_completed_internal_cv_release(&mut self, first_cv: u32) -> bool {
+        if self.next_cv == first_cv {
+            return false;
+        }
+        let mut cvs: Vec<_> = self
+            .cv_table
+            .iter()
+            .filter(|(name, index)| **index >= first_cv && name.starts_with('\0'))
+            .map(|(_, &index)| index as u16)
+            .collect();
+        cvs.sort_unstable();
+        let mut remaining = cvs.as_slice();
+        while let Some((&first, rest)) = remaining.split_first() {
+            let mut end = first + 1;
+            remaining = rest;
+            while let Some((&next, rest)) = remaining.split_first() {
+                if next != end {
+                    break;
+                }
+                end += 1;
+                remaining = rest;
+            }
+            let mut release = Instruction::new(OpCode::ReleaseTemps);
+            release.op1 = first;
+            release.op1_type = OpType::Cv;
+            release.op2 = end;
+            release.op2_type = OpType::Cv;
+            release._pad = RELEASE_TEMPS_SUBEXPRESSION | RELEASE_TEMPS_INTERNAL_CVS;
+            self.instructions.push(release);
+        }
+        !cvs.is_empty()
+    }
+
+    fn compile_condition_expression(&mut self, expression: &Expr) -> (u16, OpType) {
+        let first_cv = self.next_cv;
+        let first_tmp = self.next_tmp as u16;
+        let operand = self.compile_expr(expression);
+        if self.next_cv == first_cv
+            || !self
+                .cv_table
+                .iter()
+                .any(|(name, &index)| index >= first_cv && name.starts_with('\0'))
+        {
+            return operand;
+        }
+        // Freeze truthiness before retiring the completed condition's private
+        // references. Both branch edges then share one cleanup boundary, and
+        // a destructor cannot change the value used by the pending branch.
+        let result = self.alloc_tmp();
+        let mut cast = Instruction::new(OpCode::Cast);
+        cast.op1 = operand.0;
+        cast.op1_type = operand.1;
+        cast.result = result;
+        cast.result_type = OpType::Tmp;
+        cast.extended_value = CastType::Bool as u32;
+        self.instructions.push(cast);
+        self.emit_completed_internal_cv_release(first_cv);
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1 = first_tmp;
+        release.op1_type = OpType::Tmp;
+        release.op2 = result;
+        release.op2_type = OpType::Tmp;
+        self.instructions.push(release);
+        (result, OpType::Tmp)
+    }
+
+    fn emit_completed_reference_expression(&mut self, first_cv: u32, first_tmp: u16) -> bool {
+        if !self.emit_completed_internal_cv_release(first_cv) {
+            return false;
+        }
+        // Even an empty TMP interval is the exception boundary for the
+        // preceding private-CV ranges. Successful scalar-only expressions
+        // without those private owners acquire no additional instruction.
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1 = first_tmp;
+        release.op1_type = OpType::Tmp;
+        release.op2 = self.next_tmp as u16;
+        release.op2_type = OpType::Tmp;
+        release._pad = RELEASE_TEMPS_NESTED_OBJECTS;
+        self.instructions.push(release);
+        true
     }
 
     #[cold]

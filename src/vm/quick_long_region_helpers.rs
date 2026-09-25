@@ -176,6 +176,7 @@ fn fixed_invariant_path_element(
 struct InvariantJsonProjectionState {
     paths: Vec<Option<Vec<QuickInvariantPathElement>>>,
     fetch_mask: u64,
+    deferred_argument_mask: u64,
     parent_mask: u64,
     string_source_mask: u64,
     string_length_paths: Vec<Option<Vec<QuickInvariantPathElement>>>,
@@ -186,6 +187,7 @@ impl InvariantJsonProjectionState {
         Self {
             paths: vec![None; total_slots as usize],
             fetch_mask: 0,
+            deferred_argument_mask: 0,
             parent_mask: 0,
             string_source_mask: 0,
             string_length_paths: vec![None; total_slots as usize],
@@ -237,6 +239,11 @@ impl InvariantJsonProjectionState {
             .get_mut(instruction.result as usize)?
             .replace(path);
         add_mask_slot(&mut self.fetch_mask, instruction.result, total_slots)?;
+        if instruction.result_type == OpType::Cv
+            && instruction._pad & crate::vm::instruction::FETCH_DIM_FUNC_ARG != 0
+        {
+            add_mask_slot(&mut self.deferred_argument_mask, instruction.result, total_slots)?;
+        }
         add_mask_slot(&mut self.parent_mask, array, total_slots)?;
         Some(true)
     }

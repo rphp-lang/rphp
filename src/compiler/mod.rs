@@ -3927,6 +3927,7 @@ fn build_object_array_function_plan(
     let mut aliases = [None; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
     let mut initialized_long = [false; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
     let mut pending_call: Option<PendingObjectArrayCall> = None;
+    let mut private_argument_aliases = [false; OBJECT_LONG_PLAN_MAX_SLOTS as usize];
     let mut operations = Vec::new();
     let mut entries = Vec::new();
     let mut array_slot = None;
@@ -4008,6 +4009,7 @@ fn build_object_array_function_plan(
                     object,
                     cache_ip: ip as u16,
                 });
+                private_argument_aliases[instruction.result as usize] = true;
                 initialized_long[instruction.result as usize] = false;
             }
             OpCode::InitMethodCall => {
@@ -4071,10 +4073,24 @@ fn build_object_array_function_plan(
                 // plan still have an exact baseline lifetime range. Consume
                 // that bounded range in the proof state; the plan itself does
                 // not materialize any of these canonical Value slots.
-                if pending_call.is_some()
-                    || instruction.op1_type != OpType::Tmp
+                let private_release = instruction.is_completed_internal_cv_release();
+                if pending_call.is_some() || instruction.op1 >= instruction.op2 {
+                    return None;
+                }
+                if private_release {
+                    // Only virtual runtime-selected property arguments qualify.
+                    // Callee activation already rejects ref_args; real aliases
+                    // and ordinary CVs must keep canonical release semantics.
+                    if u32::from(instruction.op1) < argument_end
+                        || u32::from(instruction.op2) > op_array.num_cvs
+                        || (instruction.op1..instruction.op2)
+                            .any(|slot| !private_argument_aliases[slot as usize])
+                    {
+                        return None;
+                    }
+                } else if instruction.op1_type != OpType::Tmp
                     || instruction.op2_type != OpType::Tmp
-                    || instruction.op1 >= instruction.op2
+                    || instruction._pad & crate::vm::instruction::RELEASE_TEMPS_INTERNAL_CVS != 0
                 {
                     return None;
                 }
@@ -4085,6 +4101,7 @@ fn build_object_array_function_plan(
                 }
                 for slot in start..end {
                     aliases[slot] = None;
+                    private_argument_aliases[slot] = false;
                     initialized_long[slot] = false;
                 }
             }
