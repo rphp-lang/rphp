@@ -737,6 +737,9 @@ fn object_properties_to_array(
     } else if let Some(class) = eg.class_by_id(object.class_id) {
         for slot in eg.instance_property_slots_in_iteration_order(object.class_id) {
             let definition = &class.properties[slot];
+            if definition.is_virtual_hook_property() {
+                continue;
+            }
             if !project_array_object_storage
                 && definition.name == "storage"
                 && matches!(
@@ -4156,6 +4159,16 @@ fn execute_full_call<'a>(
     let return_value_ptr = unsafe {
         let result = if opline.result_type != OpType::Unused {
             (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        } else if opline.op1_type == OpType::Tmp
+            && (*(*call).func).fn_type == FunctionType::User
+            && (*(*call).func).sig.returns_reference
+            && !matches!((*(*call).func).sig.return_type_hint, ParamTypeHint::None)
+            && (*call).op_array().has_finally
+        {
+            // The compiler retained this unused call's allocated TMP. It is
+            // owned by the caller's normal bitmap/release range, so exceptions,
+            // nested finally and Fiber suspension need no extra side table.
+            (*frame).get_op_mut(opline.op1 as u32, OpType::Tmp)
         } else {
             std::ptr::null_mut()
         };

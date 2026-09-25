@@ -2296,7 +2296,16 @@ unsafe fn validate_reference_return_after_finally(
         frame,
         callee_class.as_deref(),
     )?;
-    let opline = &*(*frame).opline;
+    let marker = &*(*frame).opline;
+    let opline = if marker.op2_type == OpType::Cv {
+        (*frame).cv(u32::from(marker.op2)).as_long()
+            .and_then(|origin| usize::try_from(origin).ok())
+            .and_then(|origin| op_array.instructions.get(origin))
+            .filter(|instruction| instruction.opcode == OpCode::Return)
+            .unwrap_or(marker)
+    } else {
+        marker
+    };
     match preparation {
         ReturnTypePreparation::Exact => {}
         ReturnTypePreparation::Coerced(value, diagnostic) => {
@@ -7931,7 +7940,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     {
                         let class_name = receiver
                             .as_object()
-                            .map(|object| object.class_name.to_string())
+                            .map(|object| displayed_class_name(eg, &object.class_name))
                             .unwrap_or_else(|| "object".to_string());
                         report_php_notice(
                             eg,
@@ -8585,6 +8594,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     );
                     continue 'vm;
                 }
+                let mut replaced_value_release = None;
                 if let Some(php_arr) = arr.as_array_mut() {
                     key = php_arr.prepare_string_key_for_write(key, idx_val);
                     if let Some(element) = php_arr.get_key_mut_for_replacement(&key, &cloned_val) {
@@ -8593,6 +8603,9 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             // through an existing reference would mutate its
                             // former target and leave the dimension attached
                             // to the wrong cell on the next foreach iteration.
+                            if !element.owned_reference_is_aliased() {
+                                replaced_value_release = prepare_replaced_value_release(eg, element);
+                            }
                             *element = cloned_val;
                         } else {
                             if let Some(overflow) =
@@ -8620,23 +8633,26 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 };
                                 unsafe { frame_slot_set(frame, result, cloned_val.clone()) };
                             }
+                            replaced_value_release = prepare_replaced_value_release(
+                                eg, element.dereferenced(),
+                            );
                             assignment_slot_set(element, cloned_val);
                         }
                     } else {
                         php_arr.set(key, cloned_val);
                     }
                 }
-                if let Some(exception) = pending_false_conversion_exception {
-                    match throw_in_frame(eg, frame, exception)? {
-                        ThrowResult::Handled(new_frame, new_op_array) => {
-                            resume_activation!(new_frame, new_op_array);
-                        }
-                        ThrowResult::Unhandled(exception) => {
-                            eg.exception = Some(exception);
-                            return Ok(());
-                        }
+                // The new dimension is visible before the former value's
+                // destructor runs; no array borrow survives that callback.
+                run_prepared_value_destructor(eg, replaced_value_release)?;
+                if let Some(pending) = pending_false_conversion_exception {
+                    if let Some(replacement) = eg.exception.as_ref() {
+                        append_replaced_exception(replacement, &pending, eg);
+                    } else {
+                        eg.exception = Some(pending);
                     }
                 }
+                resume_pending_exception!();
             }
 
             OpCode::ArrayPushOp => 'array_push: {
@@ -11248,6 +11264,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // SAFETY: the active try entry supplies an instruction in
                     // this op-array, and `frame` is its live activation.
                     unsafe {
+                        if opline.op2_type == OpType::Cv {
+                            let origin = (*frame).opline.offset_from(base_ptr);
+                            frame_slot_set(frame, (*frame).cv_mut(u32::from(opline.op2)), Value::long(origin as i64));
+                        }
                         (*frame).opline = base_ptr.add(finally_ip as usize);
                         // Mark that we need to return after finally completes (per-frame).
                         (*frame).pending_return_after_finally = true;
@@ -11626,7 +11646,12 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             frame,
                             opline.op1 as usize,
                             opline.op2 as usize,
-                            if nested_objects {
+                            if opline._pad & RELEASE_TEMPS_SUBEXPRESSION != 0 {
+                                // Operand cleanup can occur between sends to
+                                // an outer call. Its pending arguments remain
+                                // live owners and must not be abandoned.
+                                STATEMENT_TEMPS_OPERANDS
+                            } else if nested_objects {
                                 STATEMENT_TEMPS_NESTED_OBJECTS
                             } else if return_cleanup {
                                 STATEMENT_TEMPS_FOREACH_OBJECT

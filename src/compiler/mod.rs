@@ -1269,7 +1269,11 @@ pub(crate) fn make_user_function_typed_with_return_mode(
         && op_array.static_vars.is_empty()
         && op_array.try_entries.is_empty()
         && !op_array.may_access_globals;
-    let call = if needs_late_static_scope {
+    let call = if returns_reference && op_array.has_finally && !has_no_return_type {
+        // Even an unused return retains a live reference until the last
+        // finally type check; the cold call boundary admits its scratch slot.
+        CallStrategy::Full
+    } else if needs_late_static_scope {
         // Late-static scope is recovered lazily in the already-cold full call
         // boundary. Ordinary static calls retain their exact compact path.
         CallStrategy::Full
@@ -3151,12 +3155,25 @@ fn build_object_long_weighted_string_score(
         }
     };
 
+    // Canonical operand releases are Noops in this guarded scalar program.
+    // Keep branch offsets in the original instruction space; only the
+    // straight-line prefix matcher steps across its lifetime markers.
+    let mut prefix_end = 0usize;
+    let mut next_prefix = || {
+        while matches!(operations.get(prefix_end), Some(ObjectLongOp::Noop)) {
+            prefix_end += 1;
+        }
+        let operation = operations.get(prefix_end).copied();
+        prefix_end += 1;
+        operation
+    };
+
     let ObjectLongOp::Arithmetic {
         kind: ScalarLongOpKind::Multiply,
         lhs: multiply_lhs,
         rhs: multiply_rhs,
         destination: multiply_result,
-    } = operations[0]
+    } = next_prefix()?
     else {
         return None;
     };
@@ -3175,7 +3192,7 @@ fn build_object_long_weighted_string_score(
         lhs: base_lhs,
         rhs: base_rhs,
         destination: base_sum,
-    } = operations[1]
+    } = next_prefix()?
     else {
         return None;
     };
@@ -3196,7 +3213,7 @@ fn build_object_long_weighted_string_score(
         lhs: ObjectLongSource::Slot(dividend),
         rhs: ObjectLongSource::Constant(divisor),
         destination: quotient,
-    } = operations[2]
+    } = next_prefix()?
     else {
         return None;
     };
@@ -3206,7 +3223,7 @@ fn build_object_long_weighted_string_score(
     let ObjectLongOp::StringLength {
         argument: string_argument,
         destination: string_length,
-    } = operations[3]
+    } = next_prefix()?
     else {
         return None;
     };
@@ -3215,7 +3232,7 @@ fn build_object_long_weighted_string_score(
         lhs: score_lhs,
         rhs: score_rhs,
         destination: score_result,
-    } = operations[4]
+    } = next_prefix()?
     else {
         return None;
     };
@@ -3230,7 +3247,7 @@ fn build_object_long_weighted_string_score(
     let ObjectLongOp::Assign {
         destination: accumulator,
         source: ObjectLongSource::Slot(source),
-    } = operations[5]
+    } = next_prefix()?
     else {
         return None;
     };
@@ -3240,7 +3257,7 @@ fn build_object_long_weighted_string_score(
 
     let mut string_adjustments = Vec::new();
     let mut string_end_target = None;
-    let mut ip = 6usize;
+    let mut ip = prefix_end;
     // A compound scalar RHS may leave canonical intermediate TMPs for the
     // statement cleanup. The ObjectLong program represents that cleanup as a
     // Noop because its own checked operations never materialize those Values.
@@ -5523,7 +5540,7 @@ fn build_binary_long_recursion_plan(
         || !op_array.static_vars.is_empty()
         || !op_array.try_entries.is_empty()
         || op_array.num_cvs != common.sig.num_args
-        || op_array.instructions.len() != 14
+        || !matches!(op_array.instructions.len(), 14 | 15)
     {
         return None;
     }
@@ -5626,12 +5643,36 @@ fn build_binary_long_recursion_plan(
         OpCode::Mul if commutative_operands_match => LongRecursiveCombine::Multiply,
         _ => return None,
     };
-    let result_return = &instructions[12];
+    let mut return_ip = 12;
+    if instructions[return_ip].opcode == OpCode::ReleaseTemps {
+        let release = &instructions[return_ip];
+        if release._pad != crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION
+            || release.op1_type != OpType::Tmp
+            || release.op2_type != OpType::Tmp
+            || release.result_type != OpType::Unused
+            || release.op1 >= release.op2
+            || !(release.op1..release.op2).all(|slot| {
+                [
+                    instructions[4].result,
+                    first_result,
+                    instructions[8].result,
+                    second_result,
+                ]
+                .contains(&slot)
+            })
+            || (release.op1..release.op2).contains(&combine_instruction.result)
+        {
+            return None;
+        }
+        return_ip += 1;
+    }
+    let result_return = &instructions[return_ip];
     if !matches!(combine_instruction.result_type, OpType::Tmp | OpType::Var)
         || result_return.opcode != OpCode::Return
         || result_return.op1_type != combine_instruction.result_type
         || result_return.op1 != combine_instruction.result
-        || instructions[13].opcode != OpCode::Return
+        || instructions.len() != return_ip + 2
+        || instructions[return_ip + 1].opcode != OpCode::Return
     {
         return None;
     }

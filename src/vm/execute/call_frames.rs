@@ -921,9 +921,21 @@ fn run_final_object_destructor_tree_inner(
     // explicitly in the strong-count check; every other counted handle is a
     // property edge that will disappear with `owner`.
     let mut children = Vec::<(usize, usize, Value)>::new();
-    let mut seen_arrays = std::collections::HashSet::new();
-    let mut seen_references = std::collections::HashSet::new();
-    let mut seen_closures = std::collections::HashSet::new();
+    let (mut seen_arrays, mut seen_references, mut seen_closures) =
+        retained_temp_containers(|visit| {
+            if let Some(object) = owner.as_object() {
+                object.for_each_owned_value(&mut *visit);
+                if let Some(generator) = &object.generator {
+                    generator.as_ref().borrow().for_each_cycle_child(&mut *visit);
+                }
+            } else if let Some(closure) = owner.as_closure() {
+                if let Some(bound_this) = &closure.bound_this { visit(bound_this); }
+                for value in &closure.captures { visit(value); }
+                if let Some(static_vars) = &closure.static_vars {
+                    for value in static_vars.as_ref().borrow().values() { visit(value); }
+                }
+            }
+        });
     let mut seen_generators = std::collections::HashSet::new();
     let mut child_index = HashMap::<usize, usize>::new();
     if let Some(object) = owner.as_object() {
@@ -2074,6 +2086,60 @@ fn throwable_first_trace_is_user_destructor(
 const STATEMENT_TEMPS_ORDINARY: u8 = 0;
 const STATEMENT_TEMPS_FOREACH_OBJECT: u8 = 1;
 const STATEMENT_TEMPS_NESTED_OBJECTS: u8 = 2;
+const STATEMENT_TEMPS_OPERANDS: u8 = 3;
+
+/// Only a container losing every owner can release its children. In
+/// particular, one shared reference cell owns its object once, regardless of
+/// how many external variables still name that cell. Prove retiring
+/// containers from the roots inward; cycles stay with the cycle collector.
+#[cold]
+fn retained_temp_containers(
+    roots: impl FnOnce(&mut dyn FnMut(&Value)),
+) -> (std::collections::HashSet<usize>, std::collections::HashSet<usize>, std::collections::HashSet<usize>) {
+    use crate::value::CycleNodeKind;
+    struct Container {
+        value: Value,
+        incoming: usize,
+        expanded: bool,
+    }
+    fn add(value: &Value, nodes: &mut Vec<Container>, indices: &mut HashMap<usize, usize>, pending: &mut Vec<usize>) {
+        let Some((identity, kind)) = value.cycle_node() else { return; };
+        if kind == CycleNodeKind::Object { return; }
+        let index = *indices.entry(identity).or_insert_with(|| {
+            let index = nodes.len();
+            nodes.push(Container { value: value.clone_cycle_handle().unwrap(), incoming: 0, expanded: false });
+            index
+        });
+        nodes[index].incoming += 1;
+        pending.push(index);
+    }
+    let _snapshot_guard = crate::value::begin_cycle_collection();
+    let mut nodes = Vec::new();
+    let mut indices = HashMap::new();
+    let mut pending = Vec::new();
+    roots(&mut |root| add(root, &mut nodes, &mut indices, &mut pending));
+    while let Some(index) = pending.pop() {
+        let node = &mut nodes[index];
+        if node.expanded || node.value.cycle_strong_count() != Some(node.incoming + 1) { continue; }
+        node.expanded = true;
+        let children = node.value.cycle_child_handles();
+        for child in children { add(&child, &mut nodes, &mut indices, &mut pending); }
+    }
+    let mut arrays = std::collections::HashSet::new();
+    let mut references = std::collections::HashSet::new();
+    let mut closures = std::collections::HashSet::new();
+    for node in &nodes {
+        if node.expanded { continue; }
+        let (identity, kind) = node.value.cycle_node().unwrap();
+        match kind {
+            CycleNodeKind::Array => { arrays.insert(identity); }
+            CycleNodeKind::Reference => { references.insert(node.value.reference_identity().unwrap()); }
+            CycleNodeKind::Closure => { closures.insert(identity); }
+            CycleNodeKind::Object => unreachable!(),
+        }
+    }
+    (arrays, references, closures)
+}
 
 /// A construction temporary can retain the same resource as its source TMP.
 /// Count only edges that are certain to disappear with this interval: unique
@@ -2208,7 +2274,7 @@ fn release_statement_temps(
             }
         }
 
-        if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
+        if matches!(release_mode, STATEMENT_TEMPS_NESTED_OBJECTS | STATEMENT_TEMPS_OPERANDS) {
             let has_owned = (first..end).any(&is_owned);
             if !has_owned {
                 return Ok(());
@@ -2218,7 +2284,9 @@ fn release_statement_temps(
             // first so the ownership proofs below see only PHP owners. On the
             // ordinary post-call path the pending chain is already empty, so
             // this is a no-op.
-            cleanup_pending_calls(eg, frame);
+            if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
+                cleanup_pending_calls(eg, frame);
+            }
             // A container that another PHP owner still holds (for example a
             // foreach source that is also a property) loses no child when
             // this range releases its handles, so it needs no release graph.
@@ -2258,9 +2326,12 @@ fn release_statement_temps(
                 return Ok(());
             }
             let mut candidates = Vec::<(usize, usize, Value)>::new();
-            let mut seen_arrays = std::collections::HashSet::new();
-            let mut seen_references = std::collections::HashSet::new();
-            let mut seen_closures = std::collections::HashSet::new();
+            let (mut seen_arrays, mut seen_references, mut seen_closures) =
+                retained_temp_containers(|visit| {
+                    for index in first..end {
+                        if is_owned(index) { visit(&*base.add(index)); }
+                    }
+                });
             let mut seen_generators = std::collections::HashSet::new();
     let mut child_index = HashMap::<usize, usize>::new();
             for index in first..end {
@@ -3902,11 +3973,10 @@ fn throw_through_catch_only_frames<'a>(
                         frame,
                         release.op1 as usize,
                         release.op2 as usize,
-                        if release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
-                            STATEMENT_TEMPS_NESTED_OBJECTS
-                        } else {
-                            STATEMENT_TEMPS_ORDINARY
-                        },
+                        // Exceptional expression retirement also owns unique
+                        // descendants of array operands, not only direct
+                        // object temporaries. It abandons pending calls first.
+                        STATEMENT_TEMPS_NESTED_OBJECTS,
                         false,
                     )?;
                     if let Some(replacement) = eg.exception.take() {
@@ -4156,11 +4226,7 @@ fn throw_in_frame<'a>(
                     search_frame,
                     release.op1 as usize,
                     release.op2 as usize,
-                    if release._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0 {
-                        STATEMENT_TEMPS_NESTED_OBJECTS
-                    } else {
-                        STATEMENT_TEMPS_ORDINARY
-                    },
+                    STATEMENT_TEMPS_NESTED_OBJECTS,
                     false,
                 )?;
                 if let Some(replacement) = eg.exception.take() {

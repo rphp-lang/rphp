@@ -280,14 +280,38 @@ impl InvariantJsonProjectionState {
         total_slots: u32,
     ) -> Option<crate::vm::instruction::Instruction> {
         let mut instruction = *op_array.instructions.get(*cursor)?;
-        while instruction.opcode == OpCode::FetchDimR {
-            let array = long_slot(instruction.op1_type, instruction.op1)?;
-            let deferred_runtime_argument = instruction.result_type == OpType::Cv
-                && instruction._pad & crate::vm::instruction::FETCH_DIM_FUNC_ARG != 0;
-            if (!deferred_runtime_argument && instruction.result_type != OpType::Tmp)
-                || !self.extend_fetch(op_array, instruction, array, total_slots)?
-            {
-                return None;
+        loop {
+            match instruction.opcode {
+                OpCode::FetchDimR => {
+                    let array = long_slot(instruction.op1_type, instruction.op1)?;
+                    let deferred_runtime_argument = instruction.result_type == OpType::Cv
+                        && instruction._pad & crate::vm::instruction::FETCH_DIM_FUNC_ARG != 0;
+                    if (!deferred_runtime_argument && instruction.result_type != OpType::Tmp)
+                        || !self.extend_fetch(op_array, instruction, array, total_slots)?
+                    {
+                        return None;
+                    }
+                }
+                OpCode::ReleaseTemps => {
+                    // Nested offset evaluation retires the consumed container
+                    // before strlen/send. Invariant JSON parents cannot own
+                    // PHP destructors; the live leaf and unrelated slots must
+                    // not be swept into this otherwise scalar projection.
+                    if instruction._pad != crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION
+                        || instruction.op1_type != OpType::Tmp
+                        || instruction.op2_type != OpType::Tmp
+                        || instruction.result_type != OpType::Unused
+                        || u32::from(instruction.op1) < op_array.num_cvs
+                        || instruction.op1 >= instruction.op2
+                        || u32::from(instruction.op2) > total_slots
+                        || (instruction.op1..instruction.op2).any(|slot| {
+                            self.fetch_mask & self.parent_mask & (1u64 << slot) == 0
+                        })
+                    {
+                        return None;
+                    }
+                }
+                _ => break,
             }
             *cursor += 1;
             instruction = *op_array.instructions.get(*cursor)?;

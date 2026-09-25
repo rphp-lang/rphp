@@ -5381,13 +5381,6 @@ fn op_assign_obj_prop_inner<'a>(
                 .class_table
                 .get(php_obj.class_name.as_ref())
                 .is_some_and(|class_def| class_def.allow_dynamic_properties);
-        let magic_get_handles_indirect_writeback = opline._pad & ASSIGN_OBJ_MODIFY != 0
-            && eg
-                .find_function(&format!(
-                    "{}::__get",
-                    php_obj.class_name.to_ascii_lowercase()
-                ))
-                .is_some();
         let readonly_class = eg
             .class_table
             .get(php_obj.class_name.as_ref())
@@ -5721,7 +5714,10 @@ fn op_assign_obj_prop_inner<'a>(
                         "Cannot access property starting with \"\\0\"".into(),
                     )?);
                 }
-                if readonly_class && !magic_get_handles_indirect_writeback {
+                // Indirect getter results return before this insertion path.
+                // A direct read-modify-write which reaches it really creates
+                // storage, even when its prior read called __get().
+                if readonly_class {
                     return Ok(object_property_throw(
                         eg,
                         frame,
@@ -5731,7 +5727,7 @@ fn op_assign_obj_prop_inner<'a>(
                         ),
                     )?);
                 }
-                if !dynamic_properties_allowed && !magic_get_handles_indirect_writeback {
+                if !dynamic_properties_allowed {
                     report_php_deprecation(
                         eg,
                         frame,

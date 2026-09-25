@@ -288,6 +288,41 @@ for ($i = 0; $i < 100; $i++) {
     }
 
     #[test]
+    fn deferred_json_argument_releases_only_consumed_containers() {
+        let tokens = Lexer::new("<?php function projection($box, $row) { $box->add(strlen($row['nested']['name'])); }").tokenize().unwrap();
+        let statements = Parser::new(tokens).parse().unwrap();
+        let mut main = Compiler::new().compile(&statements).unwrap().functions.remove(0).1;
+        let first_fetch = main.op_array.instructions.iter()
+            .position(|instruction| instruction.opcode == OpCode::FetchDimR).unwrap();
+        let release_ip = (first_fetch..main.op_array.instructions.len())
+            .find(|&ip| main.op_array.instructions[ip].opcode == OpCode::ReleaseTemps).unwrap();
+        let original = main.op_array.instructions[release_ip];
+        let live_leaf = main.op_array.instructions[release_ip - 1].result;
+        let send = |op_array: &OpArray| {
+            let total_slots = op_array.num_cvs + op_array.num_temps;
+            let mut projections = InvariantJsonProjectionState::new(total_slots);
+            projections.start(op_array.instructions[first_fetch].op1).unwrap();
+            let mut cursor = first_fetch;
+            projections.deferred_argument_send(op_array, &mut cursor, total_slots)
+        };
+        let actual_send = send(&main.op_array).unwrap_or_else(|| panic!("projection rejected: {:#?}", main.op_array.instructions));
+        assert!(matches!(actual_send.opcode, OpCode::SendVal | OpCode::SendVarEx));
+
+        // Neither the still-live leaf nor unrelated/CV slots may be omitted
+        // merely because the opcode is an expression cleanup marker.
+        for slot in [0, live_leaf, main.op_array.instructions[release_ip + 1].result] {
+            let release = &mut main.op_array.instructions[release_ip];
+            *release = original;
+            release.op1 = slot;
+            release.op2 = slot + 1;
+            assert!(send(&main.op_array).is_none(), "accepted cleanup of slot {slot}");
+        }
+        main.op_array.instructions[release_ip] = original;
+        main.op_array.instructions[release_ip]._pad = 0;
+        assert!(send(&main.op_array).is_none(), "statement cleanup is not an operand release");
+    }
+
+    #[test]
     fn detects_invariant_json_decode_long_projections() {
         let plan = long_ops_plan(
             "<?php

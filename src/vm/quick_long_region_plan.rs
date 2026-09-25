@@ -85,9 +85,9 @@ fn virtual_closure_alias(
     })
 }
 
-/// A proven Long comparison may have the canonical operand-lifetime marker
-/// before its branch. No object destructor can run on this guarded path;
-/// side exits still resume at the comparison and execute the marker normally.
+/// A proven Long producer may have the canonical operand-lifetime marker
+/// before its consumer. No object destructor can run on this guarded path;
+/// side exits still resume at the producer and execute the marker normally.
 fn scalar_comparison_branch(
     op_array: &OpArray,
     comparison_ip: usize,
@@ -1010,9 +1010,12 @@ fn detect_long_ops_region_inner(
                 add_mask_slot(&mut long_output_mask, instruction.result, total_slots)?;
                 has_add = true;
                 let resume_ip = ip;
+                let consumer_ip = scalar_comparison_branch(
+                    op_array, ip, backedge_ip, &mut passthrough_ips,
+                )?;
                 let destination = op_array
                     .instructions
-                    .get(ip + 1)
+                    .get(consumer_ip)
                     .copied()
                     .and_then(long_assign)
                     .and_then(|(destination, source)| {
@@ -1021,7 +1024,7 @@ fn detect_long_ops_region_inner(
                 if let Some(destination) = destination {
                     add_mask_slot(&mut long_output_mask, destination, total_slots)?;
                     has_assign = true;
-                    ip += 2;
+                    ip = consumer_ip + 1;
                     QuickLongOp::BinaryAssign {
                         kind: ScalarLongOpKind::Add,
                         lhs,
@@ -1032,7 +1035,7 @@ fn detect_long_ops_region_inner(
                         resume_ip,
                     }
                 } else {
-                    ip += 1;
+                    ip = consumer_ip;
                     QuickLongOp::Binary {
                         kind: ScalarLongOpKind::Add,
                         lhs,
@@ -1138,19 +1141,24 @@ fn detect_long_ops_region_inner(
                 add_mask_slot(&mut long_input_mask, rhs, total_slots)?;
                 add_mask_slot(&mut long_output_mask, result, total_slots)?;
                 has_add = true;
+                let first_resume_ip = ip;
+                let consumer_ip = scalar_comparison_branch(
+                    op_array, ip, backedge_ip, &mut passthrough_ips,
+                )?;
+                let second_add = op_array.instructions.get(consumer_ip).copied().and_then(long_add);
+                let mut second_passthrough = Vec::new();
+                let second_consumer_ip = if second_add.is_some() {
+                    scalar_comparison_branch(op_array, consumer_ip, backedge_ip, &mut second_passthrough)
+                } else {
+                    None
+                };
 
                 if let (
                     Some((second_lhs, second_rhs, second_result)),
                     Some((destination, source)),
                 ) = (
-                    op_array
-                        .instructions
-                        .get(ip + 1)
-                        .copied()
-                        .and_then(long_add),
-                    op_array
-                        .instructions
-                        .get(ip + 2)
+                    second_add,
+                    second_consumer_ip.and_then(|assign_ip| op_array.instructions.get(assign_ip))
                         .copied()
                         .and_then(long_assign),
                 ) {
@@ -1165,8 +1173,8 @@ fn detect_long_ops_region_inner(
                     add_mask_slot(&mut long_output_mask, second_result, total_slots)?;
                     add_mask_slot(&mut long_output_mask, destination, total_slots)?;
                     has_assign = true;
-                    let first_resume_ip = ip;
-                    ip += 3;
+                    passthrough_ips.extend(second_passthrough);
+                    ip = second_consumer_ip? + 1;
                     QuickLongOp::AddAddAssign {
                         first_lhs: lhs,
                         first_rhs: rhs,
@@ -1177,11 +1185,11 @@ fn detect_long_ops_region_inner(
                         destination,
                         next_target: QuickLongTarget::unresolved(ip)?,
                         first_resume_ip,
-                        second_resume_ip: first_resume_ip + 1,
+                        second_resume_ip: consumer_ip,
                     }
                 } else if let Some((destination, source)) = op_array
                     .instructions
-                    .get(ip + 1)
+                    .get(consumer_ip)
                     .copied()
                     .and_then(long_assign)
                 {
@@ -1190,8 +1198,8 @@ fn detect_long_ops_region_inner(
                     }
                     add_mask_slot(&mut long_output_mask, destination, total_slots)?;
                     has_assign = true;
-                    let add_resume_ip = ip;
-                    ip += 2;
+                    let add_resume_ip = first_resume_ip;
+                    ip = consumer_ip + 1;
                     QuickLongOp::AddAssign {
                         lhs,
                         rhs,
@@ -1201,13 +1209,13 @@ fn detect_long_ops_region_inner(
                         add_resume_ip,
                     }
                 } else {
-                    ip += 1;
+                    ip = consumer_ip;
                     QuickLongOp::Add {
                         lhs,
                         rhs,
                         result,
                         next_target: QuickLongTarget::unresolved(ip)?,
-                        resume_ip: ip - 1,
+                        resume_ip: first_resume_ip,
                     }
                 }
             }
@@ -1337,10 +1345,8 @@ fn detect_long_ops_region_inner(
                         if fetch.opcode != OpCode::FetchDimR {
                             return None;
                         }
-                        let add = op_array.instructions.get(cursor + 1).copied();
-                        let assign = op_array.instructions.get(cursor + 2).copied();
-                        if let (Some(add), Some(assign)) = (add, assign)
-                            && let Some(accumulator) = object_array_add_consumer(fetch, add, assign)
+                        if let Some((accumulator, after_consumer)) =
+                            object_array_add_consumer_at(op_array, cursor)
                         {
                             add_mask_slot(&mut long_input_mask, accumulator, total_slots)?;
                             add_mask_slot(&mut long_output_mask, accumulator, total_slots)?;
@@ -1350,14 +1356,7 @@ fn detect_long_ops_region_inner(
                                 accumulator,
                             };
                             consumer_count += 1;
-                            cursor += 3;
-                            if cursor < next_ip
-                                && op_array.instructions.get(cursor).is_some_and(|instruction| {
-                                    instruction.opcode == OpCode::ReleaseTemps
-                                })
-                            {
-                                cursor += 1;
-                            }
+                            cursor = after_consumer;
                         } else {
                             add_mask_slot(&mut long_output_mask, fetch.result, total_slots)?;
                             output_mask |= 1u64 << fetch.result;

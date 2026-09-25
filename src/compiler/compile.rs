@@ -10284,6 +10284,7 @@ impl Compiler {
         }
 
         let first_instruction = self.instructions.len();
+        let mut first_operand_tmp = self.next_tmp as u16;
         let mut accumulated = self.compile_expr(first);
         let first_line = expression_source_line(first);
         let mut accumulated_line = (first_line != 0)
@@ -10307,6 +10308,8 @@ impl Compiler {
             concat.result = result;
             concat.result_type = OpType::Tmp;
             self.push_instruction_at_line(concat, source_line);
+            self.emit_consumed_operand_release(first_operand_tmp, result, source_line);
+            first_operand_tmp = result;
             accumulated = (result, OpType::Tmp);
             accumulated_line = (source_line != 0).then_some(source_line);
         }
@@ -10331,6 +10334,7 @@ impl Compiler {
             first = left;
         }
 
+        let mut first_operand_tmp = self.next_tmp as u16;
         let mut accumulated = self.compile_expr(first);
         for operand in reversed.into_iter().rev() {
             let next = self.compile_expr(operand);
@@ -10343,9 +10347,36 @@ impl Compiler {
             add.result = result;
             add.result_type = OpType::Tmp;
             self.instructions.push(add);
+            self.emit_consumed_operand_release(
+                first_operand_tmp,
+                result,
+                expression_source_line(operand),
+            );
+            first_operand_tmp = result;
             accumulated = (result, OpType::Tmp);
         }
         accumulated
+    }
+
+    fn emit_consumed_operand_release(&mut self, first: u16, result: u16, line: usize) {
+        if result <= first {
+            return;
+        }
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1 = first;
+        release.op1_type = OpType::Tmp;
+        release.op2 = result;
+        release.op2_type = OpType::Tmp;
+        release._pad = RELEASE_TEMPS_SUBEXPRESSION;
+        self.push_instruction_at_line(release, line);
+    }
+
+    fn emit_completed_expression_release(&mut self, first: u16, result: u16, line: usize) {
+        // A post-update or dynamic read can allocate its result before the
+        // final operand. Retire both sides of the result, never the result
+        // itself, after the operation and any writeback have completed.
+        self.emit_consumed_operand_release(first, result, line);
+        self.emit_consumed_operand_release(result.saturating_add(1), self.next_tmp as u16, line);
     }
 
     #[cold]
@@ -10887,6 +10918,7 @@ impl Compiler {
                 }
             }
             Expr::CompoundAssignExpression { target, op, expr } => {
+                let first_operand_tmp = self.next_tmp as u16;
                 let direct_cv = if let Expr::Variable { name, .. } = target.as_ref() {
                     Some(self.resolve_cv(name))
                 } else {
@@ -11134,6 +11166,11 @@ impl Compiler {
                     self.instructions.push(operation);
                 }
                 self.emit_foreach_reference_source_writeback(writeback, result, OpType::Tmp);
+                self.emit_consumed_operand_release(
+                    first_operand_tmp,
+                    result,
+                    incdec_target_source_line(target),
+                );
                 if let Some(cv) = direct_cv {
                     self.definitely_defined_cvs.insert(cv);
                 }
@@ -11174,6 +11211,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::PostIncTarget(target) | Expr::PostDecTarget(target) => {
+                let first_operand_tmp = self.next_tmp as u16;
                 let source_line = incdec_target_source_line(target);
                 let prepared = match self.prepare_deferred_dimension_source(target, false, true) {
                     Ok(prepared) => prepared,
@@ -11255,6 +11293,7 @@ impl Compiler {
                         matches!(expr, Expr::PostIncTarget(_)),
                     );
                 }
+                self.emit_completed_expression_release(first_operand_tmp, original, source_line);
                 (original, OpType::Tmp)
             }
             Expr::PreInc { name, line } => {
@@ -11292,6 +11331,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::PreIncTarget(target) | Expr::PreDecTarget(target) => {
+                let first_operand_tmp = self.next_tmp as u16;
                 let source_line = incdec_target_source_line(target);
                 let prepared = match self.prepare_deferred_dimension_source(target, false, true) {
                     Ok(prepared) => prepared,
@@ -11365,6 +11405,7 @@ impl Compiler {
                         matches!(expr, Expr::PreIncTarget(_)),
                     );
                 }
+                self.emit_completed_expression_release(first_operand_tmp, result, source_line);
                 (result, OpType::Tmp)
             }
             Expr::Ternary {
@@ -12255,6 +12296,7 @@ impl Compiler {
                 (arr_tmp, OpType::Tmp)
             }
             Expr::ArrayAccess { array, index, line } => {
+                let first_operand_tmp = self.next_tmp as u16;
                 if matches!(array.as_ref(), Expr::Globals { .. }) {
                     let (key, key_type) = self.compile_expr(index);
                     let result = self.alloc_tmp();
@@ -12265,6 +12307,7 @@ impl Compiler {
                     fetch.result_type = OpType::Tmp;
                     fetch._pad |= FETCH_GLOBAL_WARN_UNDEFINED;
                     self.instructions.push(fetch);
+                    self.emit_completed_expression_release(first_operand_tmp, result, *line);
                     return (result, OpType::Tmp);
                 }
                 let (mut arr_op, mut arr_type) = self.compile_expr(array);
@@ -12302,6 +12345,7 @@ impl Compiler {
                 fetch.result = tmp;
                 self.push_instruction_at_line(fetch, *line);
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
+                self.emit_completed_expression_release(first_operand_tmp, tmp, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::DynamicClassConstant {
@@ -12548,6 +12592,7 @@ impl Compiler {
                 expr,
                 line,
             } => {
+                let first_operand_tmp = self.next_tmp as u16;
                 if *cast_type == CastType::Void {
                     let first_instruction = self.instructions.len();
                     let (inner_op, inner_type) = self.compile_expr(expr);
@@ -12574,9 +12619,11 @@ impl Compiler {
                 instr.result_type = OpType::Tmp;
                 instr.extended_value = *cast_type as u32;
                 self.push_instruction_at_line(instr, *line);
+                self.emit_completed_expression_release(first_operand_tmp, tmp, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::Isset(args) => {
+                let first_operand_tmp = self.next_tmp as u16;
                 let (tmp, tmp_type) = self.compile_isset_operand(&args[0]);
                 let tmp = if tmp_type == OpType::Tmp
                     && matches!(
@@ -12596,6 +12643,11 @@ impl Compiler {
                     self.instructions.push(instr);
                     result
                 };
+                self.emit_completed_expression_release(
+                    first_operand_tmp,
+                    tmp,
+                    expression_source_line(&args[0]),
+                );
                 // Multi-arg `isset` short-circuits before compiling the next
                 // operand's runtime instructions, just like PHP.
                 for arg in args.iter().skip(1) {
@@ -12606,6 +12658,7 @@ impl Compiler {
                     jmpz.op2 = 0;
                     self.instructions.push(jmpz);
 
+                    let first_operand_tmp = self.next_tmp as u16;
                     let (operand, operand_type) = self.compile_isset_operand(arg);
                     let tmp2 = if operand_type == OpType::Tmp
                         && matches!(
@@ -12625,6 +12678,11 @@ impl Compiler {
                         self.instructions.push(instr2);
                         result
                     };
+                    self.emit_completed_expression_release(
+                        first_operand_tmp,
+                        tmp2,
+                        expression_source_line(arg),
+                    );
                     // Copy tmp2 into tmp
                     let mut assign = Instruction::new(OpCode::AssignCv);
                     assign.op1_type = OpType::Tmp;
@@ -12637,6 +12695,7 @@ impl Compiler {
                 (tmp, OpType::Tmp)
             }
             Expr::Empty(inner) => {
+                let first_operand_tmp = self.next_tmp as u16;
                 if self.static_method_context
                     && matches!(inner.as_ref(), Expr::Variable { name, .. } if name == "this")
                 {
@@ -12661,6 +12720,11 @@ impl Compiler {
                 instr.result = tmp;
                 instr.result_type = OpType::Tmp;
                 self.instructions.push(instr);
+                self.emit_completed_expression_release(
+                    first_operand_tmp,
+                    tmp,
+                    expression_source_line(inner),
+                );
                 (tmp, OpType::Tmp)
             }
             Expr::NullCoalesce { left, right } => {
@@ -13389,6 +13453,7 @@ impl Compiler {
                 nullsafe,
                 line,
             } => {
+                let first_operand_tmp = self.next_tmp as u16;
                 let (obj_op, obj_type) = self.compile_expr(object);
                 let mut receiver_patches = self.take_nullsafe_receiver_patches(obj_op, obj_type);
                 let tmp = self.alloc_tmp();
@@ -13431,6 +13496,7 @@ impl Compiler {
                 }
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
 
+                self.emit_completed_expression_release(first_operand_tmp, tmp, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::DynamicPropertyAccess {
@@ -13439,6 +13505,7 @@ impl Compiler {
                 nullsafe,
                 line,
             } => {
+                let first_operand_tmp = self.next_tmp as u16;
                 let (obj_op, obj_type, deferred_fetches) = if *nullsafe {
                     let (object, object_type) = self.compile_expr(object);
                     (object, object_type, Vec::new())
@@ -13480,6 +13547,7 @@ impl Compiler {
                     receiver_patches.push(index);
                 }
                 self.publish_nullsafe_receiver_patches(tmp, receiver_patches);
+                self.emit_completed_expression_release(first_operand_tmp, tmp, *line);
                 (tmp, OpType::Tmp)
             }
             Expr::MethodCall {
@@ -14828,6 +14896,14 @@ impl Compiler {
             ) && instruction.result == result
                 && instruction.result_type == OpType::Tmp
             {
+                if instruction.opcode == OpCode::DoFcall {
+                    // Preserve the allocated TMP as completion storage while
+                    // retaining PHP's unused-result/NoDiscard distinction.
+                    // Only a typed reference return crossing finally needs
+                    // this slot; ordinary unused calls still materialize none.
+                    instruction.op1 = result;
+                    instruction.op1_type = OpType::Tmp;
+                }
                 instruction.result_type = OpType::Unused;
             }
         }
@@ -15112,6 +15188,30 @@ impl Compiler {
                         && !(target_outside_try && target == entry.try_start))
             }) {
                 self.instructions[instruction_index].opcode = OpCode::JmpFinally;
+            }
+        }
+        if self.returns_reference_context
+            && !matches!(self.return_type_context, ParamTypeHint::None)
+            && self
+                .try_entries
+                .iter()
+                .any(|entry| entry.finally_start != u32::MAX)
+        {
+            // Only typed reference returns crossing finally need a delayed
+            // diagnostic origin. Keep it in this activation's hidden CV,
+            // independent of nested calls and Fiber suspension.
+            // This activation slot is not a PHP symbol: neither scope
+            // snapshots nor include/eval may expose or overwrite it.
+            let origin = self.next_cv as u16;
+            self.next_cv += 1;
+            for instruction in &mut self.instructions {
+                if instruction.opcode == OpCode::Return
+                    || (instruction.opcode == OpCode::JmpFinally
+                        && instruction._pad & crate::vm::instruction::JMP_FLAG_FINALLY_END != 0)
+                {
+                    instruction.op2 = origin;
+                    instruction.op2_type = OpType::Cv;
+                }
             }
         }
         Ok(())

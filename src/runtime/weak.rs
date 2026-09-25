@@ -222,9 +222,10 @@ impl WeakObjectRuntime {
             if value.is_owned_reference() {
                 entry.value = value.clone_owned_reference_alias();
             } else {
-                entry
-                    .value
-                    .assign_dereferenced(value.dereferenced().clone());
+                // Replacing a map entry detaches its old reference binding;
+                // external aliases retain the former value.
+                entry.value = Value::owned_reference(value.dereferenced().clone());
+                entry.exposed_reference = false;
             }
             return true;
         }

@@ -36,26 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-continuation-remainder` checkpoint over `091d3d47` adds **9 exact
-passes without loss**. The complete 7,174-case stable core is **6,762 pass /
-20 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,284/20/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
+The `core-completion-remainder` checkpoint over `953a21c8` adds **3 exact
+passes without loss**. The complete 7,174-case stable core is **6,765 pass /
+17 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
+**5,287/17/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
 The shared `new_oom.phpt` timeout stays explicit, never a pass.
 
-The slice aligns GC destructor Fiber contexts and force-close traces, operand
-lifetimes, callback global publication, tick switching and Fiber stack-size
-admission. Eleven original byte-exact PHP oracles, five complete Cargo
-configurations, all-targets, exact no-loss, Composer/Symfony S0--S3 and
-unsafe/public hygiene pass. No new unsafe blocks were introduced. Exact hashes,
-counts and non-claims are recorded in [compatibility status](compatibility.md).
+The slice aligns expression completion, shared-owner retirement, dimension
+replacement/reference binding, borrowed closure captures, unused typed reference
+returns through finally and virtual-property projection. Nineteen original
+byte-exact PHP oracles, five complete Cargo configurations, all-targets, exact
+no-loss, Composer/Symfony S0--S3 and unsafe/public hygiene pass. Negative guards
+preserve existing optimized paths without discarding live operands. No new
+unsafe blocks or ignored tests were introduced. Exact hashes, counts and
+non-claims are recorded in [compatibility status](compatibility.md).
 
-Continue the core sweep from **20 failures plus the OOM timeout**, prioritizing
-temporary-owner cleanup and return/finally completion, then the remaining
-GC, native-callback suspension, reference and object-projection boundaries.
+Continue the core sweep from **17 failures plus the OOM timeout**, prioritizing
+failed property-write error completion and cycles created by destructors, then
+native-callback suspension, reference and remaining object-state boundaries.
 Phar, PCRE and Date/DateTime remain outside this stream. Preserve the exact
-5,284 and 1,478 pass sets. Aggregate performance remains deferred by user
+5,287 and 1,478 pass sets. Aggregate performance remains deferred by user
 direction. Host gates must retain aggregate memory/process containment and
 automatic build cleanup.
+
+### Preceding continuation checkpoint
+
+The `core-continuation-remainder` checkpoint over `091d3d47` added nine exact
+passes without loss, reaching 6,762 passes and 20 failures. It aligned GC
+destructor Fiber contexts, force-close traces, operand lifetimes, callback
+globals, tick switching and Fiber stack-size admission.
 
 ### Preceding lifecycle checkpoint
 

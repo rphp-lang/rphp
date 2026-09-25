@@ -150,7 +150,8 @@ fn weak_map_set_value(
     }
     let release = eg
         .weak_map_value(map, key)
-        .and_then(|old| prepare_replaced_value_destructor(eg, old.dereferenced()));
+        .filter(|old| !old.owned_reference_is_aliased())
+        .and_then(|old| prepare_replaced_value_destructor(eg, old));
     if !eg.set_weak_map_value(map, key, value) {
         return Err(VmError::Fatal("Failed to update WeakMap state".to_string()));
     }
@@ -391,7 +392,13 @@ pub(super) fn call_map_protocol(
         }
         "offsetset" | "offsetsetappend" => {
             let key = arguments.first().cloned().unwrap_or_else(Value::null);
-            let value = arguments.get(1).cloned().unwrap_or_else(Value::null);
+            // Dimension reference assignment supplies an already-owned PHP
+            // cell. Keep it across this engine protocol boundary; an explicit
+            // offsetSet() call has already materialized its by-value argument.
+            let value = arguments
+                .get(1)
+                .map(Value::clone_for_php_storage)
+                .unwrap_or_else(Value::null);
             weak_map_set_value(
                 eg,
                 receiver,

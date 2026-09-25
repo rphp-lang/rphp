@@ -194,6 +194,39 @@ fn object_array_add_consumer(
     (assign.op1 == accumulator).then_some(accumulator)
 }
 
+/// The fetched member and the addition are guarded Longs in this span.
+/// Only their TMPs may be retired between these canonical instructions;
+/// a release of the receiver, another operand or the live sum is a side exit.
+fn object_array_add_consumer_at(op_array: &OpArray, fetch_ip: usize) -> Option<(u16, usize)> {
+    let fetch = *op_array.instructions.get(fetch_ip)?;
+    let add = *op_array.instructions.get(fetch_ip + 1)?;
+    let mut assign_ip = fetch_ip + 2;
+    if let Some(release) = op_array.instructions.get(assign_ip)
+        && release.opcode == OpCode::ReleaseTemps
+    {
+        if release._pad != crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION
+            || release.op1_type != OpType::Tmp || release.op2_type != OpType::Tmp
+            || release.result_type != OpType::Unused
+            || release.op1 != fetch.result || release.op2 != fetch.result.checked_add(1)?
+            || add.result == fetch.result
+        { return None; }
+        assign_ip += 1;
+    }
+    let assign = *op_array.instructions.get(assign_ip)?;
+    let accumulator = object_array_add_consumer(fetch, add, assign)?;
+    let mut next = assign_ip + 1;
+    if let Some(release) = op_array.instructions.get(next)
+        && release.opcode == OpCode::ReleaseTemps
+    {
+        if release.op1_type != OpType::Tmp || release.op2_type != OpType::Tmp
+            || release.result_type != OpType::Unused || release.op1 >= release.op2
+            || !(release.op1..release.op2).all(|slot| slot == fetch.result || slot == add.result)
+        { return None; }
+        next += 1;
+    }
+    Some((accumulator, next))
+}
+
 /// Prove an immediate scalar-consumer span for a method's small associative
 /// array result. The assigned array CV must have no other syntactic use in the
 /// function, which makes non-materialization unobservable for the admitted
@@ -228,7 +261,7 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
         do_fcall.result,
     )?;
     let mut fetch_ips = [usize::MAX; QUICK_STRAIGHT_ARRAY_MAX_ADDS];
-    let mut consumer_release_ips = [usize::MAX; QUICK_STRAIGHT_ARRAY_MAX_ADDS];
+    let mut consumer_release_ips = Vec::new();
     let mut fetch_count = 0usize;
     let mut add_count = 0usize;
     let mut cursor = after_assign_ip;
@@ -252,27 +285,11 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
         fetch_ips[fetch_count] = cursor;
         fetch_count += 1;
 
-        let add = op_array.instructions.get(cursor + 1).copied();
-        let assign = op_array.instructions.get(cursor + 2).copied();
-        if let (Some(add), Some(assign)) = (add, assign)
-            && object_array_add_consumer(fetch, add, assign).is_some()
-        {
-            let mut next_cursor = cursor + 3;
-            if let Some(release) = op_array.instructions.get(next_cursor)
-                && release.opcode == OpCode::ReleaseTemps
-            {
-                if release.op1_type != OpType::Tmp
-                    || release.op2_type != OpType::Tmp
-                    || release.op1 >= release.op2
-                    || fetch.result < release.op1
-                    || fetch.result >= release.op2
-                    || add.result < release.op1
-                    || add.result >= release.op2
-                {
-                    return None;
+        if let Some((_, next_cursor)) = object_array_add_consumer_at(op_array, cursor) {
+            for ip in cursor + 2..next_cursor {
+                if op_array.instructions[ip].opcode == OpCode::ReleaseTemps {
+                    consumer_release_ips.push(ip);
                 }
-                consumer_release_ips[add_count] = next_cursor;
-                next_cursor += 1;
             }
             add_count += 1;
             cursor = next_cursor;
@@ -292,7 +309,7 @@ pub fn detect_object_array_consumer_span(op_array: &OpArray, init_ip: usize) -> 
     for (ip, instruction) in op_array.instructions.iter().enumerate() {
         if ip == assign_ip
             || assignment_release_ip == Some(ip)
-            || consumer_release_ips[..add_count].contains(&ip)
+            || consumer_release_ips.contains(&ip)
             || fetch_ips[..fetch_count].contains(&ip)
         {
             continue;

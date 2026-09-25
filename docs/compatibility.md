@@ -7,49 +7,63 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-continuation-remainder` checkpoint over `091d3d47` adds **9 exact
-PHP 8.5 passes without loss**. GC destructors invoked inside Fibers use
-independent, resumable VM contexts, retain their receivers and expose their
-engine trace through forced closure. Consumed binary/append temporaries retire
-at their operand boundary; callback globals survive intermediate scopes.
-Tick switching and undersized Fiber stacks fail without consuming Fiber state.
-Internal frames are excluded from user-op-array access during nested callbacks.
+The `core-completion-remainder` checkpoint over `953a21c8` adds **3 exact
+PHP 8.5 passes without loss**. Consumed receivers and operand trees retire
+before result consumption without destroying externally shared children or
+abandoning a pending outer call. Array replacement commits before displaced
+destructors run and retains the assigned reference across their mutations.
+Borrowed closure captures acquire ownership before reference promotion.
+Unused typed reference returns are validated after `finally`, retaining their
+return origin in an anonymous activation slot, not a visible PHP variable.
+Object projections distinguish stored properties from readable virtual hooks.
 
-The complete measured 7,174-case stable core is **6,762 pass / 20 fail / 183
+The complete measured 7,174-case stable core is **6,765 pass / 17 fail / 183
 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,284/20/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,753 accepted parent passes remain passes. The unchanged timeout is
-`Zend/tests/new_oom.phpt`; it is not counted as a pass or hidden by an exclusion.
+**5,287/17/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,762 accepted parent passes remain passes. The exact gains are
+`oss_fuzz_438780145`, `property_hooks/dump` and
+`temporary_cleaning/temporary_cleaning_009` under `Zend/tests`.
+The unchanged `Zend/tests/new_oom.phpt` timeout remains explicit.
 
-Eleven original E2E cases match PHP 8.5.11 stdout, stderr and exit status
-byte-exactly. The frozen-source full Cargo matrix passed: default **6,101**,
-no-default **5,767**, erased **6,172**, reified **6,194**, all-features
-**6,245**; existing ignored counts are 15/15/15/15/18. All-feature/all-target,
-exact PHPT no-loss, Composer/Symfony S0--S3, formatting, public-data hygiene
-and unsafe policy passed. Production unsafe inventory stays at **1,627
-blocks / 289 functions**. Host gates use a 6 GiB aggregate memory limit,
-no swap, two build/test workers and at most four PHPT workers; cleanup runs
-between large configurations. No OOM kill occurred in the final packet.
+Nineteen original E2E cases match PHP 8.5.11 stdout, stderr and exit status
+byte-exactly. The frozen-source full Cargo matrix passed under `test-fast`
+(debug assertions and overflow checks enabled): default **6,122**, no-default
+**5,788**, erased **6,193**, reified **6,215**, all-features **6,266**;
+existing ignored counts remain 15/15/15/15/18. Negative planner tests ensure
+that lifetime-marker admission cannot retire live receivers or results.
+All-feature/all-target, exact PHPT no-loss, Composer/Symfony S0--S3,
+formatting, public-data hygiene and unsafe policy passed. Production unsafe
+inventory stays at **1,627 blocks / 289 functions**. Host gates use a 6 GiB
+aggregate memory limit, no swap, two build/test workers and at most four PHPT
+workers. Automatic cleanup retains a safe disk reserve between configurations;
+the final packet completed without an OOM kill.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `f3b4305c721f9db0fed3ccf3931e9f4833731ae03e16cb1f106b35fcb8acfe15`;
+candidate `eaca832ed8c5f993b99c4cbd9b5212db3c6a573a70532429078d26ae61739134`;
 parent/candidate full manifests
-`908ebeec66b1f5d2beb439bdc42b51de60e69585a10b837a271821e1177cfded` /
-`7c5092ff03aa7e1d2c43e59a59c3232d39f2074a68cc47c2c53e3a41b94d015f`;
+`7c5092ff03aa7e1d2c43e59a59c3232d39f2074a68cc47c2c53e3a41b94d015f` /
+`c4fc04102948f68f5f86f214c490ab1c1665fe6822bd816444e5dfb2443416c1`;
 Zend/lang pass set
-`ecd19962f268e4d56a894d4b382ec3eb6cf8146b3a6ec216dbb7f1fb42ffacc3`;
+`44ed6c01431aa811e14d285c0d3db0f8659140fd4965cc3d82cb5d247010c333`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`af1351dc424e7917bda5f1bb94e2a4c4dd02c782e543d5a4b084e9a2dda98aa1`;
+`a154f228fe777d5005eef5fd72111598fecdf53cf282be02dc67ee72cad1fed2`;
 original oracle packet
-`f766dbc681ce38fb9e3e072a65ccc1f96453adf23aac9b70a93d5d67ff27f456`.
+`98a021132eda3b3006719f466ac413f395494e3728a035fa391c7f9efe816cb1`.
 
-Performance remains deferred by user direction. Arbitrary native-callback
-suspension, remaining GC ordering and allocation-limit/OOM equivalence are
-not claimed. Phar, PCRE and Date/DateTime remain outside this core train.
-Continue from 20 measured failures plus the explicit OOM timeout; skips and
-unsupported cases are not compatibility successes.
+Performance remains deferred by user direction. Remaining failed-write error
+priority, GC ordering, arbitrary native-callback suspension and allocation-limit
+equivalence are not claimed. Phar, PCRE and Date/DateTime remain outside this
+core train. Continue from 17 measured failures plus the explicit OOM timeout;
+skips and unsupported cases are not compatibility successes.
+
+### Preceding continuation checkpoint
+
+The `core-continuation-remainder` checkpoint over `091d3d47` added nine exact
+passes, reaching 6,762 passes and 20 failures without loss. It aligned GC
+destructor Fiber contexts, force-close traces, operand lifetimes, callback
+globals, tick switching and Fiber stack-size admission.
 
 ### Preceding lifecycle checkpoint
 

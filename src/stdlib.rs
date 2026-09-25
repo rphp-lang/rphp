@@ -13703,6 +13703,9 @@ fn fn_get_object_vars(
             continue;
         };
         declared_names.insert(definition.name.clone());
+        if definition.is_virtual_hook_property() && !definition.has_get_hook {
+            continue;
+        }
         if !definition.has_get_hook {
             let Some(object) = target.as_object() else {
                 continue;
@@ -21196,6 +21199,9 @@ fn var_export_object_properties(value: &Value, eg: &mut ExecutorGlobals) -> Resu
     for slot in slots {
         let definition = &definitions[slot];
         declared_names.insert(definition.name.clone());
+        if definition.is_virtual_hook_property() && !definition.has_get_hook {
+            continue;
+        }
         let property = if definition.has_get_hook {
             crate::vm::execute::call_object_property_get_hook(
                 eg,
@@ -21982,6 +21988,9 @@ fn project_ordinary_json_object(
             .expect("visible JSON property slot must retain its definition")
             .clone();
         declared_names.insert(definition.name.clone());
+        if definition.is_virtual_hook_property() && !definition.has_get_hook {
+            continue;
+        }
         let property = if definition.has_get_hook {
             crate::vm::execute::call_object_property_get_hook(
                 eg,

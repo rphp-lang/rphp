@@ -2067,6 +2067,10 @@ where
         // and its real call site. A non-empty trace belongs to a deeper frame
         // and must retain that immutable creation snapshot.
         let needs_detached_trace = callback_threw
+            // A published logical caller already participated in the
+            // immutable creation snapshot. An empty trace in that case may
+            // belong to an exception created in main and rethrown here.
+            && !publish_live_trace_caller
             && !trace_caller.is_null()
             && eg.exception.as_ref().is_some_and(|exception| {
                 exception.as_object().is_some_and(|object| {

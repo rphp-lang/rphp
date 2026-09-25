@@ -183,6 +183,27 @@ pub fn detect_foreach_object_property_accumulate_loop(
         term_type = combine.result_type;
         term_slot = combine.result;
         cursor = next_cursor + 1;
+        if let Some(release) = op_array.instructions.get(cursor)
+            && release.opcode == OpCode::ReleaseTemps
+        {
+            // Both projections are guarded scalar reads. Only their owned
+            // temporaries may be retired here; the receiver and foreach
+            // state must remain live, including on an arithmetic side exit.
+            if release._pad != crate::vm::instruction::RELEASE_TEMPS_SUBEXPRESSION
+                || release.op1_type != OpType::Tmp
+                || release.op2_type != OpType::Tmp
+                || release.result_type != OpType::Unused
+                || release.op1 >= release.op2
+                || (release.op1..release.op2).any(|slot| {
+                    !projections.iter().flatten().any(|projection| {
+                        slot == projection.fetch_tmp || slot == projection.result_tmp
+                    })
+                })
+            {
+                return None;
+            }
+            cursor += 1;
+        }
     }
 
     let sum = *op_array.instructions.get(cursor)?;
@@ -288,7 +309,7 @@ foreach ($rows as $row) {
         let tokens = Lexer::new(source).tokenize().unwrap();
         let statements = Parser::new(tokens).parse().unwrap();
         let result = Compiler::new().compile(&statements).unwrap();
-        let main = make_user_function(result.main);
+        let mut main = make_user_function(result.main);
         let plan = main
             .op_array
             .instructions
@@ -329,6 +350,37 @@ foreach ($rows as $row) {
         assert!(plan.term_tmp.is_some());
         assert!(plan.term_ip.is_some());
 
+        let release_ip = plan.term_ip.unwrap() + 1;
+        assert_eq!(
+            main.op_array.instructions[release_ip].opcode,
+            OpCode::ReleaseTemps
+        );
+        let backedge = main
+            .op_array
+            .instructions
+            .iter()
+            .enumerate()
+            .find_map(|(ip, instruction)| {
+                (matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                    && usize::from(instruction.op1) == plan.header_ip)
+                    .then_some(ip)
+            })
+            .unwrap();
+        let original_release = main.op_array.instructions[release_ip];
+        let malformed = &mut main.op_array;
+        malformed.instructions[release_ip].op1 = plan.receiver_cv;
+        assert!(
+            detect_foreach_object_property_accumulate_loop(&malformed, plan.header_ip, backedge,)
+                .is_none()
+        );
+        malformed.instructions[release_ip] = original_release;
+        malformed.instructions[release_ip].op2 = plan.term_tmp.unwrap() + 1;
+        assert!(
+            detect_foreach_object_property_accumulate_loop(&malformed, plan.header_ip, backedge,)
+                .is_none()
+        );
+
+        malformed.instructions[release_ip] = original_release;
         #[cfg(feature = "quick-loops")]
         assert!(main.op_array.block_plans.iter().any(|block_plan| matches!(
             block_plan,

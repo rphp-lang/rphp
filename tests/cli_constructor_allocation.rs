@@ -143,3 +143,38 @@ fn prepared_argument_snapshot_cannot_escape_virtual_region() {
     op_array.instructions.push(observation);
     assert!(quick::detect_virtual_object_array_pipeline_span(&op_array, prepare).is_none());
 }
+
+#[test]
+fn scalar_consumer_cleanup_cannot_retire_a_live_receiver_or_result() {
+    use rphp::vm::{
+        instruction::{NEW_FLAG_PREPARE_ONLY, OpType, RELEASE_TEMPS_SUBEXPRESSION},
+        opcode::OpCode,
+        quick,
+    };
+    let source = pipeline_op_array(include_str!("../benches/corpus_order_pipeline.php"));
+    let prepare = (0..source.instructions.len())
+        .find(|&ip| {
+            source.instructions[ip]._pad & NEW_FLAG_PREPARE_ONLY != 0
+                && quick::detect_virtual_object_array_pipeline_span(&source, ip).is_some()
+        })
+        .unwrap();
+    let release_ip = (prepare..source.instructions.len())
+        .find(|&ip| {
+            let instruction = &source.instructions[ip];
+            instruction.opcode == OpCode::ReleaseTemps
+                && instruction._pad == RELEASE_TEMPS_SUBEXPRESSION
+                && matches!(
+                    source.instructions[ip - 1].opcode,
+                    OpCode::Add | OpCode::Add_CvTmp | OpCode::Add_TmpTmp
+                )
+        })
+        .unwrap();
+    for slot in [0, source.instructions[release_ip - 1].result] {
+        let mut changed = pipeline_op_array(include_str!("../benches/corpus_order_pipeline.php"));
+        changed.instructions[release_ip].op1_type = OpType::Tmp;
+        changed.instructions[release_ip].op2_type = OpType::Tmp;
+        changed.instructions[release_ip].op1 = slot;
+        changed.instructions[release_ip].op2 = slot + 1;
+        assert!(quick::detect_virtual_object_array_pipeline_span(&changed, prepare).is_none());
+    }
+}

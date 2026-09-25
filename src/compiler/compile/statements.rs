@@ -2136,18 +2136,10 @@ impl Compiler {
                 self.guard_diagnostic_dimension_assignment(&path, &mut assign);
                 self.push_instruction_at_line(assign, path.source_line);
 
-                let mut bind = Instruction::new(OpCode::BindArrayDimRef);
-                bind.op1 = container;
-                bind.op1_type = container_type;
-                bind.op2 = key;
-                bind.op2_type = key_type;
-                bind.result = source;
-                bind.result_type = OpType::Cv;
-                if source_is_internal {
-                    bind._pad |= REFERENCE_RESULT_INTERNAL;
-                }
-                self.push_instruction_at_line(bind, path.source_line);
-
+                // AssignDim already promotes and installs the source cell.
+                // Re-fetching the target here could rebind that source to a
+                // different value after a displaced destructor changed the
+                // container. The expression retains the committed RHS cell.
                 self.rebuild_mutable_array_path(&path);
                 self.write_back_mutable_array_root(&path);
             }
