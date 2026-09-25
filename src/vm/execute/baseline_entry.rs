@@ -2576,14 +2576,21 @@ fn force_close_generator_activation(
         return Ok(());
     };
 
-    // A force-close is represented as a value-less non-local return. The
-    // ordinary finally completion machinery already walks nested outer
-    // finally ranges and retires the detached frame at the last marker.
+    // A synthetic force-close return must not replace a throw already
+    // suspended by an enclosing finally. Crossing the newly selected inner
+    // finally resumes that throw; a real user return still takes precedence.
+    // With no further finally to enter, the abandoned completion above stays
+    // discarded, just like the abandoned generator body.
+    let resume_return = gen_ref.borrow().pending_return_after_finally
+        || eg
+            .finally_exceptions
+            .get(&(frame as usize))
+            .is_none_or(Vec::is_empty);
     unsafe {
-        (*frame).pending_return_after_finally = true;
+        (*frame).pending_return_after_finally = resume_return;
         (*frame).opline = user.op_array.instructions.as_ptr().add(finally_start);
     }
-    gen_ref.borrow_mut().pending_return_after_finally = true;
+    gen_ref.borrow_mut().pending_return_after_finally = resume_return;
     match execute_resumed_generator_frame(
         eg,
         gen_ref,

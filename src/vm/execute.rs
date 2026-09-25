@@ -666,7 +666,11 @@ fn write_array_union_result(
     // frame; frame_tmp_set records the new array owner in the cleanup bitmap.
     unsafe {
         let result_ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS + result as usize);
-        frame_tmp_set(frame, result_ptr, Value::array(left.union(right)));
+        frame_tmp_set(
+            frame,
+            result_ptr,
+            Value::array_from_storage_copy(left.union(right), left),
+        );
     }
 }
 

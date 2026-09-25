@@ -8594,6 +8594,9 @@ pub(crate) fn initialize_lazy_object(
     } else {
         return Ok(object.clone());
     }
+    let properties_materialized = eg
+        .lazy_object_state(object)
+        .is_some_and(|state| state.properties_materialized.get());
     let property_snapshot = snapshot_lazy_property_storage(object);
     let Some((strategy, initializer, lazy_slots_before)) =
         eg.lazy_object_state_mut(object).map(|state| {
@@ -8623,18 +8626,27 @@ pub(crate) fn initialize_lazy_object(
     }
 
     let strong_before_initializer = object.object_strong_count();
+    if strategy == LazyObjectStrategy::Ghost && properties_materialized {
+        object
+            .as_object_mut()
+            .unwrap()
+            .set_lazy_property_table_snapshot(true);
+    }
     let result = match strategy {
-        LazyObjectStrategy::Ghost => crate::stdlib::call_resolved_with_values(
-            eg,
-            &initializer,
-            std::slice::from_ref(object),
-        )?,
-        LazyObjectStrategy::Proxy => crate::stdlib::call_resolved_with_values(
-            eg,
-            &initializer,
-            std::slice::from_ref(object),
-        )?,
+        LazyObjectStrategy::Ghost => {
+            crate::stdlib::call_resolved_with_values(eg, &initializer, std::slice::from_ref(object))
+        }
+        LazyObjectStrategy::Proxy => {
+            crate::stdlib::call_resolved_with_values(eg, &initializer, std::slice::from_ref(object))
+        }
     };
+    if strategy == LazyObjectStrategy::Ghost && properties_materialized {
+        object
+            .as_object_mut()
+            .unwrap()
+            .set_lazy_property_table_snapshot(false);
+    }
+    let result = result?;
     // The VM retains one operation-local handle while the initializer runs;
     // property writeback may retain a second. Releasing the last user handle
     // therefore appears as a two-to-one or three-to-two transition. A live

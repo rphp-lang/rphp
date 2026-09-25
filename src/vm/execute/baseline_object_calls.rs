@@ -3560,7 +3560,7 @@ fn op_unset_obj<'a>(
             "Cannot access property starting with \"\\0\"".into(),
         )?);
     }
-    let _ = call_guarded_property_magic_method(
+    let handled = call_guarded_property_magic_method(
         eg,
         magic_receiver,
         &name,
@@ -3570,6 +3570,12 @@ fn op_unset_obj<'a>(
     )?;
     if let Some(result) = take_magic_exception(eg, frame)? {
         return Ok(result);
+    }
+    if handled.is_none() && object.as_object().unwrap().property_slot(&key).is_none() {
+        // A missing dynamic unset still crosses the writable property-table
+        // boundary. During lazy initialization that separates its rollback
+        // snapshot, without invoking magic or changing declared slot values.
+        object.as_object_mut().unwrap().remove_dynamic_property(&key);
     }
     Ok(ColdResult::Done)
 }

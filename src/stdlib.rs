@@ -1281,7 +1281,7 @@ fn array_unshift_values(
         }
     }
     copy_array_key_provenance(array, &result);
-    *arr = Value::array(result);
+    arr.replace_array_for_splice(result, 0, 0, inserted);
     if inserted != 0 {
         crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
             eg, ed, 0, 0, 0, inserted,
@@ -4750,7 +4750,7 @@ fn fn_array_splice(
         removed.mark_utf8_text_keys();
     }
 
-    *target = Value::array(result);
+    target.replace_array_for_splice(result, start, removed_len, replacement_len);
     crate::vm::execute::adjust_live_foreach_reference_positions_for_splice(
         eg,
         ed,
@@ -20330,6 +20330,9 @@ fn var_dump_value_inner(
             let lazy_state = eg
                 .lazy_object_state(val)
                 .filter(|state| !state.initializing);
+            if let Some(state) = lazy_state {
+                state.properties_materialized.set(true);
+            }
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
             let projection = builtin_classes::fixed_array::debug_projection(val, eg)
                 .or_else(|| builtin_classes::array_object::debug_projection(val, eg))

@@ -36,14 +36,16 @@ fn foreach_iterator_owner(
 #[inline(always)]
 fn foreach_owned_iterator(value: &Value) -> *const Value {
     let object = value.as_object().expect("protocol consumer owns an object");
-    object.get_property_slot(0).expect("protocol consumer retains its Iterator") as *const Value
+    object
+        .get_property_slot(0)
+        .expect("protocol consumer retains its Iterator") as *const Value
 }
 
 #[inline]
 fn foreach_state_owns_iterator(value: &Value) -> bool {
-    value.as_object().is_some_and(|object| {
-        object.class_name.is_empty() && object.get_property_slot(0).is_some()
-    })
+    value
+        .as_object()
+        .is_some_and(|object| object.class_name.is_empty() && object.get_property_slot(0).is_some())
 }
 
 /// The private envelope has exactly one edge and cannot have PHP hooks.
@@ -956,10 +958,17 @@ fn set_foreach_iteration_state(
             let source = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
             frame_tmp_take!(frame, source)
         });
+        let reference_cursor = (iterable.is_reference()
+            && iterable.dereferenced().as_array().is_some())
+        .then(|| Value::reference_foreach_cursor(&iterable));
         let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
         frame_result_set(frame, result, opline.result_type, iterable);
         let cursor = (*frame).get_op_mut(opline.extended_value, OpType::Tmp);
-        frame_tmp_set_long(frame, cursor, position);
+        if let Some(reference_cursor) = reference_cursor {
+            frame_result_set(frame, cursor, OpType::Tmp, reference_cursor);
+        } else {
+            frame_tmp_set_long(frame, cursor, position);
+        }
     }
 }
 
@@ -1007,23 +1016,23 @@ fn adjust_live_foreach_reference_positions(
                         {
                             continue;
                         }
-                        let iteration_state = &*(*frame).get_op_ptr(
-                            next.op1 as u32,
-                            next.op1_type,
-                            op_array,
-                        );
+                        let iteration_state =
+                            &*(*frame).get_op_ptr(next.op1 as u32, next.op1_type, op_array);
                         if iteration_state.reference_identity() != target_reference
                             && iteration_state.dereferenced().array_identity() != target_array
                         {
                             continue;
                         }
-                        let position = &*(*frame).get_op_ptr(
-                            next.op2 as u32,
-                            next.op2_type,
-                            op_array,
-                        );
-                        let Some(position) = position
-                            .as_long()
+                        let position =
+                            &*(*frame).get_op_ptr(next.op2 as u32, next.op2_type, op_array);
+                        if let Some(translated) = position.reference_foreach_position(iteration_state) {
+                            // Canonical array storage already translated all
+                            // tracked cursors, including suspended/COW copies.
+                            let slot = (*frame).get_op_mut(next.op2 as u32, next.op2_type);
+                            (&mut *slot).set_reference_foreach_position(translated as i64);
+                            continue;
+                        }
+                        let Some(position) = position.dereferenced().as_long()
                             .and_then(|position| usize::try_from(position).ok())
                         else {
                             continue;
@@ -1035,13 +1044,11 @@ fn adjust_live_foreach_reference_positions(
                         let adjusted = position
                             .saturating_sub(removed_before_position)
                             .saturating_add(inserted);
-                        let position_slot =
-                            (*frame).get_op_mut(next.op2 as u32, next.op2_type);
-                        frame_tmp_set_long(
-                            frame,
-                            position_slot,
-                            i64::try_from(adjusted).unwrap_or(i64::MAX),
-                        );
+                        let position_slot = (*frame).get_op_mut(next.op2 as u32, next.op2_type);
+                        let adjusted = i64::try_from(adjusted).unwrap_or(i64::MAX);
+                        if !(&mut *position_slot).set_reference_foreach_position(adjusted) {
+                            frame_tmp_set_long(frame, position_slot, adjusted);
+                        }
                     }
                 }
             }
@@ -1255,11 +1262,8 @@ fn flush_foreach_reference_value(
     // written only into the detached iteration array at the preceding valid
     // position, which `ForeachNextRef` advanced after reading an element.
     unsafe {
-        let position = (&*(*frame).get_op_ptr(
-            position_operand as u32,
-            position_type,
-            op_array,
-        ))
+        let position = (&*(*frame).get_op_ptr(position_operand as u32, position_type, op_array))
+            .dereferenced()
             .as_long()
             .unwrap_or(0);
         if position <= 0 {
@@ -1382,7 +1386,11 @@ fn op_foreach_init<'a>(
             "getIterator",
             &[],
         )?
-        .ok_or_else(|| VmError::Fatal(format!("Call to undefined method {class_name}::getIterator()")))?;
+        .ok_or_else(|| {
+            VmError::Fatal(format!(
+                "Call to undefined method {class_name}::getIterator()"
+            ))
+        })?;
         if let Some(exception) = eg.exception.take() {
             return Ok(match throw_in_frame(eg, frame, exception)? {
                 ThrowResult::Handled(new_frame, new_op_array) => {
@@ -1758,16 +1766,10 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
     // SAFETY: both operands are compiler-owned slots in this live frame. A
     // negative cursor proves an internal consumer with an immutable slot 0;
     // neither shared borrow is used after an exception transfers control.
-    let (iteration_state, cursor, source) = unsafe {
-        let iteration_state =
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
-        let cursor = (&*(*frame).get_op_ptr(
-            opline.op2 as u32,
-            opline.op2_type,
-            op_array,
-        ))
-            .as_long()
-            .unwrap_or(0);
+    let (iteration_state, cursor, cursor_value, source) = unsafe {
+        let iteration_state = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        let cursor_value = &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array);
+        let cursor = cursor_value.dereferenced().as_long().unwrap_or(0);
         // The private owner slot never escapes or changes while this TMP
         // is live. End its RefCell guard before invoking callbacks: a thrown
         // exception can retire the TMP. No source read follows that transfer.
@@ -1776,7 +1778,7 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         } else {
             iteration_state.dereferenced()
         };
-        (iteration_state, cursor, source)
+        (iteration_state, cursor, cursor_value, source)
     };
     let lazy_source_owner = eg.lazy_object_state(source).map(|_| source.clone());
     let source = lazy_source_owner.as_ref().unwrap_or(source);
@@ -1791,45 +1793,54 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
         return Ok(control);
     }
     let arr_val = initialized_source.as_ref().unwrap_or(source);
+    let cursor = if BY_REFERENCE_LOOP {
+        cursor_value
+            .reference_foreach_position(arr_val)
+            .map(|position| position as i64)
+            .unwrap_or(cursor)
+    } else {
+        cursor
+    };
     if cursor <= i64::MIN + 1 {
         return next_native_foreach(
-            eg, frame, op_array, opline, arr_val, cursor == i64::MIN,
-            BY_REFERENCE_LOOP, ASSIGN_THROUGH_REFERENCE,
+            eg,
+            frame,
+            op_array,
+            opline,
+            arr_val,
+            cursor == i64::MIN,
+            BY_REFERENCE_LOOP,
+            ASSIGN_THROUGH_REFERENCE,
         );
     }
     // Check for Generator object
     let gen_ref_opt = if let Some(obj) = arr_val.as_object() {
         if obj.class_name.as_ref() == "Generator" {
-            arr_val.as_object_rc().and_then(|rc| rc.borrow().generator.clone())
-        } else { None }
-    } else { None };
+            arr_val
+                .as_object_rc()
+                .and_then(|rc| rc.borrow().generator.clone())
+        } else {
+            None
+        }
+    } else {
+        None
+    };
     let has_more = if cursor < 0 {
         if cursor < -1 {
-            let _ = crate::stdlib::call_object_protocol_method(
-                eg,
-                arr_val,
-                "Iterator",
-                "next",
-                &[],
-            )?;
+            let _ =
+                crate::stdlib::call_object_protocol_method(eg, arr_val, "Iterator", "next", &[])?;
             if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                 return Ok(control);
             }
         }
-        let valid = crate::stdlib::call_object_protocol_method(
-            eg,
-            arr_val,
-            "Iterator",
-            "valid",
-            &[],
-        )?
-        .unwrap_or_else(|| Value::bool(false));
+        let valid =
+            crate::stdlib::call_object_protocol_method(eg, arr_val, "Iterator", "valid", &[])?
+                .unwrap_or_else(|| Value::bool(false));
         if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
             return Ok(control);
         }
         if cursor == -1
-            && let Some(control) =
-                release_temporary_foreach_aggregate(eg, frame, op_array, opline)?
+            && let Some(control) = release_temporary_foreach_aggregate(eg, frame, op_array, opline)?
         {
             return Ok(control);
         }
@@ -1945,6 +1956,9 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                             .as_array_mut()
                             .and_then(|array| array.argument_unpack_reference_at(pos))
                             .expect("live foreach position must remain addressable");
+                        // Promotion can separate COW storage. Select that
+                        // copy before publishing this step's advanced cursor.
+                        cursor_value.reference_foreach_position(iteration_state);
                         bind_foreach_value_cv(eg, frame, val_cv, value)?;
                         if let Some(control) = take_foreach_protocol_exception(eg, frame)? {
                             return Ok(control);
@@ -1995,12 +2009,14 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                         }
                     }
                     let pos_ptr = (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
-                    frame_result_set(
-                        frame,
-                        pos_ptr,
-                        opline.op2_type,
-                        Value::long((pos + 1) as i64),
-                    );
+                    if !(&mut *pos_ptr).set_reference_foreach_position((pos + 1) as i64) {
+                        frame_result_set(
+                            frame,
+                            pos_ptr,
+                            opline.op2_type,
+                            Value::long((pos + 1) as i64),
+                        );
+                    }
                     true
                 }
             } else {
@@ -2014,29 +2030,37 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
                 .as_object()
                 .map(|object| object.class_id)
                 .unwrap_or(0);
-            let compact_slot_count = {
-                let object = arr_val.as_object().unwrap();
-                if object.has_detached_property_table()
-                    && !eg.class_by_id(class_id).is_some_and(|class| class.properties.iter().any(|p| p.has_get_hook || p.has_set_hook))
+            let compact_slot_count =
                 {
-                    Some(0)
-                } else {
-                eg.class_by_id(class_id)
-                    .filter(|class| {
-                        class.parent.is_none()
-                            && class.properties.iter().all(|definition| {
-                                definition.visibility == Visibility::Public
+                    let object = arr_val.as_object().unwrap();
+                    if object.has_detached_property_table()
+                        && !eg.class_by_id(class_id).is_some_and(|class| {
+                            class
+                                .properties
+                                .iter()
+                                .any(|p| p.has_get_hook || p.has_set_hook)
+                        })
+                    {
+                        Some(0)
+                    } else {
+                        eg.class_by_id(class_id)
+                            .filter(|class| {
+                                class.parent.is_none()
+                                    && class.properties.iter().all(|definition| {
+                                        definition.visibility == Visibility::Public
+                                    })
+                                    && class.properties.iter().enumerate().all(
+                                        |(slot, definition)| {
+                                            (!object.property_values[slot].is_undef()
+                                                || definition.has_get_hook)
+                                                && (!definition.is_virtual_hook_property()
+                                                    || definition.has_get_hook)
+                                        },
+                                    )
                             })
-                            && class.properties.iter().enumerate().all(|(slot, definition)| {
-                                (!object.property_values[slot].is_undef()
-                                    || definition.has_get_hook)
-                                    && (!definition.is_virtual_hook_property()
-                                        || definition.has_get_hook)
-                            })
-                    })
-                    .map(|class| class.properties.len())
-                }
-            };
+                            .map(|class| class.properties.len())
+                    }
+                };
             let slots = compact_slot_count.is_none().then(|| {
                 eg.visible_instance_property_slots(class_id, caller_class.as_deref())
                     .into_iter()

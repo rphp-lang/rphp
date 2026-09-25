@@ -641,6 +641,7 @@ pub(crate) struct LazyObjectState {
     pub(crate) initializer_value: crate::value::Value,
     pub(crate) initializer: crate::stdlib::ResolvedCallback,
     pub(crate) initializing: bool,
+    pub(crate) properties_materialized: std::cell::Cell<bool>,
     pub(crate) lazy_slots: Vec<usize>,
     pub(crate) proxy_instance: Option<crate::value::Value>,
     pub(crate) options: u8,
@@ -1583,6 +1584,11 @@ impl ExecutorGlobals {
                     initializer_value,
                     initializer,
                     initializing: false,
+                    properties_materialized: std::cell::Cell::new(
+                        object
+                            .as_object()
+                            .is_some_and(|object| object.dynamic_properties.is_some()),
+                    ),
                     lazy_slots,
                     proxy_instance: None,
                     options,
@@ -1815,6 +1821,7 @@ impl ExecutorGlobals {
                     initializer_value: crate::value::Value::null(),
                     initializer,
                     initializing: false,
+                    properties_materialized: std::cell::Cell::new(false),
                     lazy_slots: Vec::new(),
                     proxy_instance: Some(cloned_instance),
                     options,

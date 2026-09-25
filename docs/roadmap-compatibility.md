@@ -36,29 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-finalization-remainder` checkpoint over `ffc4589d` adds **3 exact
-passes without loss**. The complete 7,174-case stable core is **6,768 pass /
-14 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,290/14/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
+The `core-suspended-state-remainder` checkpoint over `95ad53db` adds **3 exact
+passes without loss**. The complete 7,174-case stable core is **6,771 pass /
+11 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
+**5,293/11/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
 The shared `new_oom.phpt` timeout stays explicit, never a pass.
 
-The slice preserves destructor-created roots through one bounded collector
-rerun and completes failed property inc/dec writes with PHP's error priority,
-storage state and setter suppression. Sixteen new original E2E cases plus
-nineteen preceding cases match the PHP oracle byte-exactly; five complete Cargo
+The slice preserves pending generator-finally throws, reference-foreach cursor
+positions across replacement/COW/suspension, and lazy-object property-table
+snapshots. Seventeen new E2E cases, thirty-five preceding cases and twenty-eight
+boundary probes match the PHP oracle byte-exactly; five complete Cargo
 configurations, all-targets, exact no-loss, Composer/Symfony S0--S3 and
 unsafe/public hygiene pass. No new unsafe blocks or ignored tests were
 introduced. Exact hashes, counts and non-claims are recorded in
 [compatibility status](compatibility.md).
 
-Continue the core sweep from **14 failures plus the OOM timeout**, prioritizing
-generator finally completion, reference-iterator source replacement and remaining
-object-state/projection boundaries, then automatic GC and native-callback
-suspension. Keep library-owned holdouts distinct from core execution work.
+Continue the core sweep from **11 failures plus the OOM timeout**, prioritizing
+failed static-initializer retirement and nested string-address diagnostics,
+then automatic GC admission and native-callback suspension. Keep library-owned
+holdouts distinct from core execution work.
 Phar, PCRE and Date/DateTime remain outside this stream. Preserve the exact
-5,290 and 1,478 pass sets. Aggregate performance remains deferred by user
+5,293 and 1,478 pass sets. Aggregate performance remains deferred by user
 direction. Host gates must retain aggregate memory/process containment and
 automatic build cleanup.
+
+### Preceding finalization checkpoint
+
+The `core-finalization-remainder` checkpoint over `ffc4589d` added three exact
+passes without loss, reaching 6,768 passes and 14 failures. It preserved
+destructor-created roots and completed failed property inc/dec writes.
 
 ### Preceding expression-completion checkpoint
 

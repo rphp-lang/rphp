@@ -9,6 +9,7 @@ use std::rc::Rc;
 
 mod native_array_iteration;
 mod native_iterator_delegate;
+mod reference_array_iteration;
 pub(crate) use native_array_iteration::{
     NativeArrayBuckets, NativeArrayCursor, NativeArrayIteration,
 };
@@ -615,6 +616,7 @@ struct DynamicPropertyAux {
     // Native raw-table sorting detaches the enumerated property table from
     // declared slots. Values remain in the ordinary traced dynamic map.
     detached_property_table: bool,
+    lazy_property_table_snapshot: bool,
     native_array_options: NativeArrayOptions,
     native_array_iteration: Option<Box<NativeArrayIteration>>,
     native_iterator_delegate: Option<Box<NativeIteratorDelegate>>,
@@ -665,6 +667,7 @@ impl DynamicPropertyAux {
             property_guards: HashMap::new(),
             object_cursor: OBJECT_CURSOR_UNTOUCHED,
             detached_property_table: false,
+            lazy_property_table_snapshot: false,
             native_array_options: NativeArrayOptions::default(),
             native_array_iteration: None,
             native_iterator_delegate: None,
@@ -1093,6 +1096,7 @@ impl DynamicPropertyMap {
             && auxiliary.native_iterator_delegate.is_none()
             && auxiliary.native_object_state.is_none()
             && !auxiliary.detached_property_table
+            && !auxiliary.lazy_property_table_snapshot
         {
             self.auxiliary = None;
         }
@@ -2070,13 +2074,64 @@ impl PhpObject {
         if let Some(slot) = self.property_layout.slot(key) {
             self.property_values.get_mut(slot)
         } else {
-            self.dynamic_properties.as_mut()?.get_mut(key)
+            self.get_dynamic_property_mut(key)
         }
     }
 
     #[inline]
     pub(crate) fn get_dynamic_property_mut(&mut self, key: &str) -> Option<&mut Value> {
+        self.prepare_lazy_property_table_write();
         self.dynamic_properties.as_mut()?.get_mut(key)
+    }
+
+    /// Lazy rollback retains an already materialized property table while
+    /// the initializer executes. A dynamic write separates that shared table
+    /// into a value snapshot; declared slot reads and writes stay independent.
+    #[cold]
+    pub(crate) fn set_lazy_property_table_snapshot(&mut self, enabled: bool) {
+        if enabled {
+            self.dynamic_properties
+                .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)))
+                .auxiliary
+                .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
+                .lazy_property_table_snapshot = true;
+        } else if let Some(auxiliary) = self
+            .dynamic_properties
+            .as_mut()
+            .and_then(|properties| properties.auxiliary.as_mut())
+        {
+            auxiliary.lazy_property_table_snapshot = false;
+        }
+    }
+
+    #[inline]
+    fn prepare_lazy_property_table_write(&mut self) {
+        if self
+            .dynamic_properties
+            .as_ref()
+            .and_then(|properties| properties.auxiliary.as_ref())
+            .is_some_and(|auxiliary| auxiliary.lazy_property_table_snapshot)
+        {
+            self.detach_lazy_property_table();
+        }
+    }
+
+    #[cold]
+    #[inline(never)]
+    fn detach_lazy_property_table(&mut self) {
+        self.set_lazy_property_table_snapshot(false);
+        if self.has_detached_property_table() {
+            return;
+        }
+        let mut table = DynamicPropertyMap::with_capacity(self.property_values.len());
+        self.for_each_property(|key, value| {
+            if !value.is_undef() {
+                table.insert(key, value.clone_for_php_storage());
+            }
+        });
+        // All old dynamic edges were retained above; this physical table
+        // replacement cannot release their final PHP owner inside the borrow.
+        drop(self.replace_raw_property_table(table));
     }
 
     #[inline]
@@ -2111,6 +2166,7 @@ impl PhpObject {
 
     #[inline]
     pub(crate) fn set_dynamic_property(&mut self, key: &str, value: Value) {
+        self.prepare_lazy_property_table_write();
         self.dynamic_properties
             .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(1)))
             .insert(key, value);
@@ -2118,6 +2174,7 @@ impl PhpObject {
 
     #[inline]
     pub(crate) fn remove_dynamic_property(&mut self, key: &str) -> bool {
+        self.prepare_lazy_property_table_write();
         self.dynamic_properties
             .as_mut()
             .is_some_and(|properties| properties.remove(key))
@@ -2292,9 +2349,7 @@ impl PhpObject {
             self.property_values[slot] = value;
             Some(slot)
         } else {
-            self.dynamic_properties
-                .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(1)))
-                .insert(key, value);
+            self.set_dynamic_property(key, value);
             None
         }
     }
@@ -2311,9 +2366,7 @@ impl PhpObject {
             self.property_values[slot] = Value::explicitly_unset_property();
             true
         } else {
-            self.dynamic_properties
-                .as_mut()
-                .is_some_and(|properties| properties.remove(key))
+            self.remove_dynamic_property(key)
         }
     }
 
@@ -2760,13 +2813,17 @@ const ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED: usize = 1usize << (usize::BITS - 
 // API exposing a mutable element conservatively sets the marker first.
 const ARRAY_NESTED_RELEASE_CANDIDATE: usize = 1usize << (usize::BITS - 6);
 const ARRAY_DEEP_DROP_STACK_CHECKPOINT: usize = 1usize << (usize::BITS - 7);
+// Only live by-reference iteration needs COW/retirement notifications. Keep
+// its sparse registry out of the ordinary 128-byte array representation.
+const ARRAY_REFERENCE_FOREACH: usize = 1usize << (usize::BITS - 8);
 const ARRAY_CURSOR_METADATA: usize = ARRAY_CURSOR_PRISTINE
     | ARRAY_INT_KEY_INITIALIZED
     | ARRAY_EXTERNAL_BYTE_KEYS
     | ARRAY_UTF8_TEXT_KEYS
     | ARRAY_DEFERRED_OBJECT_HANDLES_PUBLISHED
     | ARRAY_NESTED_RELEASE_CANDIDATE
-    | ARRAY_DEEP_DROP_STACK_CHECKPOINT;
+    | ARRAY_DEEP_DROP_STACK_CHECKPOINT
+    | ARRAY_REFERENCE_FOREACH;
 
 /// Fast deterministic hashing for integer-only PHP array keys.
 ///
@@ -3831,10 +3888,23 @@ impl PhpArray {
 
     #[inline]
     fn adjust_cursor_after_remove(&self, removed_position: usize) {
+        self.adjust_reference_foreach_positions(removed_position, 1, 0);
         let metadata = self.cursor.get() & ARRAY_CURSOR_METADATA;
         let current = self.cursor.get() & !ARRAY_CURSOR_METADATA;
         if removed_position < current {
             self.cursor.set(metadata | (current - 1));
+        }
+    }
+
+    #[inline]
+    fn adjust_reference_foreach_positions(&self, start: usize, removed: usize, inserted: usize) {
+        if self.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+            reference_array_iteration::splice(
+                self as *const Self as usize,
+                start,
+                removed,
+                inserted,
+            );
         }
     }
 
@@ -5399,6 +5469,7 @@ impl PhpArray {
                 }
             }
             self.next_int_key = next_int_key;
+            self.adjust_reference_foreach_positions(0, 1, 0);
             return Some(value);
         }
         if let ArrayStorage::LinearHash(linear) = &mut self.storage {
@@ -5415,6 +5486,7 @@ impl PhpArray {
                 }
             }
             self.next_int_key = next_int_key;
+            self.adjust_reference_foreach_positions(0, 1, 0);
             return Some(value);
         }
         if let ArrayStorage::Hash {
@@ -5445,6 +5517,7 @@ impl PhpArray {
             }
             self.next_int_key = new_int_counter;
             *verified_int_prefix = rebuild_int_index(entries, int_index, 0);
+            self.adjust_reference_foreach_positions(0, 1, 0);
             Some(val)
         } else {
             None
@@ -6310,6 +6383,7 @@ impl Value {
     /// preserves that recursive-observation boundary without making the
     /// property readable.
     const RELEASING_UNSET_PROPERTY_FLAG: u32 = 1 << 16;
+    const REFERENCE_FOREACH_CURSOR_FLAG: u32 = 1 << 17;
 
     #[inline]
     pub fn undef() -> Self {
@@ -6616,6 +6690,23 @@ impl Value {
             type_info: ValueType::Array as u32,
             _not_send: PhantomData,
         }
+    }
+
+    /// Publish a physical copy of existing PHP array storage. Active reference
+    /// iterators follow that copy at their saved positions, not at index zero.
+    pub(crate) fn array_from_storage_copy(array: PhpArray, source: &PhpArray) -> Self {
+        let result = Self::array(array);
+        if source.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+            let target = result.as_array().unwrap();
+            target
+                .cursor
+                .set(target.cursor.get() | ARRAY_REFERENCE_FOREACH);
+            reference_array_iteration::copied(
+                source as *const PhpArray as usize,
+                target as *const PhpArray as usize,
+            );
+        }
+        result
     }
 
     /// Reconstitute an array value from the collector's weak owner without
@@ -7364,6 +7455,9 @@ impl Value {
             match self.cycle_node().map(|node| node.1) {
                 Some(CycleNodeKind::Array) => {
                     let array = &mut *(self.data.ptr as *mut PhpArray);
+                    if array.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+                        reference_array_iteration::release_array(array as *const PhpArray as usize);
+                    }
                     array.storage = ArrayStorage::Packed(Vec::new());
                     array.next_int_key = 0;
                     array.cursor.set(0);
@@ -7747,6 +7841,12 @@ impl Value {
                 let cloned = (*rc_ptr).clone();
                 Rc::decrement_strong_count(rc_ptr as *const PhpArray);
                 let new_rc = Rc::new(cloned);
+                if new_rc.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+                    reference_array_iteration::copied(
+                        rc_ptr as usize,
+                        Rc::as_ptr(&new_rc) as usize,
+                    );
+                }
                 self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
                 &mut *(self.data.ptr as *mut PhpArray)
             };
@@ -8175,6 +8275,84 @@ impl Value {
             type_info: ValueType::Reference as u32 | Self::OWNED_REFERENCE_FLAG,
             _not_send: PhantomData,
         }
+    }
+
+    /// The frame owns this private Long cell, including across generator
+    /// snapshots. Its marker releases sparse cursor state with the last alias.
+    pub(crate) fn reference_foreach_cursor(source: &Self) -> Self {
+        let array = source
+            .dereferenced()
+            .as_array()
+            .expect("array foreach source");
+        array
+            .cursor
+            .set(array.cursor.get() | ARRAY_REFERENCE_FOREACH);
+        let mut cursor = Self::owned_reference(Self::long(0));
+        cursor.type_info |= Self::REFERENCE_FOREACH_CURSOR_FLAG;
+        reference_array_iteration::register(
+            cursor.reference_identity().unwrap(),
+            array as *const PhpArray as usize,
+        );
+        cursor
+    }
+
+    /// A structural mutator may rebuild dense storage without replacing the
+    /// PHP array being iterated. Preserve each live/copy cursor, then apply
+    /// the splice before releasing the old allocation (which may be shared).
+    pub(crate) fn replace_array_for_splice(
+        &mut self,
+        array: PhpArray,
+        start: usize,
+        removed: usize,
+        inserted: usize,
+    ) {
+        let replacement = Self::array(array);
+        if let Some(source) = self.as_array()
+            && source.cursor.get() & ARRAY_REFERENCE_FOREACH != 0
+        {
+            let target = replacement.as_array().unwrap();
+            target
+                .cursor
+                .set(target.cursor.get() | ARRAY_REFERENCE_FOREACH);
+            reference_array_iteration::copied(
+                source as *const PhpArray as usize,
+                target as *const PhpArray as usize,
+            );
+            target.adjust_reference_foreach_positions(start, removed, inserted);
+        }
+        *self = replacement;
+    }
+
+    pub(crate) fn reference_foreach_position(&self, source: &Self) -> Option<usize> {
+        if !self.is_reference_foreach_cursor() {
+            return None;
+        }
+        let array = source.dereferenced().as_array()?;
+        array
+            .cursor
+            .set(array.cursor.get() | ARRAY_REFERENCE_FOREACH);
+        Some(reference_array_iteration::resolve(
+            self.reference_identity().unwrap(),
+            array as *const PhpArray as usize,
+            array.cursor.get() & !ARRAY_CURSOR_METADATA,
+        ))
+    }
+
+    pub(crate) fn set_reference_foreach_position(&mut self, position: i64) -> bool {
+        if !self.is_reference_foreach_cursor() {
+            return false;
+        }
+        reference_array_iteration::advance(
+            self.reference_identity().unwrap(),
+            position.max(0) as usize,
+        );
+        self.assign_dereferenced(Self::long(position));
+        true
+    }
+
+    #[inline]
+    fn is_reference_foreach_cursor(&self) -> bool {
+        self.is_owned_reference() && self.type_info & Self::REFERENCE_FOREACH_CURSOR_FLAG != 0
     }
 
     const TRAVERSABLE_UNPACK_VALUE_FLAG: u32 = 1 << 29;
@@ -8761,6 +8939,9 @@ fn release_deep_container_iteratively(root_type: ValueType, root_pointer: *mut u
                         drop(std::mem::ManuallyDrop::into_inner(value));
                         continue;
                     }
+                    if (*pointer).cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+                        reference_array_iteration::release_array(pointer as usize);
+                    }
                     stats::inc_value_drop(ValueType::Array as usize);
                     let owner = std::mem::ManuallyDrop::into_inner(owner);
                     let array = Rc::try_unwrap(owner).unwrap_or_else(|_| {
@@ -8808,6 +8989,9 @@ impl Drop for Value {
                     let pointer = self.data.ptr as *const PhpArray;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     let strong_count = Rc::strong_count(&owner);
+                    if strong_count == 1 && (*pointer).cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+                        reference_array_iteration::release_array(pointer as usize);
+                    }
                     if strong_count == 1 && (*pointer).has_deep_drop_stack_checkpoint() {
                         release_deep_container_iteratively(
                             ValueType::Array,
@@ -8866,6 +9050,9 @@ impl Drop for Value {
                 unsafe {
                     let pointer = self.data.ptr as *const OwnedReference;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
+                    if Rc::strong_count(&owner) == 1 && self.is_reference_foreach_cursor() {
+                        reference_array_iteration::release_cursor((*pointer).value.get() as usize);
+                    }
                     if self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG != 0 {
                         let reference = &*pointer;
                         let internal_aliases = reference.internal_aliases.get();

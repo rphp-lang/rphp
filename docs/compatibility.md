@@ -7,59 +7,67 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-finalization-remainder` checkpoint over `ffc4589d` adds **3 exact
-PHP 8.5 passes without loss**. Cycle collection records roots created or
-released by PHP destructors without recording read-only ownership snapshots.
-One bounded rerun collects newly exposed plain cycles; new destructor-owned
-components survive for a subsequent collection. Recursive collection remains
-guarded, and resurrection, weak references and pending exceptions are preserved.
-Failed property increment/decrement completes the canonical storage checks:
-readonly/asymmetric errors chain the original operation error, ordinary missing
-storage can materialize, and pending exceptions do not invoke user setters.
+The `core-suspended-state-remainder` checkpoint over `95ad53db` adds **3 exact
+PHP 8.5 passes without loss**. Generator force-close preserves an existing
+throw when entering another finally. Frame-owned reference-foreach cursors
+distinguish replacement arrays from COW storage copies, survive generator
+suspension and follow structural mutations without retaining array owners.
+Lazy-object initialization preserves the observable materialized property
+snapshot while declared property slots remain independently writable.
 
-The complete measured 7,174-case stable core is **6,768 pass / 14 fail / 183
+The complete measured 7,174-case stable core is **6,771 pass / 11 fail / 183
 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,290/14/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,765 accepted parent passes remain passes. The exact gains are
-`gc/gc_049`, `readonly_props/readonly_containing_object` and
-`temporary_cleaning/temporary_cleaning_013` under `Zend/tests`.
+**5,293/11/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,768 accepted parent passes remain passes. The exact gains are
+`gh19613`, `lazy_objects/jit_assign_obj_op_dynamic` and `try/bug71604_2`
+under `Zend/tests`.
 The unchanged `Zend/tests/new_oom.phpt` timeout remains explicit.
 
-Sixteen new original E2E cases and nineteen preceding completion cases match
-PHP 8.5.11 stdout, stderr and exit status byte-exactly. Two root-buffer unit
-tests cover callback roots, snapshot suppression and collection reentrancy.
+Seventeen new original E2E cases, thirty-five preceding cases and twenty-eight
+cursor/property-order boundary probes match PHP 8.5.11 stdout, stderr and exit
+status byte-exactly (80/80). Two cursor unit tests prove owner-free tracking,
+snapshot retirement and COW selection.
 The frozen-source full Cargo matrix passed under `test-fast` (debug assertions
-and overflow checks enabled): default **6,139**, no-default **5,805**, erased
-**6,210**, reified **6,232**, all-features **6,283**; existing ignored counts
-remain 15/15/15/15/18. The 1,068-case adjacent property/exception slice has no
-lost pass; the complete stable-core comparison confirms the same result.
+and overflow checks enabled): default **6,158**, no-default **5,824**, erased
+**6,229**, reified **6,251**, all-features **6,302**; existing ignored counts
+remain 15/15/15/15/18. Focused and adjacent generator, array-mutation and lazy
+property gates pass; the complete stable-core comparison has no lost pass.
 All-feature/all-target, exact PHPT no-loss, Composer/Symfony S0--S3,
 formatting, public-data hygiene and unsafe policy passed. Production unsafe
 inventory stays at **1,627 blocks / 289 functions**. Host gates use a 6 GiB
 aggregate memory limit, no swap, two build/test workers and at most four PHPT
 workers. Automatic cleanup retains a safe disk reserve between configurations;
-the final packet completed without an OOM kill, with a 4.2 GiB memory peak.
+the final packet completed without an OOM kill or swap use, within its 6 GiB
+memory boundary.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `e40c182eea90ba680cd0a9918987cb2979c43e1895a1a87d78d53b37f8640e13`;
+candidate `1bda29bb8e221e01d78445a7b166b0af1e42358edfa133dbd0c75afaddf25ef8`;
 parent/candidate full manifests
-`c4fc04102948f68f5f86f214c490ab1c1665fe6822bd816444e5dfb2443416c1` /
-`b5a40d8ce83b641ecdae747515c5114303d30d6f7dcd74fd428226a8f045ce8a`;
+`b5a40d8ce83b641ecdae747515c5114303d30d6f7dcd74fd428226a8f045ce8a` /
+`3d9b608dda4bafb2b1a90b809f53c11b8b37cd5fb2b7c1853959560c6489331b`;
 Zend/lang pass set
-`a5e613a140ecb198bed2ad9281801e8b2170dd6b194d2c0f2c7b4f56528023a7`;
+`2669685373f609fe7ba65786100d91c2ebbcf8cb6b4771f4b5302f61866e3e26`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`cff19d69730e1d0b74530d9bcb65b56b48e99cb038459c58de47f2f1c38d2594`;
-original oracle packet
+`faf86ad4335d0cc4c355b035760822a1ee7c89457951aa0235e1d5643657b3dd`;
+new/preceding original oracle packets
+`74e932e03a7bbfc9bb44a2c8b92de3d5c12abd43ee4daf30afa05a94a76ad21b` /
 `003c4e71b28fea8924d4da25c19412a3561d2649f211645d4d429159fc29ec49`.
 
 Performance remains deferred by user direction. Automatic GC thresholds,
-remaining Fiber/GC ordering, arbitrary native-callback suspension, generator
-finally completion and allocation-limit equivalence are not claimed. Phar,
-PCRE and Date/DateTime remain outside this core train. Continue from 14
-measured failures plus the explicit OOM timeout;
+remaining Fiber/GC ordering, arbitrary native-callback suspension and
+allocation-limit equivalence are not claimed. Phar, PCRE and Date/DateTime
+remain outside this core train. Continue from 11 measured failures plus the
+explicit OOM timeout;
 skips and unsupported cases are not compatibility successes.
+
+### Preceding finalization checkpoint
+
+The `core-finalization-remainder` checkpoint over `ffc4589d` added three exact
+passes without loss, reaching 6,768 passes and 14 failures. It preserved
+destructor-created roots through bounded collection and completed failed
+property increment/decrement storage checks and error chaining.
 
 ### Preceding expression-completion checkpoint
 
