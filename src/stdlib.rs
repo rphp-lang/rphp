@@ -16572,7 +16572,14 @@ fn validated_handler_callback(
         ));
         return None;
     }
-    Some(Some(callback.clone()))
+    let retained = callback.clone();
+    // Registration retains this callback but does not invoke it. Its input
+    // argument is a transient engine copy rather than a PHP ownership edge;
+    // invoking the callback later still uses ordinary frame GC admission.
+    // SAFETY: the handler owns this initialized by-value argument slot for the
+    // duration of validation. `retained` already has independent ownership.
+    unsafe { (*ed).cv_mut(0).mark_internal_argument_snapshot() };
+    Some(Some(retained))
 }
 
 fn fn_set_error_handler(
@@ -31888,6 +31895,7 @@ fn fn_ini_set(
     }
     if option == "zend.enable_gc" {
         eg.gc_enabled = ini_boolean(&value);
+        crate::value::set_automatic_cycle_collection_enabled(eg.gc_enabled);
     }
     if option == "assert.exception" {
         eg.assertion_state.exception = ini_boolean(&value);
@@ -31912,6 +31920,7 @@ fn fn_gc_enable(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     eg.gc_enabled = true;
+    crate::value::set_automatic_cycle_collection_enabled(true);
     Ok(())
 }
 
@@ -31921,6 +31930,7 @@ fn fn_gc_disable(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     eg.gc_enabled = false;
+    crate::value::set_automatic_cycle_collection_enabled(false);
     Ok(())
 }
 
@@ -31954,7 +31964,10 @@ fn fn_gc_status(
         "collected",
         Value::long(i64::try_from(status.collected).unwrap_or(i64::MAX)),
     );
-    result.set_str("threshold", Value::long(10_001));
+    result.set_str(
+        "threshold",
+        Value::long(i64::try_from(status.threshold).unwrap_or(i64::MAX)),
+    );
     result.set_str("buffer_size", Value::long(16_384));
     result.set_str(
         "roots",

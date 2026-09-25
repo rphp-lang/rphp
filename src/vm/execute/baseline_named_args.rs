@@ -75,6 +75,7 @@ fn cleanup_named_call_and_throw<'a>(
 }
 
 fn materialize_named_reference_source(
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     opline: &Instruction,
     yield_snapshot: bool,
@@ -96,7 +97,7 @@ fn materialize_named_reference_source(
         } else {
             None
         }?;
-        Some(materialize_reference_alias(frame, source))
+        Some(materialize_reference_alias(eg, frame, source))
     }
 }
 
@@ -278,7 +279,7 @@ fn op_send_named<'a>(
                     return cleanup_named_call_and_throw(eg, frame, call, error);
                 }
                 if let Some(argument) =
-                    materialize_named_reference_source(frame, opline, yield_snapshot)
+                    materialize_named_reference_source(eg, frame, opline, yield_snapshot)
                 {
                     argument
                 } else if !func_common.sig.is_param_prefer_ref(variadic_index) {
@@ -373,7 +374,7 @@ fn op_send_named<'a>(
                             return cleanup_named_call_and_throw(eg, frame, call, error);
                         }
                         if let Some(argument) =
-                            materialize_named_reference_source(frame, opline, yield_snapshot)
+                            materialize_named_reference_source(eg, frame, opline, yield_snapshot)
                         {
                             argument
                         } else if !func_common.sig.is_param_prefer_ref(idx) {

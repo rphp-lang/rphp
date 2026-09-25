@@ -11,7 +11,7 @@ use std::time::{Duration, Instant};
 
 use crate::value::{
     CycleCollectionGuard, CycleNodeKind, Value, begin_cycle_collection, cycle_root_snapshot,
-    record_cycle_callback_roots,
+    record_cycle_callback_roots, take_automatic_cycle_admission,
 };
 use crate::vm::execute::{VmError, append_replaced_exception, run_cycle_object_destructor};
 
@@ -32,6 +32,7 @@ struct EphemeronEdge {
 #[derive(Default)]
 struct CycleGraph {
     nodes: Vec<CycleNode>,
+    root_count: usize,
     indices: HashMap<usize, usize>,
     ordinary_edges: Vec<(usize, usize)>,
     ephemerons: Vec<EphemeronEdge>,
@@ -302,9 +303,28 @@ impl CycleGraph {
                 stack.extend(adjacency[current].iter().rev().copied());
             }
         }
-        ordered.extend(self.nodes.iter().enumerate().filter_map(|(index, node)| {
-            (garbage.contains(&node.identity) && !visited[index]).then_some(index)
-        }));
+        // Removing live roots compacts the possible-root buffer from its
+        // tail. Destructor order follows that compacted buffer, not a stable
+        // filter of the original roots. Descendants remain in storage order.
+        let mut roots: Vec<usize> = (0..self.root_count).collect();
+        let mut position = 0;
+        while position < roots.len() {
+            if garbage.contains(&self.nodes[roots[position]].identity) {
+                position += 1;
+            } else {
+                roots.swap_remove(position);
+            }
+        }
+        ordered.extend(roots.into_iter().filter(|index| !visited[*index]));
+        ordered.extend(
+            self.nodes
+                .iter()
+                .enumerate()
+                .skip(self.root_count)
+                .filter_map(|(index, node)| {
+                    (garbage.contains(&node.identity) && !visited[index]).then_some(index)
+                }),
+        );
         ordered
     }
 }
@@ -321,11 +341,36 @@ fn propagate(adjacency: &[Vec<usize>], live: &mut [bool], queue: &mut VecDeque<u
 }
 
 impl ExecutorGlobals {
+    /// Dispatch automatic collection only from a live VM boundary. Value::drop
+    /// records admission but cannot re-enter PHP while a container is borrowed.
+    pub(crate) fn collect_automatic_cycles(&mut self) -> Result<(), VmError> {
+        let Some(mut admission) = take_automatic_cycle_admission() else {
+            return Ok(());
+        };
+        let collected = self.collect_cycles()?;
+        admission.complete(collected);
+        let pending = self.exception.take();
+        crate::vm::execute::run_value_destructors(
+            self,
+            admission.owners(),
+            self.current_execute_data.get(),
+        )?;
+        if let Some(pending) = pending {
+            if let Some(replacement) = self.exception.as_ref() {
+                append_replaced_exception(replacement, &pending, self);
+            } else {
+                self.exception = Some(pending);
+            }
+        }
+        Ok(())
+    }
+
     fn build_cycle_graph(&self) -> CycleGraph {
         let mut graph = CycleGraph::default();
         for root in cycle_root_snapshot() {
             graph.add_node(root);
         }
+        graph.root_count = graph.nodes.len();
 
         let weak = self.weak_cycle_snapshot();
         graph.stale_weak_identities = weak.stale_identities;
@@ -372,6 +417,10 @@ impl ExecutorGlobals {
     /// may itself call `gc_collect_cycles()` just like Zend's object-store
     /// destructor phase.
     pub(crate) fn request_cycle_object_roots(&self) -> Vec<Value> {
+        let mut pending_destructors = self.fiber_runtime.as_deref().map_or_else(
+            Vec::new,
+            super::fiber::FiberRuntime::pending_gc_destructor_roots,
+        );
         let possible_roots = cycle_root_snapshot();
         let has_destructor_root = possible_roots.iter().any(|value| {
             let Some(identity) = value.object_identity() else {
@@ -384,7 +433,7 @@ impl ExecutorGlobals {
         });
         drop(possible_roots);
         if !has_destructor_root {
-            return Vec::new();
+            return pending_destructors;
         }
         let graph = self.build_cycle_graph();
         let live = graph.live_identities();
@@ -394,7 +443,7 @@ impl ExecutorGlobals {
             .filter_map(|node| (!live.contains(&node.identity)).then_some(node.identity))
             .collect::<HashSet<_>>();
         let cyclic = graph.cyclic_identities(&garbage);
-        graph
+        let mut roots: Vec<_> = graph
             .nodes
             .into_iter()
             .filter_map(|node| {
@@ -406,7 +455,17 @@ impl ExecutorGlobals {
                 });
                 (has_destructor || self.has_fiber_context(node.identity)).then_some(node.value)
             })
-            .collect()
+            .collect();
+        pending_destructors.retain(|pending| {
+            !roots
+                .iter()
+                .any(|root| root.object_identity() == pending.object_identity())
+        });
+        roots.extend(pending_destructors);
+        // Request-final object-store traversal follows object handles, not
+        // the possible-root insertion order used by an explicit GC pass.
+        roots.sort_by_key(Value::object_handle);
+        roots
     }
 
     pub(crate) fn collect_cycles(&mut self) -> Result<usize, VmError> {
@@ -544,6 +603,11 @@ impl ExecutorGlobals {
         // component. Rebuild from current ownership before releasing anything.
         let current = self.build_cycle_graph();
         let currently_live = current.live_identities();
+        for (identity, _) in &garbage {
+            if currently_live.contains(identity) {
+                guard.retire_resurrected_root(*identity);
+            }
+        }
         stale.extend(current.stale_weak_identities.iter().copied());
         let collected: HashSet<usize> = garbage
             .iter()

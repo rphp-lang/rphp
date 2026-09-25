@@ -36,31 +36,40 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-failed-expression-remainder` checkpoint over `3336438e` adds **2 exact
-passes without loss**. The complete 7,174-case stable core is **6,773 pass /
-9 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,295/9/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
+The `core-gc-root-admission` checkpoint over `c914d242` adds **2 exact passes
+without loss**. The complete 7,174-case stable core is **6,775 pass /
+7 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
+**5,297/7/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
 The shared `new_oom.phpt` timeout stays explicit, never a pass.
 
-The slice preserves failed static/source-unit operand retirement, constructor
-argument dependencies and catch-variable snapshot ownership, plus nested string
-write diagnostic priority. Twenty-seven new E2E cases and fifty-two preceding
-cases match the PHP oracle byte-exactly; five complete Cargo
-configurations, all-targets, exact no-loss, Composer/Symfony S0--S3 and
-unsafe/public hygiene pass. No new unsafe blocks or ignored tests were
-introduced. Exact hashes, counts and non-claims are recorded in
+The slice adds safe automatic root admission and adaptive thresholds, preserving
+collector/destructor order, reference/COW ownership and actual callback roots
+without admitting redundant executor snapshots. Forty-six original E2E tests,
+three unit regressions and 84 current plus 79 preceding exact CLI oracle
+comparisons support the change. Five complete Cargo configurations, all-targets,
+exact no-loss, Composer/Symfony S0--S3 and unsafe/public hygiene pass. Unsafe
+inventory falls to 1,625 blocks / 289 functions with unchanged ceilings and
+ignored-test counts. Exact hashes, counts and non-claims are recorded in
 [compatibility status](compatibility.md).
 
-Continue the core sweep from **9 failures plus the OOM timeout**. Batch the
-five direct core GC/Fiber failures: automatic root admission, collector worker
-ordering and native destructor/Iterator callback suspension. Preserve ordinary
-resume, injected exceptions and force-close behavior; reject fixture-specific
-ordering or callback-stack retention. Keep the four library-involved holdouts
-distinct from core execution work.
-Phar, PCRE and Date/DateTime remain outside this stream. Preserve the exact
-5,295 and 1,478 pass sets. Aggregate performance remains deferred by user
-direction. Host gates must retain aggregate memory/process containment and
-automatic build cleanup.
+Continue the core sweep from **7 failures plus the OOM timeout**. The next
+shared core boundary is owned native callback continuations for
+`fibers/destructors_007.phpt`, `fibers/gh9916-007.phpt` and
+`fibers/gh9916-008.phpt`. Preserve callback/Iterator phases, resume values,
+injected exceptions, finally blocks and force-close; reject replayed side effects
+or pointers into unwound native stack frames. This three-case remainder closes
+the direct core cluster, not a new isolated one-test priority. Keep the four
+library-involved holdouts distinct. Phar, PCRE and Date/DateTime remain outside
+this stream. Preserve the exact 5,297 and 1,478 pass sets. Aggregate performance
+remains deferred by user direction. Host gates retain the 6 GiB/no-swap boundary,
+two build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding failed-expression checkpoint
+
+The `core-failed-expression-remainder` checkpoint over `3336438e` added two
+exact passes without loss, reaching 6,773 passes and 9 failures. It preserved
+failed source-unit/static-initializer operand retirement and nested string-write
+diagnostic priority.
 
 ### Preceding suspended-state checkpoint
 

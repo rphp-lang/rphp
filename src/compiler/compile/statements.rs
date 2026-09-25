@@ -1830,6 +1830,10 @@ impl Compiler {
         preserve.op1_type = OpType::Tmp;
         preserve.op2 = value;
         preserve.op2_type = value_type;
+        // The assignment result is the sole continuation of this evaluated
+        // RHS. Move a temporary instead of retaining a second hidden owner
+        // until statement cleanup (which would publish a false GC root).
+        preserve._pad |= ASSIGN_CV_MOVE_SOURCE;
         self.instructions.push(preserve);
 
         match write {
@@ -4201,11 +4205,30 @@ impl Compiler {
                 let first_tmp = self.next_tmp as u16;
                 let cv_idx = self.resolve_cv(var);
                 let (val_op, val_type) = self.compile_expr(expr);
+                let (val_op, val_type) = if val_type == OpType::Cv {
+                    // Freeze a CV before auto-initialization or COW changes
+                    // the destination (the source may name the same value).
+                    let saved = self.alloc_tmp();
+                    let mut preserve = Instruction::new(OpCode::AssignCv);
+                    preserve.op1 = saved;
+                    preserve.op1_type = OpType::Tmp;
+                    preserve.op2 = val_op;
+                    preserve.op2_type = val_type;
+                    self.instructions.push(preserve);
+                    (saved, OpType::Tmp)
+                } else {
+                    (val_op, val_type)
+                };
                 let mut instr = Instruction::new(OpCode::ArrayPushOp);
                 instr.op1_type = OpType::Cv;
                 instr.op1 = cv_idx;
                 instr.op2_type = val_type;
                 instr.op2 = val_op;
+                if matches!(val_type, OpType::Tmp | OpType::Var) {
+                    // This statement has no assignment-result consumer. A
+                    // successful array append transfers the RHS scratch owner.
+                    instr._pad |= ARRAY_ELEMENT_MOVE_SOURCE;
+                }
                 self.push_instruction_at_line(instr, *line);
                 let end_tmp = self.next_tmp as u16;
                 if end_tmp > first_tmp {

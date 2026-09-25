@@ -1210,6 +1210,8 @@ thread_local! {
     /// owner loses a handle. The registry owns weak pointers, so ordinary
     /// reference-counted reclamation remains authoritative.
     static CYCLE_ROOTS: RefCell<CycleRootState> = RefCell::new(CycleRootState::default());
+    /// Value release requests work; only a VM boundary may run PHP callbacks.
+    static AUTOMATIC_CYCLE_PENDING: Cell<bool> = const { Cell::new(false) };
 }
 
 #[derive(Default)]
@@ -1260,6 +1262,22 @@ impl CycleCandidate {
     }
 }
 
+struct CycleAdmissionState {
+    enabled: bool,
+    threshold: usize,
+    pending_start: Option<usize>,
+}
+
+impl Default for CycleAdmissionState {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            threshold: 10_001,
+            pending_start: None,
+        }
+    }
+}
+
 #[derive(Default)]
 struct CycleRootState {
     active: bool,
@@ -1275,9 +1293,43 @@ struct CycleRootState {
     free_time: std::time::Duration,
     candidates: Vec<CycleCandidate>,
     indices: HashMap<usize, usize, BuildHasherDefault<IntKeyHasher>>,
+    admission: CycleAdmissionState,
+}
+
+impl CycleRootState {
+    fn reindex(&mut self) {
+        self.indices = self
+            .candidates
+            .iter()
+            .enumerate()
+            .map(|(index, candidate)| (candidate.identity(), index))
+            .collect();
+    }
+
+    fn prune_dead_candidates(&mut self) {
+        let boundary = self.admission.pending_start;
+        let mut old_index = 0;
+        let mut retained_prefix = 0;
+        self.candidates.retain(|candidate| {
+            let keep = candidate.strong_count() != 0;
+            if keep && boundary.is_some_and(|end| old_index < end) {
+                retained_prefix += 1;
+            }
+            old_index += 1;
+            keep
+        });
+        if boundary.is_some() {
+            self.admission.pending_start = Some(retained_prefix);
+        }
+        self.reindex();
+    }
 }
 
 fn register_cycle_candidate(candidate: CycleCandidate) {
+    register_cycle_candidate_with_admission(candidate, true);
+}
+
+fn register_cycle_candidate_with_admission(candidate: CycleCandidate, allow_automatic: bool) {
     let _ = CYCLE_ROOTS.try_with(|state| {
         let mut state = state.borrow_mut();
         if !state.active
@@ -1307,15 +1359,190 @@ fn register_cycle_candidate(candidate: CycleCandidate) {
             }
             return;
         }
+        if allow_automatic
+            && !state.collecting
+            && state.admission.enabled
+            && state.admission.pending_start.is_none()
+            && state.candidates.len().saturating_add(1) >= state.admission.threshold
+        {
+            // Dead weak entries are implementation bookkeeping, not PHP
+            // roots. Amortize their pruning at buffer admission, never on
+            // every release. The incoming root belongs to the next buffer.
+            state.prune_dead_candidates();
+            if state.candidates.len().saturating_add(1) >= state.admission.threshold {
+                state.admission.pending_start = Some(state.candidates.len());
+                AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(true));
+            }
+        }
         let index = state.candidates.len();
         state.indices.insert(identity, index);
         state.candidates.push(candidate);
     });
 }
 
+#[inline]
+pub(crate) fn automatic_cycle_collection_pending() -> bool {
+    AUTOMATIC_CYCLE_PENDING.with(Cell::get)
+}
+
+pub(crate) fn set_automatic_cycle_collection_enabled(enabled: bool) {
+    CYCLE_ROOTS.with_borrow_mut(|state| {
+        state.admission.enabled = enabled;
+        if !enabled {
+            state.admission.pending_start = None;
+            AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(false));
+        }
+    });
+}
+
+/// Protect the incoming root until the preceding buffer has been collected.
+/// No borrow of the root registry or PHP value storage crosses VM re-entry.
+pub(crate) struct AutomaticCycleAdmission {
+    incoming: Vec<CycleCandidate>,
+    owners: Vec<Value>,
+}
+
+impl AutomaticCycleAdmission {
+    pub(crate) fn owners(&self) -> &[Value] {
+        &self.owners
+    }
+
+    pub(crate) fn complete(&mut self, collected: usize) {
+        CYCLE_ROOTS.with_borrow_mut(|state| {
+            // Compare callback-created roots against the preceding threshold.
+            // Refilling the buffer requires growth even after a useful pass;
+            // otherwise a useful pass can lower the threshold by one step.
+            state.admission.threshold =
+                if collected < 100 || state.candidates.len() >= state.admission.threshold {
+                    state.admission.threshold.saturating_add(10_000)
+                } else {
+                    state.admission.threshold.saturating_sub(10_000).max(10_001)
+                };
+        });
+        // Release planning retains temporary handles to the incoming owner.
+        // Publish its already-admitted identity first, so those snapshots
+        // cannot request a second collection of this same admission.
+        self.restore_incoming();
+    }
+
+    fn restore_incoming(&mut self) {
+        for candidate in self.incoming.drain(..) {
+            if candidate.strong_count() != 0 {
+                register_cycle_candidate_with_admission(candidate, false);
+            }
+        }
+    }
+}
+
+impl Drop for AutomaticCycleAdmission {
+    fn drop(&mut self) {
+        {
+            let _snapshot = suppress_cycle_snapshot_roots();
+            self.owners.clear();
+        }
+        // Also restore a live incoming owner if the collection exited early.
+        self.restore_incoming();
+    }
+}
+
+pub(crate) fn take_automatic_cycle_admission() -> Option<AutomaticCycleAdmission> {
+    CYCLE_ROOTS.with_borrow_mut(|state| {
+        if state.collecting || !state.active {
+            return None;
+        }
+        let first = state.admission.pending_start.take()?;
+        AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(false));
+        let incoming = state.candidates.split_off(first);
+        state.reindex();
+        let owners = incoming
+            .iter()
+            .filter_map(CycleCandidate::upgrade)
+            .collect();
+        Some(AutomaticCycleAdmission { incoming, owners })
+    })
+}
+
 #[cfg(test)]
 mod repeated_cycle_root_tests {
     use super::*;
+
+    #[test]
+    fn automatic_admission_protects_the_incoming_root_across_pruning() {
+        std::thread::spawn(|| {
+            begin_object_handle_request();
+            CYCLE_ROOTS.with_borrow_mut(|state| state.admission.threshold = 3);
+            let first = Rc::new(PhpArray::new());
+            let second = Rc::new(PhpArray::new());
+            let incoming = Rc::new(PhpArray::new());
+            for owner in [&first, &second, &incoming] {
+                register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(owner)));
+            }
+            assert!(automatic_cycle_collection_pending());
+            drop(first);
+            assert_eq!(cycle_collection_status().roots, 2);
+            let mut admission = take_automatic_cycle_admission().unwrap();
+            assert_eq!(admission.owners().len(), 1);
+            assert_eq!(cycle_collection_status().roots, 1);
+            assert!(!automatic_cycle_collection_pending());
+            let mut collector = begin_cycle_collection().unwrap();
+            collector.complete(
+                0,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            );
+            drop(collector);
+            admission.complete(100);
+            drop(admission);
+            assert_eq!(cycle_collection_status().roots, 1);
+            CYCLE_ROOTS.with_borrow(|state| {
+                assert_eq!(
+                    state.candidates[0].identity(),
+                    Rc::as_ptr(&incoming) as usize
+                );
+            });
+            assert_eq!(Rc::strong_count(&incoming), 1);
+            end_object_handle_request();
+            assert!(!automatic_cycle_collection_pending());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn explicit_collection_and_disable_cancel_pending_automatic_admission() {
+        std::thread::spawn(|| {
+            begin_object_handle_request();
+            CYCLE_ROOTS.with_borrow_mut(|state| state.admission.threshold = 3);
+            let owners: Vec<_> = (0..4).map(|_| Rc::new(PhpArray::new())).collect();
+            for owner in &owners[..3] {
+                register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(owner)));
+            }
+            assert!(automatic_cycle_collection_pending());
+            set_automatic_cycle_collection_enabled(false);
+            assert!(take_automatic_cycle_admission().is_none());
+            assert!(!automatic_cycle_collection_pending());
+            set_automatic_cycle_collection_enabled(true);
+            assert!(!automatic_cycle_collection_pending());
+            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owners[3])));
+            assert!(automatic_cycle_collection_pending());
+            let mut collector = begin_cycle_collection().unwrap();
+            assert!(!automatic_cycle_collection_pending());
+            assert!(take_automatic_cycle_admission().is_none());
+            assert_eq!(cycle_collection_status().roots, 4);
+            collector.complete(
+                0,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            );
+            drop(collector);
+            assert_eq!(cycle_collection_status().roots, 0);
+            end_object_handle_request();
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn repeated_roots_preserve_order_pruning_and_request_isolation() {
@@ -1418,6 +1645,15 @@ pub(crate) struct CycleCollectionGuard {
 }
 
 impl CycleCollectionGuard {
+    /// A previously selected garbage root that user code resurrected has
+    /// already been revisited and proved live. Callback-temporary releases
+    /// must not leave that old root in the next candidate buffer.
+    pub(crate) fn retire_resurrected_root(&mut self, identity: usize) {
+        CYCLE_ROOTS.with_borrow_mut(|state| {
+            state.callback_roots.remove(&identity);
+        });
+    }
+
     pub(crate) fn mark_ran(&mut self) {
         CYCLE_ROOTS.with(|state| {
             let mut state = state.borrow_mut();
@@ -1471,6 +1707,10 @@ pub(crate) fn begin_cycle_collection() -> Option<CycleCollectionGuard> {
             return None;
         }
         state.collecting = true;
+        // An explicit collection includes the complete current buffer and
+        // supersedes any automatic request not yet consumed by the VM.
+        state.admission.pending_start = None;
+        AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(false));
         state.callback_roots.clear();
         Some(CycleCollectionGuard { completed: None })
     })
@@ -1515,6 +1755,7 @@ pub(crate) struct CycleCollectionStatus {
     pub(crate) runs: usize,
     pub(crate) collected: usize,
     pub(crate) roots: usize,
+    pub(crate) threshold: usize,
     pub(crate) application_time: f64,
     pub(crate) collector_time: f64,
     pub(crate) destructor_time: f64,
@@ -1524,15 +1765,7 @@ pub(crate) struct CycleCollectionStatus {
 pub(crate) fn cycle_collection_status() -> CycleCollectionStatus {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
-        state
-            .candidates
-            .retain(|candidate| candidate.strong_count() != 0);
-        state.indices = state
-            .candidates
-            .iter()
-            .enumerate()
-            .map(|(index, candidate)| (candidate.identity(), index))
-            .collect();
+        state.prune_dead_candidates();
         let collector_time = state.collector_time.as_secs_f64();
         let destructor_time = state.destructor_time.as_secs_f64();
         let free_time = state.free_time.as_secs_f64();
@@ -1549,6 +1782,7 @@ pub(crate) fn cycle_collection_status() -> CycleCollectionStatus {
             runs: state.runs,
             collected: state.collected,
             roots: state.candidates.len(),
+            threshold: state.admission.threshold,
             application_time,
             collector_time,
             destructor_time,
@@ -1570,8 +1804,8 @@ pub(crate) fn prune_dead_cycle_root_storage() {
         if state.collecting {
             return;
         }
+        state.prune_dead_candidates();
         let mut candidates = std::mem::take(&mut state.candidates);
-        candidates.retain(|candidate| candidate.strong_count() != 0);
         if candidates.is_empty() {
             state.indices = HashMap::default();
             return;
@@ -1589,15 +1823,7 @@ pub(crate) fn prune_dead_cycle_root_storage() {
 pub(crate) fn cycle_root_snapshot() -> Vec<Value> {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
-        state
-            .candidates
-            .retain(|candidate| candidate.strong_count() != 0);
-        state.indices = state
-            .candidates
-            .iter()
-            .enumerate()
-            .map(|(index, candidate)| (candidate.identity(), index))
-            .collect();
+        state.prune_dead_candidates();
         state
             .candidates
             .iter()
@@ -1828,6 +2054,8 @@ pub(crate) fn begin_object_handle_request() {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
         state.active = true;
+        state.admission = CycleAdmissionState::default();
+        AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(false));
         state.collecting = false;
         state.recording_callback_roots = false;
         state.snapshot_depth = 0;
@@ -1848,6 +2076,8 @@ pub(crate) fn end_object_handle_request() {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
         state.active = false;
+        state.admission = CycleAdmissionState::default();
+        AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(false));
         state.collecting = false;
         state.recording_callback_roots = false;
         state.snapshot_depth = 0;
@@ -1933,7 +2163,14 @@ fn materialize_declared_property_defaults(defaults: &[Value]) -> Vec<Value> {
 #[inline(never)]
 fn clone_managed_property_default(value: &Value) -> Value {
     value.publish_deferred_object_handles();
-    value.clone()
+    let mut result = value.clone();
+    if result.as_array().is_some_and(PhpArray::is_empty) {
+        // The shared empty default is an immutable source template, not a
+        // mutable PHP root. The first write clears this provenance through
+        // the ordinary array COW boundary.
+        result.mark_immutable_array_literal();
+    }
+    result
 }
 
 impl PhpObject {
@@ -6384,6 +6621,25 @@ impl Value {
     /// property readable.
     const RELEASING_UNSET_PROPERTY_FLAG: u32 = 1 << 16;
     const REFERENCE_FOREACH_CURSOR_FLAG: u32 = 1 << 17;
+    /// An engine-only argument copy (a redundant source TMP or a consumed
+    /// registration argument), retaining lifetime but no additional GC edge.
+    /// Cloning or transferring it into PHP storage removes this local marker.
+    const INTERNAL_ARGUMENT_SNAPSHOT_FLAG: u32 = 1 << 18;
+
+    #[inline]
+    pub(crate) fn mark_internal_argument_snapshot(&mut self) {
+        if matches!(
+            self.value_type(),
+            ValueType::Array | ValueType::Object | ValueType::Closure
+        ) {
+            self.type_info |= Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG;
+        }
+    }
+
+    #[inline]
+    pub(crate) fn clear_internal_argument_snapshot(&mut self) {
+        self.type_info &= !Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG;
+    }
 
     #[inline]
     pub fn undef() -> Self {
@@ -8768,7 +9024,7 @@ impl Clone for Value {
                 }
                 Self {
                     data: self.data,
-                    type_info: self.type_info,
+                    type_info: self.type_info & !Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG,
                     _not_send: PhantomData,
                 }
             }
@@ -8779,7 +9035,7 @@ impl Clone for Value {
                 }
                 Self {
                     data: self.data,
-                    type_info: self.type_info,
+                    type_info: self.type_info & !Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG,
                     _not_send: PhantomData,
                 }
             }
@@ -8803,7 +9059,7 @@ impl Clone for Value {
                     Rc::increment_strong_count(self.data.ptr as *const PhpClosure);
                     Self {
                         data: self.data,
-                        type_info: self.type_info,
+                        type_info: self.type_info & !Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG,
                         _not_send: PhantomData,
                     }
                 }
@@ -8998,7 +9254,10 @@ impl Drop for Value {
                             pointer.cast_mut().cast(),
                         );
                     } else {
-                        if strong_count > 1 {
+                        if strong_count > 1
+                            && self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0
+                            && !(self.is_immutable_array_literal() && (*pointer).is_empty())
+                        {
                             register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owner)));
                         }
                         Rc::decrement_strong_count(pointer);
@@ -9021,7 +9280,9 @@ impl Drop for Value {
                         let handle = (*(*pointer).as_ptr()).lifecycle & OBJECT_HANDLE_MASK;
                         release_final_object(std::mem::ManuallyDrop::into_inner(owner), handle);
                     } else {
-                        register_cycle_candidate(CycleCandidate::Object(Rc::downgrade(&owner)));
+                        if self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0 {
+                            register_cycle_candidate(CycleCandidate::Object(Rc::downgrade(&owner)));
+                        }
                         Rc::decrement_strong_count(pointer);
                     }
                 }
@@ -9039,7 +9300,11 @@ impl Drop for Value {
                     if Rc::strong_count(&owner) == 1 {
                         release_final_closure(std::mem::ManuallyDrop::into_inner(owner));
                     } else {
-                        register_cycle_candidate(CycleCandidate::Closure(Rc::downgrade(&owner)));
+                        if self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0 {
+                            register_cycle_candidate(CycleCandidate::Closure(Rc::downgrade(
+                                &owner,
+                            )));
+                        }
                         Rc::decrement_strong_count(pointer);
                     }
                 };
@@ -9061,7 +9326,20 @@ impl Drop for Value {
                             reference.internal_aliases.set(internal_aliases - 1);
                         }
                     }
-                    if Rc::strong_count(&owner) > 1 {
+                    let target = &*(*pointer).value.get();
+                    // Reference cells holding scalars or the immutable empty
+                    // array cannot close a cycle. Do not admit such a cell
+                    // merely because an internal/closure alias was retired;
+                    // a later release after mutation will inspect it again.
+                    let collectable_target = match target.value_type() {
+                        ValueType::Array => {
+                            !target.is_immutable_array_literal()
+                                || !target.as_array().unwrap().is_empty()
+                        }
+                        ValueType::Object | ValueType::Closure => true,
+                        _ => false,
+                    };
+                    if Rc::strong_count(&owner) > 1 && collectable_target {
                         register_cycle_candidate(CycleCandidate::Reference(Rc::downgrade(&owner)));
                     }
                     Rc::decrement_strong_count(pointer);

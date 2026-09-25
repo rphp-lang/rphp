@@ -196,6 +196,8 @@ echo 'done';
 
 #[test]
 fn named_cow_and_non_frameless_operands_remain_owned_by_their_variables() {
+    // PHP keeps $reference alive after unset($needle); the needle destructor
+    // therefore belongs to request shutdown, after the ordinary-call block.
     assert_eq!(
         run_php(
             r#"<?php
@@ -234,9 +236,9 @@ echo 'done';
         ),
         concat!(
             "create:needle|create:member|after-reference|after-named|after-haystack|after-copy|",
-            "destroy:member|after-member|destroy:needle|",
+            "destroy:member|after-member|",
             "create:ordinary-needle|create:ordinary-member|after-ordinary|",
-            "destroy:ordinary-member|destroy:ordinary-needle|done",
+            "destroy:ordinary-member|destroy:ordinary-needle|donedestroy:needle|",
         )
     );
 }

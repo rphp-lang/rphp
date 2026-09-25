@@ -2127,8 +2127,26 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
     // Property-name conversion and magic accessors may rebind the CV/global
     // slots that supplied either operand. Keep opcode-local owners before any
     // re-entrant call so later phases still address the original values.
-    let receiver = obj_val.clone();
-    let obj_val = &receiver;
+    // A declared, initialized public slot without hooks cannot call PHP on
+    // this read. Borrow that receiver just as the warmed inline cache does;
+    // an unnecessary local owner/drop would publish a spurious GC root.
+    let plain_storage_read = prop_name.as_str().is_some_and(|name| {
+        obj_val.as_object().is_some_and(|object| {
+            object.native_array_options().flags & 2 == 0
+                && object.property_slot(name).is_some_and(|slot| {
+                    object.get_property_slot(slot).is_some_and(|value| !value.is_undef())
+                        && eg.instance_property_definition(object.class_id, slot).is_some_and(|definition| {
+                            definition.visibility == Visibility::Public
+                                && !definition.is_readonly
+                                && definition.set_visibility.is_none()
+                                && !definition.has_get_hook
+                                && !definition.has_set_hook
+                        })
+                })
+        })
+    }) && eg.lazy_object_state(obj_val).is_none();
+    let receiver = (!plain_storage_read).then(|| obj_val.clone());
+    let obj_val = receiver.as_ref().unwrap_or(obj_val);
     let name = match convert_object_property_name(
         eg,
         frame,
@@ -3655,7 +3673,7 @@ fn op_bind_obj_prop_ref<'a>(
                 } else {
                     (*frame).get_op_mut(opline.result as u32, opline.result_type)
                 };
-                let binding = materialize_reference_alias(frame, source);
+                let binding = materialize_reference_alias(eg, frame, source);
                 if crate::stdlib::bind_array_object_property(&receiver, &key, binding, eg)? {
                     return Ok(take_magic_exception(eg, frame)?.unwrap_or(ColdResult::Done));
                 }
@@ -4248,7 +4266,7 @@ fn op_bind_obj_prop_ref<'a>(
                     return Ok(result);
                 }
             }
-            let binding = materialize_reference_alias(frame, source);
+            let binding = materialize_reference_alias(eg, frame, source);
             if internal_result
                 && (&*source).is_owned_reference()
             {
@@ -5736,12 +5754,12 @@ fn op_assign_obj_prop_inner<'a>(
         }
 
         if prop_exists {
-            let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0)
-                .then(|| assigned.clone());
+            retire_committed_property_source(frame, opline, &assigned);
+            // Neither publication nor the storage commit can invoke PHP.
+            // Publish directly from the one owner instead of introducing a
+            // short-lived clone that GC would mistake for a PHP alias.
+            publish_property_assignment_result(frame, opline, &assigned);
             let destructor = commit_existing_object_property(eg, obj, &key, assigned, force_dynamic);
-            if let Some(assignment_result) = assignment_result.as_ref() {
-                publish_property_assignment_result(frame, opline, assignment_result);
-            }
             run_prepared_value_destructor(eg, destructor)?;
             if let Some(result) = take_magic_exception(eg, frame)? {
                 return Ok(result);
@@ -5815,6 +5833,7 @@ fn op_assign_obj_prop_inner<'a>(
                     }
                 }
                 // No __set — fall back to direct insert
+                retire_committed_property_source(frame, opline, &assigned);
                 if let Some(mut php_obj) = obj.as_object_mut() {
                     if force_dynamic {
                         php_obj.set_dynamic_property(&key, assigned);

@@ -2375,6 +2375,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
     let mut tick: u8 = 255; // One interrupt counter across all frame transitions.
     'activation: loop {
     let (frame, op_array) = activation;
+    let mut previous_opline = None;
     // A frame and its immutable metadata change only at an activation boundary.
     // Ordinary opcode backedges retain both without repeating frame setup.
     macro_rules! resume_activation {
@@ -2393,9 +2394,33 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
         }
 
-        // SAFETY: the active frame's opline points into its live op array.
+        // SAFETY: the active frame's opline and the preceding instruction
+        // both belong to this live activation. At this loop boundary no
+        // opcode-local value/container borrow survives PHP callback re-entry.
         let (mut opline_ptr, opline) = unsafe {
+            if crate::value::automatic_cycle_collection_pending() && eg.exception.is_none() {
+                let next = (*frame).opline;
+                let origin = previous_opline.unwrap_or(next);
+                (*frame).opline = origin;
+                eg.current_execute_data.set(frame);
+                let collected = eg.collect_automatic_cycles();
+                (*frame).opline = next;
+                collected?;
+                if let Some(exception) = eg.exception.take() {
+                    (*frame).opline = origin;
+                    match throw_in_frame(eg, frame, exception)? {
+                        ThrowResult::Handled(new_frame, new_op_array) => {
+                            resume_activation!(new_frame, new_op_array);
+                        }
+                        ThrowResult::Unhandled(exception) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
             let opline_ptr: *const Instruction = (*frame).opline;
+            previous_opline = Some(opline_ptr);
             (opline_ptr, &*opline_ptr)
         };
         macro_rules! array_key_or_throw {
@@ -2879,7 +2904,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 "Only variables should be assigned by reference",
                             )?;
                         }
-                        let mut binding = materialize_reference_alias(frame, source);
+                        let mut binding = materialize_reference_alias(eg, frame, source);
                         if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
                             binding.mark_internal_reference_alias();
                         }
@@ -5856,8 +5881,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         // Heap or reference TMP/Var: must clone + mark callee heap bits
                         let cloned = src_val.clone();
-                        unsafe { dst.write(cloned) };
+                        // SAFETY: caller TMP and pending argument are disjoint
+                        // live slots; the clone above owns the callee edge.
                         unsafe {
+                            if common.fn_type == FunctionType::Internal {
+                                // Preserve failed-expression lifetime without
+                                // publishing a duplicate source TMP GC edge.
+                                (*src.cast_mut()).mark_internal_argument_snapshot();
+                            }
+                            dst.write(cloned);
                             (*call).has_heap_slots = true;
                             let total = (*call).num_cvs + (*call).num_temps;
                             if total <= 64 {
@@ -5942,7 +5974,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
                     };
-                    let argument = materialize_reference_alias(frame, caller_value);
+                    let argument = materialize_reference_alias(eg, frame, caller_value);
                     if opline.op1_type == OpType::Cv && argument.is_owned_reference() {
                         publish_materialized_scope_global_reference(
                             eg,
@@ -5977,14 +6009,15 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         _ => unreachable!("indirect reference send returned invalid control flow"),
                     }
                 }
-                // SAFETY: call initialization owns this live pending frame
-                // and its resolved descriptor before argument evaluation.
-                // Read its immutable mask here; all-value calls need no
-                // positional/forwarding lookup in the out-of-line helper.
-                let (call, callee_ref_args) = unsafe {
+                // SAFETY: this pending activation owns the resolved descriptor
+                // whose reference mask and function kind are read together.
+                // Read its immutable mask and function kind here; all-value
+                // calls need no positional/forwarding lookup in the helper.
+                let (call, callee_ref_args, internal_callee) = unsafe {
                     let call = (*frame).call;
                     debug_assert!(!call.is_null());
-                    (call, (*(*call).func).sig.ref_args)
+                    (call, (*(*call).func).sig.ref_args,
+                        (*(*call).func).fn_type == FunctionType::Internal)
                 };
                 let param_idx = opline.extended_value;
                 let is_ref = if opline._pad & SEND_FLAG_PREPARED_PROPERTY_ARGUMENT != 0 {
@@ -6011,7 +6044,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             opline.op1
                         };
                         let raw_ptr = base.add(source_cv as usize);
-                        materialize_reference_alias(frame, raw_ptr)
+                        materialize_reference_alias(eg, frame, raw_ptr)
                     };
                     if !yield_snapshot && argument.is_owned_reference() {
                         publish_materialized_scope_global_reference(
@@ -6059,16 +6092,22 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             arg_slot as *mut Value,
                         )
                     } {
-                        // SAFETY: source belongs to the live caller frame and
-                        // remains valid until this value is cloned below.
-                        let cloned = if unsafe { (*source).is_undef() } {
-                            Value::null()
-                        } else {
-                            unsafe { (&*source).clone() }
-                        };
-                        // SAFETY: the borrowed fast path declined, so this
-                        // live pending argument slot still has no owner.
-                        unsafe { callback_arg_init(call, opline.op2 as usize, cloned) };
+                        // SAFETY: the live caller source and pending callee
+                        // slot are disjoint. Clone first, then mark only the
+                        // caller TMP and initialize the unowned destination.
+                        unsafe {
+                            let cloned = if (*source).is_undef() {
+                                Value::null()
+                            } else {
+                                (&*source).clone()
+                            };
+                            if internal_callee
+                                && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+                            {
+                                (*source.cast_mut()).mark_internal_argument_snapshot();
+                            }
+                            callback_arg_init(call, opline.op2 as usize, cloned);
+                        }
                     }
                 }
             }
@@ -6626,7 +6665,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                         (*cv_ptr).clone()
                                     }
                                 };
-                                globals_set(&mut eg.globals, var_name, val);
+                                globals_sync(&mut eg.globals, var_name, val);
                             }
                         }
                         unsafe {
@@ -8209,7 +8248,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     // payload and updates the frame cleanup bitmap atomically.
                     unsafe {
                         let source = (*frame).cv_mut(opline.result as u32) as *mut Value;
-                        materialize_reference_alias(frame, source)
+                        materialize_reference_alias(eg, frame, source)
                     }
                 } else {
                     let val = unsafe { &*(*frame).get_op_ptr(opline.result as u32, opline.result_type, op_array) };
@@ -8767,12 +8806,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             if compound_append_writeback {
                                 break 'array_push;
                             }
-                            let value = &*(*frame).get_op_ptr(
+                            let value = (*frame).get_op_ptr(
                                 opline.op2 as u32,
                                 opline.op2_type,
                                 op_array,
                             );
-                            if !array.try_push(value.clone()) {
+                            let value = if opline._pad & ARRAY_ELEMENT_MOVE_SOURCE != 0
+                                && !(*value).is_reference()
+                                && array.can_push()
+                            {
+                                frame_tmp_take!(frame, value.cast_mut())
+                            } else {
+                                (*value).clone()
+                            };
+                            if !array.try_push(value) {
                                 throw_operator!(
                                     "Error",
                                     "Cannot add element to the array as the next element is already occupied"
@@ -8872,7 +8919,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             let source =
                                 (*frame).get_op_mut(opline.op2 as u32, opline.op2_type);
                             if (&*source).is_reference() {
-                                let alias = materialize_reference_alias(frame, source);
+                                let alias = materialize_reference_alias(eg, frame, source);
                                 let pushed = (&mut *arr_ptr)
                                     .as_array_mut()
                                     .expect("prechecked array append target")
@@ -8910,14 +8957,20 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         } else {
                             let cloned_val = if reference_append {
                                 let source = (*frame).cv_mut(opline.op2 as u32) as *mut Value;
-                                materialize_reference_alias(frame, source)
+                                materialize_reference_alias(eg, frame, source)
                             } else {
-                                let val = &*(*frame).get_op_ptr(
+                                let val = (*frame).get_op_ptr(
                                     opline.op2 as u32,
                                     opline.op2_type,
                                     op_array,
                                 );
-                                val.clone()
+                                if opline._pad & ARRAY_ELEMENT_MOVE_SOURCE != 0
+                                    && !(*val).is_reference()
+                                {
+                                    frame_tmp_take!(frame, val.cast_mut())
+                                } else {
+                                    (*val).clone()
+                                }
                             };
                             // `$array[] =& $array` promotes the destination CV
                             // itself while materializing the source alias.
@@ -9649,7 +9702,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 as *mut Value;
                             cloned = prepare_constrained_write!(@slot &*property, cloned);
                             publish_property_assignment_result(frame, opline, &cloned);
-                            let destructor = prepare_replaced_value_release(eg, &*property);
+                            let destructor = prepare_replaced_value_release(eg, (*property).dereferenced());
                             let destructor_ran = destructor.is_some();
                             assignment_slot_set(&mut *property, cloned);
                             run_prepared_value_destructor(eg, destructor)?;
@@ -10761,7 +10814,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 unsafe { frame_return_copy_scalar(frame, return_target, src) };
                             } else {
                                 let (retval, _) =
-                                    prepare_user_return_value(frame, op_array, opline, false);
+                                    prepare_user_return_value(eg, frame, op_array, opline, false);
                                 // SAFETY: the non-null target is a writable
                                 // caller slot and `retval` is newly owned.
                                 unsafe { frame_return_set(frame, return_target, retval) };
@@ -10947,7 +11000,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 unsafe { frame_return_copy_scalar(frame, return_target, src) };
                             } else {
                                 let retval = prepared_return.take().unwrap_or_else(|| {
-                                    prepare_user_return_value(frame, op_array, opline, false).0
+                                    prepare_user_return_value(eg, frame, op_array, opline, false).0
                                 });
                                 // SAFETY: the non-null target is a writable
                                 // caller slot and `retval` is newly owned.
@@ -11246,6 +11299,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         let return_target = unsafe { (*frame).return_value };
                         if return_target.is_null() && func_common_ret.sig.returns_reference {
                             let (_, warn_non_variable) = prepare_typed_user_return_value(
+                                eg,
                                 frame,
                                 op_array,
                                 opline,
@@ -11264,6 +11318,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         }
                         if !return_target.is_null() {
                             let (retval, warn_non_variable) = prepare_typed_user_return_value(
+                                eg,
                                 frame,
                                 op_array,
                                 opline,
@@ -11366,6 +11421,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     let return_target = unsafe { (*frame).return_value };
                     if return_target.is_null() && func_common_ret.sig.returns_reference {
                         let (_, warn_non_variable) = prepare_typed_user_return_value(
+                            eg,
                             frame,
                             op_array,
                             opline,
@@ -11384,6 +11440,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     }
                     if !return_target.is_null() {
                         let (retval, warn_non_variable) = prepare_typed_user_return_value(
+                            eg,
                             frame,
                             op_array,
                             opline,
@@ -11616,7 +11673,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
             }
 
             OpCode::ClosureUseVar => {
-                op_closure_use_var(frame, op_array, opline);
+                op_closure_use_var(eg, frame, op_array, opline);
             }
 
             OpCode::NullSafeCheck => {

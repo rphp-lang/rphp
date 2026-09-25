@@ -10,6 +10,32 @@ fn globals_set(globals: &mut HashMap<String, Value>, key: &str, val: Value) {
     }
 }
 
+/// Refresh the executor's mirror of an already-live PHP variable. Repeating
+/// the same snapshot is not a PHP self-assignment and must not publish a GC
+/// root. Real writes and changed identities still use ordinary replacement.
+#[inline]
+fn globals_sync(globals: &mut HashMap<String, Value>, key: &str, val: Value) {
+    if let Some(slot) = globals.get_mut(key) {
+        let same_owner = val.cycle_node().is_some_and(|node| slot.cycle_node() == Some(node));
+        let same_value = val.dereferenced().cycle_node().is_some_and(|node| {
+            slot.dereferenced().cycle_node() == Some(node)
+        });
+        if same_owner || same_value {
+            // Reference promotion can replace the binding while preserving its
+            // referent. Publish the new cell, but retire the obsolete executor
+            // snapshot without pretending that PHP released another owner.
+            let _snapshot = crate::value::suppress_cycle_snapshot_roots();
+            if same_owner {
+                drop(val);
+            } else {
+                *slot = val;
+            }
+            return;
+        }
+    }
+    globals_set(globals, key, val);
+}
+
 /// Perform an ordinary assignment through the global symbol table.
 ///
 /// Reference-binding opcodes use `globals_set` because they intentionally
@@ -262,7 +288,8 @@ mod indexed_tmp_write_tests {
 /// Callers expand this only inside an existing opcode-level unsafe region.
 macro_rules! frame_tmp_take {
     ($frame:expr, $ptr:expr) => {{
-        let value = std::mem::replace(&mut *$ptr, Value::undef());
+        let mut value = std::mem::replace(&mut *$ptr, Value::undef());
+        value.clear_internal_argument_snapshot();
         if (*$frame).num_cvs + (*$frame).num_temps <= 64 {
             let index = slot_idx($frame, $ptr);
             (*$frame).heap_bitmap &= !(1u64 << index);
@@ -286,7 +313,8 @@ fn take_assignment_heap_source(
         frame as *const ExecuteData as usize
             + (CALL_FRAME_SLOTS + usize::from(index)) * std::mem::size_of::<Value>(),
     );
-    let value = std::mem::replace(source, Value::undef());
+    let mut value = std::mem::replace(source, Value::undef());
+    value.clear_internal_argument_snapshot();
     if frame.num_cvs + frame.num_temps <= 64 {
         frame.heap_bitmap &= !(1u64 << index);
     }
@@ -314,6 +342,7 @@ fn move_heap_source_to_primitive_cv(
     debug_assert!((destination.value_type() as u8) <= ValueType::Double as u8);
     debug_assert!(matches!(source.value_type(), ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource));
     *destination = std::mem::replace(source, Value::undef());
+    destination.clear_internal_argument_snapshot();
     if frame.num_cvs + frame.num_temps <= 64 {
         frame.heap_bitmap = (frame.heap_bitmap & !(1u64 << source_index))
             | (1u64 << destination_index);
@@ -599,8 +628,13 @@ unsafe fn try_init_borrowed_heap_arg(
 /// returned closure can outlive every forwarding call frame. A pre-existing
 /// borrowed reference remains a borrowed alias; canonical SendRef paths create
 /// owned cells at their first caller boundary.
+///
+/// # Safety
+/// `frame` must be a live user frame and `ptr` one of its initialized writable
+/// slots. Borrowed slot owners must outlive promotion; no slot/storage borrow
+/// may overlap mutation of the corresponding main-scope globals mirror.
 #[inline(always)]
-unsafe fn materialize_reference_alias(frame: *mut ExecuteData, ptr: *mut Value) -> Value {
+unsafe fn materialize_reference_alias(eg: &mut ExecutorGlobals, frame: *mut ExecuteData, ptr: *mut Value) -> Value {
     if (*ptr).is_owned_reference() {
         return (*ptr).clone_owned_reference_alias();
     }
@@ -623,6 +657,17 @@ unsafe fn materialize_reference_alias(frame: *mut ExecuteData, ptr: *mut Value) 
     let current = reference_initial_value(std::mem::replace(&mut *ptr, Value::undef()));
     let binding = Value::owned_reference(current);
     frame_slot_set(frame, ptr, binding.clone_owned_reference_alias());
+    // A main-scope mirror is an executor snapshot of this same variable, not
+    // a second PHP array owner. Retire that snapshot at promotion, before a
+    // reference append can mistake it for an independent COW allocation.
+    for (cv, name) in &(*frame).op_array().main_scope_vars {
+        if std::ptr::eq((*frame).cv(*cv), ptr) {
+            if eg.globals.contains_key(name) {
+                globals_sync(&mut eg.globals, name, binding.clone_owned_reference_alias());
+            }
+            break;
+        }
+    }
     binding
 }
 
@@ -631,6 +676,7 @@ unsafe fn materialize_reference_alias(frame: *mut ExecuteData, ptr: *mut Value) 
 /// spread additional unsafe regions through the dispatch loop.
 #[inline(always)]
 fn prepare_user_return_value(
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
@@ -662,7 +708,7 @@ fn prepare_user_return_value(
             (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
         };
         if opline.op1_type == OpType::Cv || (&*ptr).is_reference() {
-            (materialize_reference_alias(frame, ptr), false)
+            (materialize_reference_alias(eg, frame, ptr), false)
         } else {
             (
                 Value::owned_reference((&*ptr).dereferenced().clone()),
@@ -678,6 +724,7 @@ fn prepare_user_return_value(
 /// cell and forwards the same alias to the caller.
 #[inline(always)]
 fn prepare_typed_user_return_value(
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
@@ -685,13 +732,13 @@ fn prepare_typed_user_return_value(
     coerced: Option<Value>,
 ) -> (Value, bool) {
     let Some(coerced) = coerced else {
-        return prepare_user_return_value(frame, op_array, opline, returns_reference);
+        return prepare_user_return_value(eg, frame, op_array, opline, returns_reference);
     };
     if !returns_reference {
         return (coerced, false);
     }
     let (mut alias, warn_non_variable) =
-        prepare_user_return_value(frame, op_array, opline, true);
+        prepare_user_return_value(eg, frame, op_array, opline, true);
     debug_assert!(alias.is_reference());
     alias.assign_dereferenced(coerced);
     (alias, warn_non_variable)

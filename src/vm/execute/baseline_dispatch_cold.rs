@@ -394,7 +394,7 @@ fn prepare_indirect_temporary_reference(
                 return Ok(None);
             }
         }
-        Ok(Some(materialize_reference_alias(frame, source)))
+        Ok(Some(materialize_reference_alias(eg, frame, source)))
     }
 }
 
@@ -1650,11 +1650,26 @@ fn snapshot_runtime_send_rvalue(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<Value, VmError> {
-    let source = unsafe {
-        &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
+    // SAFETY: the successful send owns the live pending call and its caller's
+    // compiler temporary. Cloning finishes before the source marker changes;
+    // CVs and reference cells are never tagged as redundant snapshots.
+    let snapshot = unsafe {
+        let source = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        if source.is_undef() {
+            None
+        } else {
+            let snapshot = source.clone();
+            if matches!(opline.op1_type, OpType::Tmp | OpType::Var)
+                && (*(*(*frame).call).func).fn_type == FunctionType::Internal
+            {
+                (*(*frame).get_op_mut(opline.op1 as u32, opline.op1_type))
+                    .mark_internal_argument_snapshot();
+            }
+            Some(snapshot)
+        }
     };
-    if !source.is_undef() {
-        return Ok(source.clone());
+    if let Some(snapshot) = snapshot {
+        return Ok(snapshot);
     }
 
     let snapshot = Value::null();
@@ -4694,7 +4709,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     let called_class = eg
         .class_by_id(class_id)
         .map_or_else(|| raw_class.to_string(), |class| class.name.clone());
-    let binding = materialize_reference_alias(frame, source);
+    let binding = materialize_reference_alias(eg, frame, source);
     let constraints = binding.reference_property_constraints();
     let current = (&*binding.as_ref_ptr()).clone();
     let prepared = match prepare_typed_property_reference_attachment(
@@ -5737,7 +5752,7 @@ fn publish_materialized_scope_global_reference(
     let Some((_, name)) = variables.iter().find(|(candidate, _)| *candidate == cv as u32) else {
         return;
     };
-    globals_set(
+    globals_sync(
         &mut eg.globals,
         name,
         binding.clone_owned_reference_alias(),
@@ -6574,6 +6589,7 @@ fn op_create_first_class_callable<'a>(
 
 #[inline(never)]
 fn op_closure_use_var(
+    eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
@@ -6583,7 +6599,9 @@ fn op_closure_use_var(
         // promotion also retains a synchronously borrowed heap parameter
         // before the new reference cell becomes an owner of its payload.
         let source = unsafe { (*frame).cv_mut(opline.op2 as u32) as *mut Value };
-        unsafe { materialize_reference_alias(frame, source) }
+        // SAFETY: the compiler emits an initialized CV in this live user
+        // frame. No borrow of that slot or its globals mirror crosses promotion.
+        unsafe { materialize_reference_alias(eg, frame, source) }
     } else {
         let value = unsafe {
             &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)

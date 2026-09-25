@@ -1656,6 +1656,49 @@ fn detect_long_ops_region_inner(
                 }
             }
             OpCode::AssignCv => {
+                if instruction.op1_type == OpType::Tmp {
+                    // The compiler freezes a CV before an append can change
+                    // its array/COW owner. A guarded Long has no such owner;
+                    // fuse only the adjacent, single-consumer snapshot and
+                    // resume side exits before that original snapshot.
+                    let append = *op_array.instructions.get(ip + 1)?;
+                    let release = *op_array.instructions.get(ip + 2)?;
+                    if instruction.op2_type != OpType::Cv
+                        || instruction.result_type != OpType::Unused
+                        || instruction._pad != 0
+                        || u32::from(instruction.op1) < op_array.num_cvs
+                        || u32::from(instruction.op1) >= total_slots
+                        || ip + 2 > backedge_ip
+                        || append.opcode != OpCode::ArrayPushOp
+                        || append.op1_type != OpType::Cv
+                        || append.op2_type != OpType::Tmp
+                        || append.op2 != instruction.op1
+                        || append.result_type != OpType::Unused
+                        || append._pad != crate::vm::instruction::ARRAY_ELEMENT_MOVE_SOURCE
+                        || release.opcode != OpCode::ReleaseTemps
+                        || release.op1_type != OpType::Tmp
+                        || release.op2_type != OpType::Tmp
+                        || release.op1 != instruction.op1
+                        || release.op2 != instruction.op1.checked_add(1)?
+                        || release._pad != 0
+                        || json_projections.tracks(append.op1)
+                    {
+                        return None;
+                    }
+                    add_mask_slot(&mut long_input_mask, instruction.op2, total_slots)?;
+                    add_mask_slot(&mut array_output_mask, append.op1, total_slots)?;
+                    add_mask_slot(&mut structural_array_output_mask, append.op1, total_slots)?;
+                    has_array_push = true;
+                    let resume_ip = ip;
+                    passthrough_ips.push(ip + 1);
+                    ip += 2;
+                    QuickLongOp::ArrayPushLong {
+                        array: append.op1,
+                        value: QuickLongOperand::Slot(instruction.op2),
+                        next_target: QuickLongTarget::unresolved(ip)?,
+                        resume_ip,
+                    }
+                } else {
                 if instruction.op1_type != OpType::Cv || instruction.result_type != OpType::Unused {
                     return None;
                 }
@@ -1698,6 +1741,7 @@ fn detect_long_ops_region_inner(
                             next_target: QuickLongTarget::unresolved(ip)?,
                         }
                     }
+                }
                 }
             }
             OpCode::PostInc | OpCode::PreInc => {

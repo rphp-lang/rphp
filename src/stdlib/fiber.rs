@@ -9,7 +9,7 @@ use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::{FunctionCommon, InternalFunction};
 
-use super::{owned_argument, resolve_callback_at_callsite, write_return_value};
+use super::{owned_argument, resolve_callback_at_callsite, with_raw_argument, write_return_value};
 
 fn argument(execute_data: *mut ExecuteData, index: u32) -> Value {
     owned_argument(execute_data, index)
@@ -48,9 +48,12 @@ fn stack_size_is_admissible(eg: &mut ExecutorGlobals) -> bool {
 }
 
 fn receiver_identity(execute_data: *mut ExecuteData) -> usize {
-    argument(execute_data, 0)
-        .object_identity()
-        .expect("Fiber instance method requires an object receiver")
+    with_raw_argument(execute_data, 0, |receiver| {
+        receiver
+            .dereferenced()
+            .object_identity()
+            .expect("Fiber instance method requires an object receiver")
+    })
 }
 
 fn fiber_construct(
@@ -100,10 +103,16 @@ fn fiber_start(
     if !stack_size_is_admissible(eg) {
         return Ok(());
     }
-    let arguments = argument(execute_data, 1)
-        .as_array()
-        .map(|array| array.values().cloned().collect())
-        .unwrap_or_default();
+    // Packing public arguments must not add and release a second owner of
+    // the internal variadic container before the Fiber body starts. That
+    // implementation-only release would publish an extra possible GC root.
+    let arguments = with_raw_argument(execute_data, 1, |arguments| {
+        arguments
+            .dereferenced()
+            .as_array()
+            .map(|array| array.values().cloned().collect())
+            .unwrap_or_default()
+    });
     let outcome = eg.run_fiber(identity, FiberInput::Start(arguments), execute_data)?;
     write_result(return_value, outcome.value);
     if let Some(exception) = outcome.failure {

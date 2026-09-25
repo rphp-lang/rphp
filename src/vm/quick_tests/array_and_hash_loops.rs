@@ -200,6 +200,33 @@ for ($i = 0; $i < 100; $i++) {
     }
 
     #[test]
+    fn array_push_snapshot_fusion_preserves_exit_and_rejects_reference_or_live_slots() {
+        let mut main = compile_main("<?php $items=[];for($i=0;$i<20;$i++){$items[]=$i;}");
+        let snapshot = main.op_array.instructions.iter().position(|instruction| {
+            instruction.opcode == OpCode::AssignCv && instruction.op1_type == OpType::Tmp
+        }).unwrap();
+        let backedge = main.op_array.instructions.iter().enumerate().find_map(|(ip,instruction)| {
+            (matches!(instruction.opcode, OpCode::Jmp | OpCode::QuickLongLoopJmp)
+                && (instruction.op1 as usize) < ip).then_some(ip)
+        }).unwrap();
+        let header = main.op_array.instructions[backedge].op1 as usize;
+        let plan = detect_long_ops_loop(&main.op_array, header, backedge).unwrap();
+        assert!(plan.ops.iter().any(|operation| matches!(operation,
+            QuickLongOp::ArrayPushLong {resume_ip, ..} if *resume_ip == snapshot)));
+        let append = main.op_array.instructions[snapshot + 1];
+        main.op_array.instructions[snapshot + 1]._pad |= crate::vm::instruction::ARRAY_ELEMENT_REFERENCE;
+        assert!(detect_long_ops_loop(&main.op_array, header, backedge).is_none());
+        main.op_array.instructions[snapshot + 1] = append;
+        let release = main.op_array.instructions[snapshot + 2];
+        main.op_array.instructions[snapshot + 2].op1 += 1;
+        assert!(detect_long_ops_loop(&main.op_array, header, backedge).is_none());
+        main.op_array.instructions[snapshot + 2] = release;
+        main.op_array.instructions[snapshot].op1 = 0;
+        main.op_array.instructions[snapshot + 1].op2 = 0;
+        assert!(detect_long_ops_loop(&main.op_array, header, backedge).is_none());
+    }
+
+    #[test]
     fn detects_structural_integer_array_set_as_typed_op() {
         let plan = long_ops_plan(
             "<?php

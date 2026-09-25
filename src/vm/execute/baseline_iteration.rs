@@ -603,7 +603,7 @@ fn op_add_call_argument<'a>(
     let (value, target) = unsafe {
         let value = if opline.op2_type == OpType::Cv {
             let source = (frame as *mut Value).add(CALL_FRAME_SLOTS + opline.op2 as usize);
-            materialize_reference_alias(frame, source)
+            materialize_reference_alias(eg, frame, source)
         } else {
             (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)).clone()
         };
@@ -1329,7 +1329,7 @@ fn op_foreach_init<'a>(
             } else {
                 (*frame).get_op_mut(opline.op1 as u32, opline.op1_type)
             };
-            materialize_reference_alias(frame, source)
+            materialize_reference_alias(eg, frame, source)
         });
         (init_ip, by_reference, live_source_alias)
     };
@@ -2419,9 +2419,9 @@ fn prepare_reference_yield(
     opline: &Instruction,
 ) -> Result<Option<Value>, VmError> {
     let (value, notice) = if opline.extended_value == 1 {
-        prepare_user_return_value(frame, op_array, opline, true)
+        prepare_user_return_value(eg, frame, op_array, opline, true)
     } else {
-        let (value, _) = prepare_user_return_value(frame, op_array, opline, false);
+        let (value, _) = prepare_user_return_value(eg, frame, op_array, opline, false);
         (Value::owned_reference(value), opline.extended_value == 2)
     };
     if notice {

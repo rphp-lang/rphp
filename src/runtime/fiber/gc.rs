@@ -15,6 +15,24 @@ fn gc_trace_only_handler(
 }
 
 impl FiberRuntime {
+    /// A suspended engine destructor remains unfinished even when user code
+    /// retained its public Fiber. Request-final object-store cleanup must
+    /// close it; waiting for its public handle to become unreachable would
+    /// silently discard the pending finally block with the executor itself.
+    pub(crate) fn pending_gc_destructor_roots(&self) -> Vec<Value> {
+        let mut roots: Vec<_> = self
+            .contexts
+            .values()
+            .filter_map(|context| {
+                (context.gc_trace_frame.is_some() && context.status == FiberStatus::Suspended)
+                    .then(|| context.object.upgrade().map(Value::from_object_owner))
+                    .flatten()
+            })
+            .collect();
+        roots.sort_by_key(Value::object_handle);
+        roots
+    }
+
     fn prepare_gc_callback(
         &mut self,
         receiver: &Value,

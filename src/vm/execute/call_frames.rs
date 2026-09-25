@@ -1754,9 +1754,9 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     value: &Value,
     replaced_references: usize,
 ) -> Option<PreparedValueDestructor> {
-    // Rebinding one PHP reference does not release the resource stored inside
+    // Rebinding one PHP reference does not release the value stored inside
     // a still-shared cell. Writes through the cell pass the target itself.
-    if value.dereferenced().needs_vm_resource_release() && value.owned_reference_is_aliased() {
+    if value.owned_reference_is_aliased() {
         return None;
     }
     let value = value.dereferenced();
@@ -1794,6 +1794,12 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
     value: &Value,
     replaced_references: usize,
 ) -> Option<PreparedValueDestructor> {
+    // Removing an alias leaves the cell's array edge alive. In particular,
+    // a reference from the array back to this cell is not a final-owner drop;
+    // its children belong to the cycle collector, not the unset operation.
+    if value.owned_reference_is_aliased() {
+        return None;
+    }
     let value = value.dereferenced();
     if value.value_type() != ValueType::Array
         || value.cycle_strong_count() != Some(replaced_references)
@@ -2227,6 +2233,48 @@ fn release_failed_expression_temps(
     release_statement_temps(eg, frame, first, end, STATEMENT_TEMPS_NESTED_OBJECTS, false)
 }
 
+/// Compiler read temporaries retain an existing PHP owner, not an additional
+/// PHP storage location. Prove that owner is still live before suppressing
+/// just the temporary's GC admission. A changed CV/property, callback return,
+/// or fresh expression keeps the ordinary release path.
+#[cold]
+fn statement_temp_is_live_read_snapshot<'a>(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    slot: usize,
+    value: &Value,
+    read: impl Fn(u16, OpType) -> &'a Value,
+) -> bool {
+    let Some((identity, _)) = value.cycle_node() else { return false; };
+    let same_owner = |owner: &Value| {
+        owner.dereferenced().cycle_node().map(|(candidate, _)| candidate) == Some(identity)
+    };
+    for instruction in &op_array.instructions {
+        if usize::from(instruction.result) != slot
+            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+        {
+            continue;
+        }
+        if instruction.opcode == OpCode::FetchCvR {
+            return same_owner(read(instruction.op1, OpType::Cv));
+        }
+        if instruction.opcode == OpCode::FetchObjR && instruction._pad & FETCH_OBJ_MODIFY != 0 {
+            let receiver = read(instruction.op1, instruction.op1_type).dereferenced();
+            let Some(object) = receiver.as_object() else { return false; };
+            let name = read(instruction.op2, instruction.op2_type).dereferenced();
+            let Some(name) = name.as_str() else { return false; };
+            if let Some(slot) = object.property_slot(name)
+                && eg.instance_property_definition(object.class_id, slot)
+                    .is_some_and(|definition| definition.has_get_hook)
+            {
+                return false;
+            }
+            return object.get_property(name).is_some_and(same_owner);
+        }
+    }
+    false
+}
+
 #[cold]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
@@ -2284,6 +2332,26 @@ fn release_statement_temps(
             )
         };
 
+        // Capture the proofs after callbacks but before the first source TMP
+        // is retired. Nested borrowed-property receivers may themselves be
+        // earlier in the range. No proof may survive arbitrary PHP code.
+        let op_array = (*frame).op_array();
+        let read_snapshots = |eg: &ExecutorGlobals| -> Vec<usize> {
+            (first..end).filter(|index| {
+                is_owned(*index) && statement_temp_is_live_read_snapshot(
+                    eg, op_array, *index, &*base.add(*index),
+                    |operand, kind| &*(*frame).get_op_ptr(operand as u32, kind, op_array),
+                )
+            }).collect()
+        };
+        macro_rules! drop_statement_temp {
+            ($value:expr, $index:expr, $snapshots:expr) => {{
+                let _snapshot = $snapshots.contains(&$index)
+                    .then(crate::value::suppress_cycle_snapshot_roots);
+                std::ptr::drop_in_place($value);
+            }};
+        }
+
         if release_mode == STATEMENT_TEMPS_FOREACH_OBJECT {
             debug_assert_eq!(end, first + 1);
             if !is_owned(first) {
@@ -2320,7 +2388,7 @@ fn release_statement_temps(
                     return Ok(());
                 }
                 let value = base.add(first);
-                std::ptr::drop_in_place(value);
+                drop_statement_temp!(value, first, read_snapshots(eg));
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
                 if compact {
                     (*frame).heap_bitmap &= !(1u64 << first);
@@ -2367,12 +2435,13 @@ fn release_statement_temps(
                     || shared_outside_range(index)
                     || value_is_shallow_plain_drop(eg, &*base.add(index))
             }) {
+                let snapshots = read_snapshots(eg);
                 for index in first..end {
                     if !is_owned(index) {
                         continue;
                     }
                     let value = base.add(index);
-                    std::ptr::drop_in_place(value);
+                    drop_statement_temp!(value, index, snapshots);
                     std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
                     if compact {
                         (*frame).heap_bitmap &= !(1u64 << index);
@@ -2415,12 +2484,13 @@ fn release_statement_temps(
             if eg.exception.is_some() {
                 return Ok(());
             }
+            let snapshots = read_snapshots(eg);
             for index in first..end {
                 if !is_owned(index) {
                     continue;
                 }
                 let value = base.add(index);
-                std::ptr::drop_in_place(value);
+                drop_statement_temp!(value, index, snapshots);
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
                 if compact {
                     (*frame).heap_bitmap &= !(1u64 << index);
@@ -2436,12 +2506,13 @@ fn release_statement_temps(
         if !(first..end).any(|index| {
             is_owned(index) && value_may_require_vm_release_tree(eg, &*base.add(index))
         }) {
+            let snapshots = read_snapshots(eg);
             for index in first..end {
                 if !is_owned(index) {
                     continue;
                 }
                 let value = base.add(index);
-                std::ptr::drop_in_place(value);
+                drop_statement_temp!(value, index, snapshots);
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
                 if compact {
                     (*frame).heap_bitmap &= !(1u64 << index);
@@ -2519,12 +2590,13 @@ fn release_statement_temps(
             pending = deferred;
         }
 
+        let snapshots = read_snapshots(eg);
         for index in first..end {
             if !is_owned(index) {
                 continue;
             }
             let value = base.add(index);
-            std::ptr::drop_in_place(value);
+            drop_statement_temp!(value, index, snapshots);
             std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
             if compact {
                 (*frame).heap_bitmap &= !(1u64 << index);

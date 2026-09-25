@@ -24,7 +24,9 @@ fn commit_existing_object_property(
         };
         // A displaced array must plan the destructors of its own members
         // (the tree preparer), not only a displaced object's.
-        property.and_then(|value| prepare_replaced_value_release(eg, value))
+        // Assignment preserves a property's reference cell but replaces its
+        // referent. The alias guard applies to rebinding/unset, not this write.
+        property.and_then(|value| prepare_replaced_value_release(eg, value.dereferenced()))
     };
     {
         let mut object = target.as_object_mut().expect("property receiver");
@@ -238,18 +240,69 @@ fn publish_property_assignment_result(
     if opline._pad & ASSIGN_PROP_RESULT_VALUE == 0 {
         return;
     }
-    publish_temporary_result(frame, opline, value.clone());
+    commit_temporary_result(frame, opline, TemporaryResultCommit::ReuseOrClone(value));
+}
+
+/// A cold property writer keeps an owning RHS in its canonical TMP until
+/// validation succeeds, so exception unwinding still sees it. At commit the
+/// retained handle becomes only an implementation copy: the identical owner
+/// is about to move into storage. Retire just that copy without publishing a
+/// possible PHP cycle root. No PHP callback runs under this drop guard.
+#[cold]
+fn retire_committed_property_source(frame: *mut ExecuteData, opline: &Instruction, value: &Value) {
+    if opline._pad & ASSIGN_PROP_MOVE_SOURCE == 0
+        || !matches!(opline.result_type, OpType::Tmp | OpType::Var)
+    {
+        return;
+    }
+    commit_temporary_result(frame, opline, TemporaryResultCommit::RetireDuplicate(value));
 }
 
 #[inline(always)]
 fn publish_temporary_result(frame: *mut ExecuteData, opline: &Instruction, value: Value) {
+    commit_temporary_result(frame, opline, TemporaryResultCommit::Set(value));
+}
+
+enum TemporaryResultCommit<'a> {
+    Set(Value),
+    ReuseOrClone(&'a Value),
+    RetireDuplicate(&'a Value),
+}
+
+#[inline(always)]
+fn commit_temporary_result(
+    frame: *mut ExecuteData,
+    opline: &Instruction,
+    commit: TemporaryResultCommit<'_>,
+) {
     debug_assert!(matches!(opline.result_type, OpType::Tmp | OpType::Var));
     // SAFETY: callers prove this compiler-owned result slot either through
     // ASSIGN_PROP_RESULT_VALUE after a successful property commit or through
-    // the matching adjacent inc/dec writer. The slot and its frame remain
-    // live, and frame_slot_set preserves ownership of the displaced value.
+    // the matching adjacent inc/dec writer. Reuse/retirement additionally
+    // requires the initialized, disjoint owning RHS marked by the compiler.
+    // The frame remains live; canonical writers update its ownership bitmap.
     unsafe {
         let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+        let value = match commit {
+            TemporaryResultCommit::Set(value) => value,
+            TemporaryResultCommit::ReuseOrClone(value)
+            | TemporaryResultCommit::RetireDuplicate(value) => {
+                let same_owner = !(*result).is_reference()
+                    && value.cycle_node().is_some_and(|node| (*result).cycle_node() == Some(node));
+                if matches!(commit, TemporaryResultCommit::RetireDuplicate(_)) {
+                    if same_owner {
+                        let retained = frame_tmp_take!(frame, result);
+                        let _snapshot = crate::value::suppress_cycle_snapshot_roots();
+                        drop(retained);
+                    }
+                    return;
+                }
+                // An owning RHS already in this slot is the same expression
+                // value, not a PHP self-assignment or another possible root.
+                if same_owner { return; }
+                value.clone()
+            }
+        };
         frame_slot_set(frame, result, value);
     }
 }
