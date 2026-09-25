@@ -73,13 +73,29 @@ fn prepare_catch_variable_assignment(
     catch_cv: u32,
     catch_start: u32,
     thrown: &Value,
-    eg: &ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(Option<Value>, Option<PreparedValueDestructor>), String> {
     // SAFETY: the catch table names a CV in this live frame. Validation is
     // non-reentrant for Throwable objects, and an error resumes lookup at the
     // catch boundary before any handler body or CV mutation can occur.
     unsafe {
         let catch_variable = (*frame).cv(catch_cv);
+        if !catch_variable.is_reference()
+            && (*frame).prev_execute_data.is_null()
+            && let Some(identity) = catch_variable.vm_release_identity()
+            && let Some((_, name)) = op_array.main_scope_vars.iter().find(|(cv, _)| *cv == catch_cv)
+            && eg.globals.get(name).is_some_and(|global| {
+                !global.is_reference() && global.vm_release_identity() == Some(identity)
+            })
+        {
+            // Eval/include and global-reading calls may have materialized a
+            // snapshot of this CV. It is the same PHP symbol, not another
+            // ownership edge. Retire the mirror before preparing replacement,
+            // just as ordinary CV assignment does; real references and other
+            // PHP owners remain intact. Global reads use the live main CV.
+            eg.globals.remove(name);
+            eg.dirty_globals.remove(name);
+        }
         let replaced_value_destructor = prepare_replaced_catch_value_release(eg, catch_variable);
         if !catch_variable.is_reference() {
             return Ok((None, replaced_value_destructor));
@@ -2172,6 +2188,45 @@ fn unique_temp_array_resources(value: &Value) -> Vec<&Value> {
     resources
 }
 
+/// Retire constructor arguments before the incomplete receiver that owns
+/// their evaluation. Argument markers are nested in source order and do not
+/// replace the enclosing statement boundary; after they run, the full range
+/// still retires every other operand. Unexecuted slots are ownership-bit no-ops.
+#[cold]
+fn release_failed_expression_temps(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    current_ip: usize,
+    first: usize,
+    end: usize,
+) -> Result<(), VmError> {
+    for marker in &op_array.instructions[current_ip..] {
+        if marker.opcode != OpCode::ReleaseTemps {
+            continue;
+        }
+        if marker._pad & RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS != 0
+            && usize::from(marker.op1) > first
+            && usize::from(marker.op2) <= end
+        {
+            release_statement_temps(
+                eg, frame, usize::from(marker.op1), usize::from(marker.op2),
+                STATEMENT_TEMPS_NESTED_OBJECTS, false,
+            )?;
+            if eg.exception.is_some() {
+                return Ok(());
+            }
+        }
+        if marker._pad & (RELEASE_TEMPS_ON_RETURN | RELEASE_TEMPS_SUBEXPRESSION) == 0
+            && usize::from(marker.op1) <= first
+            && usize::from(marker.op2) >= end
+        {
+            break;
+        }
+    }
+    release_statement_temps(eg, frame, first, end, STATEMENT_TEMPS_NESTED_OBJECTS, false)
+}
+
 #[cold]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
@@ -3968,16 +4023,13 @@ fn throw_through_catch_only_frames<'a>(
                         .or(Some(first_release))
                 });
                 if let Some(release) = release {
-                    release_statement_temps(
+                    release_failed_expression_temps(
                         eg,
                         frame,
+                        op_array,
+                        current_ip as usize,
                         release.op1 as usize,
                         release.op2 as usize,
-                        // Exceptional expression retirement also owns unique
-                        // descendants of array operands, not only direct
-                        // object temporaries. It abandons pending calls first.
-                        STATEMENT_TEMPS_NESTED_OBJECTS,
-                        false,
                     )?;
                     if let Some(replacement) = eg.exception.take() {
                         append_replaced_exception(&replacement, &thrown, eg);
@@ -4226,13 +4278,13 @@ fn throw_in_frame<'a>(
                     .or(Some(first_release))
             });
             if let Some(release) = release {
-                release_statement_temps(
+                release_failed_expression_temps(
                     eg,
                     search_frame,
+                    sf_op_array,
+                    current_ip as usize,
                     release.op1 as usize,
                     release.op2 as usize,
-                    STATEMENT_TEMPS_NESTED_OBJECTS,
-                    false,
                 )?;
                 if let Some(replacement) = eg.exception.take() {
                     append_replaced_exception(&replacement, &thrown, eg);

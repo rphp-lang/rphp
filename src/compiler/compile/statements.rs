@@ -5425,6 +5425,7 @@ impl Compiler {
                     check.extended_value = func_name_idx as u32;
                     self.instructions.push(check);
 
+                    let first_tmp = self.next_tmp as u16;
                     let mut instr = Instruction::new(OpCode::BindStatic);
                     instr.op1_type = OpType::Cv;
                     instr.op1 = cv_idx;
@@ -5448,6 +5449,21 @@ impl Compiler {
                         instr.result_type = OpType::Unused;
                     }
                     self.instructions.push(instr);
+                    let end_tmp = self.next_tmp as u16;
+                    if end_tmp > first_tmp {
+                        // Binding retains the committed value, not the
+                        // initializer's argument/materialization temporaries.
+                        // This enclosing statement boundary also lets unwind
+                        // retire an interrupted initializer before catch or
+                        // finally, including destructor-thrown replacements.
+                        let mut release = Instruction::new(OpCode::ReleaseTemps);
+                        release._pad |= RELEASE_TEMPS_NESTED_OBJECTS;
+                        release.op1 = first_tmp;
+                        release.op1_type = OpType::Tmp;
+                        release.op2 = end_tmp;
+                        release.op2_type = OpType::Tmp;
+                        self.push_instruction_at_line(release, *line);
+                    }
                     self.instructions[check_idx].result = self.instructions.len() as u16;
                     self.static_vars
                         .push((cv_idx as u32, var_name.clone(), debug_default));

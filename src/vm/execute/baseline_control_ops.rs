@@ -1167,10 +1167,45 @@ fn execute_source_unit_inner(
 
     let prev_ed = eg.current_execute_data.get();
     eg.current_execute_data.set(inc_frame);
-    let inc_result = execute_ex(eg, inc_frame);
+    let mut inc_result = execute_ex(eg, inc_frame);
+    // SAFETY: the synchronous source-unit frame and its OpArray remain live
+    // until the explicit scope writeback and stack pop below.
+    let (inc_op_array, inc_ip) = unsafe {
+        let op_array = (*inc_frame).op_array();
+        let ip = (*inc_frame).opline.offset_from(op_array.instructions.as_ptr()) as usize;
+        (op_array, ip)
+    };
+
+    if let Some(mut pending) = eg.exception.take() {
+        // A source unit is a detached activation: ordinary exception dispatch
+        // stops at its root so the caller can select its own handler. Before
+        // crossing that bridge, abandon pending calls and retire only its
+        // expression temporaries. CVs still belong to the shared include/eval
+        // scope and are exported below, including changes made by destructors.
+        let first_tmp = main_func.op_array.num_cvs as usize;
+        let end_tmp = first_tmp + main_func.op_array.num_temps as usize;
+        loop {
+            if let Err(error) = release_failed_expression_temps(
+                eg,
+                inc_frame,
+                inc_op_array,
+                inc_ip,
+                first_tmp,
+                end_tmp,
+            ) {
+                inc_result = Err(error);
+                break;
+            }
+            let Some(replacement) = eg.exception.take() else {
+                break;
+            };
+            append_replaced_exception(&replacement, &pending, eg);
+            pending = replacement;
+        }
+        eg.exception = Some(pending);
+    }
 
     if caller.is_some() {
-        let inc_op_array = unsafe { (*inc_frame).op_array() };
         let inc_scope = if !inc_op_array.all_cvs.is_empty() {
             &inc_op_array.all_cvs
         } else {

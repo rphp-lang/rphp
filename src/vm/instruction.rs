@@ -488,6 +488,10 @@ pub const RELEASE_TEMPS_RETURN_COMPLETION_SITE: u16 = 1 << 2;
 /// Unwinding must continue to the statement range, which also owns receivers
 /// allocated before the interrupted argument evaluation.
 pub const RELEASE_TEMPS_SUBEXPRESSION: u16 = 1 << 3;
+/// Constructor operands retire before their freshly allocated receiver when
+/// evaluation fails. The receiver is the TMP immediately preceding op1; this
+/// dependency remains visible to cold unwind without growing the frame ABI.
+pub const RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS: u16 = 1 << 4;
 
 /// AssignDim stores the source l-value's PHP reference cell in the selected
 /// element. Ordinary assignments intentionally dereference their source;
@@ -655,6 +659,15 @@ pub struct Instruction {
 const _: [(); 16] = [(); std::mem::size_of::<Instruction>()];
 
 impl Instruction {
+    /// Operand-only retirement has the same successful execution semantics
+    /// with or without constructor unwind dependencies. Optimized regions
+    /// must still prove the retired slots and reject all other release modes.
+    #[inline]
+    pub fn is_plain_subexpression_release(&self) -> bool {
+        self.opcode == OpCode::ReleaseTemps
+            && self._pad & !RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS == RELEASE_TEMPS_SUBEXPRESSION
+    }
+
     pub fn new(opcode: OpCode) -> Self {
         Self {
             opcode,
@@ -1283,6 +1296,37 @@ impl InlineCache {
         self.func = Self::FCC_CLASS_LOADED;
         self.class_id = (raw >> 32) as u32;
         self.prop_info = raw as u32;
+    }
+}
+
+#[cfg(test)]
+mod expression_release_tests {
+    use super::*;
+
+    #[test]
+    fn constructor_unwind_metadata_preserves_only_operand_retirement() {
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        for flags in [
+            RELEASE_TEMPS_SUBEXPRESSION,
+            RELEASE_TEMPS_SUBEXPRESSION | RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS,
+        ] {
+            release._pad = flags;
+            assert!(release.is_plain_subexpression_release());
+            for extra in [
+                RELEASE_TEMPS_NESTED_OBJECTS,
+                RELEASE_TEMPS_ON_RETURN,
+                RELEASE_TEMPS_RETURN_COMPLETION_SITE,
+                1 << 15,
+            ] {
+                release._pad = flags | extra;
+                assert!(!release.is_plain_subexpression_release());
+            }
+        }
+        release._pad = RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS;
+        assert!(!release.is_plain_subexpression_release());
+        release._pad |= RELEASE_TEMPS_SUBEXPRESSION;
+        release.opcode = OpCode::Return;
+        assert!(!release.is_plain_subexpression_release());
     }
 }
 

@@ -1689,7 +1689,11 @@ fn resolve_nonexact_string_offset_key(
             };
             StringOffsetResolution::Index(index)
         }
-        StringOffsetKey::Cast(index) if direct_probe || silent => {
+        // Silent address fetches suppress missing-container notices, not the
+        // cast warning that precedes a forbidden nested string write. True
+        // isset/empty/coalesce probes retain their read-only diagnostic rules.
+        StringOffsetKey::Cast(index)
+            if direct_probe || (silent && !fetch_dim_has_write_context(opline._pad)) => {
             StringOffsetResolution::Index(index)
         }
         StringOffsetKey::Cast(index) => {

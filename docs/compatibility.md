@@ -7,31 +7,32 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-suspended-state-remainder` checkpoint over `95ad53db` adds **3 exact
-PHP 8.5 passes without loss**. Generator force-close preserves an existing
-throw when entering another finally. Frame-owned reference-foreach cursors
-distinguish replacement arrays from COW storage copies, survive generator
-suspension and follow structural mutations without retaining array owners.
-Lazy-object initialization preserves the observable materialized property
-snapshot while declared property slots remain independently writable.
+The `core-failed-expression-remainder` checkpoint over `3336438e` adds **2 exact
+PHP 8.5 passes without loss**. Failed static initializers and detached source
+units retire uncommitted operands before catch/finally, preserving constructor
+argument dependencies, retries, real owners and destructor-exception chains.
+Catch assignment retires a main-scope snapshot of the same symbol, not an
+independent PHP owner. Nested string writes report cast diagnostics before
+their canonical error while silent read probes remain silent.
 
-The complete measured 7,174-case stable core is **6,771 pass / 11 fail / 183
+The complete measured 7,174-case stable core is **6,773 pass / 9 fail / 183
 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,293/11/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,768 accepted parent passes remain passes. The exact gains are
-`gh19613`, `lazy_objects/jit_assign_obj_op_dynamic` and `try/bug71604_2`
-under `Zend/tests`.
+**5,295/9/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,771 accepted parent passes remain passes. The exact gains are
+`Zend/tests/constexpr/new.phpt` and
+`Zend/tests/offsets/string_container_offset_behaviour.phpt`.
 The unchanged `Zend/tests/new_oom.phpt` timeout remains explicit.
 
-Seventeen new original E2E cases, thirty-five preceding cases and twenty-eight
-cursor/property-order boundary probes match PHP 8.5.11 stdout, stderr and exit
-status byte-exactly (80/80). Two cursor unit tests prove owner-free tracking,
-snapshot retirement and COW selection.
+Twenty-seven new original E2E cases and fifty-two preceding cases match PHP
+8.5.11 stdout, stderr and exit status byte-exactly (79/79). The constructor
+plan guard also proves that unwind-only metadata preserves successful operand
+retirement without admitting other release modes. Four optimized-plan
+regressions found by the first matrix were repaired without changing tests.
 The frozen-source full Cargo matrix passed under `test-fast` (debug assertions
-and overflow checks enabled): default **6,158**, no-default **5,824**, erased
-**6,229**, reified **6,251**, all-features **6,302**; existing ignored counts
-remain 15/15/15/15/18. Focused and adjacent generator, array-mutation and lazy
-property gates pass; the complete stable-core comparison has no lost pass.
+and overflow checks enabled): default **6,186**, no-default **5,852**, erased
+**6,257**, reified **6,279**, all-features **6,330**; existing ignored counts
+remain 15/15/15/15/18. Focused and adjacent initializer, offset and lifetime
+gates pass; the complete stable-core comparison has no lost pass.
 All-feature/all-target, exact PHPT no-loss, Composer/Symfony S0--S3,
 formatting, public-data hygiene and unsafe policy passed. Production unsafe
 inventory stays at **1,627 blocks / 289 functions**. Host gates use a 6 GiB
@@ -41,26 +42,35 @@ the final packet completed without an OOM kill or swap use, within its 6 GiB
 memory boundary.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `1bda29bb8e221e01d78445a7b166b0af1e42358edfa133dbd0c75afaddf25ef8`;
+candidate `97427c13a1e6e2a1bba4b1313ed55e7c7b3ffb525053b4298dd825b6fdbe249e`;
 parent/candidate full manifests
-`b5a40d8ce83b641ecdae747515c5114303d30d6f7dcd74fd428226a8f045ce8a` /
-`3d9b608dda4bafb2b1a90b809f53c11b8b37cd5fb2b7c1853959560c6489331b`;
+`3d9b608dda4bafb2b1a90b809f53c11b8b37cd5fb2b7c1853959560c6489331b` /
+`cd24726a6912c71d780b40ea5f8efc722198b6f15aa208f842b71f326efe825b`;
 Zend/lang pass set
-`2669685373f609fe7ba65786100d91c2ebbcf8cb6b4771f4b5302f61866e3e26`;
+`d58064be481e0945a85e1fbad59ae9090bfe71e3214c4613d8611cb9958f23e3`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`faf86ad4335d0cc4c355b035760822a1ee7c89457951aa0235e1d5643657b3dd`;
-new/preceding original oracle packets
+`220f6d9a56d689288534b12d0f46895b2b440715311b8d5d67a8734b754989d5`;
+new original oracle packet
+`97dd4c6b105c66869f9bf5c4236d2ac6e6115136444a833778285debbc3c27d4`;
+preceding original oracle packets
 `74e932e03a7bbfc9bb44a2c8b92de3d5c12abd43ee4daf30afa05a94a76ad21b` /
 `003c4e71b28fea8924d4da25c19412a3561d2649f211645d4d429159fc29ec49`.
 
 Performance remains deferred by user direction. Automatic GC thresholds,
 remaining Fiber/GC ordering, arbitrary native-callback suspension and
 allocation-limit equivalence are not claimed. Phar, PCRE and Date/DateTime
-remain outside this core train. Continue from 11 measured failures plus the
+remain outside this core train. Continue from 9 measured failures plus the
 explicit OOM timeout;
 skips and unsupported cases are not compatibility successes.
+
+### Preceding suspended-state checkpoint
+
+The `core-suspended-state-remainder` checkpoint over `95ad53db` added three
+exact passes without loss, reaching 6,771 passes and 11 failures. It preserved
+generator-finally throws, reference-foreach cursor state and lazy-object
+property snapshots, with the complete correctness gates.
 
 ### Preceding finalization checkpoint
 

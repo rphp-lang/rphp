@@ -367,7 +367,7 @@ pub(crate) fn virtual_constructor_shape(
     op_array: &OpArray,
     ip: usize,
 ) -> Option<VirtualConstructorShape> {
-    use crate::vm::instruction::{NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE, RELEASE_TEMPS_SUBEXPRESSION};
+    use crate::vm::instruction::{NEW_FLAG_PREPARE_ONLY, NEW_FLAG_PREPARED, NEW_FLAG_VIRTUAL_OBJECT_ARRAY_PIPELINE};
     let current = *op_array.instructions.get(ip)?;
     if current.opcode != OpCode::NewObj { return None; }
     let prepare_ip = if current._pad & NEW_FLAG_PREPARED != 0 {
@@ -405,7 +405,7 @@ pub(crate) fn virtual_constructor_shape(
     if ip != prepare_ip && ip != invoke_ip { return None; }
     let mut assign_ip = invoke_ip + 2 + instruction.extended_value as usize;
     if prepared && op_array.instructions.get(assign_ip).is_some_and(|entry| {
-        entry.opcode == OpCode::ReleaseTemps && entry._pad == RELEASE_TEMPS_SUBEXPRESSION
+        entry.is_plain_subexpression_release()
     }) {
         assign_ip += 1;
     }
