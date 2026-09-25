@@ -421,6 +421,11 @@ impl ExecutorGlobals {
             Vec::new,
             super::fiber::FiberRuntime::pending_gc_destructor_roots,
         );
+        if let Some(runtime) = self.fiber_runtime.as_deref() {
+            pending_destructors.extend(runtime.pending_native_destructor_roots());
+            pending_destructors.sort_by_key(Value::object_handle);
+            pending_destructors.dedup_by_key(|value| value.object_identity());
+        }
         let possible_roots = cycle_root_snapshot();
         let has_destructor_root = possible_roots.iter().any(|value| {
             let Some(identity) = value.object_identity() else {

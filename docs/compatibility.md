@@ -7,65 +7,69 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-gc-root-admission` checkpoint over `c914d242` adds **2 exact PHP 8.5
-passes without loss**. Automatic collection starts at a VM-safe boundary,
-protects the incoming root and adapts the next admission threshold. Root-buffer
-compaction and destructor-worker shutdown preserve PHP order. Reference
-promotion, array append and property replacement retain real PHP owners while
-executor mirrors, immutable empty defaults and redundant argument snapshots do
-not manufacture extra GC roots. Actual callback invocation remains GC-eligible.
+The `core-native-callback-remainder` checkpoint over `defa0d3d` adds **3 exact
+PHP 8.5 passes without loss**. Iterator-backed `yield from` and admitted ordinary
+destructor releases retain their user activation, result storage and native
+phase across Fiber suspension. Resuming, throwing and force-closing preserve
+the same Fiber, callback order, finally blocks and committed writes without
+replaying side effects or retaining pointers into unwound native stack frames.
+Request shutdown retires parked native receivers in object-handle order.
 
-The complete measured 7,174-case stable core is **6,775 pass / 7 fail / 183
+The complete measured 7,174-case stable core is **6,778 pass / 4 fail / 183
 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,297/7/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,773 accepted parent passes remain passes. The exact gains are
-`Zend/tests/gc/bug70805.phpt` and `Zend/tests/fibers/destructors_005.phpt`.
+**5,300/4/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,775 accepted parent passes remain passes. The exact gains are
+`Zend/tests/fibers/destructors_007.phpt`, `Zend/tests/fibers/gh9916-007.phpt`
+and `Zend/tests/fibers/gh9916-008.phpt`.
 The unchanged `Zend/tests/new_oom.phpt` timeout remains explicit.
 
-Forty-six new original E2E tests and three unit regressions cover admission,
-ordering, references/COW, re-entry and optimized append side exits. All 84
-current and 79 preceding CLI oracle comparisons match PHP 8.5.11 stdout,
-stderr and exit status byte-exactly. Matrix regressions in append planning and
-iterator destruction were repaired generally. One existing frameless-call
-expectation was corrected against PHP: a retained reference destroys its
-referent after `done` at shutdown, not at the earlier variable unset.
+Thirty-six original E2E regressions cover every Iterator phase, repeated
+suspension, nested callbacks, exceptions, force-close, child/weak-reference
+retirement, resurrection, traces, GC and shared error-reporting state. All 36
+current and 163 preceding CLI comparisons match PHP 8.5.11 stdout, stderr and
+exit status byte-exactly; the focused/adjacent packet passes 208/208.
 The frozen-source full Cargo matrix passed under `test-fast` (debug assertions
-and overflow checks enabled): default **6,235**, no-default **5,901**, erased
-**6,306**, reified **6,328**, all-features **6,379**; existing ignored counts
-remain 15/15/15/15/18. Focused and adjacent GC, Fiber, iterator, weak-reference
-and lifetime gates pass; the complete stable-core comparison has no lost pass.
+and overflow checks enabled): default **6,271**, no-default **5,937**, erased
+**6,342**, reified **6,364**, all-features **6,415**; existing ignored counts
+remain 15/15/15/15/18.
 All-feature/all-target, exact PHPT no-loss, Composer/Symfony S0--S3,
 formatting, public-data hygiene and unsafe policy passed. Production unsafe
-inventory is **1,625 blocks / 289 functions**, below the unchanged ceilings.
-Host gates use a 6 GiB
-aggregate memory limit, no swap, two build/test workers and at most four PHPT
-workers. Automatic cleanup retains a safe disk reserve between configurations;
-the final packet completed without an OOM kill, with a 6 GiB peak and no swap.
+inventory is **1,627 blocks / 289 functions**, within unchanged ceilings.
+Host gates use a 6 GiB aggregate memory limit, no swap, two build/test workers
+and at most four PHPT workers. Automatic cleanup ran between configurations;
+the matrix completed without an OOM kill, with a 6 GiB peak and no swap.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `45a599f16f5b988cc73335ec722c94f257a982865659df9ef2d56a792669a085`;
+candidate `60c95b46d27fbf762cb24487b1b56e9f44992355fc80844d12ecbd4fa30cc4d4`;
 parent/candidate full manifests
-`cd24726a6912c71d780b40ea5f8efc722198b6f15aa208f842b71f326efe825b` /
-`333578f73aa27175c48f1df5db6aea374009a0805e9e84014133d8e0a8fc8101`;
+`333578f73aa27175c48f1df5db6aea374009a0805e9e84014133d8e0a8fc8101` /
+`1bbd2b24d725d1b7718d135a09ea05b7e803da239ad7a97125659285ccf1d769`;
 Zend/lang pass set
-`351feddc63d8b8ca64b6d27c73675a810230cc2d165113f40fadaba6b44dda1a`;
+`51c58d70eb9e48954d59f57b1c3141fed94611be8fba50e5a5cd819fc6cd9489`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`893be42458d84a0aa9d20f473f6d79d3f33ad0c4bd2a90c143b0e930a4285e29`;
-new original oracle packet
-`a451b2be9d4a51eac20c45ef811d676773a789b18285f37b772b732284230ea0`;
-preceding original oracle packets
-`97dd4c6b105c66869f9bf5c4236d2ac6e6115136444a833778285debbc3c27d4` /
-`74e932e03a7bbfc9bb44a2c8b92de3d5c12abd43ee4daf30afa05a94a76ad21b` /
-`003c4e71b28fea8924d4da25c19412a3561d2649f211645d4d429159fc29ec49`.
+`236c60876ca2878b0aa5e89e17574368a0349448c6ebcc6e50b2b5785bac5371`;
+current original oracle packets
+`94d4926275aceedd8a55e7a21bb95b692e1ba5db879677949f4492d77e9201d6` /
+`aed939e090a9fa06550765e1784a5c347f5a490f51e63744d5000e1d4e573a69`.
 
-Performance remains deferred by user direction. Arbitrary native-callback
-suspension, GC status outside the exercised boundaries and allocation-limit
-equivalence are not claimed. Continue from 7 measured failures plus the OOM
-timeout: three direct core destructor/Iterator suspension cases and four
-library-involved holdouts. Phar, PCRE, Date/DateTime and general library work
-remain outside this core train. Skips and unsupported cases are not passes.
+Performance remains deferred by user direction. Destructor admission is limited
+to committed ordinary-object writes and a single final object temporary;
+arbitrary native-callback suspension and allocation-limit equivalence are not
+claimed. The four remaining failures involve Random, PCRE, SPL serialization
+and `getimagesize()`; they stay separate from this core workstream. Next inspect
+the 54 tests rejected solely for `zend.enable_gc`: startup application and
+published runtime state need differential validation before runner admission.
+Phar, PCRE, Date/DateTime and general library work remain outside this train.
+Skips and unsupported cases are not passes.
+
+### Preceding automatic-GC checkpoint
+
+The `core-gc-root-admission` checkpoint over `c914d242` added two exact passes
+without loss, reaching 6,775 passes and 7 failures. It aligned automatic root
+admission, thresholds, ownership and destructor-worker shutdown ordering with
+the complete correctness gates.
 
 ### Preceding failed-expression checkpoint
 

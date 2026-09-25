@@ -98,6 +98,7 @@ pub struct Generator {
     /// Fiber-owned suspended delegation chain.
     pub(crate) fiber_suspend_result_slot: Option<u32>,
     pub(crate) fiber_suspended: bool,
+    pub(crate) fiber_iteration_ready: bool,
     /// Resume input is published only on the root Generator whose internal
     /// method call was interrupted. External attempts to advance the same
     /// Running generator therefore continue to receive the canonical error.
@@ -126,6 +127,8 @@ pub struct Generator {
     pub owner_object: Option<Weak<RefCell<PhpObject>>>,
     /// Active `yield from` delegate (sub-generator or array)
     pub delegate: Option<YieldFromDelegate>,
+    pub(crate) iterator_continuation:
+        Option<Box<crate::runtime::fiber::native::IteratorContinuation>>,
     /// TMP slot index for writing `yield from` result when delegate completes
     pub yield_from_result_slot: u32,
     /// Relative TMP index retaining the active yield-from source. A sentinel
@@ -188,6 +191,7 @@ impl Generator {
             pending_finally_exceptions: Vec::new(),
             fiber_suspend_result_slot: None,
             fiber_suspended: false,
+            fiber_iteration_ready: false,
             fiber_resume_input: None,
             rewindable: true,
             indirectly_primed: false,
@@ -197,6 +201,7 @@ impl Generator {
             closure_owner: None,
             owner_object: None,
             delegate: None,
+            iterator_continuation: None,
             yield_from_result_slot: 0,
             yield_from_source_tmp: u32::MAX,
             #[cfg(feature = "php-generics-reified")]
@@ -288,6 +293,12 @@ impl Generator {
         }
         if let Some(YieldFromDelegate::Iterator(iterator)) = &self.delegate {
             visitor(iterator);
+        }
+        if let Some(state) = &self.iterator_continuation {
+            let _snapshot = crate::value::suppress_cycle_snapshot_roots();
+            for value in state.cycle_snapshot() {
+                visitor(&value);
+            }
         }
         true
     }

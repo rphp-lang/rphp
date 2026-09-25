@@ -2449,6 +2449,47 @@ pub(crate) fn resume_generator_from_fiber(
     )
 }
 
+fn resume_foreach_generator(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    generator: &crate::vm::generator::GeneratorRef,
+    input: Option<crate::vm::generator::GeneratorFiberInput>,
+) -> Result<GeneratorResumeOutcome, VmError> {
+    eg.begin_native_generator_iteration(frame, generator.clone());
+    let outcome = if let Some(input) = input {
+        resume_generator_from_fiber(eg, generator, input)
+    } else {
+        resume_generator(eg, generator, Value::null())
+    };
+    eg.end_native_generator_iteration(frame);
+    outcome
+}
+
+pub(crate) fn resume_suspended_generator_iteration(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    receiver: Value,
+    input: crate::runtime::fiber::FiberInput,
+) -> Result<Option<*mut ExecuteData>, VmError> {
+    use crate::runtime::fiber::FiberInput;
+    use crate::vm::generator::GeneratorFiberInput;
+    let generator = receiver.as_object().and_then(|object| object.generator.clone()).expect("retained Generator consumer");
+    let input = match input {
+        FiberInput::Resume(value) => GeneratorFiberInput::Resume(value),
+        FiberInput::Throw(value) => GeneratorFiberInput::Throw(value),
+        FiberInput::ForceClose(value) => GeneratorFiberInput::ForceClose(value),
+        FiberInput::Start(_) => unreachable!(),
+    };
+    eg.current_execute_data.set(frame);
+    match resume_foreach_generator(eg, frame, &generator, Some(input))? {
+        GeneratorResumeOutcome::Advanced => {
+            generator.borrow_mut().fiber_iteration_ready = true;
+            Ok(Some(frame))
+        }
+        GeneratorResumeOutcome::Threw(exception) => inject_suspended_exception(eg, frame, exception),
+    }
+}
+
 /// Retire a suspended generator whose last userland owner is being released.
 /// PHP skips the abandoned body, executes every enclosing finally block and
 /// rejects any attempt to suspend again from that force-close path.
@@ -3108,95 +3149,18 @@ fn resume_generator_delegation(
             continue;
         }
 
-        let iterator_delegate = matches!(
-            current.borrow().delegate,
-            Some(YieldFromDelegate::Iterator(_))
-        );
-        if iterator_delegate {
-            let delegate = current
-                .borrow_mut()
-                .delegate
-                .take()
-                .expect("iterator delegation disappeared");
-            let YieldFromDelegate::Iterator(iterator) = delegate else {
-                unreachable!();
-            };
-            match std::mem::replace(
-                &mut input,
-                GeneratorFrameInput::Send(Value::null()),
-            ) {
-                frame_input @ (GeneratorFrameInput::Throw(_)
-                | GeneratorFrameInput::SyntheticThrow(_)
-                | GeneratorFrameInput::Propagate(_)) => {
-                    let mut values = vec![iterator];
-                    values.extend(take_yield_from_temporary_source(&current));
-                    match execute_generator_frame_input(
-                        eg,
-                        &current,
-                        frame_input,
-                        &parents,
-                        Some(values),
-                    )? {
-                        GeneratorFrameOutcome::Advanced => fresh_execution = true,
-                        GeneratorFrameOutcome::Threw(exception, extend_trace) => {
-                            propagation = Some(GeneratorPropagation::Threw(
-                                exception,
-                                extend_trace,
-                            ));
-                        }
-                    }
-                }
-                GeneratorFrameInput::Send(_)
-                | GeneratorFrameInput::YieldFromReturn(_)
-                | GeneratorFrameInput::FiberResume(_) => {
-                    let step = yield_from_iterator_step(eg, &iterator, false)?;
-                    if let Some(exception) = eg.exception.take() {
-                        match execute_generator_frame_input(
-                            eg,
-                            &current,
-                            GeneratorFrameInput::Propagate(exception),
-                            &parents,
-                            None,
-                        )? {
-                            GeneratorFrameOutcome::Advanced => fresh_execution = true,
-                            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
-                                propagation = Some(GeneratorPropagation::Threw(
-                                    exception,
-                                    extend_trace,
-                                ));
-                            }
-                        }
-                    } else if let Some((key, value)) = step {
-                        {
-                            let mut current_data = current.borrow_mut();
-                            current_data.value = value;
-                            current_data.key = key;
-                            current_data.last_yielded_value =
-                                current_data.value.clone_closure_capture();
-                            current_data.last_yielded_key =
-                                current_data.key.clone_closure_capture();
-                            current_data.delegate = Some(YieldFromDelegate::Iterator(iterator));
-                            current_data.state = GeneratorState::Suspended;
-                        }
-                        propagation = Some(GeneratorPropagation::Yielded);
-                    } else {
-                        current.borrow_mut().ip_offset += 1;
-                        match execute_generator_frame_input(
-                            eg,
-                            &current,
-                            GeneratorFrameInput::YieldFromReturn(Value::null()),
-                            &parents,
-                            None,
-                        )? {
-                            GeneratorFrameOutcome::Advanced => fresh_execution = true,
-                            GeneratorFrameOutcome::Threw(exception, extend_trace) => {
-                                propagation = Some(GeneratorPropagation::Threw(
-                                    exception,
-                                    extend_trace,
-                                ));
-                            }
-                        }
-                    }
+        if matches!(current.borrow().delegate, Some(YieldFromDelegate::Iterator(_)))
+            && matches!(&input, GeneratorFrameInput::Throw(_) | GeneratorFrameInput::SyntheticThrow(_) | GeneratorFrameInput::Propagate(_))
+        {
+            let Some(YieldFromDelegate::Iterator(iterator)) = current.borrow_mut().delegate.take() else { unreachable!() };
+            current.borrow_mut().iterator_continuation = None;
+            let mut values = vec![iterator];
+            values.extend(take_yield_from_temporary_source(&current));
+            let frame_input = std::mem::replace(&mut input, GeneratorFrameInput::Send(Value::null()));
+            match execute_generator_frame_input(eg, &current, frame_input, &parents, Some(values))? {
+                GeneratorFrameOutcome::Advanced => fresh_execution = true,
+                GeneratorFrameOutcome::Threw(exception, extend_trace) => {
+                    propagation = Some(GeneratorPropagation::Threw(exception, extend_trace));
                 }
             }
             continue;
@@ -3258,12 +3222,22 @@ fn execute_generator_frame_input(
             (None, false, false)
         }
         GeneratorFrameInput::FiberResume(input) => {
+            let native_iterator = gen_ref.borrow().iterator_continuation.as_ref().is_some_and(|state| state.is_suspended());
             let result_slot = {
                 let mut generator = gen_ref.borrow_mut();
                 generator.fiber_suspended = false;
                 generator.fiber_suspend_result_slot.take()
             };
-            match input {
+            if native_iterator {
+                use crate::runtime::fiber::FiberInput;
+                use crate::vm::generator::GeneratorFiberInput;
+                gen_ref.borrow_mut().iterator_continuation.as_mut().expect("checked continuation").input = Some(match input {
+                    GeneratorFiberInput::Resume(value) => FiberInput::Resume(value),
+                    GeneratorFiberInput::Throw(value) => FiberInput::Throw(value),
+                    GeneratorFiberInput::ForceClose(value) => FiberInput::ForceClose(value),
+                });
+                (None, false, false)
+            } else { match input {
                 crate::vm::generator::GeneratorFiberInput::Resume(value) => {
                     if let Some(result_slot) = result_slot {
                         restore_generator_resume_value(
@@ -3279,7 +3253,7 @@ fn execute_generator_frame_input(
                 | crate::vm::generator::GeneratorFiberInput::ForceClose(exception) => {
                     (Some(exception), false, false)
                 }
-            }
+            } }
         }
     };
     let outcome = execute_resumed_generator_frame(
@@ -4057,6 +4031,31 @@ pub(crate) fn execute_coroutine_frame(
             return Ok(());
         }
     }
+}
+
+pub(crate) fn resume_suspended_native_release(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    mut release: Box<NativeRelease>,
+    input: crate::runtime::fiber::FiberInput,
+) -> Result<Option<*mut ExecuteData>, VmError> {
+    eg.current_execute_data.set(frame);
+    if let Some(value) = release.run(eg, frame, Some(input))? {
+        eg.suspend_native_release(release, value)?;
+        unreachable!("suspension returns the internal unwind sentinel");
+    }
+    let advance = release.advance;
+    drop(release);
+    if let Some(exception) = eg.exception.take() {
+        return inject_suspended_exception(eg, frame, exception);
+    }
+    if advance {
+        // SAFETY: the release owner is resumed only with its still-live VM
+        // caller. The committed assignment retained this exact instruction;
+        // completion skips it once, whereas TMP retirement revisits its tail.
+        unsafe { (*frame).opline = (*frame).opline.add(1); }
+    }
+    Ok(Some(frame))
 }
 
 /// Publish a value into the suspended caller's result slot while preserving

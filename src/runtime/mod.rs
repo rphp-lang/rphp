@@ -2348,6 +2348,22 @@ impl ExecutorGlobals {
             .is_some_and(fiber::FiberRuntime::has_active)
     }
 
+    pub(crate) fn begin_native_generator_iteration(
+        &mut self,
+        frame: *mut ExecuteData,
+        generator: crate::vm::generator::GeneratorRef,
+    ) {
+        if let Some(runtime) = self.fiber_runtime.as_mut() {
+            runtime.begin_generator_iteration(frame, generator);
+        }
+    }
+
+    pub(crate) fn end_native_generator_iteration(&mut self, frame: *mut ExecuteData) {
+        if let Some(runtime) = self.fiber_runtime.as_mut() {
+            runtime.end_generator_iteration(frame);
+        }
+    }
+
     pub(crate) fn active_fiber_is_force_closing(&self) -> bool {
         self.fiber_runtime
             .as_deref()
@@ -2443,7 +2459,41 @@ impl ExecutorGlobals {
         let runtime = self.fiber_runtime_ptr();
         // The active Fiber and its pinned context remain live until the
         // suspension sidecar unwinds to run_fiber().
-        fiber::FiberRuntime::suspend(runtime, self, frame, return_value, value)
+        fiber::FiberRuntime::suspend(runtime, self, frame, return_value, value, None, None)
+    }
+
+    pub(crate) fn suspend_native_generator_callback(
+        &mut self,
+        generator: crate::vm::generator::GeneratorRef,
+        value: Value,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        let runtime = self.fiber_runtime_ptr();
+        fiber::FiberRuntime::suspend(
+            runtime,
+            self,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            value,
+            Some(generator),
+            None,
+        )
+    }
+
+    pub(crate) fn suspend_native_release(
+        &mut self,
+        release: Box<crate::vm::execute::NativeRelease>,
+        value: Value,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        let runtime = self.fiber_runtime_ptr();
+        fiber::FiberRuntime::suspend(
+            runtime,
+            self,
+            std::ptr::null_mut(),
+            std::ptr::null_mut(),
+            value,
+            None,
+            Some(release),
+        )
     }
 
     pub(crate) fn dynamic_scope_owner(&self, frame: usize) -> usize {

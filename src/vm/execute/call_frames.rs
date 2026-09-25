@@ -932,6 +932,44 @@ fn run_final_object_destructor_tree_inner(
         }
     }
 
+    let children = collect_final_destructor_children(eg, &owner);
+
+    for (_, property_references, child) in children {
+        let released_elsewhere = child
+            .vm_release_identity()
+            .and_then(|identity| release_references.and_then(|counts| counts.get(&identity)))
+            .copied()
+            .unwrap_or(0);
+        let expected = property_references + released_elsewhere + 1;
+        if child.vm_release_strong_count() != Some(expected) {
+            continue;
+        }
+        ran_destructor |= run_final_object_destructor_tree(
+            eg,
+            child,
+            expected,
+            release_references,
+            detach_lazy_state,
+            logical_caller,
+            internal_trace_origin,
+            logical_caller_at_current_site,
+            live_internal_caller,
+        )?;
+        if eg.exception.is_some() {
+            break;
+        }
+    }
+    if detach_lazy_state {
+        eg.take_lazy_object_state(&owner);
+    }
+    if let Some(identity) = fiber_identity {
+        eg.release_fiber_object(identity);
+    }
+    Ok(ran_destructor)
+}
+
+#[cold]
+fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec<(usize, usize, Value)> {
     // Preserve declared-slot and dynamic insertion order while grouping
     // aliases to the same child. One retained representative is accounted for
     // explicitly in the strong-count check; every other counted handle is a
@@ -1031,39 +1069,7 @@ fn run_final_object_destructor_tree_inner(
             }
         }
     }
-
-    for (_, property_references, child) in children {
-        let released_elsewhere = child
-            .vm_release_identity()
-            .and_then(|identity| release_references.and_then(|counts| counts.get(&identity)))
-            .copied()
-            .unwrap_or(0);
-        let expected = property_references + released_elsewhere + 1;
-        if child.vm_release_strong_count() != Some(expected) {
-            continue;
-        }
-        ran_destructor |= run_final_object_destructor_tree(
-            eg,
-            child,
-            expected,
-            release_references,
-            detach_lazy_state,
-            logical_caller,
-            internal_trace_origin,
-            logical_caller_at_current_site,
-            live_internal_caller,
-        )?;
-        if eg.exception.is_some() {
-            break;
-        }
-    }
-    if detach_lazy_state {
-        eg.take_lazy_object_state(&owner);
-    }
-    if let Some(identity) = fiber_identity {
-        eg.release_fiber_object(identity);
-    }
-    Ok(ran_destructor)
+    children
 }
 
 /// A callback entered beneath a detached internal activation snapshots its
@@ -1732,6 +1738,146 @@ pub(crate) enum PreparedValueDestructor {
     Tree(Value),
 }
 
+/// The release tree of a committed VM write. Values and the child order are
+/// owned here, rather than in recursive Rust locals, while a destructor parks.
+pub(crate) struct NativeRelease {
+    nodes: Vec<NativeReleaseNode>,
+    callback: Option<std::pin::Pin<Box<crate::runtime::fiber::native::NativeCallback>>>,
+    pub(crate) advance: bool,
+}
+
+struct NativeReleaseNode {
+    owner: Value,
+    references: usize,
+    phase: NativeReleasePhase,
+}
+
+#[derive(Clone, Copy)]
+enum NativeReleasePhase { Enter, WeakValues, Properties, Finish }
+
+impl NativeRelease {
+    pub(crate) fn shutdown_roots(&self) -> Vec<Value> {
+        self.nodes.iter().filter_map(|node| node.owner.clone_cycle_handle()).collect()
+    }
+    fn new(owner: Value, references: usize, advance: bool) -> Self {
+        Self { nodes: vec![NativeReleaseNode { owner, references, phase: NativeReleasePhase::Enter }], callback: None, advance }
+    }
+
+    pub(crate) fn cycle_snapshot(&self) -> (Vec<Value>, Vec<usize>) {
+        let (mut values, frames) = self.callback.as_ref().map_or_else(|| (Vec::new(), Vec::new()), |callback| callback.cycle_snapshot());
+        for node in &self.nodes { values.extend(node.owner.clone_cycle_handle()); }
+        (values, frames)
+    }
+
+    pub(crate) fn run(&mut self, eg: &mut ExecutorGlobals, frame: *mut ExecuteData, mut input: Option<crate::runtime::fiber::FiberInput>) -> Result<Option<Value>, VmError> {
+        use crate::runtime::fiber::native::{NativeCallback, NativeCallbackOutcome};
+        loop {
+            if let Some(callback) = self.callback.as_mut() {
+                #[cfg(feature = "resource-lifetime")]
+                let _resource_release_scope = crate::resource_handle::ResourceReleaseScope::new(false);
+                match NativeCallback::run(callback.as_mut(), eg, input.take(), frame)? {
+                    NativeCallbackOutcome::Suspended(value) => return Ok(Some(value)),
+                    NativeCallbackOutcome::Complete(_) => self.callback = None,
+                }
+                if eg.exception.is_some() { return Ok(None); }
+            }
+            let Some(node) = self.nodes.last_mut() else { return Ok(None); };
+            match node.phase {
+                NativeReleasePhase::Enter => {
+                    if node.owner.vm_release_strong_count() != Some(node.references) {
+                        self.nodes.pop();
+                        continue;
+                    }
+                    if !native_release_plain_object(eg, &node.owner) {
+                        let node = self.nodes.pop().expect("active release node");
+                        run_final_object_destructor_tree(eg, node.owner, node.references, None, true, frame, false, true, false)?;
+                        if eg.exception.is_some() { return Ok(None); }
+                        continue;
+                    }
+                    node.owner.mark_final_drop_tree_checkpoints(&mut std::collections::HashSet::new());
+                    node.phase = NativeReleasePhase::WeakValues;
+                    if let Some(callback) = crate::stdlib::resolve_object_public_method(eg, &node.owner, "__destruct")
+                        && callback.common().fn_type == FunctionType::User
+                        && node.owner.mark_object_destructed()
+                    {
+                        self.callback = Some(NativeCallback::new(callback));
+                    }
+                }
+                NativeReleasePhase::WeakValues => {
+                    if node.owner.vm_release_strong_count() != Some(node.references) {
+                        if let Some(mut object) = node.owner.as_object_mut() { object.finish_releasing_unset_properties(); }
+                        self.nodes.pop();
+                        continue;
+                    }
+                    node.phase = NativeReleasePhase::Properties;
+                    if let Some(identity) = node.owner.weak_object_identity()
+                        && eg.has_weak_object_release_work(identity)
+                    {
+                        let released = eg.release_weak_object(identity);
+                        for value in released.into_iter().rev() {
+                            let owner = value.dereferenced().clone();
+                            drop(value);
+                            self.nodes.push(NativeReleaseNode { owner, references: 1, phase: NativeReleasePhase::Enter });
+                        }
+                    }
+                }
+                NativeReleasePhase::Properties => {
+                    let children = collect_final_destructor_children(eg, &node.owner);
+                    node.phase = NativeReleasePhase::Finish;
+                    for (_, references, owner) in children.into_iter().rev() {
+                        self.nodes.push(NativeReleaseNode { owner, references: references + 1, phase: NativeReleasePhase::Enter });
+                    }
+                }
+                NativeReleasePhase::Finish => { self.nodes.pop(); }
+            }
+        }
+    }
+}
+
+fn native_release_plain_object(eg: &ExecutorGlobals, owner: &Value) -> bool {
+    let Some(object) = owner.as_object() else { return false; };
+    object.generator.is_none()
+        && owner.object_identity().is_none_or(|identity| !eg.has_fiber_context(identity))
+        && eg.lazy_object_state(owner).is_none()
+        && eg.find_method_info(&object.class_name, "__destruct").is_none_or(|_| {
+            crate::stdlib::resolve_object_public_method(eg, owner, "__destruct")
+                .is_some_and(|callback| callback.common().fn_type == FunctionType::User)
+        })
+}
+
+fn run_suspendable_release(eg: &mut ExecutorGlobals, frame: *mut ExecuteData, owner: Value, references: usize, advance: bool) -> Result<(), VmError> {
+    let mut release = Box::new(NativeRelease::new(owner, references, advance));
+    if let Some(value) = release.run(eg, frame, None)? {
+        eg.suspend_native_release(release, value)?;
+    }
+    Ok(())
+}
+
+/// Unlike other replacement hooks this call site has already committed the
+/// entire assignment, including its result and global mirrors. A parked
+/// release may therefore advance the opcode after completion without replay.
+fn run_committed_value_destructor_from_current_site(
+    eg: &mut ExecutorGlobals,
+    release: Option<PreparedValueDestructor>,
+    op_array: &crate::compiler::OpArray,
+    source_line: usize,
+) -> Result<(), VmError> {
+    if eg.has_active_fiber() && eg.active_generator.is_none() && eg.exception.is_none()
+        && let Some(PreparedValueDestructor::Direct { owner, .. }) = &release
+        && native_release_plain_object(eg, owner)
+    {
+        let Some(PreparedValueDestructor::Direct { owner, replaced_references, fiber_owned_references }) = release else { unreachable!() };
+        if let Some(references) = owner.vm_release_strong_count()
+            && references <= replaced_references + fiber_owned_references + 1
+        {
+            run_suspendable_release(eg, eg.current_execute_data.get(), owner, references, true)?;
+            replace_pending_destructor_trace_site(eg, Some((op_array, source_line)));
+        }
+        return Ok(());
+    }
+    run_prepared_value_destructor_from_current_site(eg, release, op_array, source_line)
+}
+
 /// Retain an object whose final PHP handle is about to be replaced.
 /// The caller chooses the opcode-specific commit boundary before invoking the
 /// returned release plan, so re-entrant code observes PHP's assignment
@@ -2331,6 +2477,27 @@ fn release_statement_temps(
                 |bitmap| bitmap & (1u64 << index) != 0,
             )
         };
+
+        // A single final object TMP has a completely owned native release
+        // plan. The instruction can revisit its callback-free slot retirement
+        // after resume; no expression or write is replayed. Wider alias graphs
+        // keep the established planner below.
+        if eg.has_active_fiber() && eg.active_generator.is_none() && eg.exception.is_none()
+            && release_mode == STATEMENT_TEMPS_ORDINARY
+        {
+            let mut owned = (first..end).filter(|index| is_owned(*index));
+            if let Some(index) = owned.next() && owned.next().is_none() {
+                let owner = &*base.add(index);
+                if owner.value_type() == ValueType::Object
+                    && !owner.is_object_destructor_retired()
+                    && owner.object_strong_count() == Some(1)
+                    && native_release_plain_object(eg, owner)
+                {
+                    run_suspendable_release(eg, frame, owner.clone(), 2, false)?;
+                    if eg.exception.is_some() { return Ok(()); }
+                }
+            }
+        }
 
         // Capture the proofs after callbacks but before the first source TMP
         // is retired. Nested borrowed-property receivers may themselves be

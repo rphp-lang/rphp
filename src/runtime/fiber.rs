@@ -21,6 +21,7 @@ use crate::vm::frame::{CALL_FRAME_SLOTS, ExecuteData};
 use crate::vm::function::FunctionType;
 
 mod gc;
+pub(crate) mod native;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) enum FiberStatus {
@@ -51,10 +52,20 @@ pub(crate) enum FiberReturnState {
 }
 
 enum FiberSuspension {
+    Release {
+        value: Value,
+        frame: *mut ExecuteData,
+        release: Box<crate::vm::execute::NativeRelease>,
+    },
     Direct {
         value: Value,
         frame: *mut ExecuteData,
         return_value: *mut Value,
+    },
+    GeneratorIteration {
+        value: Value,
+        frame: *mut ExecuteData,
+        generator: Value,
     },
     Generator {
         value: Value,
@@ -70,7 +81,10 @@ enum FiberSuspension {
 impl FiberSuspension {
     fn value(&self) -> &Value {
         match self {
-            Self::Direct { value, .. } | Self::Generator { value, .. } => value,
+            Self::Direct { value, .. }
+            | Self::Generator { value, .. }
+            | Self::Release { value, .. }
+            | Self::GeneratorIteration { value, .. } => value,
         }
     }
 }
@@ -117,9 +131,83 @@ pub(crate) struct FiberRuntime {
     pool: CoroutineStackPool,
     gc_current: Option<Value>,
     gc_trace_function: Option<Box<crate::vm::function::InternalFunction>>,
+    active_native: Vec<(usize, *mut native::NativeCallback)>,
+    native_generator_consumers: Vec<(usize, *mut ExecuteData, crate::vm::generator::GeneratorRef)>,
 }
 
 impl FiberRuntime {
+    /// Native invocation keepalives are real roots during explicit GC, but
+    /// cannot outlive request shutdown. Include their receiver and owning
+    /// Fiber in the existing handle-ordered object-store retirement pass.
+    pub(crate) fn pending_native_destructor_roots(&self) -> Vec<Value> {
+        let mut roots = Vec::new();
+        for context in self
+            .contexts
+            .values()
+            .filter(|context| context.status == FiberStatus::Suspended)
+        {
+            let mut native_roots = match context.suspension.as_ref() {
+                Some(FiberSuspension::Release { release, .. }) => release.shutdown_roots(),
+                Some(
+                    FiberSuspension::Generator { generator, .. }
+                    | FiberSuspension::GeneratorIteration { generator, .. },
+                ) => {
+                    let mut current = generator
+                        .as_object()
+                        .and_then(|object| object.generator.clone());
+                    let mut seen = std::collections::HashSet::new();
+                    let mut native_roots = Vec::new();
+                    while let Some(generator) = current {
+                        if !seen.insert(std::rc::Rc::as_ptr(&generator) as usize) {
+                            break;
+                        }
+                        let generator = generator.borrow();
+                        if let Some(state) = &generator.iterator_continuation {
+                            native_roots.extend(state.shutdown_roots());
+                        }
+                        current = match &generator.delegate {
+                            Some(crate::vm::generator::YieldFromDelegate::Generator(
+                                delegate,
+                                _,
+                            )) => Some(delegate.clone()),
+                            _ => None,
+                        };
+                    }
+                    native_roots
+                }
+                _ => Vec::new(),
+            };
+            if !native_roots.is_empty() {
+                roots.append(&mut native_roots);
+                if let Some(owner) = context.object.upgrade() {
+                    roots.push(Value::from_object_owner(owner));
+                }
+            }
+        }
+        roots.sort_by_key(Value::object_handle);
+        roots.dedup_by_key(|value| value.object_identity());
+        roots
+    }
+    pub(super) fn begin_generator_iteration(
+        &mut self,
+        frame: *mut ExecuteData,
+        generator: crate::vm::generator::GeneratorRef,
+    ) {
+        if let Some(owner) = self.active.last() {
+            self.native_generator_consumers
+                .push((*owner, frame, generator));
+        }
+    }
+
+    pub(super) fn end_generator_iteration(&mut self, frame: *mut ExecuteData) {
+        if !self.active.is_empty() {
+            let (_, retained, _) = self
+                .native_generator_consumers
+                .pop()
+                .expect("paired generator iteration");
+            assert_eq!(retained, frame);
+        }
+    }
     pub(crate) fn new() -> Self {
         Self {
             contexts: HashMap::new(),
@@ -127,6 +215,8 @@ impl FiberRuntime {
             pool: CoroutineStackPool::default(),
             gc_current: None,
             gc_trace_function: None,
+            active_native: Vec::new(),
+            native_generator_consumers: Vec::new(),
         }
     }
 
@@ -211,7 +301,9 @@ impl FiberRuntime {
         push(&context.result);
         if let Some(suspension) = &context.suspension {
             push(suspension.value());
-            if let FiberSuspension::Generator { generator, .. } = suspension {
+            if let FiberSuspension::Generator { generator, .. }
+            | FiberSuspension::GeneratorIteration { generator, .. } = suspension
+            {
                 push(generator);
             }
             if let FiberSuspension::Generator { arguments, .. } = suspension {
@@ -220,8 +312,13 @@ impl FiberRuntime {
                 }
             }
         }
-        let (state_children, frames) = context.state.cycle_snapshot();
+        let (state_children, mut frames) = context.state.cycle_snapshot();
         children.extend(state_children);
+        if let Some(FiberSuspension::Release { release, .. }) = &context.suspension {
+            let (values, release_frames) = release.cycle_snapshot();
+            children.extend(values);
+            frames.extend(release_frames);
+        }
         (children, frames)
     }
 
@@ -250,6 +347,8 @@ impl FiberRuntime {
         internal_frame: *mut ExecuteData,
         return_value: *mut Value,
         value: Value,
+        native_generator: Option<crate::vm::generator::GeneratorRef>,
+        native_release: Option<Box<crate::vm::execute::NativeRelease>>,
     ) -> Result<(), VmError> {
         // SAFETY: ExecutorGlobals supplies its live boxed registry and the VM
         // supplies the active Fiber::suspend frame. The pinned active context
@@ -265,24 +364,64 @@ impl FiberRuntime {
                 .get_mut(&identity)
                 .expect("active Fiber context must remain registered");
             let context = context.as_mut().get_unchecked_mut();
+            let native = runtime_ref
+                .active_native
+                .iter()
+                .rev()
+                .find_map(|(owner, native)| (*owner == identity).then_some(*native));
+            let boundary =
+                native.map_or(context.boundary_execute_data, |native| (*native).boundary);
             if context.force_closing {
                 return Err(VmError::Fatal(
                     "Cannot suspend in a force-closed fiber".to_string(),
                 ));
             }
-            let frame = (*internal_frame).prev_execute_data;
+            // A native operation republishes suspension only after its owned
+            // callback has restored the caller's stack. It retains the current
+            // opcode until the operation's explicit phase completes.
+            let native_operation = internal_frame.is_null();
+            let frame = if native_operation {
+                eg.current_execute_data.get()
+            } else {
+                (*internal_frame).prev_execute_data
+            };
             if frame.is_null() {
                 return Err(VmError::Fatal(
                     "Cannot suspend outside of a fiber".to_string(),
                 ));
             }
-            let active_generator = eg.active_generator.clone();
+            let active_generator = native_generator.or_else(|| eg.active_generator.clone());
+            let consumer = runtime_ref
+                .native_generator_consumers
+                .last()
+                .filter(|(owner, _, _)| *owner == identity)
+                .cloned();
+            let mut iteration_call = None;
             let (resume_frame, generator_call) = if let Some(active_generator) = active_generator {
                 let mut generator_method =
                     eg.trace_caller(frame as usize, (*frame).prev_execute_data);
                 let mut generator_receiver = None;
                 for _ in 0..64 {
                     if generator_method.is_null() {
+                        break;
+                    }
+                    if let Some((_, consumer_frame, root)) = &consumer
+                        && generator_method == *consumer_frame
+                    {
+                        let object = root
+                            .borrow()
+                            .owner_object
+                            .as_ref()
+                            .and_then(Weak::upgrade)
+                            .expect("active generator iteration retains its receiver");
+                        iteration_call = Some(Value::from_object_owner(object));
+                        generator_receiver = Some((
+                            iteration_call
+                                .as_ref()
+                                .expect("published iteration")
+                                .clone(),
+                            root.clone(),
+                        ));
                         break;
                     }
                     let function = (*generator_method).func;
@@ -306,10 +445,14 @@ impl FiberRuntime {
                         "Suspended generator is missing its internal caller".to_string(),
                     ));
                 }
-                let resume_frame = eg.trace_caller(
-                    generator_method as usize,
-                    (*generator_method).prev_execute_data,
-                );
+                let resume_frame = if iteration_call.is_some() {
+                    generator_method
+                } else {
+                    eg.trace_caller(
+                        generator_method as usize,
+                        (*generator_method).prev_execute_data,
+                    )
+                };
                 if resume_frame.is_null() {
                     return Err(VmError::Fatal(
                         "Suspended generator is missing its Fiber caller".to_string(),
@@ -376,7 +519,11 @@ impl FiberRuntime {
                 }
                 let function = (*generator_method).func;
                 let public_num_args = (*generator_method).num_args;
-                let storage_num_args = (*generator_method).num_cvs;
+                let storage_num_args = if iteration_call.is_some() {
+                    0
+                } else {
+                    (*generator_method).num_cvs
+                };
                 let mut arguments = Vec::with_capacity(storage_num_args as usize);
                 for index in 0..storage_num_args {
                     arguments.push((*generator_method).cv(index).clone_closure_capture());
@@ -395,7 +542,7 @@ impl FiberRuntime {
                 (frame, None)
             };
             let mut ancestor = resume_frame;
-            while !ancestor.is_null() && ancestor != context.boundary_execute_data {
+            while !ancestor.is_null() && ancestor != boundary {
                 ancestor = (*ancestor).prev_execute_data;
             }
             if ancestor.is_null() {
@@ -405,38 +552,55 @@ impl FiberRuntime {
                 ));
             }
             assert_eq!(context.status, FiberStatus::Running);
-            assert!(context.suspension.is_none());
-            context.suspension = Some(
-                if let Some((
+            let suspension = if let Some(native) = native {
+                &mut (*native).suspension
+            } else {
+                &mut context.suspension
+            };
+            assert!(suspension.is_none());
+            *suspension = Some(if let Some(release) = native_release {
+                FiberSuspension::Release {
+                    value,
+                    frame,
+                    release,
+                }
+            } else if let Some(generator) = iteration_call {
+                FiberSuspension::GeneratorIteration {
+                    value,
+                    frame: resume_frame,
+                    generator,
+                }
+            } else if let Some((
+                generator,
+                function,
+                public_num_args,
+                arguments,
+                generator_return_value,
+            )) = generator_call
+            {
+                FiberSuspension::Generator {
+                    value,
+                    frame: resume_frame,
                     generator,
                     function,
                     public_num_args,
                     arguments,
-                    generator_return_value,
-                )) = generator_call
-                {
-                    FiberSuspension::Generator {
-                        value,
-                        frame: resume_frame,
-                        generator,
-                        function,
-                        public_num_args,
-                        arguments,
-                        return_value: generator_return_value,
-                    }
-                } else {
-                    FiberSuspension::Direct {
-                        value,
-                        frame,
-                        return_value,
-                    }
-                },
-            );
+                    return_value: generator_return_value,
+                }
+            } else {
+                FiberSuspension::Direct {
+                    value,
+                    frame,
+                    return_value,
+                }
+            });
             // The direct call is complete from the resumed callback's point
             // of view. A generator call instead re-enters its still-pending
             // internal method, which consumes the Fiber input from its saved
             // activation before advancing this outer call site.
-            (*frame).opline = (*frame).opline.add(1);
+            if !native_operation {
+                (*frame).opline = (*frame).opline.add(1);
+            }
             Err(VmError::Fatal(String::new()))
         }
     }
@@ -517,6 +681,8 @@ impl FiberRuntime {
 
             (*context).state.exchange(eg);
             let mut generator_call = None;
+            let mut generator_iteration = None;
+            let mut native_release = None;
             let entry = if let FiberInput::Start(arguments) = input {
                 let result = &mut (*context).result as *mut Value;
                 let frame = match initialize_suspended_callback_frame(
@@ -556,6 +722,21 @@ impl FiberRuntime {
                     .take()
                     .expect("resumed Fiber must retain its suspension boundary");
                 match (suspension, input) {
+                    (FiberSuspension::Release { frame, release, .. }, input) => {
+                        (*context).force_closing |= matches!(&input, FiberInput::ForceClose(_));
+                        native_release = Some((release, input));
+                        frame
+                    }
+                    (
+                        FiberSuspension::GeneratorIteration {
+                            frame, generator, ..
+                        },
+                        input,
+                    ) => {
+                        (*context).force_closing |= matches!(&input, FiberInput::ForceClose(_));
+                        generator_iteration = Some((generator, input));
+                        frame
+                    }
                     (
                         FiberSuspension::Direct {
                             frame,
@@ -621,6 +802,25 @@ impl FiberRuntime {
             (&mut *runtime).active.push(identity);
             let execution = if eg.exception.is_some() {
                 Ok(())
+            } else if let Some((release, input)) = native_release {
+                match crate::vm::execute::resume_suspended_native_release(eg, entry, release, input)
+                {
+                    Ok(Some(entry)) if eg.exception.is_none() => {
+                        execute_coroutine_frame(eg, entry, boundary)
+                    }
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(error),
+                }
+            } else if let Some((generator, input)) = generator_iteration {
+                match crate::vm::execute::resume_suspended_generator_iteration(
+                    eg, entry, generator, input,
+                ) {
+                    Ok(Some(entry)) if eg.exception.is_none() => {
+                        execute_coroutine_frame(eg, entry, boundary)
+                    }
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(error),
+                }
             } else if let Some((function, public_num_args, arguments, return_value)) =
                 generator_call
             {

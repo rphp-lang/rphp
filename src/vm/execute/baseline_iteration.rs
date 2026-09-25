@@ -1462,8 +1462,9 @@ fn op_foreach_init<'a>(
         }
         {
             let state = gen_ref.borrow().state;
+            gen_ref.borrow_mut().fiber_iteration_ready = false;
             if state == crate::vm::generator::GeneratorState::Created {
-                let outcome = resume_generator(eg, &gen_ref, Value::null())?;
+                let outcome = resume_foreach_generator(eg, frame, &gen_ref, None)?;
                 match generator_resume_result(eg, frame, outcome)? {
                     ColdResult::Done => {}
                     control => return Ok(control),
@@ -1891,13 +1892,14 @@ fn op_foreach_next<'a, const ASSIGN_THROUGH_REFERENCE: bool, const BY_REFERENCE_
 
         // On first iteration (pos=0), generator is already started by ForeachInit
         // On subsequent iterations, call next()
-        if pos > 0 {
+        let iteration_ready = std::mem::take(&mut gen_ref.borrow_mut().fiber_iteration_ready);
+        if pos > 0 && !iteration_ready {
             let state = gen_ref.borrow().state;
             if state == crate::vm::generator::GeneratorState::Suspended {
                 if pos == 1 {
                     mark_generator_not_rewindable(&gen_ref);
                 }
-                let outcome = resume_generator(eg, &gen_ref, Value::null())?;
+                let outcome = resume_foreach_generator(eg, frame, &gen_ref, None)?;
                 let control = generator_resume_result(eg, frame, outcome)?;
                 if !matches!(control, ColdResult::Done) {
                     return Ok(control);
@@ -2706,59 +2708,6 @@ enum YieldFromSource {
     Iterator(Value),
 }
 
-fn yield_from_iterator_step(
-    eg: &mut ExecutorGlobals,
-    iterator: &Value,
-    first: bool,
-) -> Result<Option<(Value, Value)>, VmError> {
-    let method = if first { "rewind" } else { "next" };
-    let _ = crate::stdlib::call_object_protocol_method(
-        eg,
-        iterator,
-        "Iterator",
-        method,
-        &[],
-    )?;
-    if eg.exception.is_some() {
-        return Ok(None);
-    }
-    let valid = crate::stdlib::call_object_protocol_method(
-        eg,
-        iterator,
-        "Iterator",
-        "valid",
-        &[],
-    )?
-    .unwrap_or_else(|| Value::bool(false));
-    if eg.exception.is_some() || !valid.is_truthy() {
-        return Ok(None);
-    }
-    // Zend observes current() before key() when advancing an Iterator-backed
-    // yield-from delegate. Keep this separate from foreach's fetch order.
-    let value = crate::stdlib::call_object_protocol_method(
-        eg,
-        iterator,
-        "Iterator",
-        "current",
-        &[],
-    )?
-    .unwrap_or_else(Value::null);
-    if eg.exception.is_some() {
-        return Ok(None);
-    }
-    let key = crate::stdlib::call_object_protocol_method(
-        eg,
-        iterator,
-        "Iterator",
-        "key",
-        &[],
-    )?
-    .unwrap_or_else(Value::null);
-    if eg.exception.is_some() {
-        return Ok(None);
-    }
-    Ok(Some((key, value)))
-}
 
 fn throw_yield_from_exception<'a>(
     eg: &mut ExecutorGlobals,
@@ -2845,7 +2794,10 @@ fn op_yield_from<'a>(
     if eg
         .active_generator
         .as_ref()
-        .is_some_and(|generator| generator.borrow().force_closing)
+        .is_some_and(|generator| {
+            let generator = generator.borrow();
+            generator.force_closing && generator.iterator_continuation.as_ref().is_none_or(|state| !state.is_suspended())
+        })
     {
         let error = make_error_value(
             "Error",
@@ -2870,7 +2822,14 @@ fn op_yield_from<'a>(
 
     if let Some(gen_ref) = eg.active_generator.take() {
         let result_slot = opline.result as u32;
-        let source = match resolve_yield_from_source(eg, &source_val) {
+        let retained_iterator = match gen_ref.borrow().delegate.as_ref() {
+            Some(YieldFromDelegate::Iterator(iterator)) => Some(iterator.clone()),
+            _ => None,
+        };
+        let source = match retained_iterator.map_or_else(
+            || resolve_yield_from_source(eg, &source_val),
+            |iterator| Ok(Some(YieldFromSource::Iterator(iterator))),
+        ) {
             Ok(source) => source,
             Err(error) => {
                 eg.active_generator = Some(gen_ref);
@@ -3011,18 +2970,39 @@ fn op_yield_from<'a>(
                 ))
             }
             YieldFromSource::Iterator(iterator) => {
-                let step = match yield_from_iterator_step(eg, &iterator, true) {
+                use crate::runtime::fiber::native::{IteratorContinuation, IteratorStep};
+                let mut continuation = {
+                    let mut generator = gen_ref.borrow_mut();
+                    let first = generator.delegate.is_none();
+                    generator.delegate = Some(YieldFromDelegate::Iterator(iterator.clone()));
+                    generator.yield_from_result_slot = result_slot;
+                    generator.yield_from_source_tmp = if matches!(opline.op1_type, OpType::Tmp | OpType::Var) {
+                        u32::from(opline.op1).checked_sub(op_array.num_cvs).unwrap_or(u32::MAX)
+                    } else { u32::MAX };
+                    generator.iterator_continuation.take().unwrap_or_else(|| Box::new(IteratorContinuation::new(first)))
+                };
+                let step = continuation.step(eg, &iterator);
+                gen_ref.borrow_mut().iterator_continuation = Some(continuation);
+                let step = match step {
                     Ok(step) => step,
                     Err(error) => {
                         eg.active_generator = Some(gen_ref);
                         return Err(error);
                     }
                 };
+                if let IteratorStep::Suspended(value) = step {
+                    eg.active_generator = Some(gen_ref.clone());
+                    return eg.suspend_native_generator_callback(gen_ref, value).map(|()| ColdResult::Return);
+                }
                 if let Some(exception) = eg.exception.take() {
+                    gen_ref.borrow_mut().iterator_continuation = None;
+                    gen_ref.borrow_mut().delegate = None;
                     eg.active_generator = Some(gen_ref);
                     return Ok(throw_yield_from_exception(eg, frame, exception)?);
                 }
-                let Some((key, value)) = step else {
+                let IteratorStep::Item(key, value) = step else {
+                    gen_ref.borrow_mut().iterator_continuation = None;
+                    gen_ref.borrow_mut().delegate = None;
                     eg.active_generator = Some(gen_ref);
                     if opline.result_type != OpType::Unused {
                         // SAFETY: `result_slot` is compiler-allocated by this

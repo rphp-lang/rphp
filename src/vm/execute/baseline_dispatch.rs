@@ -3202,7 +3202,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 .iter()
                                 .position(|candidate| std::ptr::eq(candidate, opline))
                                 .expect("active opcode must belong to its op-array");
-                            run_prepared_value_destructor_from_current_site(
+                            run_committed_value_destructor_from_current_site(
                                 eg,
                                 destructor,
                                 op_array,
