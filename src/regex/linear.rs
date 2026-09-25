@@ -4,9 +4,9 @@
 //! or perturb the canonical backtracking loop used by the full PCRE subset.
 
 use super::{
-    Anchor, CaptureView, Match, Node, Regex, RegexFlags, chars_equal, end_anchor_matches,
-    final_end_anchor_matches, is_word_boundary, match_class_item, match_shorthand, newline_ends_at,
-    newline_len_at, subject_chars,
+    Anchor, CaptureView, ClassItem, Match, Node, Regex, RegexFlags, chars_equal,
+    end_anchor_matches, final_end_anchor_matches, is_word_boundary, match_class_item,
+    match_shorthand, newline_ends_at, newline_len_at, subject_chars,
 };
 
 mod ascii;
@@ -38,6 +38,25 @@ pub(super) fn is_supported(node: &Node) -> bool {
     }
 }
 
+/// Prove the same deterministic visitor shape while retaining capture spans.
+/// A group boundary does not make an inner quantifier terminal: `(a+)a`
+/// still needs continuation backtracking and therefore remains unsupported.
+pub(super) fn is_capture_visitor_supported(node: &Node) -> bool {
+    fn supported(node: &Node, terminal: bool) -> bool {
+        match node {
+            Node::Sequence(nodes) => nodes
+                .iter()
+                .enumerate()
+                .all(|(index, node)| supported(node, terminal && index + 1 == nodes.len())),
+            Node::Group { inner, .. } => supported(inner, terminal),
+            Node::Quantifier { inner, .. } => terminal && is_linear_consuming_atom(inner),
+            _ => is_linear_atom(node),
+        }
+    }
+
+    supported(node, true)
+}
+
 /// Boolean matching may discard captures, so deterministic groups are safe
 /// even though the capture visitor must continue to reject them.
 pub(super) fn is_boolean_supported(node: &Node) -> bool {
@@ -61,6 +80,9 @@ pub(super) fn is_boolean_supported(node: &Node) -> bool {
 /// atoms).
 #[inline(always)]
 pub(super) fn is_match(regex: &Regex, subject: &str) -> bool {
+    if let Some(matched) = ascii::try_first_match(regex, subject) {
+        return matched.is_some();
+    }
     let chars: Vec<char> = subject.chars().collect();
     let mut pos = 0usize;
     let start_literal = regex.start_literal.filter(|_| !regex.flags.anchored);
@@ -127,7 +149,7 @@ where
     F: for<'capture> FnMut(CaptureView<'capture>) -> Result<bool, E>,
 {
     let (chars, byte_offsets) = subject_chars(subject);
-    let mut groups = vec![None];
+    let mut groups = vec![None; regex.num_groups + 1];
     let mut pos = 0;
     let mut search_start = 0;
     let mut count = 0;
@@ -144,7 +166,21 @@ where
             pos += relative_pos;
         }
         groups.fill(None);
-        if let Some(end) = match_no_capture(&regex.ast, pos, &chars, regex.flags, search_start) {
+        let end = if regex.num_groups == 0 {
+            match_no_capture(&regex.ast, pos, &chars, regex.flags, search_start)
+        } else {
+            match_with_captures(
+                &regex.ast,
+                pos,
+                &chars,
+                &byte_offsets,
+                regex.flags,
+                search_start,
+                &mut groups,
+                true,
+            )
+        };
+        if let Some(end) = end {
             groups[0] = Some(Match {
                 start: byte_offsets.get(pos),
                 end: byte_offsets.get(end),
@@ -170,6 +206,66 @@ where
         }
     }
     Ok(count)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_with_captures(
+    node: &Node,
+    pos: usize,
+    chars: &[char],
+    byte_offsets: &super::ByteOffsets,
+    flags: RegexFlags,
+    search_start: usize,
+    groups: &mut [Option<Match>],
+    terminal: bool,
+) -> Option<usize> {
+    match node {
+        Node::Sequence(nodes) => {
+            let mut current = pos;
+            for (index, node) in nodes.iter().enumerate() {
+                current = match_with_captures(
+                    node,
+                    current,
+                    chars,
+                    byte_offsets,
+                    flags,
+                    search_start,
+                    groups,
+                    terminal && index + 1 == nodes.len(),
+                )?;
+            }
+            Some(current)
+        }
+        Node::Group { index, inner, .. } => {
+            let end = match_with_captures(
+                inner,
+                pos,
+                chars,
+                byte_offsets,
+                flags,
+                search_start,
+                groups,
+                terminal,
+            )?;
+            if let Some(index) = index {
+                groups[*index] = Some(Match {
+                    start: byte_offsets.get(pos),
+                    end: byte_offsets.get(end),
+                });
+            }
+            Some(end)
+        }
+        Node::Quantifier {
+            inner,
+            min,
+            max,
+            greedy,
+            ..
+        } if terminal => {
+            match_terminal_quantifier(inner, *min, *max, *greedy, pos, chars, flags, search_start)
+        }
+        _ => match_atom(node, pos, chars, flags, search_start),
+    }
 }
 
 fn is_linear_atom(node: &Node) -> bool {
@@ -279,9 +375,13 @@ fn match_atom(
     search_start: usize,
 ) -> Option<usize> {
     match node {
-        Node::Literal(literal) => {
-            (pos < chars.len() && chars_equal(chars[pos], *literal, flags)).then_some(pos + 1)
-        }
+        Node::Literal(literal) => (pos < chars.len()
+            && if flags.case_insensitive {
+                chars_equal(chars[pos], *literal, flags)
+            } else {
+                chars[pos] == *literal
+            })
+        .then_some(pos + 1),
         Node::AnyChar => (pos < chars.len()
             && (flags.dotall
                 || newline_len_at(chars, pos, flags.line_options.newline()).is_none()))
@@ -314,7 +414,7 @@ fn match_atom(
             }
             let in_class = items
                 .iter()
-                .any(|item| match_class_item(item, chars[pos], flags));
+                .any(|item| match_linear_class_item(item, chars[pos], flags));
             (in_class != *negated).then_some(pos + 1)
         }
         Node::Shorthand(shorthand) => (pos < chars.len()
@@ -323,4 +423,18 @@ fn match_atom(
         Node::Group { inner, .. } => match_no_capture(inner, pos, chars, flags, search_start),
         _ => None,
     }
+}
+
+#[inline(always)]
+fn match_linear_class_item(item: &ClassItem, candidate: char, flags: RegexFlags) -> bool {
+    if !flags.case_insensitive {
+        match item {
+            ClassItem::Literal(literal) => return candidate == *literal,
+            ClassItem::Range(lower, upper) => {
+                return candidate >= *lower && candidate <= *upper;
+            }
+            _ => {}
+        }
+    }
+    match_class_item(item, candidate, flags)
 }

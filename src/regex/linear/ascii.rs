@@ -90,9 +90,11 @@ pub(super) fn try_count_matches(regex: &Regex, subject: &str) -> Option<usize> {
     if regex.flags.case_insensitive {
         return None;
     }
-    let Some(prefix_plan) = prefix_plan(&regex.ast) else {
+    let prefix_plan = prefix_plan(&regex.ast);
+    let class_tail_plan = class_tail_plan(&regex.ast);
+    if prefix_plan.is_none() && class_tail_plan.is_none() {
         return None;
-    };
+    }
     if !subject.is_ascii() {
         return None;
     }
@@ -108,7 +110,10 @@ pub(super) fn try_count_matches(regex: &Regex, subject: &str) -> Option<usize> {
             };
             pos += relative_pos;
         }
-        let end = match_prefix_plan(prefix_plan, pos, bytes, regex.flags);
+        let end = match prefix_plan {
+            Some(plan) => match_prefix_plan(plan, pos, bytes, regex.flags),
+            None => match_terminal_class(class_tail_plan.unwrap(), pos, bytes, regex.flags),
+        };
         if let Some(end) = end {
             count += 1;
             pos = if end == pos { pos + 1 } else { end };
@@ -135,11 +140,12 @@ where
     }
     let prefix_plan = prefix_plan(&regex.ast);
     let class_tail_plan = class_tail_plan(&regex.ast);
-    if prefix_plan.is_none() && class_tail_plan.is_none() {
+    let grouped = regex.num_groups > 0 && super::is_capture_visitor_supported(&regex.ast);
+    if !grouped && prefix_plan.is_none() && class_tail_plan.is_none() {
         return Ok(None);
     }
     let bytes = subject.as_bytes();
-    let mut groups = [None];
+    let mut groups = vec![None; regex.num_groups + 1];
     let mut pos = 0;
     let mut count = 0;
     let start_literal = regex.start_literal;
@@ -151,9 +157,13 @@ where
             };
             pos += relative_pos;
         }
-        let end = match prefix_plan {
-            Some(plan) => match_prefix_plan(plan, pos, bytes, regex.flags),
-            None => match_terminal_class(class_tail_plan.unwrap(), pos, bytes),
+        let end = if grouped {
+            match_with_captures(&regex.ast, pos, bytes, regex.flags, 0, &mut groups, true)
+        } else {
+            match prefix_plan {
+                Some(plan) => match_prefix_plan(plan, pos, bytes, regex.flags),
+                None => match_terminal_class(class_tail_plan.unwrap(), pos, bytes, regex.flags),
+            }
         };
         if let Some(end) = end {
             groups[0] = Some(Match { start: pos, end });
@@ -175,6 +185,60 @@ where
         }
     }
     Ok(Some(count))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn match_with_captures(
+    node: &Node,
+    pos: usize,
+    bytes: &[u8],
+    flags: RegexFlags,
+    search_start: usize,
+    groups: &mut [Option<Match>],
+    terminal: bool,
+) -> Option<usize> {
+    match node {
+        Node::Sequence(nodes) => {
+            let mut current = pos;
+            for (index, node) in nodes.iter().enumerate() {
+                current = match_with_captures(
+                    node,
+                    current,
+                    bytes,
+                    flags,
+                    search_start,
+                    groups,
+                    terminal && index + 1 == nodes.len(),
+                )?;
+            }
+            Some(current)
+        }
+        Node::Group { index, inner, .. } => {
+            let end =
+                match_with_captures(inner, pos, bytes, flags, search_start, groups, terminal)?;
+            if let Some(index) = index {
+                groups[*index] = Some(Match { start: pos, end });
+            }
+            Some(end)
+        }
+        Node::Quantifier {
+            inner,
+            min,
+            max,
+            greedy,
+            ..
+        } if terminal => match_terminal_quantifier_at(
+            inner,
+            *min,
+            *max,
+            *greedy,
+            pos,
+            bytes,
+            flags,
+            search_start,
+        ),
+        _ => match_atom(node, pos, bytes, flags, search_start),
+    }
 }
 
 fn class_tail_plan(node: &Node) -> Option<ClassTailPlan<'_>> {
@@ -278,32 +342,80 @@ fn match_prefix_plan(
         return None;
     }
     match plan.tail {
-        Some(tail) => match_terminal_quantifier(
-            tail.inner,
-            tail.min,
-            tail.max,
-            tail.greedy,
-            prefix_end,
-            bytes,
-            flags,
-        ),
+        Some(tail) => {
+            if let Node::CharClass { negated, items } = tail.inner {
+                match_terminal_class(
+                    ClassTailPlan {
+                        negated: *negated,
+                        items,
+                        min: tail.min,
+                        max: tail.max,
+                        greedy: tail.greedy,
+                    },
+                    prefix_end,
+                    bytes,
+                    flags,
+                )
+            } else {
+                match_terminal_quantifier(
+                    tail.inner,
+                    tail.min,
+                    tail.max,
+                    tail.greedy,
+                    prefix_end,
+                    bytes,
+                    flags,
+                )
+            }
+        }
         None => Some(prefix_end),
     }
 }
 
 #[inline]
-fn match_terminal_class(plan: ClassTailPlan<'_>, pos: usize, bytes: &[u8]) -> Option<usize> {
+fn match_terminal_class(
+    plan: ClassTailPlan<'_>,
+    pos: usize,
+    bytes: &[u8],
+    flags: RegexFlags,
+) -> Option<usize> {
     let limit = plan.max.unwrap_or(usize::MAX);
     let target = if plan.greedy { limit } else { plan.min };
     let mut current = pos;
     let mut repetitions = 0;
 
+    if let [ClassItem::Range(lower, upper)] = plan.items
+        && lower.is_ascii()
+        && upper.is_ascii()
+    {
+        let (lower, upper) = if flags.case_insensitive {
+            (
+                (*lower as u8).to_ascii_lowercase(),
+                (*upper as u8).to_ascii_lowercase(),
+            )
+        } else {
+            (*lower as u8, *upper as u8)
+        };
+        while repetitions < target && current < bytes.len() {
+            let candidate = if flags.case_insensitive {
+                bytes[current].to_ascii_lowercase()
+            } else {
+                bytes[current]
+            };
+            if (candidate >= lower && candidate <= upper) == plan.negated {
+                break;
+            }
+            current += 1;
+            repetitions += 1;
+        }
+        return (repetitions >= plan.min).then_some(current);
+    }
+
     while repetitions < target && current < bytes.len() {
-        let candidate = char::from(bytes[current]);
         let in_class = plan
             .items
             .iter()
-            .any(|item| match_class_item(item, candidate, RegexFlags::default()));
+            .any(|item| match_ascii_class_item(item, bytes[current], flags));
         if in_class == plan.negated {
             break;
         }
@@ -482,10 +594,9 @@ fn match_atom(
             if pos >= bytes.len() {
                 return None;
             }
-            let candidate = char::from(bytes[pos]);
             let in_class = items
                 .iter()
-                .any(|item| match_class_item(item, candidate, flags));
+                .any(|item| match_ascii_class_item(item, bytes[pos], flags));
             (in_class != *negated).then_some(pos + 1)
         }
         Node::Shorthand(shorthand) => (pos < bytes.len()
@@ -493,6 +604,37 @@ fn match_atom(
         .then_some(pos + 1),
         Node::Group { inner, .. } => match_no_capture(inner, pos, bytes, flags, search_start),
         _ => None,
+    }
+}
+
+/// Keep ordinary ASCII literal/range classes out of the Unicode property and
+/// case-folding machinery. Complex items still delegate to the canonical
+/// matcher, so extending the public PCRE property surface does not lengthen
+/// the overwhelmingly common `[0-9]`/`[A-Z]` scan loop.
+#[inline(always)]
+fn match_ascii_class_item(item: &ClassItem, candidate: u8, flags: RegexFlags) -> bool {
+    match item {
+        ClassItem::Literal(literal) if literal.is_ascii() => {
+            let literal = *literal as u8;
+            if flags.case_insensitive {
+                candidate.eq_ignore_ascii_case(&literal)
+            } else {
+                candidate == literal
+            }
+        }
+        ClassItem::Range(lower, upper) if lower.is_ascii() && upper.is_ascii() => {
+            let (candidate, lower, upper) = if flags.case_insensitive {
+                (
+                    candidate.to_ascii_lowercase(),
+                    (*lower as u8).to_ascii_lowercase(),
+                    (*upper as u8).to_ascii_lowercase(),
+                )
+            } else {
+                (candidate, *lower as u8, *upper as u8)
+            };
+            candidate >= lower && candidate <= upper
+        }
+        _ => match_class_item(item, char::from(candidate), flags),
     }
 }
 

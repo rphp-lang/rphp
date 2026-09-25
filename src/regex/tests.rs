@@ -204,6 +204,23 @@ fn test_replace_all() {
 }
 
 #[test]
+fn linear_replacement_preserves_full_match_limits_utf8_and_empty_retry() {
+    let literal = Regex::new("needle", RegexFlags::default()).unwrap();
+    assert_eq!(
+        literal.replace_limit("xneedle yneedle", "<$0>-$1-\\0", 1),
+        ("x<needle>--needle yneedle".to_string(), 1)
+    );
+
+    let utf8 = Regex::new("ž+", RegexFlags::default()).unwrap();
+    assert_eq!(utf8.replace_all("ažžbž", "X"), "aXbX");
+
+    // Nullable patterns retain the canonical retry-at-the-same-position path
+    // instead of entering the definitely-consuming linear replacement path.
+    let empty = Regex::new("a*?", RegexFlags::default()).unwrap();
+    assert_eq!(empty.replace_all("aa", "X"), "XXXXX");
+}
+
+#[test]
 fn test_subject_chars_maps_utf8_boundaries() {
     let (chars, offsets) = subject_chars("až🙂");
 
@@ -456,11 +473,41 @@ fn test_linear_capture_visitor_preserves_greedy_lazy_and_bounded_tails() {
 fn test_linear_capture_visitor_rejects_continuations_and_captures() {
     let quantified_middle = Regex::new("a+ab", RegexFlags::default()).unwrap();
     let capture = Regex::new("(user)[0-9]+", RegexFlags::default()).unwrap();
+    let capture_needing_backtrack = Regex::new("(a+)a", RegexFlags::default()).unwrap();
     let alternation = Regex::new("user|admin", RegexFlags::default()).unwrap();
 
     assert!(!linear::is_supported(&quantified_middle.ast));
     assert!(!linear::is_supported(&capture.ast));
+    assert!(linear::is_capture_visitor_supported(&capture.ast));
+    assert!(!linear::is_capture_visitor_supported(
+        &capture_needing_backtrack.ast
+    ));
     assert!(!linear::is_supported(&alternation.ast));
+}
+
+#[test]
+fn deterministic_group_visitor_preserves_capture_spans() {
+    let subject = "user12 user3";
+    let regex = Regex::new("(?P<label>user)([0-9]+)", RegexFlags::default()).unwrap();
+    let mut seen = Vec::new();
+    let visited: Result<usize, std::convert::Infallible> =
+        regex.try_visit_captures(subject, |captures| {
+            seen.push((
+                captures.get(0).unwrap().as_str(subject).to_string(),
+                captures.get(1).unwrap().as_str(subject).to_string(),
+                captures.get(2).unwrap().as_str(subject).to_string(),
+            ));
+            Ok(true)
+        });
+
+    assert_eq!(visited.unwrap(), 2);
+    assert_eq!(
+        seen,
+        [
+            ("user12".to_string(), "user".to_string(), "12".to_string()),
+            ("user3".to_string(), "user".to_string(), "3".to_string()),
+        ]
+    );
 }
 
 #[test]

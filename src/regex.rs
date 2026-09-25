@@ -1254,12 +1254,41 @@ impl Regex {
         limit: usize,
         limits: MatchLimits,
     ) -> Result<(String, usize), MatchLimitError> {
+        if limit == 0 {
+            return Ok((subject.to_string(), 0));
+        }
+        if self.num_groups == 0
+            && node_definitely_consumes(&self.ast)
+            && linear::is_supported(&self.ast)
+        {
+            let mut result = String::with_capacity(subject.len());
+            let mut copied_until = 0usize;
+            let mut count = 0usize;
+            let visited: Result<usize, std::convert::Infallible> =
+                linear::try_visit_captures(self, subject, |capture| {
+                    if count == limit {
+                        return Ok(false);
+                    }
+                    let matched = capture
+                        .get(0)
+                        .expect("linear replacement visitor always publishes group zero");
+                    result.push_str(&subject[copied_until..matched.start]);
+                    let groups = [Some(matched.clone())];
+                    result.push_str(&expand_replacement(replacement, &groups, subject));
+                    copied_until = matched.end;
+                    count += 1;
+                    Ok(true)
+                });
+            let _ = visited.unwrap();
+            result.push_str(&subject[copied_until..]);
+            return Ok((result, count));
+        }
         let (chars, byte_offsets) = subject_chars(subject);
         let metadata = MatchMetadata {
             input: subject,
             byte_offsets: &byte_offsets,
         };
-        let mut result = String::new();
+        let mut result = String::with_capacity(subject.len());
         let mut pos = 0;
         let mut search_start = 0;
         let mut count = 0;
@@ -1342,7 +1371,6 @@ impl Regex {
                 pos = next;
             }
         }
-        result.shrink_to_fit();
         Ok((result, count))
     }
 
@@ -1378,7 +1406,7 @@ impl Regex {
         // Prove the small iterative matcher once per consumer call. Its hot
         // loop lives in a separate codegen module so the canonical matcher and
         // unrelated preg_match layout remain stable.
-        if self.num_groups == 0 && linear::is_supported(&self.ast) {
+        if linear::is_capture_visitor_supported(&self.ast) {
             linear::try_visit_captures(self, subject, visitor)
         } else {
             self.try_visit_backtracking_captures(subject, visitor)
@@ -1397,7 +1425,7 @@ impl Regex {
     where
         F: for<'capture> FnMut(CaptureView<'capture>) -> bool,
     {
-        if self.num_groups == 0 && linear::is_supported(&self.ast) {
+        if linear::is_capture_visitor_supported(&self.ast) {
             let result: Result<usize, std::convert::Infallible> =
                 linear::try_visit_captures(self, subject, |capture| Ok(visitor(capture)));
             return Ok(result.unwrap());
