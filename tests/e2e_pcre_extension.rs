@@ -117,6 +117,49 @@ var_dump(
 }
 
 #[test]
+fn deduplicated_partition_search_preserves_pcre_backtrack_limits() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+ini_set('pcre.backtrack_limit', '100');
+foreach ([str_repeat('x', 5), str_repeat('x', 6)] as $subject) {
+    var_dump(preg_match('/^(?:\D+|<\d+>)*[!?]$/', $subject));
+    var_dump(preg_last_error(), preg_last_error_msg());
+}
+ini_set('pcre.backtrack_limit', '1');
+var_dump(preg_match('/^(?:a+)*b$/', str_repeat('a', 12)));
+var_dump(preg_last_error(), preg_last_error_msg());
+"#
+        ),
+        concat!(
+            "int(0)\nint(0)\nstring(8) \"No error\"\n",
+            "bool(false)\nint(2)\nstring(25) \"Backtrack limit exhausted\"\n",
+            "int(0)\nint(0)\nstring(8) \"No error\"\n",
+        )
+    );
+}
+
+#[test]
+fn preg_grep_stops_at_the_first_limit_error_and_keeps_the_partial_result() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+ini_set('pcre.backtrack_limit', '100');
+$values = ['!', str_repeat('x', 5), str_repeat('x', 6), '?'];
+var_export(preg_grep('/^(?:\D+|<\d+>)*[!?]$/', $values));
+echo '|', preg_last_error(), '|', preg_last_error_msg(), "\n";
+var_export(preg_grep('/^(?:\D+|<\d+>)*[!?]$/', $values, PREG_GREP_INVERT));
+echo '|', preg_last_error(), '|', preg_last_error_msg(), "\n";
+"#
+        ),
+        concat!(
+            "array (\n  0 => '!',\n)|2|Backtrack limit exhausted\n",
+            "array (\n  1 => 'xxxxx',\n)|2|Backtrack limit exhausted\n",
+        )
+    );
+}
+
+#[test]
 fn preg_error_state_is_request_local_and_success_resets_it() {
     assert_eq!(
         run_php(
@@ -225,6 +268,20 @@ var_dump(preg_filter('/x/', 'y', 'x x', 1, $count), $count);
             "  [7]=>\n  string(3) \"A:4\"\n}\n",
             "int(8)\nNULL\nint(0)\nstring(3) \"y x\"\nint(1)\n",
         )
+    );
+}
+
+#[test]
+fn preg_filter_preserves_non_utf_byte_matching_and_replacement() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$count = -1;
+$result = preg_filter('/./s', '<$0>', 'žluťoučký', 2, $count);
+echo bin2hex($result), '|', $count, "\n";
+"#
+        ),
+        "3cc53e3cbe3e6c75c5a56f75c48d6bc3bd|2\n"
     );
 }
 

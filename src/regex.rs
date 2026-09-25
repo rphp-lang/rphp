@@ -2252,6 +2252,15 @@ impl MatchBudget {
     fn consume_alternative(&mut self) -> bool {
         self.consume_backtrack()
     }
+
+    #[inline]
+    fn reject_impossible_search_if_cost_exceeds(&mut self, required: usize) -> bool {
+        if required <= self.backtracks_remaining {
+            return false;
+        }
+        self.set_error(MatchLimitError::Backtrack);
+        true
+    }
 }
 
 struct MatchCtx<'a> {
@@ -3498,6 +3507,244 @@ fn absorbable_repeated_branch(node: &Node) -> bool {
     )
 }
 
+/// Return the atom from a greedy, non-possessive `atom+` branch. Repeating
+/// this branch inside an outer `*` admits every partition of one homogeneous
+/// run, which is the classic PCRE exponential backtracking shape.
+fn partitionable_plus_atom(node: &Node) -> Option<&Node> {
+    match node {
+        Node::Quantifier {
+            inner,
+            min: 1,
+            max: None,
+            greedy: true,
+            possessive: false,
+        } if matches!(
+            inner.as_ref(),
+            Node::Literal(_) | Node::AnyChar | Node::CharClass { .. } | Node::Shorthand(_)
+        ) =>
+        {
+            Some(inner)
+        }
+        Node::Group {
+            index: None, inner, ..
+        } => partitionable_plus_atom(inner),
+        _ => None,
+    }
+}
+
+fn first_required_consuming_node(node: &Node) -> Option<&Node> {
+    match node {
+        Node::Literal(_)
+        | Node::AnyChar
+        | Node::ByteUnit
+        | Node::NotNewline
+        | Node::CharClass { .. }
+        | Node::Shorthand(_)
+        | Node::GraphemeCluster
+        | Node::Linebreak => Some(node),
+        Node::Sequence(nodes) => {
+            for node in nodes {
+                if let Some(node) = first_required_consuming_node(node) {
+                    return Some(node);
+                }
+                if !matches!(
+                    node,
+                    Node::Anchor(_)
+                        | Node::WordBoundary(_)
+                        | Node::Lookahead { .. }
+                        | Node::Lookbehind { .. }
+                        | Node::Mark(_)
+                        | Node::ResetStart
+                        | Node::CaptureEnd { .. }
+                        | Node::CaptureRestore { .. }
+                ) {
+                    return None;
+                }
+            }
+            None
+        }
+        Node::Group { inner, .. } | Node::Atomic(inner) | Node::ScriptRun { inner, .. } => {
+            first_required_consuming_node(inner)
+        }
+        Node::Anchor(_)
+        | Node::WordBoundary(_)
+        | Node::Lookahead { .. }
+        | Node::Lookbehind { .. }
+        | Node::Mark(_)
+        | Node::ResetStart
+        | Node::CaptureEnd { .. }
+        | Node::CaptureRestore { .. } => None,
+        // Optional repetitions, local option changes, conditionals and calls
+        // need the full matcher to identify their first required character.
+        _ => None,
+    }
+}
+
+fn first_required_consuming_rest(rest: &[Node]) -> Option<&Node> {
+    for node in rest {
+        if let Some(node) = first_required_consuming_node(node) {
+            return Some(node);
+        }
+        if !matches!(
+            node,
+            Node::Anchor(_)
+                | Node::WordBoundary(_)
+                | Node::Lookahead { .. }
+                | Node::Lookbehind { .. }
+                | Node::Mark(_)
+                | Node::ResetStart
+                | Node::CaptureEnd { .. }
+                | Node::CaptureRestore { .. }
+        ) {
+            return None;
+        }
+    }
+    None
+}
+
+fn single_atom_matches(atom: &Node, candidate: char, flags: RegexFlags) -> bool {
+    match atom {
+        Node::Literal(literal) => chars_equal(*literal, candidate, flags),
+        Node::AnyChar => {
+            flags.dotall || newline_len_at(&[candidate], 0, flags.line_options.newline()).is_none()
+        }
+        Node::ByteUnit => candidate as u32 <= u8::MAX as u32,
+        Node::NotNewline => newline_len_at(&[candidate], 0, flags.line_options.newline()).is_none(),
+        Node::CharClass { negated, items } => {
+            items
+                .iter()
+                .any(|item| match_class_item(item, candidate, flags))
+                != *negated
+        }
+        Node::Shorthand(shorthand) => {
+            match_shorthand(*shorthand, candidate, flags.unicode_mode.ucp())
+        }
+        Node::GraphemeCluster => true,
+        Node::Linebreak => matches!(
+            candidate,
+            '\n' | '\r' | '\u{0b}' | '\u{0c}' | '\u{85}' | '\u{2028}' | '\u{2029}'
+        ),
+        _ => false,
+    }
+}
+
+/// Prove overlap by enumerating a finite positive side. Unknown intersections
+/// stay conservative: returning true may skip this cold optimization, while a
+/// false result is used to model PCRE's auto-possessification boundary.
+fn single_atoms_may_overlap(left: &Node, right: &Node, flags: RegexFlags) -> bool {
+    if let Node::Literal(candidate) = left {
+        return single_atom_matches(right, *candidate, flags);
+    }
+    if let Node::Literal(candidate) = right {
+        return single_atom_matches(left, *candidate, flags);
+    }
+
+    let finite_candidates = |node: &Node| -> Option<Vec<char>> {
+        let Node::CharClass {
+            negated: false,
+            items,
+        } = node
+        else {
+            return None;
+        };
+        let mut candidates = Vec::new();
+        for item in items {
+            match item {
+                ClassItem::Literal(candidate) => candidates.push(*candidate),
+                ClassItem::Range(start, end) => {
+                    let width = (*end as u32).saturating_sub(*start as u32);
+                    if width > 255 {
+                        return None;
+                    }
+                    candidates.extend((*start as u32..=*end as u32).filter_map(char::from_u32));
+                }
+                _ => return None,
+            }
+        }
+        Some(candidates)
+    };
+
+    if let Some(candidates) = finite_candidates(left) {
+        return candidates
+            .into_iter()
+            .any(|candidate| single_atom_matches(right, candidate, flags));
+    }
+    if let Some(candidates) = finite_candidates(right) {
+        return candidates
+            .into_iter()
+            .any(|candidate| single_atom_matches(left, candidate, flags));
+    }
+    true
+}
+
+/// If an outer `*` repeats an overlapping `atom+` and its continuation cannot
+/// start anywhere in the remaining subject, PCRE explores every partition of
+/// the homogeneous run before reporting no match. Its exact match-call count
+/// for a run of length `n` is `2^(n+1)-1`. The native engine deduplicates those
+/// equivalent states, so account for the eliminated paths without allocating
+/// them; this preserves `pcre.backtrack_limit` while retaining linear memory.
+fn impossible_partition_search_cost(
+    inner: &Node,
+    rest: &[Node],
+    pos: usize,
+    ctx: &MatchCtx<'_>,
+) -> Option<usize> {
+    let continuation = first_required_consuming_rest(rest)?;
+    if (pos..ctx.chars.len()).any(|candidate| branch_may_start_at(continuation, candidate, ctx)) {
+        return None;
+    }
+
+    let inner = match inner {
+        Node::Group {
+            index: None, inner, ..
+        } => inner.as_ref(),
+        _ => inner,
+    };
+    let branches: &[Node] = match inner {
+        Node::Alternation(branches) => branches,
+        _ => std::slice::from_ref(inner),
+    };
+    let mut recognized_viable_branch = false;
+    let mut overlapping_run_length = 0usize;
+    for branch in branches {
+        let Some(atom) = partitionable_plus_atom(branch) else {
+            // A branch that cannot start here is irrelevant to this failed
+            // run. A viable shape we do not recognize must retain the full
+            // canonical matcher instead of guessing its partition cost.
+            if branch_may_start_at(branch, pos, ctx) {
+                return None;
+            }
+            continue;
+        };
+        let run_length = ctx.chars[pos..]
+            .iter()
+            .take_while(|candidate| single_atom_matches(atom, **candidate, ctx.flags))
+            .count();
+        if run_length == 0 {
+            continue;
+        }
+        recognized_viable_branch = true;
+        if single_atoms_may_overlap(atom, continuation, ctx.flags) {
+            overlapping_run_length = overlapping_run_length.max(run_length);
+        }
+    }
+    if !recognized_viable_branch {
+        return None;
+    }
+    // PCRE auto-possessifies a repeated atom whose language cannot overlap the
+    // continuation. Since that continuation was already proven impossible,
+    // the result is a no-match without consuming the public backtrack budget.
+    if overlapping_run_length == 0 {
+        return Some(0);
+    }
+    let exponent = u32::try_from(overlapping_run_length.saturating_add(1)).unwrap_or(u32::MAX);
+    Some(
+        1usize
+            .checked_shl(exponent)
+            .map_or(usize::MAX, |paths| paths - 1),
+    )
+}
+
 /// Cheap, conservative first-token proof used before expanding an
 /// alternation branch into backtracking states. Returning `true` is allowed
 /// for an unknown/zero-width shape; returning `false` means the branch cannot
@@ -4100,6 +4347,16 @@ fn match_quantifier(
     ctx: &mut MatchCtx,
 ) -> Option<usize> {
     let limit = max.unwrap_or(usize::MAX);
+
+    if min == 0
+        && max.is_none()
+        && greedy
+        && !possessive
+        && let Some(cost) = impossible_partition_search_cost(inner, rest, pos, ctx)
+    {
+        ctx.budget.reject_impossible_search_if_cost_exceeds(cost);
+        return None;
+    }
 
     if !possessive && contains_control_verb(inner) && node_definitely_consumes(inner) {
         return match_control_quantifier(inner, min, max, greedy, rest, pos, ctx);

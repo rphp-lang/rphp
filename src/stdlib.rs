@@ -34285,7 +34285,15 @@ fn fn_preg_split(
         }
         push_part(&subject[cursor..delimiter.start], php_offset(cursor));
         if capture_delimiters {
-            for group in 1..captures.len() {
+            // PCRE publishes empty placeholders only up to the last capture
+            // that participated in this delimiter. A trailing optional group
+            // is omitted, while an unmatched group before a later match keeps
+            // its empty/-1 slot so numeric capture positions remain stable.
+            let last_participating = (1..captures.len())
+                .rev()
+                .find(|&group| captures.get(group).is_some())
+                .unwrap_or(0);
+            for group in 1..=last_participating {
                 if let Some(group) = captures.get(group) {
                     push_part(group.as_str(&subject), php_offset(group.start));
                 } else {

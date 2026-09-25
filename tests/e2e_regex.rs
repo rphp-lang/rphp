@@ -13,6 +13,22 @@ fn preg_split_supports_delimiter_and_offset_flags() {
 }
 
 #[test]
+fn preg_split_omits_only_trailing_unmatched_delimiter_captures() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+echo json_encode(preg_split('/(a)(b)?/', 'aaa', -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_OFFSET_CAPTURE)), "\n";
+echo json_encode(preg_split('/(a)?(b)/', 'b', -1, PREG_SPLIT_DELIM_CAPTURE | PREG_SPLIT_OFFSET_CAPTURE)), "\n";
+"#
+        ),
+        concat!(
+            "[[\"\",0],[\"a\",0],[\"\",1],[\"a\",1],[\"\",2],[\"a\",2],[\"\",3]]\n",
+            "[[\"\",0],[\"\",-1],[\"b\",0],[\"\",1]]\n",
+        )
+    );
+}
+
+#[test]
 fn preg_match_supports_define_blocks_and_named_subroutine_calls() {
     assert_eq!(
         run_php(

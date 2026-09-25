@@ -274,63 +274,6 @@ fn array_keyed_value(result: &mut PhpArray, key: ArrayKey, value: Value) {
     }
 }
 
-fn argument_strings(
-    ed: *mut ExecuteData,
-    eg: &mut ExecutorGlobals,
-    value: &Value,
-) -> Result<Option<(Vec<String>, bool)>, VmError> {
-    if let Some(values) = value.as_array() {
-        let mut rendered = Vec::with_capacity(values.len());
-        for (_, value) in values.iter() {
-            let Some(value) = super::internal_value_to_string(ed, eg, value)? else {
-                return Ok(None);
-            };
-            rendered.push(value);
-        }
-        Ok(Some((rendered, true)))
-    } else {
-        let Some(rendered) = super::internal_value_to_string(ed, eg, value)? else {
-            return Ok(None);
-        };
-        Ok(Some((vec![rendered], false)))
-    }
-}
-
-fn replace_strings(
-    eg: &mut ExecutorGlobals,
-    ed: *mut ExecuteData,
-    function: &str,
-    patterns: &[String],
-    replacements: &[String],
-    replacement_is_array: bool,
-    subject: &str,
-    limit: usize,
-) -> Result<(Option<String>, usize), VmError> {
-    let mut result = subject.to_string();
-    let mut count = 0;
-    for (index, pattern) in patterns.iter().enumerate() {
-        let replacement = if replacement_is_array {
-            replacements.get(index).map_or("", String::as_str)
-        } else {
-            replacements.first().map_or("", String::as_str)
-        };
-        let Some(regex) = compile_pattern(eg, ed, function, pattern)? else {
-            return Ok((None, count));
-        };
-        let (replaced, replacements) =
-            match regex.replace_limit_with_limits(&result, replacement, limit, match_limits(eg)) {
-                Ok(result) => result,
-                Err(error) => {
-                    set_match_limit_error(eg, error);
-                    return Ok((None, count));
-                }
-            };
-        result = replaced;
-        count += replacements;
-    }
-    Ok((Some(result), count))
-}
-
 pub(super) fn fn_preg_filter(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -354,10 +297,11 @@ pub(super) fn fn_preg_filter(
     let Some(limit) = optional_int(ed, eg, "preg_filter", 3, "limit", -1)? else {
         return Ok(());
     };
-    let Some((patterns, _)) = argument_strings(ed, eg, &pattern_value)? else {
+    let Some((patterns, _)) = super::preg_replace_argument_strings(ed, eg, &pattern_value)? else {
         return Ok(());
     };
-    let Some((replacements, replacement_is_array)) = argument_strings(ed, eg, &replacement_value)?
+    let Some((replacements, replacement_is_array)) =
+        super::preg_replace_argument_bytes(ed, eg, &replacement_value)?
     else {
         return Ok(());
     };
@@ -367,10 +311,11 @@ pub(super) fn fn_preg_filter(
     if let Some(subjects) = subject_value.as_array() {
         let mut result = PhpArray::new();
         for (key, subject) in subjects.iter() {
-            let Some(subject) = super::internal_value_to_string(ed, eg, subject)? else {
+            let Some(subject) = super::internal_value_to_string_value(ed, eg, subject)? else {
                 return Ok(());
             };
-            let (replaced, count) = replace_strings(
+            let subject = subject.php_string_bytes().unwrap_or_default();
+            let (replaced, count) = super::preg_replace_strings(
                 eg,
                 ed,
                 "preg_filter",
@@ -387,7 +332,7 @@ pub(super) fn fn_preg_filter(
                 return Ok(());
             };
             if count != 0 {
-                array_keyed_value(&mut result, key, Value::string(replaced));
+                array_keyed_value(&mut result, key, super::php_byte_result(replaced, false));
             }
         }
         super::copy_array_key_provenance(subjects, &result);
@@ -396,10 +341,11 @@ pub(super) fn fn_preg_filter(
         return Ok(());
     }
 
-    let Some(subject) = super::internal_value_to_string(ed, eg, &subject_value)? else {
+    let Some(subject) = super::internal_value_to_string_value(ed, eg, &subject_value)? else {
         return Ok(());
     };
-    let (replaced, count) = replace_strings(
+    let subject = subject.php_string_bytes().unwrap_or_default();
+    let (replaced, count) = super::preg_replace_strings(
         eg,
         ed,
         "preg_filter",
@@ -420,7 +366,7 @@ pub(super) fn fn_preg_filter(
         if count == 0 {
             Value::null()
         } else {
-            Value::string(replaced)
+            super::php_byte_result(replaced, false)
         },
     );
     Ok(())
@@ -469,8 +415,15 @@ pub(super) fn fn_preg_grep(
         } else {
             Cow::Owned(super::bytes_to_php_string(rendered.as_bytes()))
         };
-        if regex.is_match(&subject) != invert {
-            array_keyed_value(&mut result, key, value.clone_for_php_storage());
+        match regex.is_match_with_limits(&subject, match_limits(eg)) {
+            Ok(matches) if matches != invert => {
+                array_keyed_value(&mut result, key, value.clone_for_php_storage());
+            }
+            Ok(_) => {}
+            Err(error) => {
+                set_match_limit_error(eg, error);
+                break;
+            }
         }
     }
     super::copy_array_key_provenance(values, &result);

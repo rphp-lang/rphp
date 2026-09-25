@@ -1663,6 +1663,35 @@ fn execution_limits_stop_quantified_and_nested_paths_without_stack_growth() {
         Err(MatchLimitError::Backtrack)
     );
 
+    // The matcher deduplicates equivalent partitions of nested repetitions,
+    // but the public limit still follows the paths PCRE would explore. For an
+    // overlapping `atom+` under `*`, the exact failed-search cost is
+    // 2^(n+1)-1; a disjoint suffix remains auto-possessified.
+    let partitioned = Regex::new(r"^(?:\D+|<\d+>)*[!?]$", RegexFlags::default()).unwrap();
+    let hundred = MatchLimits {
+        backtrack: 100,
+        ..MatchLimits::default()
+    };
+    assert_eq!(
+        partitioned.is_match_with_limits("xxxxx", hundred),
+        Ok(false)
+    );
+    assert_eq!(
+        partitioned.is_match_with_limits("xxxxxx", hundred),
+        Err(MatchLimitError::Backtrack)
+    );
+    let auto_possessified = Regex::new(r"^(?:a+)*b$", RegexFlags::default()).unwrap();
+    assert_eq!(
+        auto_possessified.is_match_with_limits(
+            "aaaaaaaaaaaa",
+            MatchLimits {
+                backtrack: 1,
+                ..MatchLimits::default()
+            },
+        ),
+        Ok(false)
+    );
+
     let nested = Regex::new("^((a))$", RegexFlags::default()).unwrap();
     assert!(matches!(
         nested.captures_with_limits(
