@@ -63,7 +63,10 @@ fn parse_ini_definition(definition: &str) -> Result<(String, String), String> {
     if name.is_empty() {
         return Err("option '-d' requires a non-empty INI name".to_string());
     }
-    Ok((name.to_ascii_lowercase(), value.trim().to_string()))
+    // A directive decides how to interpret its name and value. In particular,
+    // GC publishes the raw numeric spelling and whitespace is significant for
+    // boolean keywords; neither can be recovered after CLI normalization.
+    Ok((name.to_string(), value.to_string()))
 }
 
 fn parse_cli_args(args: &[String]) -> Result<CliInvocation, String> {
@@ -497,6 +500,18 @@ mod tests {
                 ini_settings: vec![("display_errors".to_string(), "1".to_string())],
                 arguments: Vec::new(),
             })
+        );
+    }
+
+    #[test]
+    fn preserves_ini_case_and_value_whitespace_for_directive_semantics() {
+        assert_eq!(
+            super::parse_ini_definition("ZEND.ENABLE_GC=0"),
+            Ok(("ZEND.ENABLE_GC".to_string(), "0".to_string()))
+        );
+        assert_eq!(
+            super::parse_ini_definition("zend.enable_gc= on "),
+            Ok(("zend.enable_gc".to_string(), " on ".to_string()))
         );
     }
 

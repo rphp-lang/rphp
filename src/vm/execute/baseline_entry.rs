@@ -148,7 +148,7 @@ fn attach_uncaught_string_conversion_replacement_trace(
 
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
     crate::value::begin_object_handle_request();
-    crate::value::set_automatic_cycle_collection_enabled(eg.gc_enabled);
+    crate::value::initialize_cycle_collection(eg.gc_enabled);
     let func_ptr = &main_func.common as *const FunctionCommon;
     let frame = eg.vm_stack.push_call_frame(
         func_ptr,

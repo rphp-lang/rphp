@@ -31486,7 +31486,7 @@ pub fn startup_zend_assertions(settings: &[(String, String)]) -> i8 {
         .iter()
         .rev()
         .find(|(name, _)| name.eq_ignore_ascii_case("zend.assertions"))
-        .and_then(|(_, value)| value.parse::<i8>().ok())
+        .and_then(|(_, value)| value.trim().parse::<i8>().ok())
         .filter(|value| (-1..=1).contains(value))
         .unwrap_or(1)
 }
@@ -31512,7 +31512,7 @@ pub fn startup_date_timezone_warning(settings: &[(String, String)]) -> Option<St
         .rev()
         .find(|(name, _)| name.eq_ignore_ascii_case("date.timezone"))?
         .1
-        .as_str();
+        .trim();
     (!date::is_supported_timezone(value))
         .then(|| format!("Invalid date.timezone value '{value}', using 'UTC' instead"))
 }
@@ -31527,7 +31527,22 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
 
     for (name, value) in settings {
         let normalized = name.to_ascii_lowercase();
+        // Preserve the established normalization of earlier admitted settings.
+        // GC consumes the untrimmed CLI spelling below instead.
+        let raw_value = value.as_str();
+        let value = value.trim();
         match normalized.as_str() {
+            "zend.enable_gc" if name == "zend.enable_gc" => {
+                let published = match raw_value.to_ascii_lowercase().as_str() {
+                    "true" | "on" | "yes" => "1".to_string(),
+                    "false" | "off" | "no" | "none" => String::new(),
+                    _ => raw_value.to_string(),
+                };
+                set_gc_enabled(eg, gc_ini_boolean(&published));
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, published);
+            }
             "zend.assertions" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -31537,7 +31552,7 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                 eg.assertion_state.exception = ini_boolean(value);
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                    .insert(normalized, value.clone());
+                    .insert(normalized, value.to_string());
             }
             "error_reporting" => {
                 let (published, level) = normalize_error_reporting_ini(value);
@@ -31551,7 +31566,7 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     eg.precision = precision;
                     eg.ini_overrides
                         .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                        .insert(normalized, value.clone());
+                        .insert(normalized, value.to_string());
                 } else {
                     eg.precision = 14;
                     eg.ini_overrides
@@ -31564,7 +31579,7 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     eg.serialize_precision = precision;
                     eg.ini_overrides
                         .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                        .insert(normalized, value.clone());
+                        .insert(normalized, value.to_string());
                 } else {
                     eg.serialize_precision = -1;
                     eg.ini_overrides
@@ -31598,12 +31613,12 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
             | "iconv.output_encoding" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                    .insert(normalized, value.clone());
+                    .insert(normalized, value.to_string());
             }
             "date.timezone" if date::is_supported_timezone(value) => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                    .insert(normalized, value.clone());
+                    .insert(normalized, value.to_string());
             }
             _ => {}
         }
@@ -31894,8 +31909,7 @@ fn fn_ini_set(
         ret!(rv, Value::bool(false));
     }
     if option == "zend.enable_gc" {
-        eg.gc_enabled = ini_boolean(&value);
-        crate::value::set_automatic_cycle_collection_enabled(eg.gc_enabled);
+        set_gc_enabled(eg, gc_ini_boolean(&value));
     }
     if option == "assert.exception" {
         eg.assertion_state.exception = ini_boolean(&value);
@@ -31904,6 +31918,45 @@ fn fn_ini_set(
         .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
         .insert(option, value);
     ret!(rv, Value::string(previous));
+}
+
+/// GC's boolean INI contract uses keywords or an integer prefix, not a full
+/// integer/float conversion. Testing nonzero digits avoids overflow and does
+/// not allocate for arbitrarily long numeric values.
+fn gc_ini_boolean(value: &str) -> bool {
+    if ["on", "true", "yes"]
+        .iter()
+        .any(|keyword| value.eq_ignore_ascii_case(keyword))
+    {
+        return true;
+    }
+    let bytes = value
+        .trim_start_matches(|character: char| character.is_ascii_whitespace())
+        .as_bytes();
+    let digits = match bytes {
+        [b'+' | b'-', rest @ ..] => rest,
+        _ => bytes,
+    };
+    digits
+        .iter()
+        .copied()
+        .take_while(u8::is_ascii_digit)
+        .any(|digit| digit != b'0')
+}
+
+fn set_gc_enabled(eg: &mut ExecutorGlobals, enabled: bool) {
+    eg.gc_enabled = enabled;
+    crate::value::set_automatic_cycle_collection_enabled(enabled);
+    // Without an override, ini_get already observes the request flag. Do not
+    // allocate an INI sidecar merely because the GC control API was called.
+    if let Some(value) = eg
+        .ini_overrides
+        .as_deref_mut()
+        .and_then(|overrides| overrides.get_mut("zend.enable_gc"))
+    {
+        value.clear();
+        value.push(if enabled { '1' } else { '0' });
+    }
 }
 
 fn fn_gc_enabled(
@@ -31919,8 +31972,7 @@ fn fn_gc_enable(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    eg.gc_enabled = true;
-    crate::value::set_automatic_cycle_collection_enabled(true);
+    set_gc_enabled(eg, true);
     Ok(())
 }
 
@@ -31929,8 +31981,7 @@ fn fn_gc_disable(
     _rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    eg.gc_enabled = false;
-    crate::value::set_automatic_cycle_collection_enabled(false);
+    set_gc_enabled(eg, false);
     Ok(())
 }
 
@@ -31954,7 +32005,7 @@ fn fn_gc_status(
     let status = crate::value::cycle_collection_status();
     let mut result = PhpArray::new();
     result.set_str("running", Value::bool(status.running));
-    result.set_str("protected", Value::bool(false));
+    result.set_str("protected", Value::bool(status.protected));
     result.set_str("full", Value::bool(false));
     result.set_str(
         "runs",
@@ -31968,7 +32019,7 @@ fn fn_gc_status(
         "threshold",
         Value::long(i64::try_from(status.threshold).unwrap_or(i64::MAX)),
     );
-    result.set_str("buffer_size", Value::long(16_384));
+    result.set_str("buffer_size", Value::long(status.buffer_size as i64));
     result.set_str(
         "roots",
         Value::long(i64::try_from(status.roots).unwrap_or(i64::MAX)),

@@ -1264,6 +1264,7 @@ impl CycleCandidate {
 
 struct CycleAdmissionState {
     enabled: bool,
+    initialized: bool,
     threshold: usize,
     pending_start: Option<usize>,
 }
@@ -1272,6 +1273,7 @@ impl Default for CycleAdmissionState {
     fn default() -> Self {
         Self {
             enabled: true,
+            initialized: true,
             threshold: 10_001,
             pending_start: None,
         }
@@ -1293,6 +1295,9 @@ struct CycleRootState {
     free_time: std::time::Duration,
     candidates: Vec<CycleCandidate>,
     indices: HashMap<usize, usize, BuildHasherDefault<IntKeyHasher>>,
+    // Startup-disabled GC still leaves objects in the request's object store.
+    // Keep weak shutdown visibility without admitting them to userland GC.
+    unadmitted: Option<Box<HashMap<usize, CycleCandidate>>>,
     admission: CycleAdmissionState,
 }
 
@@ -1339,6 +1344,18 @@ fn register_cycle_candidate_with_admission(candidate: CycleCandidate, allow_auto
             return;
         }
         let identity = candidate.identity();
+        if !state.admission.initialized {
+            state
+                .unadmitted
+                .get_or_insert_with(|| Box::new(HashMap::new()))
+                .insert(identity, candidate);
+            return;
+        }
+        if let Some(unadmitted) = state.unadmitted.as_deref_mut() {
+            // A genuine subsequent PHP release can admit an old owner after
+            // enablement. Merely enabling GC must not do so retroactively.
+            unadmitted.remove(&identity);
+        }
         if state.collecting {
             state.callback_roots.insert(identity);
         }
@@ -1388,11 +1405,22 @@ pub(crate) fn automatic_cycle_collection_pending() -> bool {
 pub(crate) fn set_automatic_cycle_collection_enabled(enabled: bool) {
     CYCLE_ROOTS.with_borrow_mut(|state| {
         state.admission.enabled = enabled;
+        // Once enabled in this request, disabling automatic collection keeps
+        // the root buffer available to explicit gc_collect_cycles().
+        state.admission.initialized |= enabled;
         if !enabled {
             state.admission.pending_start = None;
             AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(false));
         }
     });
+}
+
+/// Startup-disabled requests have no root buffer until their first enablement.
+/// Apply this after resolving all startup definitions, before user execution;
+/// intermediate duplicate INI values must not initialize the buffer.
+pub(crate) fn initialize_cycle_collection(enabled: bool) {
+    set_automatic_cycle_collection_enabled(enabled);
+    CYCLE_ROOTS.with_borrow_mut(|state| state.admission.initialized = enabled);
 }
 
 /// Protect the incoming root until the preceding buffer has been collected.
@@ -1465,6 +1493,32 @@ pub(crate) fn take_automatic_cycle_admission() -> Option<AutomaticCycleAdmission
 #[cfg(test)]
 mod repeated_cycle_root_tests {
     use super::*;
+
+    #[test]
+    fn startup_disabled_buffer_is_initialized_only_by_enablement() {
+        std::thread::spawn(|| {
+            begin_object_handle_request();
+            initialize_cycle_collection(false);
+            let owner = Rc::new(PhpArray::new());
+            let root = CycleCandidate::Array(Rc::downgrade(&owner));
+            register_cycle_candidate(root.clone());
+            assert_eq!(cycle_collection_status().roots, 0);
+            set_automatic_cycle_collection_enabled(false);
+            register_cycle_candidate(root.clone());
+            assert_eq!(cycle_collection_status().roots, 0);
+            set_automatic_cycle_collection_enabled(true);
+            set_automatic_cycle_collection_enabled(false);
+            register_cycle_candidate(root);
+            assert_eq!(cycle_collection_status().roots, 1);
+            end_object_handle_request();
+            begin_object_handle_request();
+            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owner)));
+            assert_eq!(cycle_collection_status().roots, 1);
+            end_object_handle_request();
+        })
+        .join()
+        .unwrap();
+    }
 
     #[test]
     fn automatic_admission_protects_the_incoming_root_across_pruning() {
@@ -1703,7 +1757,7 @@ impl Drop for CycleCollectionGuard {
 pub(crate) fn begin_cycle_collection() -> Option<CycleCollectionGuard> {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
-        if state.collecting {
+        if state.collecting || !state.admission.initialized {
             return None;
         }
         state.collecting = true;
@@ -1752,10 +1806,12 @@ impl Drop for CycleSnapshotGuard {
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub(crate) struct CycleCollectionStatus {
     pub(crate) running: bool,
+    pub(crate) protected: bool,
     pub(crate) runs: usize,
     pub(crate) collected: usize,
     pub(crate) roots: usize,
     pub(crate) threshold: usize,
+    pub(crate) buffer_size: usize,
     pub(crate) application_time: f64,
     pub(crate) collector_time: f64,
     pub(crate) destructor_time: f64,
@@ -1779,10 +1835,20 @@ pub(crate) fn cycle_collection_status() -> CycleCollectionStatus {
             .unwrap_or(0.0);
         CycleCollectionStatus {
             running: state.collecting,
+            protected: !state.admission.initialized,
             runs: state.runs,
             collected: state.collected,
             roots: state.candidates.len(),
-            threshold: state.admission.threshold,
+            threshold: if state.admission.initialized {
+                state.admission.threshold
+            } else {
+                0
+            },
+            buffer_size: if state.admission.initialized {
+                16_384
+            } else {
+                0
+            },
             application_time,
             collector_time,
             destructor_time,
@@ -1829,6 +1895,29 @@ pub(crate) fn cycle_root_snapshot() -> Vec<Value> {
             .iter()
             .filter_map(CycleCandidate::upgrade)
             .collect()
+    })
+}
+
+pub(crate) fn unadmitted_cycle_root_snapshot() -> Vec<Value> {
+    CYCLE_ROOTS.with_borrow_mut(|state| {
+        let Some(unadmitted) = state.unadmitted.as_deref_mut() else {
+            return Vec::new();
+        };
+        unadmitted.retain(|_, candidate| candidate.strong_count() != 0);
+        unadmitted
+            .values()
+            .filter_map(CycleCandidate::upgrade)
+            .collect()
+    })
+}
+
+pub(crate) fn unadmitted_cycle_root_identities() -> std::collections::HashSet<usize> {
+    CYCLE_ROOTS.with_borrow_mut(|state| {
+        let Some(unadmitted) = state.unadmitted.as_deref_mut() else {
+            return std::collections::HashSet::new();
+        };
+        unadmitted.retain(|_, candidate| candidate.strong_count() != 0);
+        unadmitted.keys().copied().collect()
     })
 }
 
@@ -2068,6 +2157,7 @@ pub(crate) fn begin_object_handle_request() {
         state.free_time = std::time::Duration::ZERO;
         state.candidates.clear();
         state.indices.clear();
+        state.unadmitted = None;
     });
 }
 
@@ -2093,6 +2183,7 @@ pub(crate) fn end_object_handle_request() {
         // and destructor metadata belonged to an already-finished request.
         state.candidates.clear();
         state.indices.clear();
+        state.unadmitted = None;
     });
 }
 

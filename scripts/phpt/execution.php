@@ -36,6 +36,7 @@ function unsupported_rphp_ini_directives(string $section): array
         'precision' => true,
         'serialize_precision' => true,
         'zend.assertions' => true,
+        'zend.enable_gc' => true,
         'zend.exception_ignore_args' => true,
         'zend.exception_string_param_max_len' => true,
     ];

@@ -34,6 +34,7 @@ struct CycleGraph {
     nodes: Vec<CycleNode>,
     root_count: usize,
     indices: HashMap<usize, usize>,
+    unadmitted: HashSet<usize>,
     ordinary_edges: Vec<(usize, usize)>,
     ephemerons: Vec<EphemeronEdge>,
     stale_weak_identities: Vec<usize>,
@@ -143,7 +144,10 @@ impl CycleGraph {
                         .try_borrow()
                         .map_or(true, |object| object.native_state_retains_cycle_root())
                 });
-            if native_root || strong.saturating_sub(1 + incoming[index]) != 0 {
+            if native_root
+                || self.unadmitted.contains(&node.identity)
+                || strong.saturating_sub(1 + incoming[index]) != 0
+            {
                 live[index] = true;
                 queue.push_back(index);
             }
@@ -366,8 +370,16 @@ impl ExecutorGlobals {
     }
 
     fn build_cycle_graph(&self) -> CycleGraph {
+        let mut graph = self.build_cycle_graph_from_roots(cycle_root_snapshot());
+        // WeakMap sidecars can expose an old owner not admitted while GC was
+        // disabled at startup. They must not bypass that admission boundary.
+        graph.unadmitted = crate::value::unadmitted_cycle_root_identities();
+        graph
+    }
+
+    fn build_cycle_graph_from_roots(&self, roots: Vec<Value>) -> CycleGraph {
         let mut graph = CycleGraph::default();
-        for root in cycle_root_snapshot() {
+        for root in roots {
             graph.add_node(root);
         }
         graph.root_count = graph.nodes.len();
@@ -417,6 +429,7 @@ impl ExecutorGlobals {
     /// may itself call `gc_collect_cycles()` just like Zend's object-store
     /// destructor phase.
     pub(crate) fn request_cycle_object_roots(&self) -> Vec<Value> {
+        let _snapshot = crate::value::suppress_cycle_snapshot_roots();
         let mut pending_destructors = self.fiber_runtime.as_deref().map_or_else(
             Vec::new,
             super::fiber::FiberRuntime::pending_gc_destructor_roots,
@@ -426,33 +439,25 @@ impl ExecutorGlobals {
             pending_destructors.sort_by_key(Value::object_handle);
             pending_destructors.dedup_by_key(|value| value.object_identity());
         }
-        let possible_roots = cycle_root_snapshot();
-        let has_destructor_root = possible_roots.iter().any(|value| {
-            let Some(identity) = value.object_identity() else {
-                return false;
-            };
-            self.has_fiber_context(identity)
-                || value.as_object().is_some_and(|object| {
-                    self.class_has_destructor(object.class_id, &object.class_name)
-                })
-        });
-        drop(possible_roots);
-        if !has_destructor_root {
+        let mut possible_roots = cycle_root_snapshot();
+        possible_roots.extend(crate::value::unadmitted_cycle_root_snapshot());
+        if possible_roots.is_empty() {
             return pending_destructors;
         }
-        let graph = self.build_cycle_graph();
+        let graph = self.build_cycle_graph_from_roots(possible_roots);
         let live = graph.live_identities();
         let garbage = graph
             .nodes
             .iter()
             .filter_map(|node| (!live.contains(&node.identity)).then_some(node.identity))
             .collect::<HashSet<_>>();
-        let cyclic = graph.cyclic_identities(&garbage);
         let mut roots: Vec<_> = graph
             .nodes
             .into_iter()
             .filter_map(|node| {
-                if node.kind != CycleNodeKind::Object || !cyclic.contains(&node.identity) {
+                // Acyclic children retained by a garbage cycle also belong
+                // to the request-final object store and need destructors.
+                if node.kind != CycleNodeKind::Object || !garbage.contains(&node.identity) {
                     return None;
                 }
                 let has_destructor = node.value.as_object().is_some_and(|object| {

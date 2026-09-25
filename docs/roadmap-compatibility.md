@@ -36,32 +36,41 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-native-callback-remainder` checkpoint over `defa0d3d` adds **3 exact
-passes without loss**. The complete 7,174-case stable core is **6,778 pass /
-4 fail / 183 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,300/4/115/179 plus 1 timeout**; strings/array remains **1,478/0/68/29**.
-The shared `new_oom.phpt` timeout stays explicit, never a pass.
+The `core-gc-ini-admission` checkpoint over `4348f131` admits 54 unchanged
+`zend.enable_gc` cases after implementing effective startup/runtime state:
+**35 pass / 18 pre-existing exposed failures / 1 extension skip**. The complete
+7,174-case stable core is **6,813 pass / 22 fail / 184 skip / 154 unsupported /
+1 timeout / 0 crash**, exact **+35/-0**. Zend/lang is **5,335/22/116/125 plus
+1 timeout**; strings/array remains **1,478/0/68/29**. No other status changed;
+the known `new_oom.phpt` timeout stays visible, never a pass.
 
-The slice owns suspended native Iterator/destructor phases and their pinned
-user activations, preserving resume/throw/force-close, weak-reference retirement,
-request shutdown and error-reporting state without replay. Thirty-six original
-E2E tests, 199 exact CLI oracle comparisons and 208 focused/adjacent tests support
-the change. Five complete Cargo configurations, all-targets, exact no-loss,
-Composer/Symfony S0--S3 and unsafe/public hygiene pass. Unsafe inventory is
-1,627 blocks / 289 functions within unchanged ceilings and ignored-test counts.
-Exact hashes, counts and bounded native-callback admission are recorded in
+The slice preserves the startup-disabled root-buffer boundary and request-final
+destructors without allowing weak-object traversal to admit old roots. Twenty-
+five original CLI tests, two new units, 252 exact oracle comparisons and 242
+focused/adjacent tests support it. Five Cargo configurations, all-targets,
+runner tests, exact no-loss, Composer/Symfony S0--S3 and unsafe/public hygiene
+pass. Unsafe inventory remains 1,627 blocks / 289 functions with unchanged
+ceilings and ignored counts. Exact hashes and results are in
 [compatibility status](compatibility.md).
 
-The four failures are library-involved holdouts (Random, PCRE, SPL serialization
-and `getimagesize()`), separate from the OOM timeout. The next core admission
-cluster is **54 tests rejected solely for `zend.enable_gc`**. Verify startup
-enablement and synchronization of GC controls with their published INI state
-before admitting the directive; keep any newly exposed failure visible. Do not
-weaken upstream expectations or treat runner admission as a runtime pass.
-Phar, PCRE, Date/DateTime and general libraries remain outside this stream.
-Preserve the exact 5,300 and 1,478 pass sets. Performance stays deferred by user
-direction; host gates retain the 6 GiB/no-swap boundary, two build/test workers,
-bounded PHPT parallelism and automatic cleanup.
+The next core cluster is **11 nested-reference retirement failures**:
+`Zend/tests/gc/gc_007`, `gc_009`, `gc_012`, `gc_018`, `gc_019`, `gc_020`,
+`gc_021`, `gc_023`, `gc_033`, `gc_035` and `gc_047` (all `.phpt`). Original
+probes show completed compiler-only CV references retaining cycles until frame
+exit; prove operand retirement without weakening live alias, COW, callback or
+suspended-frame ownership. Keep destructor-count, constant-array and generator
+holdouts separate until their causes are established. Four earlier library
+failures remain outside this stream. Phar, PCRE, Date/DateTime and general
+libraries are not owned here. Preserve all 5,335 and 1,478 accepted passes.
+Performance remains deferred; host gates retain the 6 GiB/no-swap limit, two
+build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding native-callback checkpoint
+
+The `core-native-callback-remainder` checkpoint over `defa0d3d` added three
+exact passes without loss, reaching 6,778 passes and four library failures.
+It preserved Iterator/destructor phases and user activations across Fiber
+suspension, resume, throw and request shutdown.
 
 ### Preceding automatic-GC checkpoint
 
