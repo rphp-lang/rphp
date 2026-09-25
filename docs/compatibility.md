@@ -7,56 +7,67 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-completion-remainder` checkpoint over `953a21c8` adds **3 exact
-PHP 8.5 passes without loss**. Consumed receivers and operand trees retire
-before result consumption without destroying externally shared children or
-abandoning a pending outer call. Array replacement commits before displaced
-destructors run and retains the assigned reference across their mutations.
-Borrowed closure captures acquire ownership before reference promotion.
-Unused typed reference returns are validated after `finally`, retaining their
-return origin in an anonymous activation slot, not a visible PHP variable.
-Object projections distinguish stored properties from readable virtual hooks.
+The `core-finalization-remainder` checkpoint over `ffc4589d` adds **3 exact
+PHP 8.5 passes without loss**. Cycle collection records roots created or
+released by PHP destructors without recording read-only ownership snapshots.
+One bounded rerun collects newly exposed plain cycles; new destructor-owned
+components survive for a subsequent collection. Recursive collection remains
+guarded, and resurrection, weak references and pending exceptions are preserved.
+Failed property increment/decrement completes the canonical storage checks:
+readonly/asymmetric errors chain the original operation error, ordinary missing
+storage can materialize, and pending exceptions do not invoke user setters.
 
-The complete measured 7,174-case stable core is **6,765 pass / 17 fail / 183
+The complete measured 7,174-case stable core is **6,768 pass / 14 fail / 183
 skip / 208 unsupported / 1 timeout / 0 crash**. Zend/lang is
-**5,287/17/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,762 accepted parent passes remain passes. The exact gains are
-`oss_fuzz_438780145`, `property_hooks/dump` and
-`temporary_cleaning/temporary_cleaning_009` under `Zend/tests`.
+**5,290/14/115/179 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,765 accepted parent passes remain passes. The exact gains are
+`gc/gc_049`, `readonly_props/readonly_containing_object` and
+`temporary_cleaning/temporary_cleaning_013` under `Zend/tests`.
 The unchanged `Zend/tests/new_oom.phpt` timeout remains explicit.
 
-Nineteen original E2E cases match PHP 8.5.11 stdout, stderr and exit status
-byte-exactly. The frozen-source full Cargo matrix passed under `test-fast`
-(debug assertions and overflow checks enabled): default **6,122**, no-default
-**5,788**, erased **6,193**, reified **6,215**, all-features **6,266**;
-existing ignored counts remain 15/15/15/15/18. Negative planner tests ensure
-that lifetime-marker admission cannot retire live receivers or results.
+Sixteen new original E2E cases and nineteen preceding completion cases match
+PHP 8.5.11 stdout, stderr and exit status byte-exactly. Two root-buffer unit
+tests cover callback roots, snapshot suppression and collection reentrancy.
+The frozen-source full Cargo matrix passed under `test-fast` (debug assertions
+and overflow checks enabled): default **6,139**, no-default **5,805**, erased
+**6,210**, reified **6,232**, all-features **6,283**; existing ignored counts
+remain 15/15/15/15/18. The 1,068-case adjacent property/exception slice has no
+lost pass; the complete stable-core comparison confirms the same result.
 All-feature/all-target, exact PHPT no-loss, Composer/Symfony S0--S3,
 formatting, public-data hygiene and unsafe policy passed. Production unsafe
 inventory stays at **1,627 blocks / 289 functions**. Host gates use a 6 GiB
 aggregate memory limit, no swap, two build/test workers and at most four PHPT
 workers. Automatic cleanup retains a safe disk reserve between configurations;
-the final packet completed without an OOM kill.
+the final packet completed without an OOM kill, with a 4.2 GiB memory peak.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `eaca832ed8c5f993b99c4cbd9b5212db3c6a573a70532429078d26ae61739134`;
+candidate `e40c182eea90ba680cd0a9918987cb2979c43e1895a1a87d78d53b37f8640e13`;
 parent/candidate full manifests
-`7c5092ff03aa7e1d2c43e59a59c3232d39f2074a68cc47c2c53e3a41b94d015f` /
-`c4fc04102948f68f5f86f214c490ab1c1665fe6822bd816444e5dfb2443416c1`;
+`c4fc04102948f68f5f86f214c490ab1c1665fe6822bd816444e5dfb2443416c1` /
+`b5a40d8ce83b641ecdae747515c5114303d30d6f7dcd74fd428226a8f045ce8a`;
 Zend/lang pass set
-`44ed6c01431aa811e14d285c0d3db0f8659140fd4965cc3d82cb5d247010c333`;
+`a5e613a140ecb198bed2ad9281801e8b2170dd6b194d2c0f2c7b4f56528023a7`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`a154f228fe777d5005eef5fd72111598fecdf53cf282be02dc67ee72cad1fed2`;
+`cff19d69730e1d0b74530d9bcb65b56b48e99cb038459c58de47f2f1c38d2594`;
 original oracle packet
-`98a021132eda3b3006719f466ac413f395494e3728a035fa391c7f9efe816cb1`.
+`003c4e71b28fea8924d4da25c19412a3561d2649f211645d4d429159fc29ec49`.
 
-Performance remains deferred by user direction. Remaining failed-write error
-priority, GC ordering, arbitrary native-callback suspension and allocation-limit
-equivalence are not claimed. Phar, PCRE and Date/DateTime remain outside this
-core train. Continue from 17 measured failures plus the explicit OOM timeout;
+Performance remains deferred by user direction. Automatic GC thresholds,
+remaining Fiber/GC ordering, arbitrary native-callback suspension, generator
+finally completion and allocation-limit equivalence are not claimed. Phar,
+PCRE and Date/DateTime remain outside this core train. Continue from 14
+measured failures plus the explicit OOM timeout;
 skips and unsupported cases are not compatibility successes.
+
+### Preceding expression-completion checkpoint
+
+The `core-completion-remainder` checkpoint over `953a21c8` added three exact
+passes without loss, reaching 6,765 passes and 17 failures. It aligned operand
+retirement, array replacement, borrowed closure captures, unused typed reference
+returns through finally and virtual-property projection, with nineteen original
+exact PHP oracles and the complete correctness gates.
 
 ### Preceding continuation checkpoint
 

@@ -2664,6 +2664,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             }
             if !val.is_undef()
                 && opline._pad & FETCH_OBJ_REFERENCE_SOURCE != 0
+                && opline._pad & FETCH_OBJ_INCDEC == 0
                 && !matches!(
                     val.dereferenced().value_type(),
                     ValueType::Object | ValueType::Closure
@@ -2715,21 +2716,9 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                     ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
                 });
             }
-            if !val.is_undef()
-                && opline._pad & FETCH_OBJ_INCDEC != 0
-                && !readonly_clone_reinitialization_allowed(eg, obj_val, &name)
-                && let Some(definition) = definition.as_ref()
-                && let Some(message) = property_fetch_write_capability_error(
-                    eg,
-                    obj_val,
-                    definition,
-                    &name,
-                    caller_class.as_deref(),
-                    false,
-                )
-            {
-                return Ok(object_property_throw(eg, frame, "Error", message)?);
-            }
+            // Direct inc/dec first operates on a detached read snapshot.
+            // Write capability is checked by its paired assignment even if
+            // arithmetic or a diagnostic handler has already failed.
             if val.is_undef() && opline._pad & FETCH_OBJ_INCDEC != 0 {
                 report_php_warning(
                     eg,
@@ -4787,15 +4776,68 @@ fn op_assign_obj_prop<'a>(
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    op_assign_obj_prop_completion(eg, frame, op_array, opline, None)
+}
+
+#[cold]
+fn op_assign_obj_prop_completion<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    pending_incdec_error: Option<usize>,
+) -> Result<ColdResult<'a>, VmError> {
     let suppressed = opline._pad & ASSIGN_OBJ_ERROR_SUPPRESS != 0;
     if suppressed {
         eg.begin_error_suppression(frame as usize);
     }
-    let result = op_assign_obj_prop_inner(eg, frame, op_array, opline);
+    let result = op_assign_obj_prop_inner(eg, frame, op_array, opline, pending_incdec_error);
     if suppressed {
         eg.end_error_suppression(frame as usize);
     }
     result
+}
+
+/// A failed value operation still reaches PHP's paired property writer.
+/// Plain storage can be materialized and capability errors replace the
+/// pending throwable; user setters must not run with a pending exception.
+#[cold]
+#[inline(never)]
+fn finish_failed_incdec<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    old: Value,
+    error: Value,
+) -> Result<ThrowResult<'a>, VmError> {
+    let ip = (opline as *const Instruction as usize - op_array.instructions.as_ptr() as usize)
+        / std::mem::size_of::<Instruction>();
+    attach_throwable_origin(&error, eg, frame, op_array, ip);
+    let writeback = op_array.instructions.get(ip + 1).filter(|writeback| {
+        writeback.opcode == OpCode::AssignObjProp
+            && writeback._pad & (PROPERTY_INCDEC_INCREMENT | PROPERTY_INCDEC_DECREMENT) != 0
+            && writeback.result == opline.result
+            && writeback.result_type == opline.result_type
+            && matches!(opline.result_type, OpType::Tmp | OpType::Var)
+            && opline.op2_type == OpType::Unused
+    });
+    if let Some(writeback) = writeback {
+        let pending_identity = error.object_identity();
+        publish_temporary_result(frame, opline, old);
+        eg.exception = Some(error);
+        match op_assign_obj_prop_completion(eg, frame, op_array, writeback, pending_identity)? {
+            ColdResult::NewFrame(frame, op_array) => return Ok(ThrowResult::Handled(frame, op_array)),
+            ColdResult::Unhandled(error) => return Ok(ThrowResult::Unhandled(error)),
+            ColdResult::Done => {},
+            _ => unreachable!("property error completion cannot suspend execution"),
+        }
+        let error = eg.exception.take().expect("failed inc/dec retains its throwable");
+        throw_in_frame(eg, frame, error)
+    } else {
+        drop(old);
+        throw_in_frame(eg, frame, error)
+    }
 }
 
 /// Finish the direct instance-storage write that PHP performs after a static
@@ -4884,7 +4926,19 @@ fn op_assign_obj_prop_inner<'a>(
     frame: *mut ExecuteData,
     op_array: &'a crate::compiler::OpArray,
     opline: &Instruction,
+    pending_incdec_error: Option<usize>,
 ) -> Result<ColdResult<'a>, VmError> {
+    // The original operation failure is a suspended completion, not a new
+    // callback error. Keep it pending through the canonical writer's checks.
+    let take_magic_exception = |eg: &mut ExecutorGlobals, frame| {
+        if pending_incdec_error.is_some()
+            && eg.exception.as_ref().and_then(Value::object_identity) == pending_incdec_error
+        {
+            Ok(None)
+        } else {
+            take_magic_exception(eg, frame)
+        }
+    };
     // SAFETY: all operands belong to the active compiler-sized frame. A
     // Reference target remains live through this non-reentrant assignment.
     let (prop_name, val, obj) = unsafe {
@@ -4989,6 +5043,7 @@ fn op_assign_obj_prop_inner<'a>(
     let setter_guarded = property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET);
     if obj.as_object().is_some_and(|object| object.native_array_options().flags & 2 != 0)
         && crate::stdlib::array_object_property_uses_dimension(obj, &name, get_caller_class(frame, eg).as_deref(), eg) {
+        if pending_incdec_error.is_some() { return Ok(ColdResult::Done); }
         let receiver = obj.clone();
         let assignment_result = (opline._pad & ASSIGN_PROP_RESULT_VALUE != 0).then(|| assigned.clone());
         crate::stdlib::call_object_protocol_method(eg, &receiver, "ArrayAccess", "offsetSet", &[Value::string(&name), assigned])?;
@@ -5066,6 +5121,7 @@ fn op_assign_obj_prop_inner<'a>(
                             .unwrap_or((false, false));
                         if readonly_state == (true, true) {
                             let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                                && opline._pad & (PROPERTY_INCDEC_INCREMENT | PROPERTY_INCDEC_DECREMENT) == 0
                                 && assigned.value_type() == ValueType::Array
                             {
                                 "indirectly modify"
@@ -5115,6 +5171,7 @@ fn op_assign_obj_prop_inner<'a>(
                             };
                             let message = if asymmetric {
                                 let action = if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                                    && opline._pad & (PROPERTY_INCDEC_INCREMENT | PROPERTY_INCDEC_DECREMENT) == 0
                                     && assigned.value_type() == ValueType::Array
                                 {
                                     "indirectly modify"
@@ -5175,6 +5232,14 @@ fn op_assign_obj_prop_inner<'a>(
             && !lazy_dynamic_property
             && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_SET)
             && eg.class_magic_set(0, &lazy_class_name);
+        if pending_incdec_error.is_some()
+            && (magic_set_can_handle
+                || (lazy_set_hook_declaring_class.is_some()
+                    && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
+                    && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_HOOK_SET)))
+        {
+            return Ok(ColdResult::Done);
+        }
         if let Some(declaring_class) = lazy_set_hook_declaring_class.as_deref()
             && opline._pad & crate::vm::instruction::OBJ_PROP_HOOK_BYPASS == 0
             && !property_guard_active(eg, obj, &name, PROPERTY_GUARD_HOOK_SET)
@@ -5289,6 +5354,7 @@ fn op_assign_obj_prop_inner<'a>(
                     .map_or(false, |v| !v.is_undef());
                 if already_init {
                     if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                        && opline._pad & (PROPERTY_INCDEC_INCREMENT | PROPERTY_INCDEC_DECREMENT) == 0
                         && assigned.value_type() == ValueType::Array
                     {
                         let err = make_error_value("Error", &format!(
@@ -5409,7 +5475,7 @@ fn op_assign_obj_prop_inner<'a>(
                     "Accessing static property {object_display_class_name}::${name} as non static"
                 ),
             )?;
-            if let Some(pending) = eg.exception.take() {
+            if pending_incdec_error.is_none() && let Some(pending) = eg.exception.take() {
                 // PHP completes a plain instance-storage assignment after a
                 // throwing handler observes this notice.  The handler must
                 // still see the pre-write object, and its throwable remains
@@ -5503,6 +5569,7 @@ fn op_assign_obj_prop_inner<'a>(
             .and_then(|slot| eg.instance_property_definition(object_class_id, slot));
         if let Some(definition_ref) = definition {
             if opline._pad & ASSIGN_OBJ_MODIFY != 0
+                && opline._pad & (PROPERTY_INCDEC_INCREMENT | PROPERTY_INCDEC_DECREMENT) == 0
                 && assigned.value_type() == ValueType::Array
                 && let Some((stored_type, constraints)) = obj
                     .as_object()

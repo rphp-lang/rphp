@@ -2748,6 +2748,19 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                 }
             };
         }
+        macro_rules! finish_failed_value_incdec {
+            ($old:expr, $error:expr) => {{
+                match finish_failed_incdec(eg, frame, op_array, opline, $old, $error)? {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        resume_activation!(new_frame, new_op_array);
+                    }
+                    ThrowResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                }
+            }};
+        }
         macro_rules! resume_pending_exception {
             () => {
                 if let Some(exception) = eg.exception.take() {
@@ -6765,13 +6778,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         throw_operator!("TypeError", &message);
                     }
                     let Some((new_val, diagnostic)) = increment_php_value(&old) else {
-                        throw_operator!(
+                        let error = make_error_value(
                             "TypeError",
                             &format!("Cannot increment {}", old.diagnostic_type_name())
                         );
+                        finish_failed_value_incdec!(old, error);
                     };
                     if let Some(diagnostic) = diagnostic {
                         report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                        if value_only && let Some(error) = eg.exception.take() {
+                            finish_failed_value_incdec!(old, error);
+                        }
                         if let Some(writeback_cv) = writeback_cv {
                             restore_incdec_snapshot_on_exception!(writeback_cv, old);
                         }
@@ -6883,13 +6900,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                         throw_operator!("TypeError", &message);
                     }
                     let Some((new_val, diagnostic)) = decrement_php_value(&old) else {
-                        throw_operator!(
+                        let error = make_error_value(
                             "TypeError",
                             &format!("Cannot decrement {}", old.diagnostic_type_name())
                         );
+                        finish_failed_value_incdec!(old, error);
                     };
                     if let Some(diagnostic) = diagnostic {
                         report_incdec_diagnostic(eg, frame, op_array, opline, diagnostic)?;
+                        if value_only && let Some(error) = eg.exception.take() {
+                            finish_failed_value_incdec!(old, error);
+                        }
                         if let Some(writeback_cv) = writeback_cv {
                             restore_incdec_snapshot_on_exception!(writeback_cv, old);
                         }

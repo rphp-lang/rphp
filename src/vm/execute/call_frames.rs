@@ -334,7 +334,7 @@ fn value_tree_requires_vm_release(
     // Temporary Rc snapshots are read-only graph handles. Suppress ordinary
     // possible-root registration until every snapshot has dropped; otherwise
     // this predicate would itself perturb `gc_status()['roots']`.
-    let _cycle_snapshot_guard = crate::value::begin_cycle_collection();
+    let _cycle_snapshot_guard = crate::value::suppress_cycle_snapshot_roots();
     let root = value;
     let mut pending = Vec::new();
     let mut current = None;
@@ -2113,7 +2113,7 @@ fn retained_temp_containers(
         nodes[index].incoming += 1;
         pending.push(index);
     }
-    let _snapshot_guard = crate::value::begin_cycle_collection();
+    let _snapshot_guard = crate::value::suppress_cycle_snapshot_roots();
     let mut nodes = Vec::new();
     let mut indices = HashMap::new();
     let mut pending = Vec::new();
@@ -4083,6 +4083,11 @@ fn throw_in_frame<'a>(
     thrown: Value,
 ) -> Result<ThrowResult<'a>, VmError> {
     let mut thrown = thrown;
+    if let Some(pending) = eg.exception.take()
+        && pending.object_identity() != thrown.object_identity()
+    {
+        append_replaced_exception(&thrown, &pending, eg);
+    }
     // A clone-with expression aborts on the first escaping property error,
     // including when a handler in this same frame catches it.
     eg.clone_with_readonly_updates

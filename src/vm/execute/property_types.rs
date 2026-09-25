@@ -238,14 +238,19 @@ fn publish_property_assignment_result(
     if opline._pad & ASSIGN_PROP_RESULT_VALUE == 0 {
         return;
     }
+    publish_temporary_result(frame, opline, value.clone());
+}
+
+#[inline(always)]
+fn publish_temporary_result(frame: *mut ExecuteData, opline: &Instruction, value: Value) {
     debug_assert!(matches!(opline.result_type, OpType::Tmp | OpType::Var));
-    // SAFETY: the compiler sets the flag only when the source TMP is also the
-    // expression result. The caller invokes this after all validation and a
-    // successful property commit, while the compiler-owned result and frame
-    // remain live.
+    // SAFETY: callers prove this compiler-owned result slot either through
+    // ASSIGN_PROP_RESULT_VALUE after a successful property commit or through
+    // the matching adjacent inc/dec writer. The slot and its frame remain
+    // live, and frame_slot_set preserves ownership of the displaced value.
     unsafe {
         let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
-        frame_slot_set(frame, result, value.clone());
+        frame_slot_set(frame, result, value);
     }
 }
 

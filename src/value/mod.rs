@@ -1260,6 +1260,9 @@ impl CycleCandidate {
 struct CycleRootState {
     active: bool,
     collecting: bool,
+    recording_callback_roots: bool,
+    snapshot_depth: usize,
+    callback_roots: std::collections::HashSet<usize>,
     runs: usize,
     collected: usize,
     request_started_at: Option<std::time::Instant>,
@@ -1273,10 +1276,16 @@ struct CycleRootState {
 fn register_cycle_candidate(candidate: CycleCandidate) {
     let _ = CYCLE_ROOTS.try_with(|state| {
         let mut state = state.borrow_mut();
-        if !state.active || state.collecting {
+        if !state.active
+            || state.snapshot_depth != 0
+            || (state.collecting && !state.recording_callback_roots)
+        {
             return;
         }
         let identity = candidate.identity();
+        if state.collecting {
+            state.callback_roots.insert(identity);
+        }
         // Repeated releases of one shared receiver already have their weak
         // root at the tail. Reuse that exact identity before hashing it again;
         // other roots retain the existing indexed lookup and insertion order.
@@ -1348,12 +1357,54 @@ mod repeated_cycle_root_tests {
         .join()
         .unwrap();
     }
+
+    #[test]
+    fn collector_callbacks_keep_new_roots_but_not_ownership_snapshots() {
+        std::thread::spawn(|| {
+            CYCLE_ROOTS.with_borrow_mut(|state| state.active = true);
+            let old = Rc::new(PhpArray::new());
+            let created = Rc::new(PhpArray::new());
+            let snapshot = Rc::new(PhpArray::new());
+            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&old)));
+            let mut collector = begin_cycle_collection().unwrap();
+            assert!(begin_cycle_collection().is_none());
+            {
+                let _callback = record_cycle_callback_roots();
+                register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&created)));
+                {
+                    let _snapshot = suppress_cycle_snapshot_roots();
+                    register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&snapshot)));
+                }
+                assert!(cycle_collection_status().running);
+                assert!(begin_cycle_collection().is_none());
+            }
+            collector.complete(
+                0,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            );
+            drop(collector);
+            CYCLE_ROOTS.with_borrow(|state| {
+                assert_eq!(state.candidates.len(), 1);
+                assert_eq!(
+                    state.candidates[0].identity(),
+                    Rc::as_ptr(&created) as usize
+                );
+                assert_eq!(state.snapshot_depth, 0);
+                assert!(!state.collecting);
+                assert!(!state.recording_callback_roots);
+            });
+            CYCLE_ROOTS.with_borrow_mut(|state| *state = CycleRootState::default());
+        })
+        .join()
+        .unwrap();
+    }
 }
 
 /// Guards one explicit collector pass against recursive collection and keeps
 /// temporary graph-handle drops out of the possible-root buffer.
 pub(crate) struct CycleCollectionGuard {
-    ran: bool,
     completed: Option<(
         usize,
         std::time::Duration,
@@ -1364,18 +1415,14 @@ pub(crate) struct CycleCollectionGuard {
 
 impl CycleCollectionGuard {
     pub(crate) fn mark_ran(&mut self) {
-        if self.ran {
-            return;
-        }
-        self.ran = true;
         CYCLE_ROOTS.with(|state| {
             let mut state = state.borrow_mut();
             state.runs = state.runs.saturating_add(1);
         });
     }
 
-    /// Retire the possible-root buffer after a completed Zend-style pass.
-    /// A later refcount decrement will enqueue a still-live component again.
+    /// Retire the visited root buffer after collection. Roots published by
+    /// user callbacks survive for a later pass, unless their owners died.
     pub(crate) fn complete(
         &mut self,
         collected: usize,
@@ -1392,13 +1439,22 @@ impl Drop for CycleCollectionGuard {
         let _ = CYCLE_ROOTS.try_with(|state| {
             let mut state = state.borrow_mut();
             state.collecting = false;
+            state.recording_callback_roots = false;
             if let Some((collected, collector_time, destructor_time, free_time)) = self.completed {
                 state.collected = state.collected.saturating_add(collected);
                 state.collector_time = state.collector_time.saturating_add(collector_time);
                 state.destructor_time = state.destructor_time.saturating_add(destructor_time);
                 state.free_time = state.free_time.saturating_add(free_time);
-                state.candidates.clear();
-                state.indices.clear();
+                let callback_roots = std::mem::take(&mut state.callback_roots);
+                state.candidates.retain(|candidate| {
+                    callback_roots.contains(&candidate.identity()) && candidate.strong_count() != 0
+                });
+                state.indices = state
+                    .candidates
+                    .iter()
+                    .enumerate()
+                    .map(|(index, candidate)| (candidate.identity(), index))
+                    .collect();
             }
         });
     }
@@ -1411,11 +1467,42 @@ pub(crate) fn begin_cycle_collection() -> Option<CycleCollectionGuard> {
             return None;
         }
         state.collecting = true;
-        Some(CycleCollectionGuard {
-            ran: false,
-            completed: None,
-        })
+        state.callback_roots.clear();
+        Some(CycleCollectionGuard { completed: None })
     })
+}
+
+/// PHP callbacks executed by the collector can create cycles or remove the
+/// last external root. Record those releases without permitting recursive GC.
+pub(crate) struct CycleCallbackGuard(bool);
+
+pub(crate) fn record_cycle_callback_roots() -> CycleCallbackGuard {
+    CYCLE_ROOTS.with_borrow_mut(|state| {
+        CycleCallbackGuard(std::mem::replace(&mut state.recording_callback_roots, true))
+    })
+}
+
+impl Drop for CycleCallbackGuard {
+    fn drop(&mut self) {
+        let _ = CYCLE_ROOTS.try_with(|state| {
+            state.borrow_mut().recording_callback_roots = self.0;
+        });
+    }
+}
+
+/// Read-only ownership walks must not publish their temporary clones as PHP
+/// roots, including when called from a destructor during a collection.
+pub(crate) struct CycleSnapshotGuard;
+
+pub(crate) fn suppress_cycle_snapshot_roots() -> CycleSnapshotGuard {
+    CYCLE_ROOTS.with_borrow_mut(|state| state.snapshot_depth += 1);
+    CycleSnapshotGuard
+}
+
+impl Drop for CycleSnapshotGuard {
+    fn drop(&mut self) {
+        let _ = CYCLE_ROOTS.try_with(|state| state.borrow_mut().snapshot_depth -= 1);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -1738,6 +1825,9 @@ pub(crate) fn begin_object_handle_request() {
         let mut state = state.borrow_mut();
         state.active = true;
         state.collecting = false;
+        state.recording_callback_roots = false;
+        state.snapshot_depth = 0;
+        state.callback_roots.clear();
         state.runs = 0;
         state.collected = 0;
         state.request_started_at = Some(std::time::Instant::now());
@@ -1755,6 +1845,9 @@ pub(crate) fn end_object_handle_request() {
         let mut state = state.borrow_mut();
         state.active = false;
         state.collecting = false;
+        state.recording_callback_roots = false;
+        state.snapshot_depth = 0;
+        state.callback_roots.clear();
         state.runs = 0;
         state.collected = 0;
         state.request_started_at = None;
@@ -6405,7 +6498,7 @@ impl Value {
         if !self.try_has_cycle_children().unwrap_or(false) {
             return;
         }
-        let _cycle_snapshot_guard = begin_cycle_collection();
+        let _cycle_snapshot_guard = suppress_cycle_snapshot_roots();
         let Some(root) = self
             .clone_cycle_handle()
             .or_else(|| self.dereferenced().clone_cycle_handle())

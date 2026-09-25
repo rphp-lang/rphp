@@ -9,7 +9,10 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::time::{Duration, Instant};
 
-use crate::value::{CycleNodeKind, Value, begin_cycle_collection, cycle_root_snapshot};
+use crate::value::{
+    CycleCollectionGuard, CycleNodeKind, Value, begin_cycle_collection, cycle_root_snapshot,
+    record_cycle_callback_roots,
+};
 use crate::vm::execute::{VmError, append_replaced_exception, run_cycle_object_destructor};
 
 use super::ExecutorGlobals;
@@ -35,7 +38,39 @@ struct CycleGraph {
     stale_weak_identities: Vec<usize>,
 }
 
+struct CyclePass {
+    collected: usize,
+    invoked_destructors: bool,
+    collector_time: Duration,
+    destructor_time: Duration,
+    free_time: Duration,
+}
+
 impl CycleGraph {
+    /// A destructor discovered during the one allowed rerun retires now, but
+    /// its still-owned component stays intact until a subsequent collection.
+    fn retained_by(&self, roots: &HashSet<usize>) -> HashSet<usize> {
+        let mut adjacency = HashMap::<usize, Vec<usize>>::new();
+        for &(source, target) in &self.ordinary_edges {
+            adjacency.entry(source).or_default().push(target);
+        }
+        for edge in &self.ephemerons {
+            adjacency.entry(edge.map).or_default().push(edge.value);
+        }
+        let mut retained = roots.clone();
+        let mut pending: Vec<_> = roots.iter().copied().collect();
+        while let Some(source) = pending.pop() {
+            if let Some(children) = adjacency.get(&source) {
+                for &target in children {
+                    if retained.insert(target) {
+                        pending.push(target);
+                    }
+                }
+            }
+        }
+        retained
+    }
+
     fn add_node(&mut self, value: Value) -> Option<usize> {
         let (identity, kind) = value.cycle_node()?;
         if self.indices.contains_key(&identity) {
@@ -378,15 +413,47 @@ impl ExecutorGlobals {
         let Some(mut guard) = begin_cycle_collection() else {
             return Ok(0);
         };
-        self.release_gc_destructor_owner(self.current_execute_data.get())?;
+        {
+            let _callback_roots = record_cycle_callback_roots();
+            self.release_gc_destructor_owner(self.current_execute_data.get())?;
+        }
         if self.exception.is_some() {
             return Ok(0);
         }
+        let mut result = self.collect_cycle_pass(&mut guard, false)?;
+        if result.invoked_destructors {
+            let pending = self.exception.take();
+            let rerun = self.collect_cycle_pass(&mut guard, true)?;
+            if let Some(previous) = pending {
+                if let Some(replacement) = self.exception.as_ref() {
+                    append_replaced_exception(replacement, &previous, self);
+                } else {
+                    self.exception = Some(previous);
+                }
+            }
+            result.collected += rerun.collected;
+            result.collector_time += rerun.collector_time;
+            result.destructor_time += rerun.destructor_time;
+            result.free_time += rerun.free_time;
+        }
+        guard.complete(
+            result.collected,
+            result.collector_time,
+            result.destructor_time,
+            result.free_time,
+        );
+        Ok(result.collected)
+    }
 
+    fn collect_cycle_pass(
+        &mut self,
+        guard: &mut CycleCollectionGuard,
+        rerun: bool,
+    ) -> Result<CyclePass, VmError> {
         let collector_started = Instant::now();
         let mut initial = self.build_cycle_graph();
         let ran = !initial.nodes.is_empty();
-        if ran {
+        if ran || rerun {
             guard.mark_ran();
         }
         let initially_live = initial.live_identities();
@@ -401,6 +468,26 @@ impl ExecutorGlobals {
         let cyclic = initial.cyclic_identities(&garbage_identities);
 
         let destructor_order = initial.destructor_order(&garbage_identities);
+        let pending_destructors: HashSet<_> = destructor_order
+            .iter()
+            .filter_map(|&index| {
+                let node = &initial.nodes[index];
+                if node.kind != CycleNodeKind::Object {
+                    return None;
+                }
+                let pending = self.has_fiber_context(node.identity)
+                    || (!node.value.is_object_destructor_retired()
+                        && node.value.as_object().is_some_and(|object| {
+                            self.class_has_destructor(object.class_id, &object.class_name)
+                        }));
+                pending.then_some(node.identity)
+            })
+            .collect();
+        let deferred = if rerun {
+            initial.retained_by(&pending_destructors)
+        } else {
+            HashSet::new()
+        };
         let has_destructors = destructor_order
             .iter()
             .any(|index| initial.nodes[*index].kind == CycleNodeKind::Object);
@@ -410,6 +497,7 @@ impl ExecutorGlobals {
         let collector_resumed = if has_destructors {
             let destructor_started = Instant::now();
             collector_time = destructor_started.duration_since(collector_started);
+            let _callback_roots = record_cycle_callback_roots();
             for index in destructor_order {
                 let node = &initial.nodes[index];
                 if node.kind == CycleNodeKind::Object {
@@ -459,7 +547,10 @@ impl ExecutorGlobals {
         stale.extend(current.stale_weak_identities.iter().copied());
         let collected: HashSet<usize> = garbage
             .iter()
-            .filter_map(|(identity, _)| (!currently_live.contains(identity)).then_some(*identity))
+            .filter_map(|(identity, _)| {
+                (!currently_live.contains(identity) && !deferred.contains(identity))
+                    .then_some(*identity)
+            })
             .collect();
 
         stale.extend(collected.iter().copied());
@@ -499,13 +590,13 @@ impl ExecutorGlobals {
             .count();
         drop(current);
         let free_time = Instant::now().duration_since(free_started);
-        guard.complete(
-            count,
-            if ran { collector_time } else { Duration::ZERO },
-            if ran { destructor_time } else { Duration::ZERO },
-            if ran { free_time } else { Duration::ZERO },
-        );
         self.exception = pending_exception;
-        Ok(count)
+        Ok(CyclePass {
+            collected: count,
+            invoked_destructors: !pending_destructors.is_empty(),
+            collector_time: if ran { collector_time } else { Duration::ZERO },
+            destructor_time: if ran { destructor_time } else { Duration::ZERO },
+            free_time: if ran { free_time } else { Duration::ZERO },
+        })
     }
 }
