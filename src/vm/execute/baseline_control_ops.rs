@@ -647,6 +647,7 @@ fn execute_source_unit(
         record_included,
         caller,
         synthetic_trace_origin,
+        false,
     );
     let Some((owner, displaced)) = displaced else {
         return result;
@@ -752,6 +753,7 @@ fn execute_source_unit_inner(
     record_included: bool,
     caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
     synthetic_trace_origin: Option<(String, usize)>,
+    request_unit: bool,
 ) -> Result<IncludeFileOutcome, VmError> {
     let source_offset_base = if synthetic_trace_origin.is_some() { 6 } else { 0 };
     let mut lexer = crate::lexer::Lexer::new(&source).with_source_offset_base(source_offset_base);
@@ -763,6 +765,9 @@ fn execute_source_unit_inner(
     let tokens = match tokenized {
         Ok(tokens) => tokens,
         Err(error) => {
+            if request_unit {
+                return Err(startup_source_parse_error(eg, error, &canonical));
+            }
             return Ok(include_parse_error(
                 eg,
                 caller.is_some(),
@@ -783,6 +788,9 @@ fn execute_source_unit_inner(
     {
         Ok(statements) => statements,
         Err(error) => {
+            if request_unit {
+                return Err(startup_source_parse_error(eg, error, &canonical));
+            }
             let error = if synthetic_trace_origin.is_some()
                 && error == "Expected expression, got Eof"
             {
@@ -1112,7 +1120,7 @@ fn execute_source_unit_inner(
     let included_global_vars = &main_func.op_array.global_vars;
     let caller_global_vars = caller.map(|(_, op_array)| &op_array.global_vars[..]).unwrap_or(&[]);
     let mut globals_backup: HashMap<String, Option<Value>> = HashMap::new();
-    if caller_is_local_scope || caller.is_none() {
+    if !request_unit && (caller_is_local_scope || caller.is_none()) {
         for (_, var_name) in scope_vars
             .iter()
             .chain(main_func.op_array.main_scope_vars.iter())
@@ -1168,7 +1176,7 @@ fn execute_source_unit_inner(
             })
         })
     };
-    if let Some((caller_frame, _)) = caller {
+    if let Some((caller_frame, _)) = caller.filter(|_| !request_unit) {
         eg.alias_dynamic_scope(inc_frame as usize, caller_frame as usize);
         let called_class_id = called_class_id_for_frame(eg, caller_frame, 0);
         if called_class_id != 0 {
@@ -1212,6 +1220,11 @@ fn execute_source_unit_inner(
     let prev_ed = eg.current_execute_data.get();
     eg.current_execute_data.set(inc_frame);
     let mut inc_result = execute_ex(eg, inc_frame);
+    if request_unit && inc_result.is_ok() && eg.exception.is_some() && eg.exception_handler.is_some() {
+        if let Err(error) = crate::stdlib::dispatch_pending_uncaught_exception_handlers(eg, inc_frame) {
+            inc_result = Err(error);
+        }
+    }
     // SAFETY: the synchronous source-unit frame and its OpArray remain live
     // until the explicit scope writeback and stack pop below.
     let (inc_op_array, inc_ip) = unsafe {

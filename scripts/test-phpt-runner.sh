@@ -32,8 +32,8 @@ cp -R "$script_root/tests/php-src/runner-fixtures/." "$fixture_copy/"
 "$php_bin" -r '
 $summary = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
 if ($summary["schema_version"] !== 5
-    || $summary["total"] !== 14
-    || $summary["statuses"]["pass"] !== 12
+    || $summary["total"] !== 15
+    || $summary["statuses"]["pass"] !== 13
     || $summary["statuses"]["skip"] !== 1
     || $summary["statuses"]["xfail"] !== 1
     || array_sum(array_intersect_key(
@@ -41,11 +41,11 @@ if ($summary["schema_version"] !== 5
         array_flip(["fail", "unsupported", "timeout", "crash"]),
     )) !== 0
     || $summary["execution_profile"] !== [
-        "attempted" => 12,
+        "attempted" => 13,
         "pre_execution_failed" => 0,
         "front_end_rejected" => 2,
-        "runtime_reached" => 10,
-        "runtime_reach_rate" => 10 / 12,
+        "runtime_reached" => 11,
+        "runtime_reach_rate" => 11 / 13,
     ]
     || $summary["expectation_profiles"] !== [
         "diagnostic" => [
@@ -61,14 +61,14 @@ if ($summary["schema_version"] !== 5
             "attempted_pass_rate" => 1,
         ],
         "ordinary" => [
-            "pass" => 10,
+            "pass" => 11,
             "fail" => 0,
             "skip" => 1,
             "xfail" => 1,
             "unsupported" => 0,
             "timeout" => 0,
             "crash" => 0,
-            "total" => 12,
+            "total" => 13,
             "headline_pass_rate" => 1,
             "attempted_pass_rate" => 1,
         ],
@@ -83,8 +83,8 @@ if ($summary["schema_version"] !== 5
 $map = json_decode(file_get_contents($argv[1]), true, flags: JSON_THROW_ON_ERROR);
 $groupTotal = array_sum(array_column($map["groups"], "total"));
 if ($map["schema_version"] !== 1
-    || $map["total"] !== 14
-    || $groupTotal !== 14
+    || $map["total"] !== 15
+    || $groupTotal !== 15
     || $map["hazards"] !== []
     || $map["manifest_sha256"] !== hash_file("sha256", $argv[2])
 ) {
@@ -152,7 +152,8 @@ $binaryRecord = json_decode(
 if (unsupported_rphp_ini_directives($supported) !== []
     || unsupported_rphp_ini_directives($diagnostics) !== []
     || unsupported_rphp_ini_directives("include_path=first:second\n") !== []
-    || unsupported_rphp_ini_directives("include_path=.\nauto_prepend_file=pre.php\n") !== ["auto_prepend_file"]
+    || unsupported_rphp_ini_directives("include_path=.\nauto_prepend_file=pre.php\nauto_append_file=post.php\n") !== []
+    || unsupported_rphp_ini_directives("auto_prepend_file=pre.php\nmemory_limit=64M\n") !== ["memory_limit"]
     || target_command("/rphp", "rphp", "test.php", "include_path=first:second\n", "") !== [
         "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html", "-d", "include_path=first:second", "test.php",
     ]

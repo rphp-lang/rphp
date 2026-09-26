@@ -2315,6 +2315,7 @@ include!("execute/call_frames.rs");
 include!("execute/baseline_entry.rs");
 include!("execute/callback_array_pipeline.rs");
 include!("execute/baseline_control_ops.rs");
+include!("execute/startup_source.rs");
 include!("execute/baseline_object_calls.rs");
 include!("execute/baseline_iteration.rs");
 include!("execute/baseline_named_args.rs");

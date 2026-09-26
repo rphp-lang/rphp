@@ -12,6 +12,8 @@ function unsupported_rphp_ini_directives(string $section): array
         'variables_order' => true,
         'output_handler' => true,
         'include_path' => true,
+        'auto_prepend_file' => true,
+        'auto_append_file' => true,
         // Core-language cases can carry optional optimizer preferences; their
         // reference results are also verified with OPcache disabled. RPHP
         // leaves these extension-only INI entries unpublished. EXTENSIONS
@@ -188,7 +190,9 @@ function run_test(
             }
             $temporaryFiles[] = $skipFile;
             $skip = run_process(
-                target_command($target, $kind, $skipFile, $ini, ''),
+                // Test-specific INI belongs to FILE, not SKIPIF. In particular,
+                // startup source/output hooks must not contaminate admission.
+                target_command($target, $kind, $skipFile, '', ''),
                 $directory,
                 $environment,
                 '',
@@ -308,7 +312,8 @@ function run_test(
             }
             $temporaryFiles[] = $cleanFile;
             $clean = run_process(
-                target_command($target, $kind, $cleanFile, $ini, ''),
+                // Like the upstream runner, CLEAN uses the base profile.
+                target_command($target, $kind, $cleanFile, '', ''),
                 $directory,
                 $environment,
                 '',

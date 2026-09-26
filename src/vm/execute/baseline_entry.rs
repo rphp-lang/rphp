@@ -193,6 +193,14 @@ fn attach_uncaught_string_conversion_replacement_trace(
 }
 
 pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Value, VmError> {
+    execute_request(eg, main_func, None)
+}
+
+fn execute_request(
+    eg: &mut ExecutorGlobals,
+    main_func: &UserFunction,
+    body: Option<&mut dyn FnMut(&mut ExecutorGlobals, *mut ExecuteData) -> Result<(), VmError>>,
+) -> Result<Value, VmError> {
     crate::value::begin_object_handle_request();
     crate::value::initialize_cycle_collection(eg.gc_enabled);
     let func_ptr = &main_func.common as *const FunctionCommon;
@@ -227,8 +235,13 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     }
     eg.current_execute_data.set(frame);
 
-    let mut execution = execute_ex(eg, frame);
+    let body_dispatches_handlers = body.is_some();
+    let mut execution = match body {
+        Some(body) => body(eg, frame),
+        None => execute_ex(eg, frame),
+    };
     if execution.is_ok()
+        && !body_dispatches_handlers
         && main_func.op_array.source_file.as_ref() != "Command line code"
         && eg.exception.is_some()
         && eg.exception_handler.is_some()

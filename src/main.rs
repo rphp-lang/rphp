@@ -310,6 +310,9 @@ fn main() {
         }
     };
     let executed_file = matches!(action, CliAction::File(_)).then(|| source_file.clone());
+    let inline_request = matches!(action, CliAction::Inline(_));
+    let (prepend, append) = stdlib::startup_source_files(&ini_settings);
+    let has_startup_units = !inline_request && (!prepend.is_empty() || !append.is_empty());
     let script_name = match &action {
         CliAction::File(file) => Some(file.clone()),
         _ => None,
@@ -319,7 +322,22 @@ fn main() {
         _ => 0,
     };
 
-    let source = read_source(action).unwrap_or_else(|error| {
+    // PHP opens the primary file before prepend, but reads/compiles it later.
+    // Retain that handle: replacing the pathname must not replace the program.
+    let mut startup_file = if has_startup_units && let CliAction::File(file) = &action {
+        Some(std::fs::File::open(file).unwrap_or_else(|error| {
+            eprintln!("error: could not read file '{file}': {error}");
+            std::process::exit(1);
+        }))
+    } else {
+        None
+    };
+    let source = if startup_file.is_some() {
+        Ok(Vec::new())
+    } else {
+        read_source(action)
+    }
+    .unwrap_or_else(|error| {
         eprintln!("error: {error}");
         std::process::exit(1);
     });
@@ -351,6 +369,29 @@ fn main() {
         }
         Some(request)
     };
+
+    if has_startup_units {
+        let (mut eg, _stdlib, _coroutines) = startup_request.unwrap_or_else(initialize_request);
+        if let Some(executed_file) = executed_file {
+            eg.record_included_file(executed_file);
+        }
+        let root = match Compiler::new().with_source_path(source_file).compile(&[]) {
+            Ok(compiled) => make_user_function(compiled.main),
+            Err(error) => {
+                finish_cli_execution(&mut eg, Err(execute::VmError::CompileFatal(error.message)));
+                return;
+            }
+        };
+        let primary = match startup_file.as_mut() {
+            Some(file) => execute::StartupSource::File(file),
+            None => execute::StartupSource::Stdin(&source),
+        };
+        let result = execute::execute_startup_request(&mut eg, &root, primary);
+        // A fatal error leaves the logical root live for pending callbacks.
+        // Keep its descriptor owner alive through CLI fatal publication/shutdown.
+        finish_cli_execution(&mut eg, result);
+        return;
+    }
 
     let tokens = Lexer::new_bytes(&source)
         .with_source_offset_base(source_offset_base)
@@ -462,6 +503,13 @@ fn main() {
     }
 
     let exec_result = execute::execute(&mut eg, &main_func);
+    finish_cli_execution(&mut eg, exec_result);
+}
+
+fn finish_cli_execution(
+    eg: &mut ExecutorGlobals,
+    exec_result: Result<rphp::value::Value, execute::VmError>,
+) {
     if stats::enabled() {
         stats::dump_to_stderr();
     }
@@ -469,19 +517,19 @@ fn main() {
     match exec_result {
         Ok(_) => {}
         Err(execute::VmError::Exit(code)) => {
-            exit_after_pending_shutdown(&mut eg, code);
+            exit_after_pending_shutdown(eg, code);
         }
         Err(execute::VmError::Parse(message)) => {
-            stdlib::publish_cli_fatal(&eg, "Parse error", &message);
-            exit_after_pending_shutdown(&mut eg, 255);
+            stdlib::publish_cli_fatal(eg, "Parse error", &message);
+            exit_after_pending_shutdown(eg, 255);
         }
         Err(execute::VmError::CompileFatal(message)) => {
-            stdlib::publish_cli_fatal(&eg, "Fatal error", &message);
-            exit_after_pending_shutdown(&mut eg, 255);
+            stdlib::publish_cli_fatal(eg, "Fatal error", &message);
+            exit_after_pending_shutdown(eg, 255);
         }
         Err(e) => {
-            stdlib::publish_cli_fatal(&eg, "Fatal error", &e.to_string());
-            exit_after_pending_shutdown(&mut eg, 255);
+            stdlib::publish_cli_fatal(eg, "Fatal error", &e.to_string());
+            exit_after_pending_shutdown(eg, 255);
         }
     }
 }

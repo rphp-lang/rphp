@@ -36,38 +36,43 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-optional-optimizer-admission` checkpoint over `ec5dfbea` admits four
-explicit optimizer preferences in the PHPT runner, without changing Rust,
-upstream tests or claiming OPcache support. Real extension requirements and
-unsupported preload/file-cache/JIT directives remain enforced.
+The `core-startup-source-lifecycle` checkpoint over `729366d2` closes
+native/local prepend/main/append execution in one request, preserving globals,
+references, delayed compilation, primary file-handle identity, return/exit,
+diagnostic handlers and one final shutdown. The root descriptor remains alive
+through pending fatal callbacks. Inline CLI code ignores startup units.
 
-The complete 7,174-case stable core is
-**6,873 pass / 5 fail / 194 skip / 101 unsupported / 1 timeout / 0 crash**,
-exact admission **+15/-0**. Zend/lang is **5,387/5/118/88 plus 1 timeout**;
-strings/array stays **1,486/0/76/13**. The 16 selected core cases pass reference
-PHP 8.5.11 with their original INI and with OPcache explicitly disabled; RPHP passes
-15. `bug55156` exposes an existing parser failure, not a regression;
-`inheritance/gh16508` becomes a genuine extension skip. Four library failures
-and the contained `new_oom.phpt` timeout remain unchanged. No previous exact
-pass is lost, and no unexpected stage movement, timeout or crash is hidden.
+Stable core is **6,875 pass / 5 fail / 194 skip / 99 unsupported / 1 timeout /
+0 crash**, exact **+2/-0** measured coverage. The unchanged focused set is
+**3/3** against parent **1/3**, runtime **+2/-0** including its adjacent CLI
+case; `bug32924` is admission of an already matching case, not a third fix.
+All 38 original CLI contracts match reference
+PHP 8.5.11 and the exact release; 43 adjacent regressions, five Cargo variants,
+all targets, unsafe/runner checks and seven Composer/Symfony S0--S3 gates pass.
+No earlier pass or failure stage is lost. Runner test INI is isolated to FILE;
+SKIPIF/CLEAN retain the base profile. See [exact evidence](compatibility.md).
 
-Original runner regressions and full PHPT no-loss pass. The immediately
-preceding five Cargo configurations, all targets, seven Composer/Symfony
-S0--S3 gates and unsafe checks are reused because Rust/Cargo inputs, tests and
-the exact release binary are unchanged; no redundant rebuild was performed.
-Unsafe inventory remains 1,625 blocks / 289 functions. Exact evidence is in
-[compatibility status](compatibility.md).
+The five remaining stable failures belong to four library contracts and the
+existing `bug55156` parser behavior. Skips, unsupported cases and the contained
+`new_oom` timeout are not passes. URL/user-wrapper startup loading and general
+parser diagnostics are explicit non-claims. No tokenizer/parser, Phar, PCRE,
+Date/DateTime or general library implementation was changed.
 
-This is newly measured core coverage, not fifteen runtime fixes or complete
-PHP compatibility. The next read-only priority is the shared memory-limit
-boundary: 35 cases are excluded solely by that directive. Finite budgets must
-not be admitted without real enforcement, and external safety limits stay in
-place. Auto-prepend/append request lifecycle and other unsupported settings
-remain open; the newly exposed parser failure stays outside this workstream.
+Next: request-owned allocation limits, checked reservation before mutation and
+safe OOM finalization. Thirty-five tests are excluded solely by `memory_limit`;
+the bounded 15-case baseline is 3 pass / 4 fail / 3 timeout / 5 crash against
+15 reference passes. Startup-only admission was rejected; no finite budget may
+be admitted without enforcement and no host safety limit may be relaxed.
+The separate stack-limit group also depends on `zend_test`; it is not eight
+independent core passes waiting for an INI allowlist.
 
-Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
-here. Performance remains deferred; host gates retain the 6 GiB/no-swap limit,
-two build/test workers, bounded PHPT parallelism and automatic cleanup.
+Performance remains deferred. Keep the 6 GiB/no-swap host boundary, two
+build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding optimizer-admission checkpoint
+
+The runner-only `core-optional-optimizer-admission` checkpoint reached 6,873
+stable passes, exact +15/-0, without runtime changes or an OPcache claim.
 
 ### Preceding INI/include-path checkpoint
 

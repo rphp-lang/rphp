@@ -17238,6 +17238,20 @@ pub fn startup_output_handler(settings: &[(String, String)]) -> String {
         })
 }
 
+/// Startup files are system-level request configuration, not runtime-writable
+/// include statements. Inline CLI code publishes the settings but ignores them.
+pub fn startup_source_files(settings: &[(String, String)]) -> (String, String) {
+    let read = |key: &str| {
+        settings
+            .iter()
+            .rev()
+            .find(|(name, _)| name == key)
+            .map(|(_, value)| parse_ini::startup_cli_string(value))
+            .unwrap_or_default()
+    };
+    (read("auto_prepend_file"), read("auto_append_file"))
+}
+
 /// Validate before user declarations exist, but use the same buffer and
 /// callback machinery as ob_start(). Invalid callbacks warn and do not abort
 /// request startup; the CLI owns the display/logging policy.
@@ -31730,7 +31744,7 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, parse_ini::startup_cli_string(raw_value));
             }
-            "output_handler" if name == "output_handler" => {
+            "output_handler" | "auto_prepend_file" | "auto_append_file" if name == &normalized => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, parse_ini::startup_cli_string(raw_value));
@@ -31946,7 +31960,9 @@ fn ini_base_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
         return Some(value.to_string());
     }
     Some(match option {
-        "disable_functions" | "output_handler" => String::new(),
+        "disable_functions" | "output_handler" | "auto_prepend_file" | "auto_append_file" => {
+            String::new()
+        }
         "variables_order" => "EGPCS".to_string(),
         "display_errors" | "report_memleaks" | "allow_url_fopen" => "1".to_string(),
         "zend.assertions" => eg.assertion_state.startup_mode.to_string(),
@@ -32094,7 +32110,12 @@ fn apply_ini_option(
     };
     if matches!(
         option.as_str(),
-        "allow_url_fopen" | "disable_functions" | "variables_order" | "output_handler"
+        "allow_url_fopen"
+            | "disable_functions"
+            | "variables_order"
+            | "output_handler"
+            | "auto_prepend_file"
+            | "auto_append_file"
     ) {
         return Ok(None);
     }
