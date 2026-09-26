@@ -36,27 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `phpunit-filter-extension` checkpoint over `f928c3af` honestly admits the
-CLI Filter extension. All seven PHP 8.5 globals have exact Reflection contracts;
-`filter_has_var()` and both input consumers read an immutable request snapshot
-rather than mutable superglobals. Every runnable upstream Filter case passes:
-**100 pass / 0 fail / 19 unsupported / one upstream XFAIL**. The unsupported
-cases require HTTP PHPT sections or a runner-only CLI INI form and are not
-counted as passes.
+The `phpunit-json-extension` checkpoint over `bb29963b` honestly admits the
+CLI JSON extension. All five PHP 8.5 globals have exact Reflection contracts,
+`JsonException` has JSON ownership and the canonical `Throwable` layout, and
+decode fallback preserves PHP object-handle order. Recursive debug projection
+from JSON callbacks is guarded without contaminating later calls. Every
+runnable supported upstream JSON case passes: **85 pass / 0 fail / 2 skip /
+1 unsupported**.
 
 The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip /
 99 unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
 variants, all-targets, Composer S0, unsafe/static and runner gates pass.
-After the clean rebase onto that parent, the focused adjacent packet, the full
-Filter PHPT packet and the 7,174-case no-loss ledger were repeated against the
-rebuilt release candidate. Performance is deferred by user direction. See
-[exact evidence](compatibility.md).
+Performance is deferred by user direction. See [exact evidence](compatibility.md).
 
-The staged PHPUnit startup surface now finds Ctype, Filter and Tokenizer. Next:
-close JSON's remaining semantic failures before publishing its extension
-identity, then implement the shared Libxml foundation required by DOM and
-XMLWriter, and finally Mbstring. This remains dependency-ordered extension
-work, not a blanket PHPUnit or HTTP-SAPI compatibility claim.
+The staged PHPUnit startup surface now finds Ctype, Filter, JSON and Tokenizer.
+Next: implement the shared Libxml foundation required by DOM and XMLWriter,
+then complete DOM/XMLWriter and finally Mbstring. This remains
+dependency-ordered extension work, not a blanket PHPUnit or HTTP-SAPI
+compatibility claim.
+
+### Preceding PHPUnit Filter foundation checkpoint
+
+The `phpunit-filter-extension` checkpoint over `f928c3af` honestly admits the
+CLI Filter extension. All seven PHP 8.5 globals have exact Reflection contracts;
+`filter_has_var()` and both input consumers read an immutable request snapshot
+rather than mutable superglobals. Every runnable upstream Filter case passes:
+**100 pass / 0 fail / 19 unsupported / one upstream XFAIL**. The stable ledger
+remains exact **+0/-0** with full correctness gates. See
+[exact evidence](compatibility.md).
 
 ### Preceding PHPUnit Ctype foundation checkpoint
 

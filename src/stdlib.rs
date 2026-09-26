@@ -592,7 +592,7 @@ fn json_decode_exact_value(
         }
         Err(error) => {
             if flags & JSON_THROW_ON_ERROR_FLAG != 0 {
-                eg.exception = Some(make_json_exception(error.code()));
+                eg.exception = Some(make_json_exception(error.code(), eg));
             } else {
                 eg.set_json_last_error(error.code());
             }
@@ -16229,9 +16229,24 @@ fn json_error_message(code: i64) -> &'static str {
     }
 }
 
-fn make_json_exception(code: i64) -> Value {
-    let exception = crate::value::make_error_value("JsonException", json_error_message(code));
+fn make_json_exception(code: i64, eg: &ExecutorGlobals) -> Value {
+    let (class_id, property_layout, property_defaults) = {
+        let class = eg
+            .find_class("JsonException")
+            .expect("JsonException is registered before JSON calls execute");
+        (
+            class.class_id,
+            std::rc::Rc::clone(&class.property_layout),
+            std::rc::Rc::clone(&class.property_defaults),
+        )
+    };
+    let exception = Value::object(PhpObject::with_layout_from_defaults(
+        class_id,
+        property_layout,
+        property_defaults.as_ref(),
+    ));
     if let Some(mut object) = exception.as_object_mut() {
+        object.set_property("message", Value::string(json_error_message(code)));
         object.set_property("code", Value::long(code));
     }
     exception
@@ -16276,7 +16291,7 @@ fn fn_json_encode(
     }
     if encoded.error_code != JSON_ERROR_NONE {
         if flags & JSON_THROW_ON_ERROR_FLAG != 0 && flags & JSON_PARTIAL_OUTPUT_ON_ERROR_FLAG == 0 {
-            eg.exception = Some(make_json_exception(encoded.error_code));
+            eg.exception = Some(make_json_exception(encoded.error_code, eg));
             ret!(rv, Value::bool(false));
         }
         eg.set_json_last_error(encoded.error_code);
@@ -20127,6 +20142,15 @@ fn dump_output_value(
         return Ok(dump_value(value, 0, eg, context));
     }
 
+    const DEBUG_INFO_GUARD: &str = "\0rphp\0__debugInfo";
+    const DEBUG_INFO_OPERATION: u8 = 1;
+    if value
+        .as_object()
+        .is_some_and(|object| object.property_guard_active(DEBUG_INFO_GUARD, DEBUG_INFO_OPERATION))
+    {
+        return Ok(PhpOutputBytes::from_text("*RECURSION*\n".to_string()));
+    }
+
     // Retain the receiver across the synchronous user call. __debugInfo() may
     // rebind the variable that supplied var_dump() or initialize a lazy proxy.
     let receiver = value.clone();
@@ -20175,7 +20199,16 @@ fn object_debug_projection(
     }) {
         return Ok(None);
     }
-    let debug_info = crate::vm::execute::call_object_debug_info(eg, receiver)?;
+    const DEBUG_INFO_GUARD: &str = "\0rphp\0__debugInfo";
+    const DEBUG_INFO_OPERATION: u8 = 1;
+    if let Some(mut object) = receiver.as_object_mut() {
+        object.set_property_guard(DEBUG_INFO_GUARD, DEBUG_INFO_OPERATION, true);
+    }
+    let debug_info = crate::vm::execute::call_object_debug_info(eg, receiver);
+    if let Some(mut object) = receiver.as_object_mut() {
+        object.set_property_guard(DEBUG_INFO_GUARD, DEBUG_INFO_OPERATION, false);
+    }
+    let debug_info = debug_info?;
     check_debug_projection_exception(eg, ed)?;
     let Some(debug_info) = debug_info else {
         return Ok(None);
@@ -31672,6 +31705,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "gettext",
     #[cfg(target_os = "linux")]
     "iconv",
+    "json",
     "Phar",
     "pcre",
     "tokenizer",

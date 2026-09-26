@@ -10812,6 +10812,8 @@ fn class_get_extension_name(
         "Reflection"
     } else if lowered.starts_with("date") {
         "date"
+    } else if lowered == "jsonexception" {
+        "json"
     } else if lowered == "phar" || lowered == "pharexception" {
         "Phar"
     } else if lowered == "phptoken" {

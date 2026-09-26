@@ -245,7 +245,22 @@ fn decode_object_map<'de, A>(mut map: A, child: PhpValueSeed<'_>) -> Result<Valu
 where
     A: MapAccess<'de>,
 {
-    let mut properties = DynamicPropertyMap::with_capacity(map.size_hint().unwrap_or(0));
+    let capacity = map.size_hint().unwrap_or(0);
+    let Some(first_key) = map.next_key::<String>()? else {
+        return Ok(Value::object(PhpObject::std_class_from_properties(
+            DynamicPropertyMap::with_capacity(0),
+        )));
+    };
+    // PHP materializes stdClass after the first complete member. If that
+    // member is another object, the child receives its handle first; if it is
+    // scalar, the parent is allocated before any later object member.
+    let first_value = map.next_value_seed(child)?;
+    if first_key.as_bytes().first() == Some(&0) {
+        return Err(serde::de::Error::custom(INVALID_PROPERTY_ERROR_MARKER));
+    }
+    let mut properties = DynamicPropertyMap::with_capacity(capacity);
+    properties.insert_owned(first_key, first_value);
+    let object = Value::object(PhpObject::std_class_from_properties(properties));
     while let Some(key) = map.next_key::<String>()? {
         // Zend decodes the member value before it attempts to install the
         // property. A malformed/depth-limited value therefore wins over the
@@ -254,13 +269,15 @@ where
         if key.as_bytes().first() == Some(&0) {
             return Err(serde::de::Error::custom(INVALID_PROPERTY_ERROR_MARKER));
         }
-        properties.insert_owned(key, value);
+        object
+            .as_object_mut()
+            .expect("streaming JSON object must retain its stdClass payload")
+            .set_dynamic_property(&key, value);
     }
-    let value = Value::object(PhpObject::std_class_from_properties(properties));
     if is_deep_drop_checkpoint(child.container_depth) {
-        value.mark_deep_drop_stack_checkpoint();
+        object.mark_deep_drop_stack_checkpoint();
     }
-    Ok(value)
+    Ok(object)
 }
 
 /// Validate one JSON document without constructing its PHP projection.
@@ -735,13 +752,11 @@ struct PreparedNumbers {
     plan: NumberPlan,
 }
 
-fn replace_valid_json_numbers(input: &str, mut observe: impl FnMut(&str)) -> String {
+fn visit_valid_json_numbers(input: &str, mut observe: impl FnMut(&str)) {
     let bytes = input.as_bytes();
     let mut in_string = false;
     let mut escaped = false;
     let mut index = 0usize;
-    let mut copied_until = 0usize;
-    let mut output = String::with_capacity(input.len());
 
     while index < bytes.len() {
         let byte = bytes[index];
@@ -777,15 +792,41 @@ fn replace_valid_json_numbers(input: &str, mut observe: impl FnMut(&str)) -> Str
         let end = index;
         let token = &input[start..end];
         if is_valid_json_number(token) {
-            output.push_str(&input[copied_until..start]);
-            output.push('0');
-            copied_until = end;
             observe(token);
         }
     }
+}
+
+fn replace_valid_json_numbers(input: &str, mut observe: impl FnMut(&str)) -> String {
+    let mut copied_until = 0usize;
+    let mut output = String::with_capacity(input.len());
+    visit_valid_json_numbers(input, |token| {
+        let start = token.as_ptr() as usize - input.as_ptr() as usize;
+        let end = start + token.len();
+        output.push_str(&input[copied_until..start]);
+        output.push('0');
+        copied_until = end;
+        observe(token);
+    });
 
     output.push_str(&input[copied_until..]);
     output
+}
+
+/// Detect the two finite-parser cases that need PHP's lexeme projection
+/// before serde starts allocating the result tree. Retrying after a partial
+/// tree was built would consume object handles in a different order.
+fn number_plan_required(input: &str) -> bool {
+    let mut required = false;
+    visit_valid_json_numbers(input, |token| {
+        if required || !token.bytes().any(|byte| matches!(byte, b'.' | b'e' | b'E')) {
+            return;
+        }
+        if let Ok(number) = token.parse::<f64>() {
+            required = !number.is_finite() || (number == 0.0 && number.is_sign_negative());
+        }
+    });
+    required
 }
 
 /// Replace syntactically complete numeric tokens with a cheap placeholder and
@@ -1112,6 +1153,12 @@ fn decode_php_text(
     };
     if bigint_as_string {
         let prepared = prepare_numbers(input, true);
+        return decode(&prepared.input, Some(&prepared.plan), None)
+            .map_err(|error| map_json_error(error, &prepared.input));
+    }
+
+    if number_plan_required(input) {
+        let prepared = prepare_numbers(input, false);
         return decode(&prepared.input, Some(&prepared.plan), None)
             .map_err(|error| map_json_error(error, &prepared.input));
     }

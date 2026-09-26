@@ -7,6 +7,48 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: JSON
+
+The `phpunit-json-extension` checkpoint over `bb29963b` honestly admits the
+CLI JSON extension. All five PHP 8.5 globals are present with exact
+Reflection-visible names, arity, parameter types/defaults, return types and
+extension ownership. `JsonException` now reports JSON ownership and uses the
+canonical seven-slot `Throwable` layout, including the ordinary internal-call
+trace.
+
+Number projection is planned before a decode allocates its result tree, so an
+overflowing exponent or negative zero cannot consume object handles during a
+discarded partial decode. Streaming object materialization follows PHP's
+first-complete-member order. Recursive `var_dump()` from a JSON callback's
+`__debugInfo()` projection is guarded and reports `*RECURSION*` without
+leaking the guard into later calls.
+
+The complete 88-case upstream `ext/json` packet is **85 pass / 0 fail / 2 skip
+/ 1 unsupported**, without timeout or crash. Every runnable supported case
+passes. The 7,174-case stable ledger remains **6,881 pass / 0 fail / 194 skip
+/ 99 unsupported**, exact **+0/-0**, with the identical 6,881-path pass set.
+Five complete Cargo configurations and the all-features/all-targets gate pass;
+Composer 2.8.12 S0, format, unsafe policy and runner self-tests are green.
+Production remains at the unsafe ceiling of **1,627 blocks / 289 functions**.
+Performance is deferred by user direction and no performance claim is made.
+
+This remains a staged PHPUnit foundation, not a PHPUnit compatibility claim.
+The startup probe now finds Ctype, Filter, JSON and Tokenizer. The remaining
+extension blockers are `libxml`, `dom`, `xmlwriter` and `mbstring`; the next
+bounded checkpoint is the shared Libxml foundation, followed by DOM/XMLWriter
+and then Mbstring.
+
+SHA-256 evidence: release
+`d34fa1e658969792b347137d5dd6e75d2cc6e1aa31067181bf5d180035c41c08`;
+JSON manifest
+`6e921d2416a0156451388542079293a48cc02cf635f3565f4e61efe9807e223f`;
+stable manifest
+`f86e4e098cc809485e466255bbe498a41746c51520f0b30cffaf5074f316decb`;
+stable pass set
+`54853df66d0bc05d98a73894d6a13f3a10082b56430f7f9a991b79be08bb079f`;
+builtin audit summary
+`514c546366fd4214f09249f4b644a58c73373ef9c8ec759bf8023da0cf4c18a0`.
+
 ### PHPUnit extension foundation: Filter
 
 The `phpunit-filter-extension` checkpoint over `f928c3af` honestly admits the
