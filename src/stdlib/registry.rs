@@ -4047,6 +4047,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         .find_function("filter_id")
         .expect("filter_id was just registered");
     eg.register_internal_function_reflection_metadata(filter_id, vec![None], "filter");
+    reg_typed!(
+        "filter_has_var",
+        fn_filter_has_var,
+        2,
+        2,
+        ["input_type", "var_name"],
+        [ParamTypeHint::Int, ParamTypeHint::String],
+        ParamTypeHint::Bool
+    );
+    let filter_has_var = eg
+        .find_function("filter_has_var")
+        .expect("filter_has_var was just registered");
+    eg.register_internal_function_reflection_metadata(filter_has_var, vec![None, None], "filter");
     const FILTER_INPUT_DEFAULT_DIAGNOSTICS: &[Option<&str>] =
         &[None, None, Some("FILTER_DEFAULT"), None];
     const FILTER_ARRAY_DEFAULT_DIAGNOSTICS: &[Option<&str>] = &[None, Some("FILTER_DEFAULT"), None];
@@ -4084,7 +4097,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::Int]),
             ParamTypeHint::Bool,
         ],
-        ParamTypeHint::Mixed
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("null".to_string()),
+        ])
     );
     let filter_input_array = eg
         .find_function("filter_input_array")
@@ -4109,6 +4126,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
             ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("null".to_string()),
         ])
     );
     let filter_var_array = eg

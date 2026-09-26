@@ -31667,6 +31667,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     #[cfg(target_os = "linux")]
     "ctype",
     "date",
+    "filter",
     #[cfg(target_os = "linux")]
     "gettext",
     #[cfg(target_os = "linux")]
@@ -31682,7 +31683,7 @@ fn admitted_extension_name(bytes: &[u8]) -> bool {
     // admitted extensions. Actual name comparisons are explicit pay-use work
     // and stay out of the hot caller's instruction footprint.
     let admitted_length = match bytes.len() {
-        4 | 8 | 9 => true,
+        4 | 6 | 8 | 9 => true,
         #[cfg(target_os = "linux")]
         7 => true,
         #[cfg(target_os = "linux")]

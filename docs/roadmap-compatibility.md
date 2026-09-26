@@ -36,6 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-filter-extension` checkpoint over `f928c3af` honestly admits the
+CLI Filter extension. All seven PHP 8.5 globals have exact Reflection contracts;
+`filter_has_var()` and both input consumers read an immutable request snapshot
+rather than mutable superglobals. Every runnable upstream Filter case passes:
+**100 pass / 0 fail / 19 unsupported / one upstream XFAIL**. The unsupported
+cases require HTTP PHPT sections or a runner-only CLI INI form and are not
+counted as passes.
+
+The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip /
+99 unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
+variants, all-targets, Composer S0, unsafe/static and runner gates pass.
+After the clean rebase onto that parent, the focused adjacent packet, the full
+Filter PHPT packet and the 7,174-case no-loss ledger were repeated against the
+rebuilt release candidate. Performance is deferred by user direction. See
+[exact evidence](compatibility.md).
+
+The staged PHPUnit startup surface now finds Ctype, Filter and Tokenizer. Next:
+close JSON's remaining semantic failures before publishing its extension
+identity, then implement the shared Libxml foundation required by DOM and
+XMLWriter, and finally Mbstring. This remains dependency-ordered extension
+work, not a blanket PHPUnit or HTTP-SAPI compatibility claim.
+
+### Preceding PHPUnit Ctype foundation checkpoint
+
 The `phpunit-extension-foundation` checkpoint over `cbc5c6da` honestly admits
 Ctype on Linux. Its 11 functions expose PHP 8.5 call metadata and classify
 bytes through the active native `LC_CTYPE`; adjacent non-UCP PCRE byte classes,

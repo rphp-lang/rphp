@@ -7,6 +7,51 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: Filter
+
+The `phpunit-filter-extension` checkpoint over `f928c3af` honestly admits the
+CLI Filter extension. All seven PHP 8.5 globals are present with exact
+Reflection-visible names, arity, parameter types/defaults, return types and
+extension ownership. The previously missing `filter_has_var()` now shares an
+immutable request-input snapshot with `filter_input()` and
+`filter_input_array()`; later userland mutations of `$_GET`, `$_POST`,
+`$_COOKIE`, `$_ENV` or `$_SERVER` cannot rewrite the raw input view.
+
+The complete 120-case upstream `ext/filter` packet is **100 pass / 0 fail /
+19 unsupported / one upstream XFAIL**, without timeout or crash. Every runnable
+case passes. The unsupported cases use HTTP-only PHPT sections or one
+runner-inexpressible CLI INI form and remain visible; this CLI checkpoint does
+not claim an HTTP SAPI.
+
+The 7,174-case stable ledger remains **6,881 pass / 0 fail / 194 skip /
+99 unsupported**, exact **+0/-0** with the identical 6,881-path pass set. Five
+complete Cargo configurations pass: default **6,940**, no-default **6,595**,
+erased **7,011**, reified **7,033**, all-features **7,084**; ignored
+15/15/15/15/18. All-targets, Composer S0, format, unsafe policy and runner
+self-tests are green. Performance is deferred by user direction and no
+performance claim is made. After the clean rebase onto `f928c3af`, the focused
+adjacent packet, complete Filter PHPT packet and stable no-loss ledger were
+repeated against the rebuilt release candidate.
+
+This remains a staged PHPUnit foundation, not a PHPUnit compatibility claim.
+The startup probe now finds Ctype, Filter and Tokenizer; `dom`, `json`,
+`libxml`, `mbstring` and `xmlwriter` remain honest missing extensions. JSON's
+remaining semantic failures are the next bounded checkpoint, followed by the
+shared Libxml/DOM/XMLWriter foundation and then Mbstring.
+
+SHA-256 evidence: release
+`b4e01c2706c37d92b882bfeebc54b5ae6b8f10409e98fe195abf17b6420ac60b`;
+Filter manifest
+`146949f3a5c05fc9406e4d9ff484eb785df62b19c8f748f2bb164341e38323c9`;
+stable manifest
+`fa70e5ffb258de7d37bf1c1a1dcfc641c5f17e3034df5d09ff5dc1b6f7ac1572`;
+stable pass set
+`54853df66d0bc05d98a73894d6a13f3a10082b56430f7f9a991b79be08bb079f`;
+Cargo matrix
+`0cd46a2b97688f2a238c542c56d0550d073a7fabbf09748c478fc82f3c25c55e`;
+builtin audit summary
+`1589158557c70d8cd95bdbd48107b1541ad99afdee46fb8660802af555397484`.
+
 ### PHPUnit extension foundation: Ctype
 
 The `phpunit-extension-foundation` checkpoint over `cbc5c6da` admits the

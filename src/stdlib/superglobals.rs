@@ -4,6 +4,32 @@
 use crate::runtime::ExecutorGlobals;
 use crate::value::{PhpArray, Value};
 
+const FILTER_INPUT_SNAPSHOT: &str = "\0rphp_filter_input";
+
+fn filter_input_name(input_type: i64) -> Option<&'static str> {
+    match input_type {
+        0 => Some("_POST"),
+        1 => Some("_GET"),
+        2 => Some("_COOKIE"),
+        4 => Some("_ENV"),
+        5 => Some("_SERVER"),
+        _ => None,
+    }
+}
+
+pub(crate) fn filter_input_source(eg: &ExecutorGlobals, input_type: i64) -> Option<&PhpArray> {
+    let name = filter_input_name(input_type)?;
+    eg.jit_auto_globals
+        .get(FILTER_INPUT_SNAPSHOT)
+        .and_then(Value::as_array)
+        .and_then(|inputs| inputs.get_str(name))
+        .and_then(Value::as_array)
+}
+
+pub(crate) fn filter_input_type_is_valid(input_type: i64) -> bool {
+    filter_input_name(input_type).is_some()
+}
+
 fn byte_string(bytes: &[u8]) -> Value {
     match std::str::from_utf8(bytes) {
         Ok(text) => Value::string(text),
@@ -81,12 +107,24 @@ pub fn register_request_globals(
         PhpArray::new()
     };
 
+    let get = PhpArray::new();
+    let post = PhpArray::new();
+    let cookie = PhpArray::new();
+    let files = PhpArray::new();
+    let mut filter_inputs = PhpArray::new();
+    filter_inputs.set_str("_GET", Value::array(get.clone()));
+    filter_inputs.set_str("_POST", Value::array(post.clone()));
+    filter_inputs.set_str("_COOKIE", Value::array(cookie.clone()));
+    filter_inputs.set_str("_ENV", Value::array(environment.clone()));
+    filter_inputs.set_str("_SERVER", Value::array(server.clone()));
+
     let globals = &mut eg.globals;
     globals.insert("argv".to_string(), Value::array(argv));
     globals.insert("argc".to_string(), Value::long(argc));
-    for name in ["_GET", "_POST", "_COOKIE", "_FILES"] {
-        globals.insert(name.to_string(), Value::array(PhpArray::new()));
-    }
+    globals.insert("_GET".to_string(), Value::array(get));
+    globals.insert("_POST".to_string(), Value::array(post));
+    globals.insert("_COOKIE".to_string(), Value::array(cookie));
+    globals.insert("_FILES".to_string(), Value::array(files));
     // The CLI SAPI always activates `$_SERVER`; `auto_globals_jit` defers
     // `$_ENV` and `$_REQUEST` until code names them.
     globals.insert("_SERVER".to_string(), Value::array(server));
@@ -96,6 +134,10 @@ pub fn register_request_globals(
     let lazy = &mut eg.jit_auto_globals;
     lazy.insert("_ENV".to_string(), Value::array(environment));
     lazy.insert("_REQUEST".to_string(), Value::array(PhpArray::new()));
+    lazy.insert(
+        FILTER_INPUT_SNAPSHOT.to_string(),
+        Value::array(filter_inputs),
+    );
 }
 
 /// Auto-globals PHP creates lazily under the default `auto_globals_jit`.

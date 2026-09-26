@@ -2838,16 +2838,35 @@ pub(super) fn fn_filter_var_array(
     ret!(rv, Value::array(result));
 }
 
-fn filter_input_source<'a>(eg: &'a ExecutorGlobals, input_type: i64) -> Option<&'a PhpArray> {
-    let name = match input_type {
-        0 => "_POST",
-        1 => "_GET",
-        2 => "_COOKIE",
-        4 => "_ENV",
-        5 => "_SERVER",
-        _ => return None,
+fn invalid_filter_input_type(eg: &mut ExecutorGlobals, function: &str, parameter: &str) {
+    eg.exception = Some(crate::value::make_error_value(
+        "ValueError",
+        &format!("{function}(): Argument #1 (${parameter}) must be an INPUT_* constant"),
+    ));
+}
+
+pub(super) fn fn_filter_has_var(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(input_type) = typed_internal_int_argument(ed, eg, "filter_has_var", 0, "input_type")?
+    else {
+        return Ok(());
     };
-    eg.globals.get(name).and_then(Value::as_array)
+    let Some(variable_name) =
+        typed_internal_string_argument(ed, eg, "filter_has_var", 1, "var_name")?
+    else {
+        return Ok(());
+    };
+    if !super::superglobals::filter_input_type_is_valid(input_type) {
+        invalid_filter_input_type(eg, "filter_has_var", "input_type");
+        return Ok(());
+    }
+    let present = super::superglobals::filter_input_source(eg, input_type)
+        .and_then(|input| input.get_str(&variable_name))
+        .is_some();
+    ret!(rv, Value::bool(present));
 }
 
 pub(super) fn fn_filter_input(
@@ -2897,13 +2916,13 @@ pub(super) fn fn_filter_input(
         };
         (flags, None)
     };
-    let input = filter_input_source(eg, input_type)
+    if !super::superglobals::filter_input_type_is_valid(input_type) {
+        invalid_filter_input_type(eg, "filter_input", "type");
+        return Ok(());
+    }
+    let input = super::superglobals::filter_input_source(eg, input_type)
         .and_then(|input| input.get_str(&variable_name))
         .cloned();
-    let input = input.or_else(|| {
-        (input_type == 5 && variable_name == "PHP_SELF")
-            .then(|| Value::string(super::internal_call_source(ed).0))
-    });
     let Some(input) = input else {
         let default = option
             .as_ref()
@@ -2937,9 +2956,37 @@ pub(super) fn fn_filter_input_array(
     else {
         return Ok(());
     };
-    let Some(input) = filter_input_source(eg, input_type).cloned() else {
+    if let Some(options) = arg_opt!(ed, 1)
+        && options.value_type() != ValueType::Array
+    {
+        let Some(_) = typed_internal_int_value_argument_expected(
+            ed,
+            eg,
+            options,
+            "filter_input_array",
+            1,
+            "options",
+            "array|int",
+        )?
+        else {
+            return Ok(());
+        };
+    }
+    if arg_opt!(ed, 2).is_some()
+        && typed_internal_bool_argument(ed, eg, "filter_input_array", 2, "add_empty")?.is_none()
+    {
+        return Ok(());
+    }
+    if !super::superglobals::filter_input_type_is_valid(input_type) {
+        invalid_filter_input_type(eg, "filter_input_array", "type");
+        return Ok(());
+    }
+    let input = super::superglobals::filter_input_source(eg, input_type)
+        .cloned()
+        .expect("valid filter input types have request snapshots");
+    if input.is_empty() {
         ret!(rv, Value::null());
-    };
+    }
     let definitions = arg!(ed, 1).clone();
     let add_empty = arg_opt!(ed, 2).map_or_else(|| Value::bool(true), Clone::clone);
     let arguments = [Value::array(input), definitions, add_empty];
