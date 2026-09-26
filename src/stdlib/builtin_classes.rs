@@ -287,8 +287,7 @@ fn register_rounding_mode(eg: &mut ExecutorGlobals) -> Box<InternalFunction> {
     ));
     cases_method.common.sig.return_type_hint = ParamTypeHint::Array;
     let cases_pointer = &cases_method.common as *const FunctionCommon;
-    eg.function_table
-        .insert("roundingmode::cases".to_string(), cases_pointer);
+    eg.insert_function_entry("roundingmode::cases".to_string(), cases_pointer);
     eg.method_declaring_class
         .insert(cases_pointer, ROUNDING_MODE_CLASS.into());
     cases_method
@@ -1991,15 +1990,13 @@ fn register_value_error(eg: &mut ExecutorGlobals) -> [Box<InternalFunction>; 2] 
         ],
     ));
     let constructor_pointer = &constructor.common as *const FunctionCommon;
-    eg.function_table
-        .insert("valueerror::__construct".to_string(), constructor_pointer);
+    eg.insert_function_entry("valueerror::__construct".to_string(), constructor_pointer);
     eg.method_declaring_class
         .insert(constructor_pointer, "ValueError".into());
 
     let get_message = Box::new(make_internal_method(fn_throwable_get_message, 1, 0, vec![]));
     let get_message_pointer = &get_message.common as *const FunctionCommon;
-    eg.function_table
-        .insert("valueerror::getmessage".to_string(), get_message_pointer);
+    eg.insert_function_entry("valueerror::getmessage".to_string(), get_message_pointer);
     eg.method_declaring_class
         .insert(get_message_pointer, "ValueError".into());
     [constructor, get_message]
@@ -2136,7 +2133,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
-            eg.function_table.insert(full_name, ptr);
+            eg.insert_function_entry(full_name, ptr);
             eg.method_declaring_class.insert(ptr, $class.into());
             funcs.push(f);
         }};
@@ -2144,7 +2141,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]));
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
-            eg.function_table.insert(full_name, ptr);
+            eg.insert_function_entry(full_name, ptr);
             eg.method_declaring_class.insert(ptr, $class.into());
             funcs.push(f);
         }};
@@ -2157,7 +2154,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
             let f = Box::new(make_internal_method($handler, $num_args, $min_args, vec![]).with_static_parameter_names(&[$($pnames),*]));
             let ptr = &f.common as *const FunctionCommon;
             let full_name = internal_method_lookup_name(&$class, &$method);
-            eg.function_table.insert(full_name, ptr);
+            eg.insert_function_entry(full_name, ptr);
             eg.method_declaring_class.insert(ptr, $class.into());
             eg.register_internal_static_method(ptr);
             funcs.push(f);
@@ -4911,8 +4908,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     closure_call.common.sig.ref_args = u64::MAX << 1;
     closure_call.common.sig.prefer_ref_args = u64::MAX << 1;
     let closure_call_ptr = &closure_call.common as *const FunctionCommon;
-    eg.function_table
-        .insert("closure::call".to_string(), closure_call_ptr);
+    eg.insert_function_entry("closure::call".to_string(), closure_call_ptr);
     eg.method_declaring_class
         .insert(closure_call_ptr, "Closure".into());
     funcs.push(closure_call);
@@ -4924,8 +4920,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     closure_invoke.common.sig.ref_args = u64::MAX;
     closure_invoke.common.sig.prefer_ref_args = u64::MAX;
     let closure_invoke_ptr = &closure_invoke.common as *const FunctionCommon;
-    eg.function_table
-        .insert("closure::__invoke".to_string(), closure_invoke_ptr);
+    eg.insert_function_entry("closure::__invoke".to_string(), closure_invoke_ptr);
     eg.method_declaring_class
         .insert(closure_invoke_ptr, "Closure".into());
     funcs.push(closure_invoke);

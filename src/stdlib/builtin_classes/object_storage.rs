@@ -1020,7 +1020,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             function.common.sig.return_type_hint = Void;
         }
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table.insert(
+        eg.insert_function_entry(
             internal_method_lookup_name("SplObjectStorage", name),
             pointer,
         );

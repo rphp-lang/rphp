@@ -27274,7 +27274,7 @@ first-run caches, and stays deferred.
 
 The `interpreter-hotspots` checkpoint keeps the same gate byte-identical on the
 rebased runtime and brings the cold analysis to about 10 s and the warm one to
-about 3.9 s on a loaded host (reference PHP: 1.6 s and 0.6 s). Two upstream
+about 3.9 s on a loaded host (reference PHP: 1.6 s and 0.6 s, of which 0.55 s is bootstrap). Two upstream
 changes had broken or slowed the gate first. The post-entry argument type
 checks of `7844e409` exposed that a bound closure's `$this` was installed
 before surplus unpacked arguments were packed into the variadic array; the
@@ -27299,8 +27299,39 @@ descending into a shared nested array until every owner is proven to lie
 inside the released tree. Destruction order was checked against reference
 PHP for shared nested arrays, arrays displaced from properties and captured
 closures. Peak memory of the full cold run is about 700 MB, unchanged from
-the rebased base; the remaining gap to PHP is ordinary interpreter,
-compile and class-linking cost and stays open.
+the rebased base.
+
+The `bootstrap-linear` checkpoint then looked at why `rphp phpstan.phar
+--version` (bootstrap only: 2,355 includes, 2,200 classes) took 3.2 s against
+0.55 s for PHP, and found that half of it was quadratic bookkeeping rather
+than compilation. The compile-time constant table was cached by (constant
+count, class count), so every unit that declared a class invalidated it and
+the next include rebuilt it from all constants and class constants (3.9
+million formatted inserts per bootstrap); the compiler also cloned the whole
+table for `prescan_constants`, per class for `self::`/`parent::` constant
+spellings, per class again for property defaults and per attribute list.
+`GenericMetadata::merge` rebuilt its symbol intern index and re-boxed all
+four tables per unit, and class registration scanned the entire function
+table once per class to find `Parent::*` methods and once per used trait.
+Now the runtime extends the cached table incrementally at `define()`, class
+registration and `class_alias()` (any other table change still triggers a
+full rebuild), the compiler reads constants through a layered
+`ConstantScope` (expression overlay, unit-local declarations, shared table)
+that resolves `self::`/`parent::`/`__CLASS__` at lookup without copying,
+generics metadata keeps its intern index across merges, and a per-owner
+method-key index (fed by every function-table publication) replaces both
+scans. Constant scoping was checked against reference PHP for forward `const`
+references, `self::`/`parent::` in class constants, property defaults and
+attributes, enum cases reading interface constants, `__COMPILER_HALT_OFFSET__`
+and constants defined at runtime or aliased before a later include
+(`tests/e2e_constants.rs`, `tests/e2e_class_constant_resolution_contracts.rs`,
+`tests/e2e_deferred_constant_expressions.rs` keep the original coverage).
+Bootstrap instructions fell from 27.4 to 12.7 billion; on a loaded host the
+bootstrap takes about 1.7 s, the warm analysis about 2.1 s and the cold one
+about 6.8 s. The remaining bootstrap is genuine work whose per-unit cost is
+still higher than PHP's: compilation (48 %, of which the quick-loop planner is
+9 %), parsing (19 %), lexing (10 %), the SHA-512 phar signature check (10 %)
+and class linking (9 %). That gap stays open.
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

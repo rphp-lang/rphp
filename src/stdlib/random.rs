@@ -111,8 +111,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     ));
     cases_method.common.sig.return_type_hint = ParamTypeHint::Array;
     let cases_pointer = &cases_method.common as *const FunctionCommon;
-    eg.function_table
-        .insert("random\\intervalboundary::cases".to_string(), cases_pointer);
+    eg.insert_function_entry("random\\intervalboundary::cases".to_string(), cases_pointer);
     eg.method_declaring_class
         .insert(cases_pointer, INTERVAL_BOUNDARY.into());
 

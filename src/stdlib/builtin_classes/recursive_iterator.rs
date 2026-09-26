@@ -812,8 +812,7 @@ pub(super) fn register_method(
     }
     function.handler_validates_types = true;
     let pointer = &function.common as *const FunctionCommon;
-    eg.function_table
-        .insert(internal_method_lookup_name(owner, name), pointer);
+    eg.insert_function_entry(internal_method_lookup_name(owner, name), pointer);
     // These registrations publish a real boxed body, not a declaration stub.
     // Retain its identity for complete native-parent inheritance so a later
     // child need not discover the same methods by scanning the whole table.

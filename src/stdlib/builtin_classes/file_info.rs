@@ -832,8 +832,7 @@ fn register_method(
         function.common.sig.return_type_hint = result;
     }
     let pointer = &function.common as *const FunctionCommon;
-    eg.function_table
-        .insert(internal_method_lookup_name("SplFileInfo", name), pointer);
+    eg.insert_function_entry(internal_method_lookup_name("SplFileInfo", name), pointer);
     eg.bind_latest_internal_method_body("SplFileInfo", name, pointer);
     eg.method_declaring_class
         .insert(pointer, "SplFileInfo".into());

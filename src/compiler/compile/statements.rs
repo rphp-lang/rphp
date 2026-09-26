@@ -3312,8 +3312,7 @@ impl Compiler {
                         .iter()
                         .chain(else_body)
                         .any(Stmt::contains_goto_or_label)
-                    && let Ok(value) =
-                        self.eval_const_expr_in_source(condition, &self.known_constants)
+                    && let Ok(value) = self.eval_const_expr_in_source(condition)
                 {
                     // Yield is a syntactic generator marker in PHP, including
                     // when it lives in the branch eliminated below. Record it
@@ -3696,7 +3695,7 @@ impl Compiler {
             }
             Stmt::ExprStmt(expr) => {
                 if self.tick_interval != 0
-                    && self.eval_const_expr_in_source(expr, &self.known_constants).is_ok() {
+                    && self.eval_const_expr_in_source(expr).is_ok() {
                     return Ok(());
                 }
                 // PHP does not perform an rvalue fetch for a bare CV whose
@@ -5403,13 +5402,15 @@ impl Compiler {
                     );
                 }
                 let compile_time = (!constant_expression_materializes_object(value))
-                    .then(|| self.eval_const_expr_in_source(value, &self.known_constants).ok())
+                    .then(|| self.eval_const_expr_in_source(value).ok())
                     .flatten();
                 let (val_op, val_type) = if let Some(ct_val) = compile_time {
-                    if first_source_declaration {
-                        std::rc::Rc::make_mut(&mut self.known_constants)
-                            .entry(declaration_name.clone())
-                            .or_insert_with(|| ct_val.clone());
+                    if first_source_declaration
+                        && !self.unit_constants.contains_key(&declaration_name)
+                        && !self.known_constants.contains_key(&declaration_name)
+                    {
+                        self.unit_constants
+                            .insert(declaration_name.clone(), ct_val.clone());
                     }
                     (self.add_literal(ct_val), OpType::Const)
                 } else {
@@ -5529,7 +5530,8 @@ impl Compiler {
                     instr.op2 = name_idx;
                     instr.extended_value = func_name_idx as u32;
                     let debug_default = default.as_ref().and_then(|expr| {
-                        self.eval_const_expr_in_source(expr, &HashMap::new()).ok()
+                        self.eval_const_expr_in_scope(expr, &ConstantScope::empty(), None)
+                            .ok()
                     });
                     if let Some(def_expr) = default {
                         // PHP static-variable initializers are runtime
@@ -6119,34 +6121,10 @@ impl Compiler {
                 // allows a property declared in the same class to use
                 // `self::CONSTANT`, even though the class itself is not linked
                 // until the complete declaration has been compiled.
-                let mut property_constants = (*self.known_constants).clone();
-                property_constants.insert(
-                    "self::class".to_string(),
-                    Value::string(resolved_class.clone()),
-                );
-                property_constants.insert(
-                    "__CLASS__".to_string(),
-                    Value::string(resolved_class.clone()),
-                );
-                for constant in &compiled_constants {
-                    if constant.evaluation_error.is_none() && !constant.value_is_deferred {
-                        property_constants.insert(
-                            format!("self::{}", constant.name),
-                            constant.value.clone(),
-                        );
-                    }
-                }
-                if let Some(parent) = &resolved_parent {
-                    property_constants
-                        .insert("parent::class".to_string(), Value::string(parent.clone()));
-                    let prefix = format!("{}::", parent);
-                    for (constant, value) in self.known_constants.iter() {
-                        if let Some(name) = constant.strip_prefix(&prefix) {
-                            property_constants
-                                .insert(format!("parent::{name}"), value.clone());
-                        }
-                    }
-                }
+                // The class scope publishes `self::class`, `__CLASS__`, this
+                // class's already compiled constants (recorded in the unit
+                // table by `compile_class_constants`) and the parent spellings
+                // without copying the shared table.
 
                 // Evaluate property defaults (constant expressions only)
                 let mut compiled_props: Vec<PropertyDefinition> = Vec::new();
@@ -6330,9 +6308,13 @@ impl Compiler {
                             }
                             None
                         }
-                        Some(expr) => match self.eval_const_expr_in_source_with_property(
+                        Some(expr) => match self.eval_const_expr_in_scope(
                             expr,
-                            &property_constants,
+                            &self.class_constant_scope(
+                                &resolved_class,
+                                resolved_parent.as_deref(),
+                                true,
+                            ),
                             Some(&prop.name),
                         ) {
                             Ok(value) => Some(value),
@@ -7313,15 +7295,6 @@ impl Compiler {
                 let mut readonly_props: Vec<String> = Vec::new();
                 let mut deferred_instance_defaults = Vec::new();
                 let mut rebound_trait_defaults = Vec::new();
-                let mut trait_property_constants = (*self.known_constants).clone();
-                trait_property_constants.insert(
-                    "self::class".to_string(),
-                    Value::string(resolved_trait.clone()),
-                );
-                trait_property_constants.insert(
-                    "__CLASS__".to_string(),
-                    Value::string(resolved_trait.clone()),
-                );
                 for prop in properties {
                     self.validate_attribute_target(&prop.attributes, "property", prop.line)?;
                     self.validate_deprecated_target(&prop.attributes, "property")?;
@@ -7418,9 +7391,9 @@ impl Compiler {
                     }
                     let mut default_is_deferred = false;
                     let default = match &prop.default {
-                        Some(expr) => match self.eval_const_expr_in_source_with_property(
+                        Some(expr) => match self.eval_const_expr_in_scope(
                             expr,
-                            &trait_property_constants,
+                            &self.class_constant_scope(&resolved_trait, None, true),
                             Some(&prop.name),
                         ) {
                             Ok(value) => Some(value),
@@ -7918,15 +7891,17 @@ impl Compiler {
                         let constants: Vec<_> = self
                             .known_constants
                             .iter()
+                            .chain(self.unit_constants.iter())
                             .filter_map(|(key, value)| {
                                 key.strip_prefix(&prefix)
                                     .map(|constant| (constant.to_string(), value.clone()))
                             })
                             .collect();
-                        let known = std::rc::Rc::make_mut(&mut self.known_constants);
                         for (constant, value) in constants {
-                            known.insert(format!("self::{constant}"), value.clone());
-                            known.insert(format!("{resolved_enum}::{constant}"), value);
+                            self.unit_constants
+                                .insert(format!("self::{constant}"), value.clone());
+                            self.unit_constants
+                                .insert(format!("{resolved_enum}::{constant}"), value);
                         }
                     }
                 }
@@ -7947,7 +7922,7 @@ impl Compiler {
                         case.value
                             .as_ref()
                             .map(|expr| {
-                                self.eval_const_expr_in_source(expr, &self.known_constants)
+                                self.eval_const_expr_in_source(expr)
                                     .map_err(|error| {
                                         format!(
                                             "Cannot use non-constant expression as enum case value for {}::{}: {}",
@@ -8611,33 +8586,22 @@ impl Compiler {
             }
         }
 
-        let mut known = (*self.known_constants).clone();
-        known.insert("self::class".into(), Value::string(owner.to_string()));
-        let owner_prefix = format!("{owner}::");
-        for (name, value) in self.known_constants.iter() {
-            if let Some(constant) = name.strip_prefix(&owner_prefix) {
-                known.insert(format!("self::{constant}"), value.clone());
-            }
-        }
-        if let Some(parent) = parent {
-            known.insert("parent::class".into(), Value::string(parent.to_string()));
-            let prefix = format!("{}::", parent);
-            for (name, value) in self.known_constants.iter() {
-                if let Some(constant) = name.strip_prefix(&prefix) {
-                    known.insert(format!("parent::{}", constant), value.clone());
-                }
-            }
-        }
-
-        let runtime_integer_diagnostics = constants
-            .iter()
-            .map(|constant| {
-                constant_expression_contains_runtime_integer_diagnostic(
-                    &constant.value,
-                    &|expression| self.eval_const_expr_in_source(expression, &known),
-                )
-            })
-            .collect::<Vec<_>>();
+        // Each resolved constant is recorded in the unit table under its
+        // `Owner::NAME` spelling, so the class scope (which translates
+        // `self::`/`parent::` at lookup) sees it for the following constants,
+        // property defaults and later classes of this unit.
+        let runtime_integer_diagnostics = {
+            let known = self.class_constant_scope(owner, parent, false);
+            constants
+                .iter()
+                .map(|constant| {
+                    constant_expression_contains_runtime_integer_diagnostic(
+                        &constant.value,
+                        &|expression| self.eval_const_expr_in_scope(expression, &known, None),
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
         let callable_factories = constants
             .iter()
             .zip(runtime_integer_diagnostics)
@@ -8681,12 +8645,14 @@ impl Compiler {
                 if values[index].is_some() || deferred_values[index] {
                     continue;
                 }
-                let Ok(value) = self.eval_const_expr_in_source(&constant.value, &known) else {
+                let Ok(value) = self.eval_const_expr_in_scope(
+                    &constant.value,
+                    &self.class_constant_scope(owner, parent, false),
+                    None,
+                ) else {
                     continue;
                 };
-                known.insert(format!("self::{}", constant.name), value.clone());
-                known.insert(format!("{}::{}", owner, constant.name), value.clone());
-                std::rc::Rc::make_mut(&mut self.known_constants)
+                self.unit_constants
                     .insert(format!("{}::{}", owner, constant.name), value.clone());
                 values[index] = Some(value);
                 remaining -= 1;
@@ -8707,7 +8673,11 @@ impl Compiler {
                     .filter(|(index, _)| values[*index].is_none() && !deferred_values[*index])
                     .map(|(index, constant)| {
                         let reason = self
-                            .eval_const_expr_in_source(&constant.value, &known)
+                            .eval_const_expr_in_scope(
+                                &constant.value,
+                                &self.class_constant_scope(owner, parent, false),
+                                None,
+                            )
                             .expect_err("unresolved class constant expression");
                         let reference = reason
                             .strip_prefix("class constant ")

@@ -240,7 +240,7 @@ mod startup_variance_tests {
             (GenericDeclarationKind::Method, "Owner::method"),
         ] {
             let metadata = GenericMetadata {
-                symbols: vec![name.into(), "T".into()].into_boxed_slice(),
+                symbols: vec![name.into(), "T".into()],
                 declarations: vec![GenericDeclaration {
                     kind,
                     owner: 0,
@@ -262,8 +262,7 @@ mod startup_variance_tests {
                     }]
                     .into_boxed_slice(),
                     methods: Box::default(),
-                }]
-                .into_boxed_slice(),
+                }],
                 ..GenericMetadata::default()
             };
             for owner in ["Owner", "oWnEr"] {

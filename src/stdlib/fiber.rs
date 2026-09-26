@@ -353,8 +353,7 @@ fn register_method(
 ) {
     let function = Box::new(function);
     let pointer = &function.common as *const FunctionCommon;
-    eg.function_table
-        .insert(format!("{class}::{name}").to_ascii_lowercase(), pointer);
+    eg.insert_function_entry(format!("{class}::{name}").to_ascii_lowercase(), pointer);
     eg.method_declaring_class.insert(pointer, class.into());
     if class == "Fiber" && matches!(name, "getcurrent" | "suspend") {
         eg.register_internal_static_method(pointer);

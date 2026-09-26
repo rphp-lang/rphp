@@ -476,7 +476,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            eg.function_table.insert(
+            eg.insert_function_entry(
                 internal_method_lookup_name($class, $method),
                 pointer,
             );
@@ -498,7 +498,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            eg.function_table.insert(internal_method_lookup_name($class, $method), pointer);
+            eg.insert_function_entry(internal_method_lookup_name($class, $method), pointer);
             register_display_name!(pointer, $class, $method);
             eg.method_declaring_class.insert(pointer, $class.into());
             eg.register_internal_static_method(pointer);
@@ -514,8 +514,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            eg.function_table
-                .insert(internal_method_lookup_name($class, $method), pointer);
+            eg.insert_function_entry(internal_method_lookup_name($class, $method), pointer);
             register_display_name!(pointer, $class, $method);
             eg.method_declaring_class
                 .insert(pointer, $class.into());
@@ -532,8 +531,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
                 vec![$($name.to_string()),*],
             ));
             let pointer = &function.common as *const FunctionCommon;
-            eg.function_table
-                .insert(internal_method_lookup_name($class, $method), pointer);
+            eg.insert_function_entry(internal_method_lookup_name($class, $method), pointer);
             register_display_name!(pointer, $class, $method);
             eg.method_declaring_class
                 .insert(pointer, $class.into());

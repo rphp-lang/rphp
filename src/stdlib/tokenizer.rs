@@ -2195,7 +2195,7 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
         function.common.sig.param_type_hints = hints;
         function.common.sig.return_type_hint = (declaration.return_hint)();
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table.insert(
+        eg.insert_function_entry(
             super::builtin_classes::internal_method_lookup_name(PHP_TOKEN, declaration.name),
             pointer,
         );

@@ -711,8 +711,7 @@ fn register_method(
     function.handler_validates_types = true;
     function.common.sig.param_type_hints = hints.to_vec();
     let pointer = &function.common as *const FunctionCommon;
-    eg.function_table
-        .insert(internal_method_lookup_name(owner, name), pointer);
+    eg.insert_function_entry(internal_method_lookup_name(owner, name), pointer);
     eg.method_declaring_class.insert(pointer, owner.into());
     eg.register_internal_function_display_name(pointer, internal_method_display_name(owner, name));
     eg.register_internal_function_reflection_metadata(pointer, vec![None; names.len()], "SPL");

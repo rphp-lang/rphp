@@ -2134,31 +2134,135 @@ const RESOLVED_CONSTANT_EXPRESSION_PREFIX: &str = "\0rphp-resolved-symbol\0";
 /// overlay (`__PROPERTY__`, relative spellings) layered over the source unit's
 /// shared constant table, so evaluating a default value never copies that
 /// table.
+/// Layered read view over compile-time constants. The executor-wide table
+/// is shared read-only between units, unit-local declarations live in a small
+/// overlay, and a class scope translates `self::`/`parent::` spellings at
+/// lookup time. Nothing here copies the shared table: a 2,500-file bootstrap
+/// used to clone it several times per class.
 pub(crate) struct ConstantScope<'a> {
-    base: &'a HashMap<String, Value>,
+    /// Expression-local spellings; highest precedence.
     overlay: Option<HashMap<String, Value>>,
+    /// Constants declared by the unit being compiled.
+    unit: Option<&'a HashMap<String, Value>>,
+    /// The executor-wide table.
+    base: Option<&'a HashMap<String, Value>>,
+    /// Only `Owner::NAME` spellings resolve (array-unpack legality).
+    class_constants_only: bool,
+    lexical: Option<LexicalConstantScope>,
+}
+
+#[derive(Clone)]
+struct LexicalConstantScope {
+    owner: String,
+    owner_value: Value,
+    parent: Option<String>,
+    parent_value: Option<Value>,
+    /// Also publish `__CLASS__` (property defaults).
+    class_magic: bool,
 }
 
 impl<'a> ConstantScope<'a> {
     pub(crate) fn flat(base: &'a HashMap<String, Value>) -> Self {
         Self {
-            base,
             overlay: None,
+            unit: None,
+            base: Some(base),
+            class_constants_only: false,
+            lexical: None,
         }
     }
 
-    fn layered(base: &'a HashMap<String, Value>, overlay: HashMap<String, Value>) -> Self {
+    fn empty() -> Self {
         Self {
-            base,
-            overlay: Some(overlay),
+            overlay: None,
+            unit: None,
+            base: None,
+            class_constants_only: false,
+            lexical: None,
         }
+    }
+
+    fn unit(unit: &'a HashMap<String, Value>, base: &'a HashMap<String, Value>) -> Self {
+        Self {
+            overlay: None,
+            unit: Some(unit),
+            base: Some(base),
+            class_constants_only: false,
+            lexical: None,
+        }
+    }
+
+    fn class(
+        unit: &'a HashMap<String, Value>,
+        base: &'a HashMap<String, Value>,
+        owner: &str,
+        parent: Option<&str>,
+        class_magic: bool,
+    ) -> Self {
+        Self {
+            overlay: None,
+            unit: Some(unit),
+            base: Some(base),
+            class_constants_only: false,
+            lexical: Some(LexicalConstantScope {
+                owner: owner.to_string(),
+                owner_value: Value::string(owner.to_string()),
+                parent: parent.map(str::to_owned),
+                parent_value: parent.map(|parent| Value::string(parent.to_string())),
+                class_magic,
+            }),
+        }
+    }
+
+    fn with_overlay(&self, overlay: HashMap<String, Value>) -> Self {
+        Self {
+            overlay: Some(overlay),
+            unit: self.unit,
+            base: self.base,
+            class_constants_only: self.class_constants_only,
+            lexical: self.lexical.clone(),
+        }
+    }
+
+    fn class_constants_only(mut self) -> Self {
+        self.class_constants_only = true;
+        self
+    }
+
+    fn lookup(&self, key: &str) -> Option<&Value> {
+        if self.class_constants_only && !key.contains("::") {
+            return None;
+        }
+        self.unit
+            .and_then(|unit| unit.get(key))
+            .or_else(|| self.base.and_then(|base| base.get(key)))
     }
 
     fn get(&self, key: &str) -> Option<&Value> {
-        self.overlay
-            .as_ref()
-            .and_then(|overlay| overlay.get(key))
-            .or_else(|| self.base.get(key))
+        if let Some(value) = self.overlay.as_ref().and_then(|overlay| overlay.get(key)) {
+            return Some(value);
+        }
+        if let Some(lexical) = &self.lexical {
+            if key == "self::class" || (lexical.class_magic && key == "__CLASS__") {
+                return Some(&lexical.owner_value);
+            }
+            if let Some(constant) = key.strip_prefix("self::")
+                && let Some(value) = self.lookup(&format!("{}::{constant}", lexical.owner))
+            {
+                return Some(value);
+            }
+            if let Some(parent) = &lexical.parent {
+                if key == "parent::class" {
+                    return lexical.parent_value.as_ref();
+                }
+                if let Some(constant) = key.strip_prefix("parent::")
+                    && let Some(value) = self.lookup(&format!("{parent}::{constant}"))
+                {
+                    return Some(value);
+                }
+            }
+        }
+        self.lookup(key)
     }
 }
 
@@ -3467,6 +3571,9 @@ pub struct Compiler {
     /// Shared copy-on-write: child compilers read the parent's table and only
     /// materialize their own copy when they add a constant.
     known_constants: Rc<HashMap<String, Value>>,
+    /// Constants this unit declares or derives while compiling; layered over
+    /// the shared table by `ConstantScope` instead of copying it.
+    unit_constants: HashMap<String, Value>,
     /// Canonical declaration names of enums whose case objects are available
     /// to the declaration-time constant folder in this compilation scope.
     known_enum_classes: Rc<HashSet<String>>,
@@ -3835,6 +3942,7 @@ impl Compiler {
             source_directory: String::new(),
             implicit_return_value: Value::null(),
             known_constants: Rc::new(HashMap::new()),
+            unit_constants: HashMap::new(),
             known_enum_classes: Rc::new(HashSet::new()),
             compiler_halt_offset: None,
             compiling_constant_expression: false,
@@ -4091,6 +4199,7 @@ impl Compiler {
         child.source_file = self.source_file.clone();
         child.source_directory = self.source_directory.clone();
         child.known_constants = Rc::clone(&self.known_constants);
+        child.unit_constants = self.unit_constants.clone();
         child.known_enum_classes = Rc::clone(&self.known_enum_classes);
         child.known_value_constructors = self.known_value_constructors.clone();
         child.known_public_constructors = self.known_public_constructors.clone();
@@ -4714,7 +4823,8 @@ impl Compiler {
             stmts,
             None,
             &mut HashSet::new(),
-            Rc::make_mut(&mut self.known_constants),
+            &self.known_constants,
+            &mut self.unit_constants,
             file_context,
             self.precision,
         );
@@ -4723,7 +4833,8 @@ impl Compiler {
             stmts,
             None,
             &mut HashSet::new(),
-            Rc::make_mut(&mut self.known_constants),
+            &self.known_constants,
+            &mut self.unit_constants,
             file_context,
             self.precision,
         );
@@ -4806,7 +4917,8 @@ impl Compiler {
         stmts: &[Stmt],
         ns: Option<&str>,
         declared: &mut HashSet<String>,
-        known: &mut HashMap<String, Value>,
+        base: &HashMap<String, Value>,
+        unit: &mut HashMap<String, Value>,
         file_context: Option<(&str, &str)>,
         precision: i32,
     ) {
@@ -4819,16 +4931,17 @@ impl Compiler {
                             None => name.clone(),
                         };
                         if declared.insert(fqn.clone())
-                            && !known.contains_key(&fqn)
+                            && !unit.contains_key(&fqn)
+                            && !base.contains_key(&fqn)
                             && !constant_expression_materializes_object(value)
                             && let Ok(val) = Self::eval_const_expr_with_context(
                                 value,
-                                &ConstantScope::flat(known),
+                                &ConstantScope::unit(unit, base),
                                 file_context,
                                 precision,
                             )
                         {
-                            known.insert(fqn, val);
+                            unit.insert(fqn, val);
                         }
                     }
                 }
@@ -4837,7 +4950,8 @@ impl Compiler {
                         body,
                         (!name.is_empty()).then_some(name.as_str()),
                         declared,
-                        known,
+                        base,
+                        unit,
                         file_context,
                         precision,
                     );
@@ -4847,7 +4961,8 @@ impl Compiler {
                         body,
                         ns,
                         declared,
-                        known,
+                        base,
+                        unit,
                         file_context,
                         precision,
                     );
@@ -6120,7 +6235,7 @@ impl Compiler {
             Self::find_compiler_halt_offset(stmts).and_then(|offset| i64::try_from(offset).ok())
         });
         if let Some(offset) = self.compiler_halt_offset {
-            Rc::make_mut(&mut self.known_constants)
+            self.unit_constants
                 .insert("__COMPILER_HALT_OFFSET__".to_string(), Value::long(offset));
         }
 
@@ -6353,7 +6468,7 @@ impl Compiler {
                 else_body,
                 ..
             } => self
-                .eval_const_expr_in_source(condition, &self.known_constants)
+                .eval_const_expr_in_source(condition)
                 .ok()
                 .is_some_and(|value| {
                     let live_body = if value.is_truthy() {
@@ -6808,18 +6923,36 @@ impl Compiler {
         Self::eval_const_expr_with_context(expr, &ConstantScope::flat(known), None, 14)
     }
 
-    fn eval_const_expr_in_source(
-        &self,
-        expr: &Expr,
-        known: &HashMap<String, Value>,
-    ) -> Result<Value, String> {
-        self.eval_const_expr_in_source_with_property(expr, known, None)
+    /// The unit's constant view: its own declarations over the shared table.
+    fn unit_constant_scope(&self) -> ConstantScope<'_> {
+        ConstantScope::unit(&self.unit_constants, &self.known_constants)
     }
 
-    fn eval_const_expr_in_source_with_property(
+    /// A class body's constant view: `self::`/`parent::` resolve against the
+    /// owner and parent spellings without copying the shared table.
+    fn class_constant_scope(
+        &self,
+        owner: &str,
+        parent: Option<&str>,
+        class_magic: bool,
+    ) -> ConstantScope<'_> {
+        ConstantScope::class(
+            &self.unit_constants,
+            &self.known_constants,
+            owner,
+            parent,
+            class_magic,
+        )
+    }
+
+    fn eval_const_expr_in_source(&self, expr: &Expr) -> Result<Value, String> {
+        self.eval_const_expr_in_scope(expr, &self.unit_constant_scope(), None)
+    }
+
+    fn eval_const_expr_in_scope(
         &self,
         expr: &Expr,
-        known: &HashMap<String, Value>,
+        known: &ConstantScope<'_>,
         lexical_property: Option<&str>,
     ) -> Result<Value, String> {
         // The context-free evaluator deliberately knows nothing about this
@@ -6837,7 +6970,7 @@ impl Compiler {
         self.collect_class_name_literals(expr, known, &mut overlay);
         Self::eval_const_expr_with_context_and_enum_classes(
             expr,
-            &ConstantScope::layered(known, overlay),
+            &known.with_overlay(overlay),
             Some((self.source_file.as_str(), self.source_directory.as_str())),
             self.precision,
             &self.known_enum_classes,
@@ -7254,29 +7387,6 @@ impl Compiler {
             lexical_property: lexical_property.map(str::to_owned),
             source_directory: self.source_directory.clone(),
         });
-        let mut known = (*self.known_constants).clone();
-        if let Some(class) = lexical_class {
-            known.insert("self::class".to_string(), Value::string(class));
-            let prefix = format!("{class}::");
-            for (name, value) in self.known_constants.iter() {
-                if let Some(constant) = name.strip_prefix(&prefix) {
-                    known.insert(format!("self::{constant}"), value.clone());
-                }
-            }
-        }
-        if let Some(parent) = lexical_parent {
-            known.insert("parent::class".to_string(), Value::string(parent));
-            let prefix = format!("{parent}::");
-            for (name, value) in self.known_constants.iter() {
-                if let Some(constant) = name.strip_prefix(&prefix) {
-                    known.insert(format!("parent::{constant}"), value.clone());
-                }
-            }
-        }
-        known.insert(
-            "__PROPERTY__".to_string(),
-            Value::string(lexical_property.unwrap_or_default()),
-        );
         let mut definitions = Vec::with_capacity(attributes.len());
         for attribute in attributes
             .iter()
@@ -7289,11 +7399,14 @@ impl Compiler {
                     CallArg::Named { name, value } => (Some(name.clone()), value),
                     CallArg::Unpack(expression) => (None, expression),
                 };
-                let value = self.eval_const_expr_in_source_with_property(
-                    expression,
-                    &known,
-                    lexical_property,
-                );
+                // `__PROPERTY__` is published by the expression overlay. The
+                // scope is rebuilt per argument because the loop also records
+                // deferred diagnostics through `&mut self`.
+                let known = match lexical_class {
+                    Some(class) => self.class_constant_scope(class, lexical_parent, false),
+                    None => self.unit_constant_scope(),
+                };
+                let value = self.eval_const_expr_in_scope(expression, &known, lexical_property);
                 let runtime_factory = (constant_expression_contains_runtime_callable(expression)
                     || constant_expression_materializes_object(expression))
                 .then(|| {
@@ -7347,14 +7460,12 @@ impl Compiler {
             return Some(ValueType::Array);
         }
 
-        let class_constants = self
-            .known_constants
-            .iter()
-            .filter(|(name, _)| name.contains("::"))
-            .map(|(name, value)| (name.clone(), value.clone()))
-            .collect();
         let value = self
-            .eval_const_expr_in_source(expr, &class_constants)
+            .eval_const_expr_in_scope(
+                expr,
+                &self.unit_constant_scope().class_constants_only(),
+                None,
+            )
             .ok()?;
 
         // `new` is evaluated at runtime in an ordinary array expression. The
@@ -7366,7 +7477,7 @@ impl Compiler {
     fn collect_class_name_literals(
         &self,
         expr: &Expr,
-        base: &HashMap<String, Value>,
+        base: &ConstantScope<'_>,
         overlay: &mut HashMap<String, Value>,
     ) {
         match expr {
@@ -8505,8 +8616,7 @@ impl Compiler {
                             type_hints.last(),
                             Some(ParamTypeHint::None | ParamTypeHint::Mixed)
                         )
-                        && let Ok(value) = func_compiler
-                            .eval_const_expr_in_source(default_expr, &func_compiler.known_constants)
+                        && let Ok(value) = func_compiler.eval_const_expr_in_source(default_expr)
                     {
                         let Ok(normalized) = normalize_typed_declaration_default(
                             value.clone(),
@@ -9837,7 +9947,7 @@ impl Compiler {
     /// runtime work keep the ordinary evaluation and warning order.
     fn compile_dynamic_property_name(&mut self, property: &Expr) -> (u16, OpType) {
         if self
-            .eval_const_expr_in_source(property, &self.known_constants)
+            .eval_const_expr_in_source(property)
             .is_ok_and(|value| value.value_type() == ValueType::Array)
         {
             self.compile_deprecations
@@ -10790,8 +10900,8 @@ impl Compiler {
                 ) && deferred_constant_expression_is_supported(left)
                     && deferred_constant_expression_is_supported(right)
                     && let (Ok(left_value), Ok(right_value)) = (
-                        self.eval_const_expr_in_source(left, &self.known_constants),
-                        self.eval_const_expr_in_source(right, &self.known_constants),
+                        self.eval_const_expr_in_source(left),
+                        self.eval_const_expr_in_source(right),
                     )
                     && Self::scalar_comparison_uses_precision(&left_value, &right_value)
                     && let Ok(value) = Self::eval_const_binary_with_precision(
@@ -11771,7 +11881,7 @@ impl Compiler {
                         ..
                     } = first.expr()
                         && self
-                            .eval_const_expr_in_source(left, &self.known_constants)
+                            .eval_const_expr_in_source(left)
                             .is_ok_and(|value| !value.is_truthy())
                     {
                         Some(left.as_ref())
@@ -12320,9 +12430,7 @@ impl Compiler {
                 let immutable_literal = !elements
                     .iter()
                     .any(|element| element.by_reference || element.unpack)
-                    && self
-                        .eval_const_expr_in_source(expr, &self.known_constants)
-                        .is_ok();
+                    && self.eval_const_expr_in_source(expr).is_ok();
                 if self.deferred_error.is_none()
                     && let Some(element) = elements.iter().find(|element| {
                         element.unpack
@@ -12525,9 +12633,7 @@ impl Compiler {
                     let null = self.add_literal(Value::null());
                     return (null, OpType::Const);
                 }
-                if class_keyword
-                    && let Ok(value) = self.eval_const_expr_in_source(class, &self.known_constants)
-                {
+                if class_keyword && let Ok(value) = self.eval_const_expr_in_source(class) {
                     if let Some(class_name) = value.as_str() {
                         return (self.add_literal(Value::string(class_name)), OpType::Const);
                     }

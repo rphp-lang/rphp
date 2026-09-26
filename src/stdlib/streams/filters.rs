@@ -325,7 +325,7 @@ pub(in crate::stdlib) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<I
         }
         function.common.sig.return_type_hint = result;
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table.insert(
+        eg.insert_function_entry(
             format!("php_user_filter::{name}").to_ascii_lowercase(),
             pointer,
         );

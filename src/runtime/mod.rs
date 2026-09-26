@@ -897,6 +897,12 @@ pub struct ExecutorGlobals {
     >,
     /// Function table — name → pointer to FunctionCommon
     pub function_table: SymbolTable<*const FunctionCommon>,
+    /// `owner::` (canonical lowercase prefix) → every method key published
+    /// under that owner in `function_table`. Class registration inherits the
+    /// parent's effective methods from this index instead of scanning the
+    /// whole function table once per class. Keys are only appended; a key
+    /// later removed from `function_table` is skipped on read.
+    method_keys_by_owner: SymbolTable<Vec<String>>,
     /// Compiler-owned helpers that must never participate in user function
     /// lookup, callable checks, Reflection or get_defined_functions().
     private_function_table: SymbolTable<*const FunctionCommon>,
@@ -2126,6 +2132,7 @@ impl ExecutorGlobals {
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
             function_table: SymbolTable::default(),
+            method_keys_by_owner: SymbolTable::default(),
             private_function_table: SymbolTable::default(),
             runtime_function_declarations: HashMap::new(),
             class_table: SymbolTable::default(),
@@ -2269,6 +2276,7 @@ impl ExecutorGlobals {
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
             function_table: SymbolTable::default(),
+            method_keys_by_owner: SymbolTable::default(),
             private_function_table: SymbolTable::default(),
             runtime_function_declarations: HashMap::new(),
             class_table: SymbolTable::default(),
@@ -7882,57 +7890,53 @@ impl ExecutorGlobals {
                         .map(|(n, _, _, _, _)| n.to_lowercase())
                         .collect();
                     let parent_prefix = Self::canonical_method_owner_prefix(parent_name);
-                    let parent_initial = parent_prefix.as_bytes().first();
                     let mut inherited = Vec::new();
-                    self.function_table.iter().for_each(|(k, v)| {
-                        // The length is stored in the table entry. Reject a
-                        // short global name before touching its separate heap
-                        // storage, then reject mismatched initials/delimiters
-                        // before comparing the whole potentially long prefix.
-                        // This is only a necessary condition; the exact
-                        // canonical prefix check still decides membership.
-                        if k.len() < parent_prefix.len()
-                            || k.as_bytes().first() != parent_initial
-                            || k.as_bytes().get(parent_prefix.len() - 1) != Some(&b':')
-                            || !k.starts_with(&parent_prefix)
-                        {
-                            return;
-                        }
-                        let method_name = &k[parent_prefix.len()..];
-                        let concrete_property_hook = method_name
-                            .strip_prefix('$')
-                            .and_then(|name| name.split_once("::"))
-                            .and_then(|(property_name, hook)| {
-                                parent
-                                    .properties
-                                    .iter()
-                                    .find(|property| {
-                                        property.name.eq_ignore_ascii_case(property_name)
-                                    })
-                                    .map(|property| match hook {
-                                        "get" => {
-                                            property.has_get_hook && !property.abstract_get_hook()
-                                        }
-                                        "set" => {
-                                            property.has_set_hook && !property.abstract_set_hook()
-                                        }
-                                        _ => false,
-                                    })
-                            })
-                            .unwrap_or(false);
-                        let replaces_synthetic_property_accessor = concrete_property_hook
-                            && !own_explicit_property_hooks.contains(method_name);
-                        if child_method_names.contains(method_name)
-                            && !replaces_synthetic_property_accessor
-                        {
-                            return;
-                        }
-                        let mut child_full =
-                            String::with_capacity(child_prefix.len() + method_name.len());
-                        child_full.push_str(&child_prefix);
-                        child_full.push_str(method_name);
-                        inherited.push((child_full, *v, replaces_synthetic_property_accessor));
-                    });
+                    // The owner index yields exactly the keys carrying the
+                    // parent's canonical prefix; the exact check stays as the
+                    // membership contract.
+                    self.method_keys_of_owner(&parent_prefix)
+                        .for_each(|(k, v)| {
+                            debug_assert!(k.starts_with(&parent_prefix));
+                            if !k.starts_with(&parent_prefix) {
+                                return;
+                            }
+                            let method_name = &k[parent_prefix.len()..];
+                            let concrete_property_hook = method_name
+                                .strip_prefix('$')
+                                .and_then(|name| name.split_once("::"))
+                                .and_then(|(property_name, hook)| {
+                                    parent
+                                        .properties
+                                        .iter()
+                                        .find(|property| {
+                                            property.name.eq_ignore_ascii_case(property_name)
+                                        })
+                                        .map(|property| match hook {
+                                            "get" => {
+                                                property.has_get_hook
+                                                    && !property.abstract_get_hook()
+                                            }
+                                            "set" => {
+                                                property.has_set_hook
+                                                    && !property.abstract_set_hook()
+                                            }
+                                            _ => false,
+                                        })
+                                })
+                                .unwrap_or(false);
+                            let replaces_synthetic_property_accessor = concrete_property_hook
+                                && !own_explicit_property_hooks.contains(method_name);
+                            if child_method_names.contains(method_name)
+                                && !replaces_synthetic_property_accessor
+                            {
+                                return;
+                            }
+                            let mut child_full =
+                                String::with_capacity(child_prefix.len() + method_name.len());
+                            child_full.push_str(&child_prefix);
+                            child_full.push_str(method_name);
+                            inherited.push((child_full, *v, replaces_synthetic_property_accessor));
+                        });
                     inherited
                 };
                 for (child_full, func_ptr, replaces_synthetic_property_accessor) in inherited {
@@ -7943,7 +7947,7 @@ impl ExecutorGlobals {
                         inherited_concrete_property_hooks
                             .insert(child_full[child_prefix.len()..].to_owned());
                     }
-                    self.function_table.insert(child_full, func_ptr);
+                    self.insert_function_entry(child_full, func_ptr);
                 }
             }
         }
@@ -8193,8 +8197,7 @@ impl ExecutorGlobals {
                     .collect();
                 let trait_prefix = format!("{}::", trait_name).to_lowercase();
                 let trait_methods: Vec<(String, *const FunctionCommon, bool)> = self
-                    .function_table
-                    .iter()
+                    .method_keys_of_owner(&trait_prefix)
                     .filter(|(k, _)| k.starts_with(&trait_prefix))
                     .filter(|(key, _)| {
                         let method_name = &key[trait_prefix.len()..];
@@ -8226,7 +8229,7 @@ impl ExecutorGlobals {
                                 !class_def.is_trait,
                             );
                         let child_full = format!("{}::{}", class_name, method_name).to_lowercase();
-                        self.function_table.insert(child_full, func_ptr);
+                        self.insert_function_entry(child_full, func_ptr);
                         // A specialized trait function is unique to this
                         // concrete composer, so publish that lexical owner
                         // directly. Shared pointers retain their trait owner
@@ -8302,8 +8305,10 @@ impl ExecutorGlobals {
                 is_static,
                 !class_def.is_trait,
             );
-            self.function_table
-                .insert(format!("{}::{}", class_name, alias).to_lowercase(), pointer);
+            self.insert_function_entry(
+                format!("{}::{}", class_name, alias).to_lowercase(),
+                pointer,
+            );
             let declaring_class = if !class_def.is_trait && bound_lexical_static_properties {
                 &class_name
             } else {
@@ -8589,7 +8594,13 @@ impl ExecutorGlobals {
         let class_def = std::rc::Rc::new(class_def);
         let class_ptr = std::rc::Rc::as_ptr(&class_def);
         self.index_class_name(&class_name, &class_def);
-        self.class_table.insert(class_name.clone(), class_def);
+        let previous_key = self.compilation_constants_key();
+        self.class_table
+            .insert(class_name.clone(), std::rc::Rc::clone(&class_def));
+        self.extend_compilation_constants(previous_key, |known| {
+            class_compilation_constants(known, &class_name, &class_def);
+        });
+        drop(class_def);
         let class_id = unsafe { (*class_ptr).class_id as usize };
         if self.class_by_id.len() <= class_id {
             self.class_by_id.resize(class_id + 1, std::ptr::null());
@@ -8616,7 +8627,7 @@ impl ExecutorGlobals {
             })
             .collect();
         for (full_name, func_ptr) in &method_entries {
-            self.function_table.insert(full_name.clone(), *func_ptr);
+            self.insert_function_entry(full_name.clone(), *func_ptr);
         }
         // Populate declaring_class reverse map
         for (_full_name, func_ptr) in method_entries {
@@ -9769,13 +9780,18 @@ impl ExecutorGlobals {
             })
             .collect();
         for (method, function) in methods {
-            self.function_table.insert(
+            self.insert_function_entry(
                 format!("{}::{}", alias, method).to_ascii_lowercase(),
                 function,
             );
         }
         self.index_class_name(alias, &class);
-        self.class_table.insert(alias.to_string(), class);
+        let previous_key = self.compilation_constants_key();
+        self.class_table
+            .insert(alias.to_string(), Rc::clone(&class));
+        self.extend_compilation_constants(previous_key, |known| {
+            class_compilation_constants(known, alias, &class);
+        });
         self.retry_pending_named_classes()
             .map_err(ClassAliasRegistrationError::DelayedLink)?;
         if let Some(error) = self.interface_relation_error() {
@@ -10557,6 +10573,41 @@ impl ExecutorGlobals {
     }
 
     /// Register a function by name. Returns error if already declared.
+    /// Publish one function-table entry and, for `Owner::method` keys, index
+    /// it under its owner so inheritance can enumerate an owner's methods.
+    pub(crate) fn insert_function_entry(
+        &mut self,
+        key: String,
+        function: *const FunctionCommon,
+    ) -> Option<*const FunctionCommon> {
+        let owner_end = key.find("::").map(|index| index + 2);
+        let previous = self.function_table.insert(key.clone(), function);
+        if previous.is_none()
+            && let Some(owner_end) = owner_end
+        {
+            let owner = key[..owner_end].to_string();
+            self.method_keys_by_owner
+                .entry(owner)
+                .or_default()
+                .push(key);
+        }
+        previous
+    }
+
+    /// Function-table keys published under `owner_prefix` (`owner::`,
+    /// canonical lowercase), in publication order. Only keys still present in
+    /// the function table are yielded.
+    pub(crate) fn method_keys_of_owner<'a>(
+        &'a self,
+        owner_prefix: &str,
+    ) -> impl Iterator<Item = (&'a String, &'a *const FunctionCommon)> + 'a {
+        self.method_keys_by_owner
+            .get(owner_prefix)
+            .into_iter()
+            .flatten()
+            .filter_map(|key| self.function_table.get(key).map(|function| (key, function)))
+    }
+
     pub fn register_function(
         &mut self,
         name: &str,
@@ -10594,7 +10645,15 @@ impl ExecutorGlobals {
                 Err(Self::function_redeclaration_error(*entry.get(), func, name))
             }
             std::collections::hash_map::Entry::Vacant(entry) => {
+                let owner_end = entry.key().find("::").map(|index| index + 2);
+                let method_key = owner_end.map(|_| entry.key().clone());
                 entry.insert(func);
+                if let (Some(owner_end), Some(method_key)) = (owner_end, method_key) {
+                    self.method_keys_by_owner
+                        .entry(method_key[..owner_end].to_string())
+                        .or_default()
+                        .push(method_key);
+                }
                 Ok(())
             }
         }
@@ -10873,11 +10932,48 @@ impl ExecutorGlobals {
             return Err(constant_redefinition_message(name));
         }
         self.note_request_static_value(&value);
+        let previous_key = self.compilation_constants_key();
+        let compiled_value = value.clone();
         let mut table = self.constant_table.borrow_mut();
         let name: Rc<str> = Rc::from(name);
         table.insert(name.clone(), value);
-        self.constant_definition_order.borrow_mut().push(name);
+        drop(table);
+        self.constant_definition_order
+            .borrow_mut()
+            .push(name.clone());
+        self.extend_compilation_constants(previous_key, |known| {
+            known.insert(name.to_string(), compiled_value);
+        });
         Ok(())
+    }
+
+    /// Identity of the compile-time constant table: constants and classes are
+    /// only ever added, so equal counts prove equal contents.
+    pub(crate) fn compilation_constants_key(&self) -> (usize, usize) {
+        (self.constant_table.borrow().len(), self.class_table.len())
+    }
+
+    /// Bring the cached compile-time constant table forward across one
+    /// registration instead of rebuilding it from every constant and class
+    /// at the next include. `previous_key` is the identity before the
+    /// registration; a cache built from any other state is discarded so the
+    /// next compile rebuilds it in full.
+    pub(crate) fn extend_compilation_constants(
+        &self,
+        previous_key: (usize, usize),
+        extend: impl FnOnce(&mut HashMap<String, crate::value::Value>),
+    ) {
+        let mut cache = self.compilation_constants_cache.borrow_mut();
+        let in_sync = cache
+            .as_ref()
+            .is_some_and(|(cached_key, _)| *cached_key == previous_key);
+        if !in_sync {
+            *cache = None;
+            return;
+        }
+        let (cached_key, table) = cache.as_mut().expect("checked above");
+        extend(Rc::make_mut(table));
+        *cached_key = self.compilation_constants_key();
     }
 
     pub(crate) fn defined_dynamic_constants(&self) -> Vec<(String, crate::value::Value)> {
@@ -11884,6 +11980,28 @@ impl ExecutorGlobals {
     }
 }
 
+/// Publish one registered class's constants under both the declared and the
+/// registered spellings for compile-time evaluation.
+pub(crate) fn class_compilation_constants(
+    known: &mut HashMap<String, crate::value::Value>,
+    registered_name: &str,
+    class: &ClassDef,
+) {
+    for constant in &class.constants {
+        if constant.evaluation_error.is_some() {
+            continue;
+        }
+        known.insert(
+            format!("{}::{}", class.name, constant.name),
+            constant.value.clone(),
+        );
+        known.insert(
+            format!("{registered_name}::{}", constant.name),
+            constant.value.clone(),
+        );
+    }
+}
+
 pub(crate) fn constant_redefinition_message(name: &str) -> String {
     format!("Constant {name} already defined, this will be an error in PHP 9")
 }
@@ -12742,15 +12860,14 @@ mod stdlib_capacity_tests {
             "iterato:iterator::not_inherited",
             "unrelated_______::not_inherited",
         ] {
-            eg.function_table.insert(key.into(), pointer);
+            eg.insert_function_entry(key.into(), pointer);
         }
         // Names shorter than the owner prefix can be discarded without
         // dereferencing their storage. At and beyond the boundary, the exact
         // prefix still decides membership, including multibyte spellings.
         for length in 0..=32 {
-            eg.function_table.insert("i".repeat(length), pointer);
-            eg.function_table
-                .insert(format!("{}:", "\u{e9}".repeat(length)), pointer);
+            eg.insert_function_entry("i".repeat(length), pointer);
+            eg.insert_function_entry(format!("{}:", "\u{e9}".repeat(length)), pointer);
         }
         let mut expected: Vec<_> = eg
             .function_table

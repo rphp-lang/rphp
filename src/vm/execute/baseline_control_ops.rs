@@ -549,7 +549,7 @@ fn unavailable_class_constant_owner(error: &str) -> Option<&str> {
 /// made a 2,500-file bootstrap format and insert millions of entries, so the
 /// table is cached until a constant or class is registered.
 fn compilation_constants(eg: &ExecutorGlobals) -> std::rc::Rc<HashMap<String, Value>> {
-    let key = (eg.constant_table.borrow().len(), eg.class_table.len());
+    let key = eg.compilation_constants_key();
     if let Some((cached_key, table)) = eg.compilation_constants_cache.borrow().as_ref()
         && *cached_key == key
     {
@@ -568,19 +568,7 @@ fn build_compilation_constants(eg: &ExecutorGlobals) -> HashMap<String, Value> {
         .map(|(name, value)| (name.to_string(), value.clone()))
         .collect();
     for (registered_name, class) in &eg.class_table {
-        for constant in &class.constants {
-            if constant.evaluation_error.is_some() {
-                continue;
-            }
-            known.insert(
-                format!("{}::{}", class.name, constant.name),
-                constant.value.clone(),
-            );
-            known.insert(
-                format!("{registered_name}::{}", constant.name),
-                constant.value.clone(),
-            );
-        }
+        crate::runtime::class_compilation_constants(&mut known, registered_name, class);
     }
     known
 }

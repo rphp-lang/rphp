@@ -353,8 +353,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         function.common.sig.param_type_hints = hints.clone();
         function.common.plan.call = crate::vm::function::CallStrategy::Full;
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table
-            .insert(internal_method_lookup_name(owner, name), pointer);
+        eg.insert_function_entry(internal_method_lookup_name(owner, name), pointer);
         eg.bind_latest_internal_method_body(owner, name, pointer);
         eg.method_declaring_class.insert(pointer, (*owner).into());
         eg.register_internal_function_display_name(

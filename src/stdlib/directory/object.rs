@@ -99,8 +99,7 @@ pub(in crate::stdlib) fn register_class(eg: &mut ExecutorGlobals) -> Vec<Box<Int
         let mut function = Box::new(make_internal_method(handler, 1, 0, vec![]));
         function.common.sig.return_type_hint = result;
         let pointer = &function.common as *const FunctionCommon;
-        eg.function_table
-            .insert(format!("directory::{name}"), pointer);
+        eg.insert_function_entry(format!("directory::{name}"), pointer);
         eg.method_declaring_class
             .insert(pointer, "Directory".into());
         eg.register_internal_function_reflection_metadata(pointer, vec![], "standard");

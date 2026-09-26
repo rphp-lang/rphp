@@ -140,12 +140,10 @@ pub(super) fn register_method_identity(
         _ => None,
     };
     if let Some(display) = display {
-        eg.function_table
-            .insert(display.to_ascii_lowercase(), pointer);
+        eg.insert_function_entry(display.to_ascii_lowercase(), pointer);
         eg.register_internal_function_static_display_name(pointer, display);
     } else {
-        eg.function_table
-            .insert(internal_method_lookup_name(owner, name), pointer);
+        eg.insert_function_entry(internal_method_lookup_name(owner, name), pointer);
         eg.register_internal_function_display_name(
             pointer,
             internal_method_display_name(owner, name),

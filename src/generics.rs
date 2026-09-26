@@ -439,10 +439,13 @@ pub struct GenericUseSite {
 /// cache the resolved declaration after their first execution.
 #[derive(Debug, Default)]
 pub struct GenericMetadata {
-    symbols: Box<[Box<str>]>,
-    declarations: Box<[GenericDeclaration]>,
-    inheritances: Box<[GenericInheritance]>,
-    use_sites: Box<[GenericUseSite]>,
+    symbols: Vec<Box<str>>,
+    /// Symbol intern index, maintained across merges so appending one unit's
+    /// metadata costs that unit's size, not the executor-wide table's.
+    symbol_ids: HashMap<Box<str>, GenericSymbol>,
+    declarations: Vec<GenericDeclaration>,
+    inheritances: Vec<GenericInheritance>,
+    use_sites: Vec<GenericUseSite>,
 }
 
 impl GenericMetadata {
@@ -477,37 +480,38 @@ impl GenericMetadata {
     /// resolved against this combined table and therefore need no opcode
     /// relocation.
     pub fn merge(&mut self, incoming: Self) -> u32 {
-        let current = std::mem::take(self);
-        let use_site_base = current.use_sites.len() as u32;
+        let use_site_base = self.use_sites.len() as u32;
         if incoming.symbols.is_empty()
             && incoming.declarations.is_empty()
             && incoming.inheritances.is_empty()
             && incoming.use_sites.is_empty()
         {
-            *self = current;
             return use_site_base;
         }
 
-        let mut symbols = current.symbols.into_vec();
-        let mut symbol_ids = symbols
-            .iter()
-            .enumerate()
-            .map(|(index, symbol)| (symbol.to_string(), index as GenericSymbol))
-            .collect::<HashMap<_, _>>();
+        // Metadata straight from the builder has no index yet.
+        if self.symbol_ids.len() != self.symbols.len() {
+            self.symbol_ids = self
+                .symbols
+                .iter()
+                .enumerate()
+                .map(|(index, symbol)| (symbol.clone(), index as GenericSymbol))
+                .collect();
+        }
         let mut symbol_relocation = Vec::with_capacity(incoming.symbols.len());
         for symbol in incoming.symbols {
-            let relocated = if let Some(existing) = symbol_ids.get(symbol.as_ref()) {
+            let relocated = if let Some(existing) = self.symbol_ids.get(symbol.as_ref()) {
                 *existing
             } else {
-                let index = symbols.len() as GenericSymbol;
-                symbol_ids.insert(symbol.to_string(), index);
-                symbols.push(symbol);
+                let index = self.symbols.len() as GenericSymbol;
+                self.symbol_ids.insert(symbol.clone(), index);
+                self.symbols.push(symbol);
                 index
             };
             symbol_relocation.push(relocated);
         }
 
-        let mut declarations = current.declarations.into_vec();
+        let declarations = &mut self.declarations;
         for mut declaration in incoming.declarations {
             declaration.owner = symbol_relocation[declaration.owner as usize];
             for parameter in &mut declaration.parameters {
@@ -553,7 +557,7 @@ impl GenericMetadata {
             declarations.push(declaration);
         }
 
-        let mut inheritances = current.inheritances.into_vec();
+        let inheritances = &mut self.inheritances;
         for mut inheritance in incoming.inheritances {
             inheritance.owner = symbol_relocation[inheritance.owner as usize];
             inheritance.ancestor = symbol_relocation[inheritance.ancestor as usize];
@@ -563,19 +567,13 @@ impl GenericMetadata {
             inheritances.push(inheritance);
         }
 
-        let mut use_sites = current.use_sites.into_vec();
+        let use_sites = &mut self.use_sites;
         for mut use_site in incoming.use_sites {
             for argument in &mut use_site.arguments {
                 remap_type_symbols(argument, &symbol_relocation);
             }
             use_sites.push(use_site);
         }
-        *self = Self {
-            symbols: symbols.into_boxed_slice(),
-            declarations: declarations.into_boxed_slice(),
-            inheritances: inheritances.into_boxed_slice(),
-            use_sites: use_sites.into_boxed_slice(),
-        };
         use_site_base
     }
 
@@ -1463,10 +1461,11 @@ impl GenericMetadataBuilder {
 
     fn finish(self) -> GenericMetadata {
         GenericMetadata {
-            symbols: self.symbols.into_boxed_slice(),
-            declarations: self.declarations.into_boxed_slice(),
-            inheritances: self.inheritances.into_boxed_slice(),
-            use_sites: self.use_sites.into_boxed_slice(),
+            symbols: self.symbols,
+            symbol_ids: HashMap::new(),
+            declarations: self.declarations,
+            inheritances: self.inheritances,
+            use_sites: self.use_sites,
         }
     }
 }
