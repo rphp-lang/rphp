@@ -819,8 +819,62 @@ pub(crate) struct PendingClosureBindings {
 struct ClassNameIndex {
     /// Number of `class_table` entries the index accounts for.
     indexed: usize,
-    names: HashMap<String, String>,
+    names: SymbolTable<String>,
 }
+
+/// Multiply-rotate hasher for the symbol tables. SipHash dominated class and
+/// function lookups on every slow property or call path; symbol names are
+/// request-local trusted data, so a non-keyed hash is acceptable.
+#[derive(Default)]
+pub struct SymbolHasher(u64);
+
+impl SymbolHasher {
+    const SEED: u64 = 0x517c_c1b7_2722_0a95;
+
+    #[inline(always)]
+    fn mix(&mut self, word: u64) {
+        self.0 = (self.0.rotate_left(5) ^ word).wrapping_mul(Self::SEED);
+    }
+}
+
+impl std::hash::Hasher for SymbolHasher {
+    #[inline(always)]
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    #[inline]
+    fn write(&mut self, bytes: &[u8]) {
+        let mut chunks = bytes.chunks_exact(8);
+        for chunk in &mut chunks {
+            self.mix(u64::from_le_bytes(chunk.try_into().expect("8-byte chunk")));
+        }
+        let rest = chunks.remainder();
+        if !rest.is_empty() {
+            let mut word = [0u8; 8];
+            word[..rest.len()].copy_from_slice(rest);
+            self.mix(u64::from_le_bytes(word));
+        }
+    }
+
+    #[inline(always)]
+    fn write_u8(&mut self, value: u8) {
+        self.mix(u64::from(value));
+    }
+
+    #[inline(always)]
+    fn write_u32(&mut self, value: u32) {
+        self.mix(u64::from(value));
+    }
+
+    #[inline(always)]
+    fn write_usize(&mut self, value: usize) {
+        self.mix(value as u64);
+    }
+}
+
+/// String-keyed table hashed with [`SymbolHasher`].
+pub type SymbolTable<V> = HashMap<String, V, std::hash::BuildHasherDefault<SymbolHasher>>;
 
 pub struct ExecutorGlobals {
     pub(crate) memory_budget: crate::request_memory::Budget,
@@ -842,10 +896,10 @@ pub struct ExecutorGlobals {
         [ResolvedVirtualAggregateCacheEntry; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
     >,
     /// Function table — name → pointer to FunctionCommon
-    pub function_table: HashMap<String, *const FunctionCommon>,
+    pub function_table: SymbolTable<*const FunctionCommon>,
     /// Compiler-owned helpers that must never participate in user function
     /// lookup, callable checks, Reflection or get_defined_functions().
-    private_function_table: HashMap<String, *const FunctionCommon>,
+    private_function_table: SymbolTable<*const FunctionCommon>,
     /// Compiler-unique declaration marker to the owned descriptor and public
     /// PHP name. Child/conditional functions stay absent from ordinary lookup
     /// until execution reaches their marker; retaining the entry makes a
@@ -853,7 +907,7 @@ pub struct ExecutorGlobals {
     runtime_function_declarations: HashMap<String, (String, *const FunctionCommon)>,
     /// Class table — name/alias → shared ClassDef. `Rc` keeps metadata and
     /// inline-cache pointers stable while aliases reuse the exact identity.
-    pub class_table: HashMap<String, std::rc::Rc<ClassDef>>,
+    pub class_table: SymbolTable<std::rc::Rc<ClassDef>>,
     /// Case-folded class and anonymous public names → `class_table` key, so a
     /// lookup that misses the exact spelling stays O(1) instead of scanning
     /// every registered class. Rebuilt whenever the table grew behind it.
@@ -1108,6 +1162,14 @@ pub struct ExecutorGlobals {
     /// Per-class memo of `__get`/`__isset` availability: bit 0 resolved,
     /// bit 1 has `__get`, bit 2 has `__isset`.
     class_magic_accessor_flags: std::cell::RefCell<Vec<u8>>,
+    /// Transitive ancestor names per class id for `class_is_a`.
+    class_ancestor_cache: std::cell::RefCell<Vec<Option<std::rc::Rc<[String]>>>>,
+    /// Declared public property resolutions per (op array cache, ip, class
+    /// id): a site that sees many receiver classes keeps its monomorphic
+    /// inline cache thrashing but skips the full lookup.
+    pub(crate) polymorphic_property_reads: std::cell::RefCell<
+        HashMap<(usize, usize, u32), u32, std::hash::BuildHasherDefault<SymbolHasher>>,
+    >,
     /// Compile-time constant table shared across included units, keyed by
     /// the constant and class counts it was built from. Declarations are
     /// immutable once registered, so equal counts prove the same contents.
@@ -2063,10 +2125,10 @@ impl ExecutorGlobals {
             resolved_virtual_aggregate_cache: std::cell::RefCell::new(
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
-            function_table: HashMap::new(),
-            private_function_table: HashMap::new(),
+            function_table: SymbolTable::default(),
+            private_function_table: SymbolTable::default(),
             runtime_function_declarations: HashMap::new(),
-            class_table: HashMap::new(),
+            class_table: SymbolTable::default(),
             class_name_index: std::cell::RefCell::new(ClassNameIndex::default()),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
@@ -2172,6 +2234,8 @@ impl ExecutorGlobals {
             class_by_id: vec![std::ptr::null()],
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
+            class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
+            polymorphic_property_reads: std::cell::RefCell::new(HashMap::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
@@ -2204,10 +2268,10 @@ impl ExecutorGlobals {
             resolved_virtual_aggregate_cache: std::cell::RefCell::new(
                 [ResolvedVirtualAggregateCacheEntry::EMPTY; RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS],
             ),
-            function_table: HashMap::new(),
-            private_function_table: HashMap::new(),
+            function_table: SymbolTable::default(),
+            private_function_table: SymbolTable::default(),
             runtime_function_declarations: HashMap::new(),
-            class_table: HashMap::new(),
+            class_table: SymbolTable::default(),
             class_name_index: std::cell::RefCell::new(ClassNameIndex::default()),
             pending_anonymous_classes: HashMap::new(),
             pending_runtime_classes: HashMap::new(),
@@ -2313,6 +2377,8 @@ impl ExecutorGlobals {
             class_by_id: vec![std::ptr::null()],
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
+            class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
+            polymorphic_property_reads: std::cell::RefCell::new(HashMap::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
@@ -9308,13 +9374,86 @@ impl ExecutorGlobals {
         let canonical_target = self
             .find_class(target)
             .map_or(target, |class| class.name.as_str());
-        let canonical_class = self
-            .find_class(class_name)
-            .map_or(class_name, |class| class.name.as_str());
-        if canonical_class.eq_ignore_ascii_case(canonical_target) {
+        let Some(class_def) = self.find_class(class_name) else {
+            return class_name
+                .strip_prefix('\\')
+                .unwrap_or(class_name)
+                .eq_ignore_ascii_case(
+                    canonical_target
+                        .strip_prefix('\\')
+                        .unwrap_or(canonical_target),
+                );
+        };
+        if class_def.name.eq_ignore_ascii_case(canonical_target) {
             return true;
         }
-        if let Some(class_def) = self.find_class(class_name) {
+        // Registered declarations are immutable, so the transitive ancestry
+        // (parents, interfaces, the implicit Stringable relation) is computed
+        // once per class instead of re-walking name lookups on every check.
+        if class_def.class_id != 0 {
+            let ancestors = self.class_ancestors(class_def);
+            let target = canonical_target
+                .strip_prefix('\\')
+                .unwrap_or(canonical_target);
+            return ancestors
+                .iter()
+                .any(|ancestor| ancestor.eq_ignore_ascii_case(target));
+        }
+        self.class_is_a_uncached(class_def, canonical_target)
+    }
+
+    /// Canonical names of every ancestor of `class_def` (excluding itself),
+    /// memoized by class id.
+    fn class_ancestors(&self, class_def: &ClassDef) -> std::rc::Rc<[String]> {
+        let index = class_def.class_id as usize;
+        if let Some(Some(cached)) = self.class_ancestor_cache.borrow().get(index) {
+            return std::rc::Rc::clone(cached);
+        }
+        let mut names: Vec<String> = Vec::new();
+        let mut pending: Vec<String> = Vec::new();
+        if !class_def.is_trait
+            && self
+                .find_effective_method(class_def, "__toString")
+                .is_some()
+        {
+            names.push("Stringable".to_string());
+        }
+        pending.extend(class_def.parent.iter().cloned());
+        pending.extend(class_def.implements.iter().cloned());
+        while let Some(name) = pending.pop() {
+            let Some(ancestor) = self.find_class(&name) else {
+                if !names.iter().any(|known| known.eq_ignore_ascii_case(&name)) {
+                    names.push(name);
+                }
+                continue;
+            };
+            if names
+                .iter()
+                .any(|known| known.eq_ignore_ascii_case(&ancestor.name))
+            {
+                continue;
+            }
+            names.push(ancestor.name.clone());
+            if !ancestor.is_trait
+                && self.find_effective_method(ancestor, "__toString").is_some()
+                && !names.iter().any(|known| known == "Stringable")
+            {
+                names.push("Stringable".to_string());
+            }
+            pending.extend(ancestor.parent.iter().cloned());
+            pending.extend(ancestor.implements.iter().cloned());
+        }
+        let ancestors: std::rc::Rc<[String]> = names.into();
+        let mut cache = self.class_ancestor_cache.borrow_mut();
+        if cache.len() <= index {
+            cache.resize(index + 1, None);
+        }
+        cache[index] = Some(std::rc::Rc::clone(&ancestors));
+        ancestors
+    }
+
+    fn class_is_a_uncached(&self, class_def: &ClassDef, canonical_target: &str) -> bool {
+        {
             // PHP implicitly makes every class with an effective __toString()
             // implementation satisfy the built-in Stringable interface. The
             // relation participates in declaration variance as well as
@@ -11750,7 +11889,7 @@ pub(crate) fn constant_redefinition_message(name: &str) -> String {
 }
 
 fn class_is_a_in_table(
-    class_table: &HashMap<String, std::rc::Rc<ClassDef>>,
+    class_table: &SymbolTable<std::rc::Rc<ClassDef>>,
     class_name: &str,
     target: &str,
 ) -> bool {

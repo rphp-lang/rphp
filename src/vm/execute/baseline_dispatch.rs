@@ -9539,6 +9539,12 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 } else {
                     try_cached_fetch_obj_r::<true, false>(eg, frame, op_array, opline)
                 };
+                let cached = match cached {
+                    CachedFetchObjResult::Miss => {
+                        try_memoized_fetch_obj_r::<false>(eg, frame, op_array, opline)
+                    }
+                    hit => hit,
+                };
                 match cached {
                     CachedFetchObjResult::Miss => {
                         match op_fetch_obj_r_slow(eg, frame, op_array, opline)? {

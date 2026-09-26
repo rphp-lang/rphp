@@ -27227,6 +27227,36 @@ Nette's container compiler running as ordinary PHP (about 1.9 s of
 `resolve`/`complete`/code generation, 1 s of Neon parsing) plus PHPStan's own
 first-run caches, and stays deferred.
 
+The `interpreter-hotspots` checkpoint keeps the same gate byte-identical on the
+rebased runtime and brings the cold analysis to about 10 s and the warm one to
+about 3.9 s on a loaded host (reference PHP: 1.6 s and 0.6 s). Two upstream
+changes had broken or slowed the gate first. The post-entry argument type
+checks of `7844e409` exposed that a bound closure's `$this` was installed
+before surplus unpacked arguments were packed into the variadic array; the
+receiver overwrote the last surplus argument, so Nette's
+`FunctionLike::setParameters()` reported "Argument #2 must be of type
+Parameter, Method given". The receiver is now installed after captures and
+variadic packing (`tests/e2e_closures.rs`). The request memory budget of
+`a636e797` swept its whole weak string map every 256 string reservations, so
+each string creation cost grew with the number of live strings and the cold
+run took 47 s with half of all instructions in the sweep; the sweep now runs
+only once the map has doubled past the population measured by the previous
+sweep (and, unchanged, before exhaustion is declared), so it is amortized
+constant per reservation. The interpreter changes themselves: symbol tables
+hash with a multiply-rotate hasher instead of SipHash, class ancestry is
+memoized per class id so `class_is_a`/`instanceof` stop re-walking parents
+and interfaces with case-insensitive compares, polymorphic `FETCH_OBJ_R`
+sites remember their (op array, ip, class id) property slot and refill the
+inline cache without the declared-property lookup, the release pre-walk is
+owner-count aware so a replaced array shared with the rest of the program no
+longer walks the whole object graph, and the destructor planner stops
+descending into a shared nested array until every owner is proven to lie
+inside the released tree. Destruction order was checked against reference
+PHP for shared nested arrays, arrays displaced from properties and captured
+closures. Peak memory of the full cold run is about 700 MB, unchanged from
+the rebased base; the remaining gap to PHP is ordinary interpreter,
+compile and class-linking cost and stays open.
+
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,
 `Phar::canWrite()`/`canCompress()`/`getSupportedSignatures()`, the class

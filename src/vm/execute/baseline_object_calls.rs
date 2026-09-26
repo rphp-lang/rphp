@@ -1699,6 +1699,49 @@ fn finish_cached_restricted_obj_modify<const FUNC_ARG: bool>(
     CachedFetchObjResult::Complete
 }
 
+/// A polymorphic site: the monomorphic inline cache missed, but this receiver
+/// class was already resolved here. Reinstate that resolution and take the
+/// cached path so the full lookup runs once per (site, class).
+#[cold]
+#[inline(never)]
+fn try_memoized_fetch_obj_r<const FUNC_ARG: bool>(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+) -> CachedFetchObjResult {
+    if opline.op2_type != OpType::Const {
+        return CachedFetchObjResult::Miss;
+    }
+    // SAFETY: op1 belongs to the live frame and the opline lies inside this
+    // op array's instruction vector; the object tag is checked before the
+    // unchecked class-id read.
+    let (ip, class_id) = unsafe {
+        let object = (&*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array))
+            .dereferenced();
+        if object.value_type() != ValueType::Object {
+            return CachedFetchObjResult::Miss;
+        }
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        (ip, object.object_class_id_unchecked())
+    };
+    if class_id == 0 {
+        return CachedFetchObjResult::Miss;
+    }
+    let packed = eg
+        .polymorphic_property_reads
+        .borrow()
+        .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
+        .copied();
+    let Some(packed) = packed else {
+        return CachedFetchObjResult::Miss;
+    };
+    op_array
+        .inline_cache_mut(ip)
+        .set_property(class_id, (packed >> 2) as usize, packed & 3);
+    try_cached_fetch_obj_r::<false, FUNC_ARG>(eg, frame, op_array, opline)
+}
+
 #[inline(always)]
 fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
     eg: &ExecutorGlobals,
@@ -2444,6 +2487,12 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                             ic_mut.set_declared_property_name(dynamic_name);
                         }
                     }
+                    if opline.op2_type == OpType::Const {
+                        eg.polymorphic_property_reads.borrow_mut().insert(
+                            (op_array.cache.as_ptr() as usize, ip, obj.class_id),
+                            ((slot as u32) << 2) | flags,
+                        );
+                    }
                 }
             }
         }
@@ -2488,11 +2537,9 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             (obj.get_property(&key).cloned(), None)
         };
         if cache_dynamic_std_class && found_val.is_some() {
-            let ic_mut = unsafe {
-                &mut *(op_array.cache.as_ptr().add(ip)
-                    as *mut crate::vm::instruction::InlineCache)
-            };
-            ic_mut.set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
+            op_array
+                .inline_cache_mut(ip)
+                .set_dynamic_property_read(obj.property_layout_ptr(), dynamic_position);
         }
         drop(obj); // Release borrow before potential magic method call
         if found_val.is_none()
@@ -6065,7 +6112,7 @@ fn op_init_method_call<'a>(
             if obj_class_id != 0 && magic_method.is_none() {
                 // SAFETY: this instruction owns its request-local cache slot;
                 // the resolved descriptor and class ID stay live for the request.
-                let ic_mut = unsafe { &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache) };
+                let ic_mut = op_array.inline_cache_mut(ip);
                 if common.plan.is_static_method() {
                     if !resolved_has_generic_contract && trait_scope_class_id == 0 {
                         ic_mut.set_static_object_method(resolved, obj_class_id);

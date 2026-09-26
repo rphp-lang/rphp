@@ -97,6 +97,17 @@ pub struct OpArray {
 }
 
 impl OpArray {
+    /// Mutable access to one instruction's inline cache. The cache vector is
+    /// sized at compilation and only the executing instruction touches its own
+    /// entry, so the single-threaded VM never holds two references to it.
+    #[inline(always)]
+    pub(crate) fn inline_cache_mut(&self, ip: usize) -> &mut InlineCache {
+        debug_assert!(ip < self.cache.len());
+        // SAFETY: `ip` indexes the compiler-sized cache of this live op array,
+        // and inline caches are mutated only by the instruction that owns
+        // them on the single VM thread, so no other reference is alive.
+        unsafe { &mut *(self.cache.as_ptr().add(ip) as *mut InlineCache) }
+    }
     /// Anonymous code shares bytecode across differently bound Closure
     /// objects, so visibility proven at one activation is not immutable.
     #[inline]

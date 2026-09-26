@@ -315,13 +315,31 @@ fn value_tree_requires_vm_release(
     seen_references: &mut std::collections::HashSet<usize>,
     seen_closures: &mut std::collections::HashSet<usize>,
 ) -> bool {
+    type Counts = HashMap<usize, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
+
     #[inline]
-    fn queue_cycle_child(value: &Value, depth: u32, pending: &mut Vec<(Value, u32)>) {
+    fn node_identity(value: &Value) -> Option<usize> {
+        value
+            .object_identity()
+            .or_else(|| value.array_identity())
+            .or_else(|| (value.value_type() == ValueType::Closure).then(|| value.weak_object_identity()).flatten())
+    }
+
+    #[inline]
+    fn queue_cycle_child(
+        value: &Value,
+        depth: u32,
+        pending: &mut Vec<(Value, u32)>,
+        queued: &mut Counts,
+    ) {
         if let Some(value) = value
             .clone_cycle_handle()
             .or_else(|| value.dereferenced().clone_cycle_handle())
             .or_else(|| value.dereferenced().needs_vm_resource_release().then(|| value.dereferenced().clone()))
         {
+            if let Some(identity) = node_identity(value.dereferenced()) {
+                *queued.entry(identity).or_insert(0) += 1;
+            }
             pending.push((value, depth.saturating_add(1)));
         }
     }
@@ -353,7 +371,18 @@ fn value_tree_requires_vm_release(
     let _cycle_snapshot_guard = crate::value::suppress_cycle_snapshot_roots();
     let root = value;
     let mut pending = Vec::new();
-    let mut current = None;
+    // Snapshot handles this walk itself holds per node, so a node's owner
+    // count can be reduced to the PHP references it really has.
+    let mut queued: Counts = Counts::default();
+    // In-tree references found so far per shared node. A container that
+    // other PHP owners hold cannot die with this tree, so its children are
+    // walked only once every one of its references proved to lie inside the
+    // tree. That keeps a replaced cache array from walking the whole object
+    // graph it shares with the rest of the program.
+    let mut encounters: Counts = Counts::default();
+    let mut descended: std::collections::HashSet<usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>> =
+        Default::default();
+    let mut current: Option<(Value, u32)> = None;
     let mut maximum_depth = 0u32;
     let mut requires_release = false;
     loop {
@@ -367,6 +396,7 @@ fn value_tree_requires_vm_release(
             // Already inspected this alias edge.
         } else {
             let value = value.dereferenced();
+            let identity = node_identity(value);
             let is_new_node = if let Some(identity) = value.object_identity() {
                 seen_objects.insert(identity)
             } else if value.value_type() == ValueType::Closure {
@@ -378,43 +408,61 @@ fn value_tree_requires_vm_release(
             } else {
                 true
             };
-            if is_new_node {
+            if is_new_node && value_requires_vm_release(eg, value) {
+                // Keep walking after finding the VM callback boundary. A
+                // destructor or suspended Generator can own a much deeper
+                // container graph whose later structural Rust drop still
+                // needs sparse stack checkpoints.
+                requires_release = true;
+            }
+            let descend = match identity {
+                None => is_new_node,
+                Some(identity) => {
+                    let found = {
+                        let slot = encounters.entry(identity).or_insert(0);
+                        *slot += 1;
+                        *slot
+                    };
+                    // `queued` still counts the handle held in `current`;
+                    // it is released only after this node is processed.
+                    let held_here = queued.get(&identity).copied().unwrap_or(0);
+                    let owners = value
+                        .cycle_strong_count()
+                        .map_or(1, |count| count.saturating_sub(held_here).max(1));
+                    let root_or_unique = current.is_none() || owners <= 1;
+                    (root_or_unique || found >= owners) && descended.insert(identity)
+                }
+            };
+            if descend {
                 // Deduplicate identity before mutating its persistent marker:
                 // a deep back-edge can point at an object currently borrowed
                 // by the release planner.
                 mark_deep_container(value, depth);
-                if value_requires_vm_release(eg, value) {
-                    // Keep walking after finding the VM callback boundary. A
-                    // destructor or suspended Generator can own a much deeper
-                    // container graph whose later structural Rust drop still
-                    // needs sparse stack checkpoints.
-                    requires_release = true;
-                }
                 if value.object_identity().is_some()
                     && let Some(object) = value.as_object()
                 {
                     object.for_each_owned_value(|property| {
-                        queue_cycle_child(property, depth, &mut pending)
+                        queue_cycle_child(property, depth, &mut pending, &mut queued)
                     });
                     if let Some(generator) = &object.generator {
                         generator
                             .as_ref()
                             .borrow()
                             .for_each_cycle_child(|child| {
-                                queue_cycle_child(child, depth, &mut pending)
+                                queue_cycle_child(child, depth, &mut pending, &mut queued)
                             });
                     }
                 } else if value.value_type() == ValueType::Closure {
                     if let Some(closure) = value.as_closure() {
                         if let Some(bound_this) = &closure.bound_this {
-                            queue_cycle_child(bound_this, depth, &mut pending);
+                            queue_cycle_child(bound_this, depth, &mut pending, &mut queued);
                         }
                         for capture in &closure.captures {
-                            queue_cycle_child(capture, depth, &mut pending);
+                            queue_cycle_child(capture, depth, &mut pending, &mut queued);
                         }
                         if let Some(static_vars) = &closure.static_vars {
                             for value in static_vars.as_ref().borrow().values() {
-                                queue_cycle_child(value, depth, &mut pending);
+                                queue_cycle_child(value, depth, &mut pending, &mut queued);
                             }
                         }
                     }
@@ -422,10 +470,18 @@ fn value_tree_requires_vm_release(
                     && let Some(array) = value.as_array()
                 {
                     for value in array.values() {
-                        queue_cycle_child(value, depth, &mut pending);
+                        queue_cycle_child(value, depth, &mut pending, &mut queued);
                     }
                 }
             }
+        }
+        // The finished snapshot handle drops with `current`; its identity no
+        // longer counts as held by this walk.
+        if let Some((finished, _)) = current.take()
+            && let Some(identity) = node_identity(finished.dereferenced())
+            && let Some(slot) = queued.get_mut(&identity)
+        {
+            *slot = slot.saturating_sub(1);
         }
         current = pending.pop();
         if current.is_none() {
@@ -561,6 +617,15 @@ fn plain_generator_children(
     Some((identity, children))
 }
 
+/// A root the caller releases may still be held by the slot or prepared
+/// handle that names it; only nested arrays are subject to the shared-owner
+/// rule in `collect_destructor_children_inner`.
+fn exempt_root_array(root: &Value, array_encounters: &mut HashMap<usize, usize>) {
+    if let Some(identity) = root.dereferenced().array_identity() {
+        array_encounters.insert(identity, usize::MAX >> 1);
+    }
+}
+
 fn collect_destructor_children(
     eg: &ExecutorGlobals,
     value: &Value,
@@ -570,6 +635,7 @@ fn collect_destructor_children(
     seen_closures: &mut std::collections::HashSet<usize>,
     seen_generators: &mut std::collections::HashSet<usize>,
     child_index: &mut HashMap<usize, usize>,
+    array_encounters: &mut HashMap<usize, usize>,
 ) {
     stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
         collect_destructor_children_inner(
@@ -581,6 +647,7 @@ fn collect_destructor_children(
             seen_closures,
             seen_generators,
             child_index,
+            array_encounters,
         )
     });
 }
@@ -594,6 +661,7 @@ fn collect_destructor_children_inner(
     seen_closures: &mut std::collections::HashSet<usize>,
     seen_generators: &mut std::collections::HashSet<usize>,
     child_index: &mut HashMap<usize, usize>,
+    array_encounters: &mut HashMap<usize, usize>,
 ) {
     if let Some(identity) = value.reference_identity()
         && !seen_references.insert(identity)
@@ -624,6 +692,7 @@ fn collect_destructor_children_inner(
                 seen_closures,
                 seen_generators,
                 child_index,
+            array_encounters,
             );
         }
         return;
@@ -658,6 +727,7 @@ fn collect_destructor_children_inner(
                     seen_closures,
                     seen_generators,
                     child_index,
+                array_encounters,
                 );
             }
             for capture in &closure.captures {
@@ -670,6 +740,7 @@ fn collect_destructor_children_inner(
                     seen_closures,
                     seen_generators,
                     child_index,
+                array_encounters,
                 );
             }
             if let Some(static_vars) = &closure.static_vars {
@@ -683,6 +754,7 @@ fn collect_destructor_children_inner(
                         seen_closures,
                         seen_generators,
                         child_index,
+                    array_encounters,
                     );
                 }
             }
@@ -692,6 +764,21 @@ fn collect_destructor_children_inner(
     let Some(array_identity) = value.array_identity() else {
         return;
     };
+    // A nested array that other PHP owners still hold survives this
+    // release, so its members lose no reference; recurse only once every
+    // one of its owners was found inside the dying tree.
+    if let Some(owners) = value.cycle_strong_count()
+        && owners > 1
+    {
+        let found = {
+            let slot = array_encounters.entry(array_identity).or_insert(0);
+            *slot += 1;
+            *slot
+        };
+        if found < owners {
+            return;
+        }
+    }
     if !seen_arrays.insert(array_identity) {
         return;
     }
@@ -706,6 +793,7 @@ fn collect_destructor_children_inner(
                 seen_closures,
                 seen_generators,
                 child_index,
+            array_encounters,
             );
         }
     }
@@ -995,6 +1083,7 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
         });
     let mut seen_generators = std::collections::HashSet::new();
     let mut child_index = HashMap::<usize, usize>::new();
+    let mut array_encounters = HashMap::<usize, usize>::new();
     if let Some(object) = owner.as_object() {
         object.for_each_owned_value(|property| {
             collect_destructor_children(
@@ -1006,6 +1095,7 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
                 &mut seen_closures,
                 &mut seen_generators,
                 &mut child_index,
+            &mut array_encounters,
             );
         });
         if let Some(generator) = &object.generator {
@@ -1025,6 +1115,7 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
                         &mut seen_closures,
                         &mut seen_generators,
                         &mut child_index,
+                    &mut array_encounters,
                     );
                 });
         }
@@ -1043,6 +1134,7 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
                 &mut seen_closures,
                 &mut seen_generators,
                 &mut child_index,
+            &mut array_encounters,
             );
         }
         for capture in &closure.captures {
@@ -1055,6 +1147,7 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
                 &mut seen_closures,
                 &mut seen_generators,
                 &mut child_index,
+            &mut array_encounters,
             );
         }
         if let Some(static_vars) = &closure.static_vars {
@@ -1068,6 +1161,7 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
                     &mut seen_closures,
                     &mut seen_generators,
                     &mut child_index,
+                &mut array_encounters,
                 );
             }
         }
@@ -1283,7 +1377,9 @@ fn collect_retiring_root_destructors(
         });
     let mut seen_generators = std::collections::HashSet::new();
     let mut child_index = HashMap::<usize, usize>::new();
+    let mut array_encounters = HashMap::<usize, usize>::new();
     visit_roots(&mut |root| {
+        exempt_root_array(root, &mut array_encounters);
         collect_destructor_children(
             eg,
             root,
@@ -1293,6 +1389,7 @@ fn collect_retiring_root_destructors(
             &mut seen_closures,
             &mut seen_generators,
             &mut child_index,
+        &mut array_encounters,
         );
     });
     if canonical_direct_roots_retained {
@@ -1633,11 +1730,13 @@ fn run_frame_destructors_filtered(
             let mut candidates = Vec::new();
             let mut seen_generators = std::collections::HashSet::new();
             let mut child_index = HashMap::new();
+            let mut array_encounters = HashMap::new();
             visit_roots(&mut |value| {
                 collect_destructor_children(
                     eg, value, &mut candidates, &mut seen_arrays,
                     &mut seen_references, &mut seen_closures,
                     &mut seen_generators, &mut child_index,
+                &mut array_encounters,
                 );
             });
             if live_generators_only {
@@ -2877,10 +2976,12 @@ fn release_statement_temps(
                 });
             let mut seen_generators = std::collections::HashSet::new();
     let mut child_index = HashMap::<usize, usize>::new();
+    let mut array_encounters = HashMap::<usize, usize>::new();
             for index in first..end {
                 if !is_owned(index) {
                     continue;
                 }
+                exempt_root_array(&*base.add(index), &mut array_encounters);
                 collect_destructor_children(
                     eg,
                     &*base.add(index),
@@ -2890,6 +2991,7 @@ fn release_statement_temps(
                     &mut seen_closures,
                     &mut seen_generators,
                     &mut child_index,
+                &mut array_encounters,
                 );
             }
             let _ = run_collected_value_destructors(
