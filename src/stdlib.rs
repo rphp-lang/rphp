@@ -31956,7 +31956,7 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
             "pcre.backtrack_limit" | "pcre.recursion_limit" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
-                    .insert(normalized, value.clone());
+                    .insert(normalized, value.to_owned());
             }
             "zend.exception_string_param_max_len" => {
                 let published = normalize_exception_string_param_max_len(value);
