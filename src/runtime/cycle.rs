@@ -42,7 +42,7 @@ struct CycleGraph {
 
 struct CyclePass {
     collected: usize,
-    invoked_destructors: bool,
+    rerun_required: bool,
     collector_time: Duration,
     destructor_time: Duration,
     free_time: Duration,
@@ -183,9 +183,9 @@ impl CycleGraph {
             .collect()
     }
 
-    /// Nodes in strongly connected garbage components determine PHP's
-    /// returned collection count. Acyclic children are reclaimed by breaking
-    /// their owner's edges and receive destructors, but are not counted.
+    /// Identify the cyclic part separately from its acyclic descendants.
+    /// Destructors on a cyclic node require a second pass; acyclic children
+    /// with destructors retire with their owners and are not counted twice.
     fn cyclic_identities(&self, garbage: &HashSet<usize>) -> HashSet<usize> {
         let mut adjacency = vec![Vec::new(); self.nodes.len()];
         let mut reverse = vec![Vec::new(); self.nodes.len()];
@@ -490,7 +490,7 @@ impl ExecutorGlobals {
             return Ok(0);
         }
         let mut result = self.collect_cycle_pass(&mut guard, false)?;
-        if result.invoked_destructors {
+        if result.rerun_required {
             let pending = self.exception.take();
             let rerun = self.collect_cycle_pass(&mut guard, true)?;
             if let Some(previous) = pending {
@@ -525,6 +525,12 @@ impl ExecutorGlobals {
         if ran || rerun {
             guard.mark_ran();
         }
+        // The pass has now inspected these roots, including live callback
+        // products from the preceding pass. Only subsequent PHP releases
+        // may admit them again; a stale callback marker must not survive.
+        for node in &initial.nodes {
+            guard.retire_visited_callback_root(node.identity);
+        }
         let initially_live = initial.live_identities();
         let garbage: Vec<(usize, CycleNodeKind)> = initial
             .nodes
@@ -537,47 +543,87 @@ impl ExecutorGlobals {
         let cyclic = initial.cyclic_identities(&garbage_identities);
 
         let destructor_order = initial.destructor_order(&garbage_identities);
-        let pending_destructors: HashSet<_> = destructor_order
+        let destructor_nodes: HashSet<_> = destructor_order
             .iter()
             .filter_map(|&index| {
                 let node = &initial.nodes[index];
                 if node.kind != CycleNodeKind::Object {
                     return None;
                 }
-                let pending = self.has_fiber_context(node.identity)
-                    || (!node.value.is_object_destructor_retired()
-                        && node.value.as_object().is_some_and(|object| {
-                            self.class_has_destructor(object.class_id, &object.class_name)
-                        }));
-                pending.then_some(node.identity)
+                let has_destructor = self.has_fiber_context(node.identity)
+                    || node.value.as_object().is_some_and(|object| {
+                        self.class_has_destructor(object.class_id, &object.class_name)
+                            || object.generator.as_ref().is_some_and(|generator| {
+                                generator.borrow().state
+                                    != crate::vm::generator::GeneratorState::Completed
+                            })
+                    });
+                has_destructor.then_some(node.identity)
             })
             .collect();
+        let pending_destructors: HashSet<_> = initial
+            .nodes
+            .iter()
+            .filter_map(|node| {
+                (destructor_nodes.contains(&node.identity)
+                    && (self.has_fiber_context(node.identity)
+                        || !node.value.is_object_destructor_retired()))
+                .then_some(node.identity)
+            })
+            .collect();
+        let cyclic_destructors = pending_destructors
+            .iter()
+            .any(|identity| cyclic.contains(identity));
         let deferred = if rerun {
             initial.retained_by(&pending_destructors)
         } else {
             HashSet::new()
         };
-        let has_destructors = destructor_order
-            .iter()
-            .any(|index| initial.nodes[*index].kind == CycleNodeKind::Object);
+        let has_destructors = !pending_destructors.is_empty();
+        let mut stale = std::mem::take(&mut initial.stale_weak_identities);
+        // Without callbacks, ownership cannot change between tracing and
+        // collection. Keep that graph instead of allocating weak handles and
+        // tracing a large ordinary object cycle for a second time.
+        let mut unchanged = Some(initial);
+        let mut directly_retired = HashSet::new();
         let mut collector_time = Duration::ZERO;
         let mut destructor_time = Duration::ZERO;
         let mut pending_exception = None;
         let collector_resumed = if has_destructors {
+            let initial = unchanged.take().unwrap();
+            let nodes: Vec<_> = initial
+                .nodes
+                .iter()
+                .map(|node| {
+                    (
+                        node.identity,
+                        node.kind,
+                        node.value.weak_cycle_handle().unwrap(),
+                    )
+                })
+                .collect();
+            // A graph snapshot must not keep every PHP child alive during a
+            // destructor. Retain only its receiver across the callback, so
+            // ordinary unsets can retire children immediately. Weak owners
+            // prevent allocation-address reuse while the callback re-enters.
+            drop(initial);
             let destructor_started = Instant::now();
             collector_time = destructor_started.duration_since(collector_started);
             let _callback_roots = record_cycle_callback_roots();
             for index in destructor_order {
-                let node = &initial.nodes[index];
-                if node.kind == CycleNodeKind::Object {
-                    if self.has_fiber_context(node.identity) {
-                        self.force_close_fiber_object(
-                            node.identity,
-                            self.current_execute_data.get(),
-                        )?;
+                let (identity, kind, weak) = &nodes[index];
+                if *kind == CycleNodeKind::Object && pending_destructors.contains(identity) {
+                    let Some(owner) = weak.upgrade() else {
+                        continue;
+                    };
+                    if self.has_fiber_context(*identity) {
+                        self.force_close_fiber_object(*identity, self.current_execute_data.get())?;
                     }
-                    if !self.run_gc_destructor_in_fiber(&node.value)? {
-                        run_cycle_object_destructor(self, &node.value)?;
+                    if !self.run_gc_destructor_in_fiber(&owner)? {
+                        run_cycle_object_destructor(self, &owner)?;
+                    }
+                    if owner.cycle_strong_count() == Some(1) {
+                        directly_retired.insert(*identity);
                     }
                     if let Some(exception) = self.exception.take() {
                         // A destructor failure does not abandon the remaining
@@ -606,16 +652,18 @@ impl ExecutorGlobals {
         } else {
             collector_started
         };
-        let mut stale = std::mem::take(&mut initial.stale_weak_identities);
-        drop(initial);
-
         // Destructors may create roots, remove edges or resurrect a complete
         // component. Rebuild from current ownership before releasing anything.
-        let current = self.build_cycle_graph();
-        let currently_live = current.live_identities();
+        let (current, currently_live) = if let Some(unchanged) = unchanged {
+            (unchanged, initially_live)
+        } else {
+            let current = self.build_cycle_graph();
+            let live = current.live_identities();
+            (current, live)
+        };
         for (identity, _) in &garbage {
             if currently_live.contains(identity) {
-                guard.retire_resurrected_root(*identity);
+                guard.retire_visited_callback_root(*identity);
             }
         }
         stale.extend(current.stale_weak_identities.iter().copied());
@@ -655,7 +703,9 @@ impl ExecutorGlobals {
             .iter()
             .filter(|(identity, kind)| {
                 collected.contains(identity)
-                    && cyclic.contains(identity)
+                    && (cyclic.contains(identity) || !destructor_nodes.contains(identity))
+                    && (current.indices.contains_key(identity)
+                        || (cyclic.contains(identity) && directly_retired.contains(identity)))
                     && matches!(
                         kind,
                         CycleNodeKind::Array | CycleNodeKind::Object | CycleNodeKind::Closure
@@ -667,7 +717,7 @@ impl ExecutorGlobals {
         self.exception = pending_exception;
         Ok(CyclePass {
             collected: count,
-            invoked_destructors: !pending_destructors.is_empty(),
+            rerun_required: cyclic_destructors || (has_destructors && guard.has_callback_roots()),
             collector_time: if ran { collector_time } else { Duration::ZERO },
             destructor_time: if ran { destructor_time } else { Duration::ZERO },
             free_time: if ran { free_time } else { Duration::ZERO },

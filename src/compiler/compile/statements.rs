@@ -5177,7 +5177,19 @@ impl Compiler {
                 writeback.result_type = OpType::Tmp;
                 writeback._pad |= ASSIGN_OBJ_MODIFY;
                 self.push_instruction_at_line(writeback, *line);
-                self.emit_completed_reference_expression(first_cv, first_tmp);
+                if !self.emit_completed_reference_expression(first_cv, first_tmp)
+                    && self.next_tmp as u16 > first_tmp
+                {
+                    // The fetched property array and receiver cease to be
+                    // expression owners after writeback even without a private
+                    // reference CV, just as for property-array append.
+                    let mut release = Instruction::new(OpCode::ReleaseTemps);
+                    release.op1 = first_tmp;
+                    release.op1_type = OpType::Tmp;
+                    release.op2 = self.next_tmp as u16;
+                    release.op2_type = OpType::Tmp;
+                    self.push_instruction_at_line(release, *line);
+                }
             }
             Stmt::Include {
                 path,

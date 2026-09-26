@@ -8368,7 +8368,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     if let Some(message) = reference_array_auto_init_error(&constraints, eg) {
                         throw_operator!("TypeError", &message);
                     }
-                    unsafe { slot_set(arr_ptr, Value::array(PhpArray::new())) };
+                    unsafe {
+                        slot_set(arr_ptr, Value::array(PhpArray::new()));
+                        // SAFETY: op1 is an initialized slot in this live frame.
+                        // Track that slot, not get_op_mut's reference target:
+                        // its referent may live in a global or caller-owned cell.
+                        frame_tmp_finish_external_write(
+                            frame,
+                            (*frame).slot_ptr(opline.op1 as u32),
+                        );
+                    }
                     arr_ptr = unsafe {
                         let ptr = (*frame).get_op_mut(opline.op1 as u32, opline.op1_type);
                         if (&*ptr).is_reference() {
@@ -8904,6 +8913,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             throw_operator!("TypeError", &message);
                         }
                         slot_set(arr_ptr, Value::array(PhpArray::new()));
+                        frame_tmp_finish_external_write(
+                            frame,
+                            (*frame).slot_ptr(opline.op1 as u32),
+                        );
                     }
                     let array_can_push = (&*arr_ptr)
                         .as_array()
@@ -9197,6 +9210,10 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                     } else {
                         if matches!(array_value.value_type(), ValueType::Null | ValueType::Undef) {
                             slot_set(array_ptr, Value::array(PhpArray::new()));
+                            frame_tmp_finish_external_write(
+                                frame,
+                                (*frame).slot_ptr(opline.op1 as u32),
+                            );
                         }
                         if (&*array_ptr).as_array().is_none() {
                             match (&*array_ptr).value_type() {

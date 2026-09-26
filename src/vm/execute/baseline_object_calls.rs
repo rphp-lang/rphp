@@ -4747,6 +4747,7 @@ fn op_bind_array_dim_ref<'a>(
         };
         if matches!(mutable_source.value_type(), ValueType::Null | ValueType::Undef) {
             slot_set(mutable_source, Value::array(PhpArray::new()));
+            frame_tmp_finish_external_write(frame, (*frame).slot_ptr(opline.op1 as u32));
         }
         let Some(array) = mutable_source.as_array_mut() else {
             let instruction_index = (opline as *const Instruction)

@@ -54,7 +54,7 @@ fn finish_request_handler_shutdown(
     for handler in eg.exception_handler_stack.drain(..) {
         handler_roots.extend(handler);
     }
-    run_value_destructors(eg, &handler_roots, frame)?;
+    run_request_handler_destructors(eg, &handler_roots, frame)?;
     drop(handler_roots);
     pop_vm_call_frame(eg, frame);
     Ok(())
@@ -1389,51 +1389,7 @@ where
         && user.op_array.may_access_globals
         && !saved_execute_data.is_null()
     {
-        unsafe {
-            let mut scope = saved_execute_data;
-            let mut fallback = None;
-            while !scope.is_null() {
-                let frame = &mut *scope;
-                // Internal activations (including explicit GC) carry only
-                // FunctionCommon plus an internal tail, never a UserFunction
-                // op-array. Skip them before inspecting lexical bindings.
-                if frame.func.is_null()
-                    || Function::from_common_ptr(frame.func).fn_type() != FunctionType::User
-                {
-                    scope = frame.prev_execute_data;
-                    continue;
-                }
-                sync_dirty_globals_to_frame(eg, frame);
-                let scope_op_array = frame.op_array();
-                if fallback.is_none() && !scope_op_array.global_vars.is_empty() {
-                    fallback = Some(scope);
-                }
-                if !scope_op_array.main_scope_vars.is_empty() {
-                    for (cv, name) in &scope_op_array.main_scope_vars {
-                        globals_sync(
-                            &mut eg.globals,
-                            name,
-                            clone_scope_binding(frame.cv(*cv)),
-                        );
-                    }
-                    scope = std::ptr::null_mut();
-                } else {
-                    scope = frame.prev_execute_data;
-                }
-            }
-            if let Some(scope) = fallback {
-                let frame = &*scope;
-                if frame.op_array().main_scope_vars.is_empty() {
-                    for (cv, name) in &frame.op_array().global_vars {
-                        globals_sync(
-                            &mut eg.globals,
-                            name,
-                            clone_scope_binding(frame.cv(*cv)),
-                        );
-                    }
-                }
-            }
-        }
+        publish_detached_scope_globals(eg, saved_execute_data);
     }
     let this_offset = signature.this_offset as usize;
     let positional_public_num_args = num_args.saturating_sub(this_offset + capture_count);
@@ -2128,9 +2084,7 @@ where
     // Complete the other half of the ordinary call boundary: writes through
     // `global` in a detached callback must become visible in the suspended
     // caller before its next opcode executes.
-    if !saved_execute_data.is_null() {
-        unsafe { sync_dirty_globals_to_frame(eg, &mut *saved_execute_data) };
-    }
+    restore_detached_scope_globals(eg, saved_execute_data);
 
     execution_result?;
 
@@ -2611,6 +2565,14 @@ fn force_close_generator_activation(
     let Some(finally_start) = finally_start else {
         close_failed_generator(gen_ref);
         eg.current_execute_data.set(frame);
+        // CVs retire before operands of an abandoned call. A callback copied
+        // into a pending operand must stay alive while unrelated locals run
+        // their destructors, irrespective of the parameter declaration order.
+        // OPERANDS preserves that pending-call ownership until the TMP phase.
+        release_statement_temps(
+            eg, frame, 0, user.op_array.num_cvs as usize,
+            STATEMENT_TEMPS_OPERANDS, false,
+        )?;
         run_frame_destructors(eg, frame)?;
         eg.current_execute_data.set(saved_execute_data);
         unsafe { cleanup_frame_slots(frame) };
@@ -3378,6 +3340,62 @@ fn release_generator_trace_frames(
     }
 }
 
+/// Detached callbacks and generators enter without the ordinary DoFcall
+/// boundary. Refresh their global bindings from the suspended user scopes.
+#[cold]
+fn publish_detached_scope_globals(eg: &mut ExecutorGlobals, mut scope: *mut ExecuteData) {
+    // SAFETY: scope is the current live executor chain. Only user functions
+    // have compiler CV metadata; internal frames are skipped before reading it.
+    unsafe {
+        let mut fallback = None;
+        while !scope.is_null() {
+            let frame = &mut *scope;
+            if frame.func.is_null()
+                || Function::from_common_ptr(frame.func).fn_type() != FunctionType::User
+            {
+                scope = frame.prev_execute_data;
+                continue;
+            }
+            sync_dirty_globals_to_frame(eg, frame);
+            let scope_op_array = frame.op_array();
+            if fallback.is_none() && !scope_op_array.global_vars.is_empty() {
+                fallback = Some(scope);
+            }
+            if !scope_op_array.main_scope_vars.is_empty() {
+                for (cv, name) in &scope_op_array.main_scope_vars {
+                    globals_sync(&mut eg.globals, name, clone_scope_binding(frame.cv(*cv)));
+                }
+                scope = std::ptr::null_mut();
+            } else {
+                scope = frame.prev_execute_data;
+            }
+        }
+        if let Some(scope) = fallback {
+            let frame = &*scope;
+            if frame.op_array().main_scope_vars.is_empty() {
+                for (cv, name) in &frame.op_array().global_vars {
+                    globals_sync(&mut eg.globals, name, clone_scope_binding(frame.cv(*cv)));
+                }
+            }
+        }
+    }
+}
+
+#[cold]
+fn restore_detached_scope_globals(eg: &mut ExecutorGlobals, mut caller: *mut ExecuteData) {
+    // A destructor may run while returning from a function whose own body is
+    // global-free. Its fast return cannot publish callback writes, so carry
+    // them through the suspended ancestors now, up to the main symbol table.
+    // SAFETY: the suspended caller chain outlives the detached activation;
+    // synchronization skips internal descriptors before reading CV metadata.
+    unsafe {
+        while !caller.is_null() && !eg.dirty_globals.is_empty() {
+            sync_dirty_globals_to_frame(eg, &mut *caller);
+            caller = eg.trace_caller(caller as usize, (*caller).prev_execute_data);
+        }
+    }
+}
+
 /// Materialize one detached frame from the generator snapshot. All resume
 /// paths use this function so slot restoration and frame ownership cannot
 /// drift between normal yield, delegated return and delegated exception.
@@ -3454,6 +3472,9 @@ fn materialize_generator_frame(
     // ip_offset belongs to the same immutable generator op-array.
     unsafe {
         let user = &*(func_ptr as *const UserFunction);
+        if user.op_array.may_access_globals {
+            publish_detached_scope_globals(eg, saved_execute_data);
+        }
         (*frame).return_value = std::ptr::null_mut();
         (*frame).pending_return_after_finally = pending_return_after_finally;
         for (i, value) in cv_values.into_iter().enumerate() {
@@ -3855,6 +3876,7 @@ fn execute_resumed_generator_frame(
     };
     eg.current_execute_data.set(saved_execute_data);
     eg.active_generator = saved_active;
+    restore_detached_scope_globals(eg, saved_execute_data);
     if let Err(error) = result {
         if fiber_suspended {
             eg.exception = saved_exception;

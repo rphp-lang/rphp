@@ -36,34 +36,40 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-reference-retirement` checkpoint over `0e280362` retires completed
-compiler-private reference owners while preserving real aliases, COW storage,
-pending calls and suspended activations. The complete 7,174-case stable core is
-**6,822 pass / 13 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
-exact **+9/-0**. Zend/lang is **5,344/13/116/125 plus 1 timeout**;
+The `core-cycle-remainder` checkpoint over `60136a25` aligns promoted-container
+ownership, weak collector snapshots, post-destructor counts and delegated-frame
+retirement while preserving live aliases, COW storage and callback roots.
+The complete 7,174-case stable core is
+**6,829 pass / 6 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
+exact **+7/-0**. Zend/lang is **5,351/6/116/125 plus 1 timeout**;
 strings/array stays **1,478/0/68/29**. No other status changed. The known
 `new_oom.phpt` timeout stays visible, never a pass.
 
-The eleven-case GC cluster gains nine; `gc_023` and `gc_033` remain explicit
-graph/admission holdouts rather than reasons to broaden operand retirement.
-Sixty-nine original CLI regressions, three compiler proofs, one new unit and
-307 exact oracle comparisons support the slice. Five Cargo configurations,
+All seven supplying GC/generator cases and three adjacent PHPTs pass.
+The slice adds 106 original CLI regressions and two value units, with 413
+exact oracle comparisons including the accepted parent set. Five Cargo configurations,
 all-targets, exact no-loss, Composer/Symfony S0--S3 and unsafe policy/self-tests
-pass, including restored native-region admission with public-root rejection.
+pass, including nested pre-commit destruction and suspended operand order.
 Unsafe inventory remains 1,627 blocks / 289 functions with unchanged ceilings
 and ignored counts. Exact hashes and results are in
 [compatibility status](compatibility.md).
 
-The next core remainder has **nine failures**: `gc_017`, `gc_023`, `gc_028`,
-`gc_029`, `gc_033`, `gc_045`, `generators/gc_with_yield_from`,
-`constant_arrays` and `foreach/foreach_002` (all under `Zend/tests`, `.phpt`).
-Original reductions separate post-destructor counting, promoted-container
-ownership, delegated-frame cleanup and reference-copy boundaries; verify each
-mechanism before changing it. Four library failures remain outside this stream.
+The next core remainder has **two PHPT failures**: `constant_arrays` and
+`foreach/foreach_002` (under `Zend/tests`, `.phpt`). Original reductions separate
+constant reference-stripping from ordinary COW and self-target iteration;
+shared DAGs must not be rejected as recursion and object identities must survive
+constant snapshots. A separate shutdown/global-string discovery remains an
+explicit follow-up. Four library failures remain outside this stream.
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
-here. Preserve every one of the 5,344 and 1,478 accepted passes. Performance
+here. Preserve every one of the 5,351 and 1,478 accepted passes. Performance
 remains deferred; host gates retain the 6 GiB/no-swap limit, two build/test
 workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding reference-retirement checkpoint
+
+The `core-reference-retirement` checkpoint over `0e280362` added nine exact
+passes without loss, reaching 6,822 passes and 13 failures. It retired completed
+private reference operands while protecting real aliases and suspended owners.
 
 ### Preceding GC configuration checkpoint
 
@@ -5774,7 +5780,7 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
-Current AMD64 stable-core status is 6,753 pass / 29 fail / 183 skip / 208
+Current AMD64 stable-core status is 6,829 pass / 6 fail / 184 skip / 154
 unsupported / 1 explicitly contained OOM timeout / 0 crash. Date/DateTime is
 integrated; separate workstreams own Phar and PCRE. The core sweep continues
 from the remaining failure manifest, with performance intentionally deferred

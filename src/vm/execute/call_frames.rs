@@ -1156,13 +1156,63 @@ fn run_value_destructors_inner(
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
 ) -> Result<bool, VmError> {
+    let candidates = collect_retiring_root_destructors(
+        eg,
+        |visit| { for root in roots { visit(root); } },
+        canonical_direct_roots_retained,
+    );
+    run_collected_value_destructors(
+        eg,
+        candidates,
+        logical_caller,
+        internal_trace_origin,
+        logical_caller_at_current_site,
+        live_internal_caller,
+    )
+}
+
+/// Handler roots retire after output callbacks and static destructors. The
+/// main frame has already released its CVs, but its canonical global mirrors
+/// remain readable by finally blocks. Include those owners in the same final
+/// retirement proof without erasing their values before invoking callbacks.
+#[cold]
+pub(crate) fn run_request_handler_destructors(
+    eg: &mut ExecutorGlobals,
+    roots: &[Value],
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let candidates = collect_retiring_root_destructors(eg, |visit| {
+        for root in roots { visit(root); }
+        for root in eg.globals.values() { visit(root); }
+    }, false);
+    run_collected_value_destructors(
+        eg, candidates, logical_caller, true, false, false,
+    ).map(|_| ())
+}
+
+#[cold]
+fn collect_retiring_root_destructors(
+    eg: &ExecutorGlobals,
+    visit_roots: impl Fn(&mut dyn FnMut(&Value)),
+    canonical_direct_roots_retained: bool,
+) -> Vec<(usize, usize, Value)> {
     let mut candidates = Vec::<(usize, usize, Value)>::new();
-    let mut seen_arrays = std::collections::HashSet::new();
-    let mut seen_references = std::collections::HashSet::new();
-    let mut seen_closures = std::collections::HashSet::new();
+    // Replacing a final outer container does not retire a shared or cyclic
+    // descendant. Use the same ownership proof as statement and property
+    // release before dispatching any destructor inside the detached roots.
+    let (mut seen_arrays, mut seen_references, mut seen_closures) =
+        retained_temp_containers(|visit| {
+            visit_roots(&mut |root| {
+                visit(root);
+                // Shutdown snapshots retain a second handle beside the
+                // canonical static/constant table entry. Both owners belong
+                // to this retirement boundary, including container roots.
+                if canonical_direct_roots_retained { visit(root); }
+            });
+        });
     let mut seen_generators = std::collections::HashSet::new();
     let mut child_index = HashMap::<usize, usize>::new();
-    for root in roots {
+    visit_roots(&mut |root| {
         collect_destructor_children(
             eg,
             root,
@@ -1173,11 +1223,11 @@ fn run_value_destructors_inner(
             &mut seen_generators,
             &mut child_index,
         );
-    }
+    });
     if canonical_direct_roots_retained {
-        for root in roots {
+        visit_roots(&mut |root| {
             let Some(identity) = root.vm_release_identity() else {
-                continue;
+                return;
             };
             if let Some((_, references, _)) = candidates
                 .iter_mut()
@@ -1185,17 +1235,9 @@ fn run_value_destructors_inner(
             {
                 *references += 1;
             }
-        }
+        });
     }
-
-    run_collected_value_destructors(
-        eg,
-        candidates,
-        logical_caller,
-        internal_trace_origin,
-        logical_caller_at_current_site,
-        live_internal_caller,
-    )
+    candidates
 }
 
 #[cold]
@@ -1401,7 +1443,13 @@ pub(crate) fn run_cycle_object_destructor(
         return Ok(());
     };
     let class_name = object.class_name.to_string();
+    let generator = object.generator.clone();
     drop(object);
+    if let Some(generator) = generator
+        && generator.borrow().state != crate::vm::generator::GeneratorState::Completed
+    {
+        force_close_generator(eg, &generator, false)?;
+    }
     if eg.find_method_info(&class_name, "__destruct").is_some()
         && owner.mark_object_destructed()
     {
@@ -1459,7 +1507,21 @@ fn run_frame_destructors_filtered(
 
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
-        if let Some(variables) = variables {
+        let op_array = (*frame).op_array();
+        let root_frame = (*frame).prev_execute_data.is_null()
+            && (op_array.name == "<main>" || op_array.name == *op_array.source_file);
+        let needs_container_release = |index: usize| {
+            let value = &*base.add(index);
+            matches!(value.value_type(), ValueType::Array | ValueType::Reference | ValueType::Closure)
+                && value_may_require_vm_release_tree(eg, value)
+        };
+        let nested_local_release = !root_frame && if total <= 64 {
+            HeapSlotIter::new((*frame).owned_heap_bitmap())
+                .any(|index| needs_container_release(index as usize))
+        } else {
+            (0..total).any(needs_container_release)
+        };
+        if variables.is_some() || nested_local_release {
             // Dynamic symbols are real local owners, not a detached global
             // mirror. Plan their retirement together with the CV/TMP roots,
             // so a shared reference is freed only when every alias belongs to
@@ -1476,7 +1538,9 @@ fn run_frame_destructors_filtered(
                         }
                     }
                 }
-                variables.for_each(|_, value| visit(value));
+                if let Some(variables) = variables {
+                    variables.for_each(|_, value| visit(value));
+                }
             };
             let (mut seen_arrays, mut seen_references, mut seen_closures) =
                 retained_temp_containers(visit_roots);
@@ -1532,9 +1596,6 @@ fn run_frame_destructors_filtered(
         } else {
             (0..total).collect()
         };
-        let op_array = (*frame).op_array();
-        let root_frame = (*frame).prev_execute_data.is_null()
-            && (op_array.name == "<main>" || op_array.name == *op_array.source_file);
         let logical_caller = if root_frame || detached_caller_at_current_site {
             frame
         } else {
@@ -1773,7 +1834,10 @@ pub(crate) enum PreparedValueDestructor {
         replaced_references: usize,
         fiber_owned_references: usize,
     },
-    Tree(Value),
+    Tree {
+        owner: Value,
+        replaced_references: usize,
+    },
 }
 
 /// The release tree of a committed VM write. Values and the child order are
@@ -2005,7 +2069,10 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
     {
         return None;
     }
-    Some(PreparedValueDestructor::Tree(value.clone()))
+    Some(PreparedValueDestructor::Tree {
+        owner: value.clone(),
+        replaced_references,
+    })
 }
 
 #[cold]
@@ -2221,14 +2288,30 @@ fn run_prepared_value_destructor_with_context(
             )?;
             replace_pending_destructor_trace_site(eg, trace_site);
         }
-        PreparedValueDestructor::Tree(owner) => {
+        PreparedValueDestructor::Tree { owner, replaced_references } => {
+            // Some callers retire children before committing their write,
+            // while the old root is still readable. Prove the same prepared
+            // owner boundary before starting any callback.
+            if owner.cycle_strong_count().is_none_or(|count| count > replaced_references + 1) {
+                return Ok(());
+            }
             let mut pending = None;
             loop {
-                run_value_destructors_inner(
+                // Once array retirement has begun, a throwing destructor does
+                // not cancel its remaining siblings, even if it published a
+                // view of this array. The plan's COW owner keeps this original
+                // storage stable; nested shared containers keep their own
+                // independent final-owner proofs.
+                let references = owner.cycle_strong_count().expect("prepared array owner");
+                let candidates = collect_retiring_root_destructors(
                     eg,
-                    std::slice::from_ref(&owner),
-                    logical_caller,
+                    |visit| { for _ in 0..references { visit(&owner); } },
                     false,
+                );
+                run_collected_value_destructors(
+                    eg,
+                    candidates,
+                    logical_caller,
                     internal_trace_origin,
                     logical_caller_at_current_site,
                     live_internal_caller,
@@ -2453,6 +2536,21 @@ fn statement_temp_is_live_read_snapshot<'a>(
         }
         if instruction.opcode == OpCode::FetchCvR {
             return same_owner(read(instruction.op1, OpType::Cv));
+        }
+        if instruction.opcode == OpCode::FetchDimR && instruction._pad & FETCH_DIM_MUTABLE != 0 {
+            // Nested writes read an element into a private TMP, then write it
+            // back. Suppress its scratch release only while that exact element
+            // still owns the resulting allocation. No ArrayAccess callback or
+            // offset diagnostic is repeated while proving this identity.
+            let receiver = read(instruction.op1, instruction.op1_type).dereferenced();
+            let Some(array) = receiver.as_array() else { return false; };
+            let key = read(instruction.op2, instruction.op2_type).dereferenced();
+            return match value_to_array_key_ref(key) {
+                Ok(ArrayKeyRef::Int(key)) => array.get_int(key).is_some_and(same_owner),
+                Ok(ArrayKeyRef::String(_)) => array_string_key_for_lookup(array, key)
+                    .and_then(|key| array.get_str(&key)).is_some_and(same_owner),
+                Err(_) => false,
+            };
         }
         if instruction.opcode == OpCode::FetchObjR && instruction._pad & FETCH_OBJ_MODIFY != 0 {
             let receiver = read(instruction.op1, instruction.op1_type).dereferenced();

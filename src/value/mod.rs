@@ -1262,6 +1262,17 @@ impl CycleCandidate {
     }
 }
 
+/// A collector's non-owning snapshot. Keeps allocation identities stable
+/// while callbacks may release the last PHP owner, without delaying that
+/// release or making another unreachable node appear externally rooted.
+pub(crate) struct WeakCycleValue(CycleCandidate);
+
+impl WeakCycleValue {
+    pub(crate) fn upgrade(&self) -> Option<Value> {
+        self.0.upgrade()
+    }
+}
+
 struct CycleAdmissionState {
     enabled: bool,
     initialized: bool,
@@ -1495,6 +1506,45 @@ mod repeated_cycle_root_tests {
     use super::*;
 
     #[test]
+    fn weak_cycle_snapshot_does_not_retain_its_owner() {
+        for value in [
+            Value::array(PhpArray::new()),
+            Value::owned_reference(Value::array(PhpArray::new())),
+        ] {
+            let identity = value.cycle_node();
+            let weak = value.weak_cycle_handle().unwrap();
+            assert_eq!(value.cycle_strong_count(), Some(1));
+            let snapshot = weak.upgrade().unwrap();
+            assert_eq!(snapshot.cycle_node(), identity);
+            assert_eq!(value.cycle_strong_count(), Some(2));
+            drop(snapshot);
+            assert_eq!(value.cycle_strong_count(), Some(1));
+            drop(value);
+            assert!(weak.upgrade().is_none());
+        }
+    }
+
+    #[test]
+    fn private_reference_retirement_does_not_publish_a_php_root() {
+        std::thread::spawn(|| {
+            CYCLE_ROOTS.with_borrow_mut(|state| state.active = true);
+            let value = Value::owned_reference(Value::array(PhpArray::new()));
+            let mut private = value.clone_owned_reference_alias();
+            private.mark_internal_reference_alias();
+            drop(private);
+            assert_eq!(cycle_collection_status().roots, 0);
+            let public = value.clone_owned_reference_alias();
+            drop(public);
+            assert_eq!(cycle_collection_status().roots, 1);
+            drop(value);
+            assert_eq!(cycle_collection_status().roots, 0);
+            CYCLE_ROOTS.with_borrow_mut(|state| *state = CycleRootState::default());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
     fn startup_disabled_buffer_is_initialized_only_by_enablement() {
         std::thread::spawn(|| {
             begin_object_handle_request();
@@ -1699,10 +1749,20 @@ pub(crate) struct CycleCollectionGuard {
 }
 
 impl CycleCollectionGuard {
-    /// A previously selected garbage root that user code resurrected has
-    /// already been revisited and proved live. Callback-temporary releases
-    /// must not leave that old root in the next candidate buffer.
-    pub(crate) fn retire_resurrected_root(&mut self, identity: usize) {
+    /// Acyclic destructor children need a rerun only when their callbacks
+    /// published surviving roots. Cyclic destructors request one separately.
+    pub(crate) fn has_callback_roots(&self) -> bool {
+        CYCLE_ROOTS.with_borrow(|state| {
+            state.candidates.iter().any(|candidate| {
+                state.callback_roots.contains(&candidate.identity())
+                    && candidate.strong_count() != 0
+            })
+        })
+    }
+
+    /// A root inspected by a pass, including a resurrected receiver, must not
+    /// stay in the next buffer merely because an old callback marker remains.
+    pub(crate) fn retire_visited_callback_root(&mut self, identity: usize) {
         CYCLE_ROOTS.with_borrow_mut(|state| {
             state.callback_roots.remove(&identity);
         });
@@ -7605,17 +7665,35 @@ impl Value {
         }
     }
 
+    fn array_owner(&self) -> Option<std::mem::ManuallyDrop<Rc<PhpArray>>> {
+        if self.value_type() != ValueType::Array {
+            return None;
+        }
+        // SAFETY: the Array tag proves that the pointer came from
+        // Rc<PhpArray>::into_raw; ManuallyDrop keeps the Value's owner.
+        Some(std::mem::ManuallyDrop::new(unsafe {
+            Rc::from_raw(self.data.ptr as *const PhpArray)
+        }))
+    }
+
+    pub(crate) fn weak_cycle_handle(&self) -> Option<WeakCycleValue> {
+        let candidate = match self.cycle_node()?.1 {
+            CycleNodeKind::Array => CycleCandidate::Array(Rc::downgrade(&*self.array_owner()?)),
+            CycleNodeKind::Object => CycleCandidate::Object(self.object_weak()?),
+            CycleNodeKind::Reference => {
+                CycleCandidate::Reference(Rc::downgrade(&self.owned_reference_rc()))
+            }
+            CycleNodeKind::Closure => {
+                CycleCandidate::Closure(Rc::downgrade(&*self.closure_owner()?))
+            }
+        };
+        Some(WeakCycleValue(candidate))
+    }
+
     /// Current Rc owner count, including this collector snapshot handle.
     pub(crate) fn cycle_strong_count(&self) -> Option<usize> {
         match self.cycle_node()?.1 {
-            CycleNodeKind::Array => {
-                // SAFETY: the Array tag proves that the pointer came from
-                // `Rc<PhpArray>::into_raw`; ManuallyDrop keeps this handle.
-                let owner = std::mem::ManuallyDrop::new(unsafe {
-                    Rc::from_raw(self.data.ptr as *const PhpArray)
-                });
-                Some(Rc::strong_count(&owner))
-            }
+            CycleNodeKind::Array => self.array_owner().map(|owner| Rc::strong_count(&owner)),
             CycleNodeKind::Object => self.object_strong_count(),
             CycleNodeKind::Reference => Some(Rc::strong_count(&self.owned_reference_rc())),
             CycleNodeKind::Closure => self.closure_owner().map(|owner| Rc::strong_count(&owner)),
@@ -9430,7 +9508,13 @@ impl Drop for Value {
                         ValueType::Object | ValueType::Closure => true,
                         _ => false,
                     };
-                    if Rc::strong_count(&owner) > 1 && collectable_target {
+                    // A compiler-private binding borrows an existing PHP
+                    // cell. Retiring it is not a release of a PHP root; actual
+                    // aliases and the final referent keep their own admission.
+                    if self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG == 0
+                        && Rc::strong_count(&owner) > 1
+                        && collectable_target
+                    {
                         register_cycle_candidate(CycleCandidate::Reference(Rc::downgrade(&owner)));
                     }
                     Rc::decrement_strong_count(pointer);

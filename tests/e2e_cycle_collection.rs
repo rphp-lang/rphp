@@ -194,7 +194,8 @@ echo 'released|';
 echo 'again:', gc_collect_cycles(), '|';
 "#,
         ),
-        "ready|rooted:0|replaced|bound|direct|released|again:0|"
+        // PHP 8.5 releases locals before the pending call's callback owner.
+        "ready|rooted:0|replaced|direct|bound|released|again:0|"
     );
 }
 
