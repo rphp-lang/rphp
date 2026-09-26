@@ -3490,14 +3490,14 @@ pub struct Compiler {
     /// Current namespace (None = global namespace)
     current_namespace: Option<String>,
     /// Use aliases: alias → fully qualified name
-    use_map: HashMap<String, String>,
+    use_map: Rc<HashMap<String, String>>,
     /// Class-like aliases are case-insensitive. Keep a normalized cold index
     /// so collision validation does not turn import-heavy files quadratic.
-    class_import_map: HashMap<String, String>,
+    class_import_map: Rc<HashMap<String, String>>,
     /// Function imports have a distinct, case-insensitive alias namespace.
-    function_use_map: HashMap<String, String>,
+    function_use_map: Rc<HashMap<String, String>>,
     /// Constant imports have a distinct, case-sensitive alias namespace.
-    constant_use_map: HashMap<String, String>,
+    constant_use_map: Rc<HashMap<String, String>>,
     /// Declaration ranges belonging to the current lexical namespace block.
     /// Class/function definitions already live in their compiler vectors, so
     /// imports that follow a declaration can inspect those cold ranges without
@@ -3912,10 +3912,10 @@ impl Compiler {
             disabled_functions: None,
             precision: 14,
             current_namespace: None,
-            use_map: HashMap::new(),
-            class_import_map: HashMap::new(),
-            function_use_map: HashMap::new(),
-            constant_use_map: HashMap::new(),
+            use_map: Rc::default(),
+            class_import_map: Rc::default(),
+            function_use_map: Rc::default(),
+            constant_use_map: Rc::default(),
             class_declaration_scope_start: 0,
             function_declaration_scope_start: 0,
             constant_declaration_names: Vec::new(),

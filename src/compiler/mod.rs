@@ -613,7 +613,16 @@ impl OpArray {
                     crate::vm::instruction::NEW_FLAG_VIRTUAL_DECLARED_READS;
             }
         }
-        for init_ip in 0..self.instructions.len() {
+        // Every callback-pipeline shape starts with a named InitFcall at its
+        // entry instruction; skip the literal lookups for everything else.
+        let named_call_ips: Vec<usize> = self
+            .instructions
+            .iter()
+            .enumerate()
+            .filter(|(_, instruction)| instruction.opcode == OpCode::InitFcall)
+            .map(|(ip, _)| ip)
+            .collect();
+        for &init_ip in &named_call_ips {
             if crate::vm::callback_pipeline::detect_callback_array_pipeline_span(self, init_ip)
                 .is_some()
             {
@@ -621,7 +630,7 @@ impl OpArray {
                     crate::vm::instruction::CALL_FLAG_CALLBACK_ARRAY_PIPELINE;
             }
         }
-        for init_ip in 0..self.instructions.len() {
+        for &init_ip in &named_call_ips {
             if crate::vm::callback_pipeline::detect_staged_callback_array_pipeline_span(
                 self, init_ip,
             )
@@ -631,7 +640,7 @@ impl OpArray {
                     crate::vm::instruction::CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE;
             }
         }
-        for init_ip in 0..self.instructions.len() {
+        for &init_ip in &named_call_ips {
             if let Some(span) =
                 crate::vm::callback_pipeline::detect_filter_map_callback_array_pipeline_span(
                     self, init_ip,
@@ -645,7 +654,7 @@ impl OpArray {
                 }
             }
         }
-        for init_ip in 0..self.instructions.len() {
+        for &init_ip in &named_call_ips {
             if let Some(span) =
                 crate::vm::callback_pipeline::detect_json_callback_array_pipeline_span(
                     self, init_ip,

@@ -1299,9 +1299,9 @@ fn evaluate_deferred_attribute_expression(
             };
             let dynamic_scope = AttributeEvaluationScope {
                 namespace: None,
-                class_imports: HashMap::new(),
-                function_imports: HashMap::new(),
-                constant_imports: HashMap::new(),
+                class_imports: Default::default(),
+                function_imports: Default::default(),
+                constant_imports: Default::default(),
                 lexical_class: scope.lexical_class.clone(),
                 lexical_parent: scope.lexical_parent.clone(),
                 lexical_property: scope.lexical_property.clone(),
@@ -2267,9 +2267,9 @@ fn report_deprecated_expression_references(
             {
                 let dynamic_scope = AttributeEvaluationScope {
                     namespace: None,
-                    class_imports: HashMap::new(),
-                    function_imports: HashMap::new(),
-                    constant_imports: HashMap::new(),
+                    class_imports: Default::default(),
+                    function_imports: Default::default(),
+                    constant_imports: Default::default(),
                     lexical_class: scope.lexical_class.clone(),
                     lexical_parent: scope.lexical_parent.clone(),
                     lexical_property: scope.lexical_property.clone(),

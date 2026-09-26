@@ -5241,10 +5241,13 @@ impl Compiler {
                 let prev_constant_declaration_scope_start = self.constant_declaration_scope_start;
                 let prev_elided_declaration_scope_start = self.elided_declaration_scope_start;
                 self.current_namespace = (!name.is_empty()).then_some(name.clone());
-                self.use_map.clear();
-                self.class_import_map.clear();
-                self.function_use_map.clear();
-                self.constant_use_map.clear();
+                // Import tables are shared read-only with child compilers and
+                // attribute scopes; start fresh tables instead of clearing a
+                // possibly shared one in place.
+                self.use_map = Rc::default();
+                self.class_import_map = Rc::default();
+                self.function_use_map = Rc::default();
+                self.constant_use_map = Rc::default();
                 self.class_declaration_scope_start = self.class_defs.len();
                 self.function_declaration_scope_start = self.functions.len();
                 self.constant_declaration_scope_start = self.constant_declaration_names.len();
@@ -5295,18 +5298,18 @@ impl Compiler {
                                 ));
                             }
                             self.validate_import_alias(*kind, &fqn, alias, *line)?;
-                            self.class_import_map
+                            Rc::make_mut(&mut self.class_import_map)
                                 .insert(alias.to_ascii_lowercase(), fqn.clone());
-                            self.use_map.insert(alias.clone(), fqn);
+                            Rc::make_mut(&mut self.use_map).insert(alias.clone(), fqn);
                         }
                         UseKind::Function => {
                             self.validate_import_alias(*kind, &fqn, alias, *line)?;
-                            self.function_use_map
+                            Rc::make_mut(&mut self.function_use_map)
                                 .insert(alias.to_ascii_lowercase(), fqn);
                         }
                         UseKind::Const => {
                             self.validate_import_alias(*kind, &fqn, alias, *line)?;
-                            self.constant_use_map.insert(alias.clone(), fqn);
+                            Rc::make_mut(&mut self.constant_use_map).insert(alias.clone(), fqn);
                         }
                     }
                 }

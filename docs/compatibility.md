@@ -27326,12 +27326,17 @@ attributes, enum cases reading interface constants, `__COMPILER_HALT_OFFSET__`
 and constants defined at runtime or aliased before a later include
 (`tests/e2e_constants.rs`, `tests/e2e_class_constant_resolution_contracts.rs`,
 `tests/e2e_deferred_constant_expressions.rs` keep the original coverage).
-Bootstrap instructions fell from 27.4 to 12.7 billion; on a loaded host the
-bootstrap takes about 1.7 s, the warm analysis about 2.1 s and the cold one
-about 6.8 s. The remaining bootstrap is genuine work whose per-unit cost is
-still higher than PHP's: compilation (48 %, of which the quick-loop planner is
-9 %), parsing (19 %), lexing (10 %), the SHA-512 phar signature check (10 %)
-and class linking (9 %). That gap stays open.
+Two smaller per-function costs went the same way: the callback-pipeline
+detectors of the quick-loop planner ran their literal lookups at every
+instruction of every function and now visit only `InitFcall` entries, and
+each nested function compiler cloned the unit's four import tables, which are
+now shared read-only (`Rc`) and copied only when a `use` statement writes.
+Bootstrap instructions fell from 27.4 to 11.2 billion; on a loaded host the
+bootstrap takes about 1.4 s, the warm analysis about 1.9 s and the cold one
+about 6.4 s. The remaining bootstrap is genuine work whose per-unit cost is
+still higher than PHP's: compilation (41 %), parsing (21 %), lexing (11 %),
+the SHA-512 phar signature check (11 %) and class linking (10 %). That gap
+stays open.
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

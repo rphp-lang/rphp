@@ -1798,9 +1798,9 @@ pub struct AttributeArgument {
 #[derive(Debug, Clone, Default)]
 pub struct AttributeEvaluationScope {
     pub namespace: Option<String>,
-    pub class_imports: HashMap<String, String>,
-    pub function_imports: HashMap<String, String>,
-    pub constant_imports: HashMap<String, String>,
+    pub class_imports: Rc<HashMap<String, String>>,
+    pub function_imports: Rc<HashMap<String, String>>,
+    pub constant_imports: Rc<HashMap<String, String>>,
     pub lexical_class: Option<String>,
     pub lexical_parent: Option<String>,
     pub lexical_property: Option<String>,
