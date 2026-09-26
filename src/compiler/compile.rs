@@ -3343,6 +3343,9 @@ pub struct Compiler {
     /// removes the expression; zero and one retain a runtime guard so
     /// `ini_set("zend.assertions", ...)` can toggle already-compiled code.
     zend_assertions: i8,
+    /// Startup-only builtin eligibility, shared by child source units. The
+    /// normal configuration allocates no set and adds no runtime call guard.
+    disabled_functions: Option<Rc<HashSet<String>>>,
     /// Request precision at the time this source unit begins compilation.
     /// PHP folds constant float/string comparisons against this snapshot.
     precision: i32,
@@ -3764,6 +3767,7 @@ impl Compiler {
             strict_types: false,
             tick_interval: 0,
             zend_assertions: 1,
+            disabled_functions: None,
             precision: 14,
             current_namespace: None,
             use_map: HashMap::new(),
@@ -3842,6 +3846,20 @@ impl Compiler {
     pub fn with_precision(mut self, precision: i32) -> Self {
         self.precision = precision;
         self
+    }
+
+    pub fn with_disabled_functions(mut self, names: &str) -> Self {
+        let names: HashSet<String> = crate::runtime::startup::disabled_function_names(names)
+            .map(str::to_owned)
+            .collect();
+        self.disabled_functions = (!names.is_empty()).then(|| Rc::new(names));
+        self
+    }
+
+    fn builtin_is_disabled(&self, name: &str) -> bool {
+        self.disabled_functions
+            .as_ref()
+            .is_some_and(|names| names.contains(&name.to_ascii_lowercase()))
     }
 
     pub fn with_source_path(self, path: impl Into<String>) -> Self {
@@ -4024,6 +4042,7 @@ impl Compiler {
         child.strict_types = self.strict_types;
         child.tick_interval = self.tick_interval;
         child.zend_assertions = self.zend_assertions;
+        child.disabled_functions = self.disabled_functions.clone();
         child.precision = self.precision;
         child.current_namespace = self.current_namespace.clone();
         child.use_map = self.use_map.clone();
@@ -5665,7 +5684,11 @@ impl Compiler {
             return known.mask;
         }
         // Fall back to builtin table
-        builtin_ref_args(name)
+        if self.builtin_is_disabled(name) {
+            0
+        } else {
+            builtin_ref_args(name)
+        }
     }
 
     fn lookup_param_index(&self, name: &str, parameter: &str) -> Option<usize> {
@@ -11680,7 +11703,8 @@ impl Compiler {
                     self.needs_caller_scope_metadata = true;
                 }
                 let assertion_construct = generic_args.is_empty()
-                    && name.trim_start_matches('\\').eq_ignore_ascii_case("assert");
+                    && name.trim_start_matches('\\').eq_ignore_ascii_case("assert")
+                    && !self.builtin_is_disabled("assert");
                 if assertion_construct && self.zend_assertions < 0 {
                     let enabled = self.add_literal(Value::bool(true));
                     return (enabled, OpType::Const);
@@ -11965,6 +11989,7 @@ impl Compiler {
                         && self.current_namespace.is_some()
                         && !name.contains('\\')
                         && !self.has_function_import(name)
+                        && !self.builtin_is_disabled(name)
                     {
                         builtin_ref_args(name)
                     } else {
@@ -15002,14 +15027,18 @@ impl Compiler {
     /// fallback lookup because a namespaced user function may shadow it.
     fn unambiguous_global_function_name<'a>(&'a self, name: &'a str) -> Option<&'a str> {
         if let Some(fully_qualified) = name.strip_prefix('\\') {
-            return Some(fully_qualified);
+            return (!self.builtin_is_disabled(fully_qualified)).then_some(fully_qualified);
         }
         if !name.contains('\\')
             && let Some(imported) = self.function_use_map.get(&name.to_ascii_lowercase())
         {
-            return (!imported.contains('\\')).then_some(imported.as_str());
+            return (!imported.contains('\\') && !self.builtin_is_disabled(imported))
+                .then_some(imported.as_str());
         }
-        if self.current_namespace.is_none() && !name.contains('\\') {
+        if self.current_namespace.is_none()
+            && !name.contains('\\')
+            && !self.builtin_is_disabled(name)
+        {
             Some(name)
         } else {
             None

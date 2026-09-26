@@ -186,6 +186,30 @@ fn startup_display_errors_uses_stderr(settings: &[(String, String)]) -> bool {
         .is_some_and(|(_, value)| value.trim().eq_ignore_ascii_case("stderr"))
 }
 
+fn emit_disabled_function_startup_warnings(settings: &[(String, String)]) {
+    use rphp::runtime::startup::{disable_function_warnings, setting};
+    if stdlib::startup_error_reporting(settings) & 2 == 0 {
+        return;
+    }
+    let warnings = disable_function_warnings(setting(settings, "disable_functions").unwrap_or(""));
+    let enabled = |name, default| {
+        setting(settings, name).map_or(default, |value| value != "" && value != "0")
+    };
+    let display = enabled("display_errors", true) && enabled("display_startup_errors", true);
+    for message in warnings {
+        if enabled("log_errors", false) || !display {
+            eprintln!("PHP Warning:  {message} in Unknown on line 0");
+        }
+        if display {
+            if startup_display_errors_uses_stderr(settings) {
+                eprintln!("Warning: {message} in Unknown on line 0");
+            } else {
+                println!("\nWarning: {message} in Unknown on line 0");
+            }
+        }
+    }
+}
+
 fn read_source(action: CliAction) -> Result<Vec<u8>, String> {
     match action {
         CliAction::Inline(code) => {
@@ -243,6 +267,7 @@ fn main() {
     if let Some(warning) = stdlib::startup_date_timezone_warning(&ini_settings) {
         eprintln!("PHP Warning:  PHP Startup: {warning} in Unknown on line 0");
     }
+    emit_disabled_function_startup_warnings(&ini_settings);
 
     let source_directory = std::env::current_dir()
         .map(|path| path.to_string_lossy().into_owned())
@@ -309,6 +334,9 @@ fn main() {
 
     let result = Compiler::new()
         .with_zend_assertions(stdlib::startup_zend_assertions(&ini_settings))
+        .with_disabled_functions(
+            rphp::runtime::startup::setting(&ini_settings, "disable_functions").unwrap_or(""),
+        )
         .with_precision(stdlib::startup_precision(&ini_settings))
         .with_source_context(source_file, source_directory)
         .compile(&stmts)
@@ -346,6 +374,7 @@ fn main() {
     let _stdlib = stdlib::register_stdlib(&mut eg);
     stdlib::register_request_globals(&mut eg, script_name.as_deref(), &arguments);
     let _coroutines = register_coroutine_api(&mut eg);
+    eg.apply_disabled_functions();
     // Register declared functions
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)

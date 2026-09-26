@@ -8,6 +8,8 @@ function unsupported_rphp_ini_directives(string $section): array
     $supported = [
         'allow_url_fopen' => true,
         'assert.exception' => true,
+        'disable_functions' => true,
+        'variables_order' => true,
         'date.timezone' => true,
         // Three historical ext/date fixtures put this PHP expression in the
         // INI section. run-tests.php passes it through as an unknown directive

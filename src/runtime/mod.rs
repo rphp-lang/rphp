@@ -28,6 +28,7 @@ use crate::vm::virtual_aggregate_cache::{
 
 mod cycle;
 pub(crate) mod fiber;
+pub mod startup;
 #[path = "coroutine/state.rs"]
 pub(crate) mod suspended;
 mod weak;
@@ -10365,6 +10366,7 @@ impl ExecutorGlobals {
             name.to_lowercase()
         };
         if let Some(alias) = crate::builtin_metadata::internal_function_alias(&key)
+            && !self.internal_function_is_disabled(alias.alias)
             && let Some(&previous) = self.function_table.get(alias.target)
         {
             return Err(Self::function_redeclaration_error(previous, func, name));
@@ -10608,6 +10610,9 @@ impl ExecutorGlobals {
     #[cold]
     fn find_inherited_function(&self, name: &str, original: &str) -> Option<*const FunctionCommon> {
         if let Some(alias) = crate::builtin_metadata::internal_function_alias(name) {
+            if self.internal_function_is_disabled(alias.alias) {
+                return None;
+            }
             return self.function_table.get(alias.target).copied();
         }
         let (_, method) = Self::split_method_lookup_name(name)?;

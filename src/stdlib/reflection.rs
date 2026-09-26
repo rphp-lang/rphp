@@ -331,6 +331,13 @@ fn function_construct(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let target = with_argument(ed, 1, Clone::clone);
+    if let Some(name) = target.as_str() {
+        let name = name.trim_start_matches('\\');
+        if name.contains("::") || eg.find_function(name).is_none() {
+            reflection_exception(eg, format!("Function {name}() does not exist"));
+            return Ok(());
+        }
+    }
     with_argument(ed, 0, |value| {
         if let Some(mut object) = value.as_object_mut() {
             populate_function_reflection_record(&target, eg, &mut object)
@@ -355,7 +362,7 @@ fn populate_function_reflection_record(
     let function = target
         .as_closure()
         .map(|closure| closure.func)
-        .or_else(|| eg.find_function(&owner));
+        .or_else(|| eg.find_function(owner.trim_start_matches('\\')));
     let requested_name = owner.trim_start_matches('\\');
     let public_name = crate::builtin_metadata::internal_function_alias(requested_name)
         .map(|alias| alias.alias.to_string())

@@ -14015,7 +14015,11 @@ fn fn_get_defined_functions(
     internal.extend(
         crate::builtin_metadata::INTERNAL_FUNCTION_ALIASES
             .iter()
-            .filter(|alias| eg.function_table.contains_key(alias.target))
+            .filter(|alias| {
+                !eg.function_table.contains_key(alias.alias)
+                    && !eg.internal_function_is_disabled(alias.alias)
+                    && eg.function_table.contains_key(alias.target)
+            })
             .map(|alias| alias.alias.to_string()),
     );
     // The function table is hash-backed. PHP does not specify list ordering,
@@ -31512,6 +31516,11 @@ pub fn startup_precision(settings: &[(String, String)]) -> i32 {
         .unwrap_or(14)
 }
 
+pub fn startup_error_reporting(settings: &[(String, String)]) -> i64 {
+    crate::runtime::startup::setting(settings, "error_reporting")
+        .map_or(32767, |value| normalize_error_reporting_ini(value).1)
+}
+
 /// PHP validates the final command-line date.timezone value during module
 /// startup, before request parsing or execution.  Keep the diagnostic outside
 /// the request error-handler pipeline and fall back to UTC on rejection.
@@ -31541,6 +31550,23 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
         let raw_value = value.as_str();
         let value = value.trim();
         match normalized.as_str() {
+            "disable_functions" if name == "disable_functions" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(
+                        normalized,
+                        crate::runtime::startup::ini_string(raw_value).to_string(),
+                    );
+            }
+            "variables_order" if name == "variables_order" => {
+                let value = crate::runtime::startup::ini_string(raw_value);
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(
+                        normalized,
+                        crate::runtime::startup::variables_order(value).to_string(),
+                    );
+            }
             "zend.enable_gc" if name == "zend.enable_gc" => {
                 let published = match raw_value.to_ascii_lowercase().as_str() {
                     "true" | "on" | "yes" => "1".to_string(),
@@ -31715,6 +31741,12 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("display_errors") {
         ret!(rv, Value::string("1"));
     }
+    if option.eq_ignore_ascii_case("disable_functions") {
+        ret!(rv, Value::string(""));
+    }
+    if option.eq_ignore_ascii_case("variables_order") {
+        ret!(rv, Value::string("EGPCS"));
+    }
     if option.eq_ignore_ascii_case("allow_url_fopen") {
         ret!(rv, Value::string("1"));
     }
@@ -31761,6 +31793,8 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         return Some(value.clone());
     }
     Some(match option {
+        "disable_functions" => String::new(),
+        "variables_order" => "EGPCS".to_string(),
         "display_errors" | "report_memleaks" | "allow_url_fopen" => "1".to_string(),
         "zend.assertions" => eg.assertion_state.startup_mode.to_string(),
         "assert.exception" => if eg.assertion_state.exception {
@@ -31819,7 +31853,10 @@ fn fn_ini_set(
     let Some(previous) = ini_default(eg, &option) else {
         ret!(rv, Value::bool(false));
     };
-    if option == "allow_url_fopen" {
+    if matches!(
+        option.as_str(),
+        "allow_url_fopen" | "disable_functions" | "variables_order"
+    ) {
         ret!(rv, Value::bool(false));
     }
 

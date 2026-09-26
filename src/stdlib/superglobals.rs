@@ -48,20 +48,38 @@ pub fn register_request_globals(
     }
     let argc = argv.len() as i64;
 
-    let environment = environment();
-    let mut server = environment.clone();
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0.0, |elapsed| elapsed.as_secs_f64());
-    server.set_str("PHP_SELF", Value::string(self_name));
-    server.set_str("SCRIPT_NAME", Value::string(self_name));
-    server.set_str("SCRIPT_FILENAME", Value::string(filename));
-    server.set_str("PATH_TRANSLATED", Value::string(filename));
-    server.set_str("DOCUMENT_ROOT", Value::string(""));
-    server.set_str("REQUEST_TIME_FLOAT", Value::double(now));
-    server.set_str("REQUEST_TIME", Value::long(now as i64));
-    server.set_str("argv", Value::array(argv.clone()));
-    server.set_str("argc", Value::long(argc));
+    let order = super::ini_default(eg, "variables_order").unwrap_or_else(|| "EGPCS".to_string());
+    let server_enabled = order.bytes().any(|byte| byte.eq_ignore_ascii_case(&b'S'));
+    let environment_enabled = order.bytes().any(|byte| byte.eq_ignore_ascii_case(&b'E'));
+    let environment = if server_enabled || environment_enabled {
+        environment()
+    } else {
+        PhpArray::new()
+    };
+    let mut server = if server_enabled {
+        environment.clone()
+    } else {
+        PhpArray::new()
+    };
+    if server_enabled {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map_or(0.0, |elapsed| elapsed.as_secs_f64());
+        server.set_str("PHP_SELF", Value::string(self_name));
+        server.set_str("SCRIPT_NAME", Value::string(self_name));
+        server.set_str("SCRIPT_FILENAME", Value::string(filename));
+        server.set_str("PATH_TRANSLATED", Value::string(filename));
+        server.set_str("DOCUMENT_ROOT", Value::string(""));
+        server.set_str("REQUEST_TIME_FLOAT", Value::double(now));
+        server.set_str("REQUEST_TIME", Value::long(now as i64));
+        server.set_str("argv", Value::array(argv.clone()));
+        server.set_str("argc", Value::long(argc));
+    }
+    let environment = if environment_enabled {
+        environment
+    } else {
+        PhpArray::new()
+    };
 
     let globals = &mut eg.globals;
     globals.insert("argv".to_string(), Value::array(argv));

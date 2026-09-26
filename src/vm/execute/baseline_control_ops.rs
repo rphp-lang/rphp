@@ -788,6 +788,7 @@ fn execute_source_unit_inner(
     let mut compile_result = loop {
         let compiler = crate::compiler::compile::Compiler::new()
             .with_zend_assertions(eg.assertion_state.startup_mode)
+            .with_disabled_functions(eg.startup_disabled_functions())
             .with_precision(eg.precision)
             .with_source_path(canonical.clone())
             .with_implicit_return_value(implicit_return.clone())

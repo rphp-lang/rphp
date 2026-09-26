@@ -36,36 +36,43 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-shutdown-symbols` checkpoint over `85df66e8` closes the disclosed
-post-frame global-string holdout. Late callbacks retain canonical surviving
-symbol bindings while direct object retirement, reference identity, suspended
-Fibers, active handlers and diagnostic origins keep their PHP-defined phases.
+The `core-startup-configuration` checkpoint over `5f35f871` aligns CLI
+`disable_functions` and `variables_order` across compiler eligibility, callable
+registration, aliases, Reflection and request globals. Include/eval share the
+startup policy; user replacements and diagnostic order retain PHP semantics.
 
-The complete 7,174-case stable core remains
-**6,831 pass / 4 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
-exact **+0/-0**. Zend/lang is **5,353/4/116/125 plus 1 timeout**;
-strings/array is **1,478/0/68/29**. No pass or status is lost. The known
-`getimagesize()` library failure changes stage when its formerly omitted late
-destructor runs; the independent core lifecycle oracle is exact. The known
-`new_oom.phpt` timeout stays visible, never a pass.
+The complete 7,174-case stable core is
+**6,842 pass / 5 fail / 184 skip / 142 unsupported / 1 timeout / 0 crash**,
+exact **+11/-0**. Zend/lang is **5,364/5/116/113 plus 1 timeout**;
+strings/array is **1,478/0/68/29**. Every previous pass, status and failure stage
+is preserved. Of twelve newly executable paths, eleven pass and
+`Zend/tests/traits/constant_016.phpt` exposes a pre-existing deferred trait
+constant collision bug. The known `new_oom.phpt` timeout remains visible.
 
-The slice adds 59 original CLI regressions. Focused/adjacent Cargo is 488/488,
-and all 506 original PHP 8.5.11 comparisons are exact. Five Cargo configurations,
+The slice adds 54 original CLI regressions checked against PHP 8.5.11.
+Focused/adjacent Cargo covers 351 distinct tests; all eighteen release-oracle
+specimens are byte-exact. Five Cargo configurations,
 all targets, PHPT no-loss, all seven Composer/Symfony S0--S3 gates and unsafe
 policy/self-tests pass. Unsafe inventory remains 1,627 blocks / 289 functions;
 ceilings and ignored counts are unchanged. Exact evidence is in
 [compatibility status](compatibility.md).
 
-There are **zero ordinary core failures in this measured corpus**, not a blanket
-compatibility claim. Four library failures and 154 unsupported cases remain.
-The next data-selected core train admits startup `disable_functions` and
-`variables_order`: configuration must reach compiler eligibility, callable
-registration and request globals. Prove the twelve supplying paths with original
-oracles before admitting them; preserve every accepted pass.
+There is **one ordinary core failure in this measured corpus**, alongside four
+library failures and 142 unsupported cases. The next data-selected checkpoint
+resolves deferred trait constant values before collision comparison, preserving
+metadata priority, scope, evaluation order and no-collision laziness. Its small
+PHPT yield is justified by closing the last currently admitted ordinary core
+failure; it must still have original positive/negative oracles and exact no-loss.
 
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
 here. Performance remains deferred; host gates retain the 6 GiB/no-swap limit,
 two build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding shutdown-symbol checkpoint
+
+The `core-shutdown-symbols` checkpoint over `85df66e8` closed the post-frame
+global-string oracle holdout, preserving callback bindings and shutdown phases.
+Stable PHPT remained 6,831 pass / 4 library fail, exact +0/-0.
 
 ### Preceding array-snapshot checkpoint
 
@@ -5794,7 +5801,7 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
-Current AMD64 stable-core status is 6,831 pass / 4 fail / 184 skip / 154
+Current AMD64 stable-core status is 6,842 pass / 5 fail / 184 skip / 142
 unsupported / 1 explicitly contained OOM timeout / 0 crash. Date/DateTime is
 integrated; separate workstreams own Phar and PCRE. The core sweep continues
 from original core holdouts and named unsupported capabilities, with performance

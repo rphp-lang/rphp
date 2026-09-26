@@ -149,6 +149,10 @@ $binaryRecord = json_decode(
     flags: JSON_THROW_ON_ERROR,
 );
 if (unsupported_rphp_ini_directives($supported) !== []
+    || unsupported_rphp_ini_directives("disable_functions=strlen,count\nvariables_order=EGPCS\n") !== []
+    || target_command("/rphp", "rphp", "test.php", "disable_functions=strlen,count\nvariables_order=EGPCS\n", "") !== [
+        "/rphp", "-d", "disable_functions=strlen,count", "-d", "variables_order=EGPCS", "test.php",
+    ]
     || unsupported_rphp_ini_directives("zend.enable_gc=0\n") !== []
     || unsupported_rphp_ini_directives("zend.enable_gc=1\n") !== []
     || target_command("/rphp", "rphp", "test.php", "zend.enable_gc=0\n", "") !== [

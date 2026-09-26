@@ -72,7 +72,7 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
     }
 }
 
-/// Emit the PHP 8.2 undefined-local diagnostic for one already-snapshotted
+/// Emit the undefined-variable diagnostic for one already-snapshotted
 /// read. The caller owns control-flow handling when a user handler throws.
 fn report_undefined_variable_read(
     eg: &mut ExecutorGlobals,
@@ -96,12 +96,17 @@ fn report_undefined_variable_name(
     name: &str,
     suppressed: bool,
 ) -> Result<(), VmError> {
+    let kind = if crate::parser::is_auto_global_name(name) {
+        "global variable"
+    } else {
+        "variable"
+    };
     report_php_warning(
         eg,
         frame,
         op_array,
         opline,
-        &format!("Undefined variable ${name}"),
+        &format!("Undefined {kind} ${name}"),
         suppressed,
     )
 }
