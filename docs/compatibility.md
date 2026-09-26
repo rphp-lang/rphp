@@ -7,32 +7,31 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-cycle-remainder` checkpoint over `60136a25` tracks promoted frame
-containers and retires completed property-write operands. Collector snapshots
-no longer keep every child alive across callbacks; real aliases, COW storage,
-resurrection and callback-created roots remain protected. Unreachable delegated
-generators run their cleanup, with locals retired before pending call operands.
-Nested pre-commit destruction preserves sibling order even when a destructor
-both publishes its container and throws.
+The `core-array-snapshots` checkpoint over `9c737a7a` completes the two
+remaining ordinary core failures in the measured corpus. Dynamic constants
+snapshot array entries without retaining PHP reference cells, reject array
+cycles without rejecting shared DAGs, preserve object/resource identity and
+diagnostic order, and rebuild cursor/next-index state. Foreach specialization
+now accounts for CVs promoted by array-literal references; ordinary by-value
+targets keep the existing plain path.
 
-The complete 7,174-case stable core is **6,829 pass / 6 fail / 184 skip /
-154 unsupported / 1 timeout / 0 crash**, exact **+7/-0**. Zend/lang is
-**5,351/6/116/125 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,822 accepted parent passes remain passes; no other status changed.
-All seven supplying GC/generator cases and three adjacent PHPT regressions
-pass. The known `Zend/tests/new_oom.phpt` timeout remains visible, never a pass.
+The complete 7,174-case stable core is **6,831 pass / 4 fail / 184 skip /
+154 unsupported / 1 timeout / 0 crash**, exact **+2/-0**. Zend/lang is
+**5,353/4/116/125 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+All 6,829 accepted parent passes remain passes; no other status changed.
+Both `Zend/tests/constant_arrays.phpt` and
+`Zend/tests/foreach/foreach_002.phpt` pass. The known
+`Zend/tests/new_oom.phpt` timeout remains visible, never a pass.
 
-The slice adds **106 original CLI regressions and two value units**. Its
-focused gates also preserve 69 earlier CLI cases, 29 heap cases, seven cycle
-E2E and seven selected value units. **413 original comparisons** match PHP
-8.5.11 stdout, stderr and exit status byte-exactly; four separately named
-discovery holdouts remain failures, not claimed passes. One older suspended-call
-test had the opposite destructor order from PHP; its expectation was corrected
-with new reversed-parameter and retained-owner oracle coverage.
+The slice adds **29 original CLI regressions and one compiler proof**;
+focused/adjacent Cargo gates pass **426/426**. **445 of 446 original
+comparisons** match PHP 8.5.11 stdout, stderr and exit status byte-exactly,
+including the complete accepted parent set. The one already-disclosed
+shutdown/global-string discovery remains a failing follow-up, not a pass.
 
 The frozen-source `test-fast` matrix retains debug assertions and overflow
-checks: default **6,479**, no-default **6,144**, erased **6,550**, reified
-**6,572**, all-features **6,623**; ignored counts remain 15/15/15/15/18.
+checks: default **6,509**, no-default **6,174**, erased **6,580**, reified
+**6,602**, all-features **6,653**; ignored counts remain 15/15/15/15/18.
 All-feature/all-target checks, exact PHPT no-loss, Composer/Symfony S0--S3,
 formatting and unsafe policy/self-tests pass. Unsafe inventory stays
 **1,627 blocks / 289 functions**, with unchanged ceilings. Host gates retain
@@ -40,30 +39,38 @@ the 6 GiB/no-swap limit, two build/test workers, at most four PHPT workers and
 automatic cleanup between variants.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `06e7bb884aec4a4b4750b0674caa41461f8640a8618b98c908dc507c0b98b140`;
+candidate `169a6f27c97a4e41c081951dd8492b25b5693450e31da88bec217d0e5f5ec097`;
 parent/candidate full manifests
-`04d9a9bd862f9ceefd3c0fb33571e7198708945f3f369126a97ceaf7303936e3` /
-`7c48f6a39ce4ed9edae313254b1bd4fe961fd057663d5fd447cbcd050e11c297`;
-seven-case manifest
-`258deb38169382637dfa58c2f666865f9344a6f2f0253660171824080eebf685`;
+`7c48f6a39ce4ed9edae313254b1bd4fe961fd057663d5fd447cbcd050e11c297` /
+`f414d4cbcd448824e3eb5648c4bdcc60d0a067022fb1dc73618d0ed442b032f7`;
+two-case manifest
+`0ed6dccbad8a76a2b510735be4037c417cd858fc37cfcd4ea7e366372f709c4b`;
 Zend/lang pass set
-`d94eb38881749b02862291d99139838ee3cee37fc26004b76886d28081fef516`;
+`8df59861d81dcf2a01ef9d702163c1786042724d9da88624886f159b3c7cdbd4`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`2777060c2ec68dff3d5488d1406722c3bc094ea02ec3f444e5c44549f04087d4`;
+`c0222c8cf1a7d033934d6aafa423cbe699857414029925f995a3b65a9178be34`;
 no-loss summary
-`ced6a70b489eb42799d535515c76179d80e24a2d0beb26785d614846aa676f08`;
+`cc7e7e9919675219e7d29d9673dfad04182be1cd0351244dcc5889451e9918fa`;
 final evidence packet
-`dc6050f316a90d6c45dddcf5c6f1b4a2ead8457abb113975ad47070c248364b0`.
+`cc02af8ba6eeaa5b6c4cb8ac104134ca3b6d9960018413c7a7d5af9d912050e9`.
 
 Performance remains deferred by user direction. The remaining PHPT failures
-are **two core** (constant arrays and self-target foreach) plus **four library**
-cases (Random, PCRE, SPL serialization and `getimagesize()`). The independent
+are **four library** cases (Random, PCRE, SPL serialization and
+`getimagesize()`), with **zero ordinary failures in this core stream**. This is
+not a blanket PHP compatibility claim. The independent
 original shutdown/global-string discovery is also an explicit non-claim.
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are outside
 this train. Skips, unsupported cases and allocation-limit equivalence remain
 non-claims.
+
+### Preceding cycle-ownership checkpoint
+
+The `core-cycle-remainder` checkpoint over `60136a25` added seven exact
+passes without loss, reaching 6,829 passes and six failures. It aligned
+promoted-container ownership, collector snapshots, delegated cleanup and
+post-destructor retirement while preserving aliases and callback-created roots.
 
 ### Preceding reference-retirement checkpoint
 

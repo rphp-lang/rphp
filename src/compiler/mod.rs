@@ -228,6 +228,16 @@ impl OpArray {
                 OpCode::AssignGlobalRef if instruction.op2_type == OpType::Cv => {
                     mark(instruction.op2)
                 }
+                OpCode::AddArrayElement
+                    if instruction.op2_type == OpType::Cv
+                        && instruction._pad & crate::vm::instruction::ARRAY_ELEMENT_REFERENCE
+                            != 0 =>
+                {
+                    // A literal reference promotes its source CV just like
+                    // an explicit binding. Foreach must write through that
+                    // cell rather than selecting the plain rebind opcode.
+                    mark(instruction.op2)
+                }
                 OpCode::BindCvRef => {
                     mark(instruction.op1);
                     mark(instruction.result);

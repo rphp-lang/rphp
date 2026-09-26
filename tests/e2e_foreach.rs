@@ -45,6 +45,26 @@ function captured($values) {
 }
 
 #[test]
+fn foreach_specialization_accounts_for_array_literal_reference_sources() {
+    let source = r#"<?php
+function literalAlias($values) {
+    $value = 5;
+    $aliases = ['nested' => [&$value]];
+    foreach ($values as $value) {}
+}
+function literalCopy($values) {
+    $value = 5;
+    $copy = ['nested' => [$value]];
+    foreach ($values as $value) {}
+}
+"#;
+    let alias = foreach_opcodes(source, "literalAlias");
+    assert!(alias.contains(&OpCode::ForeachNext));
+    assert!(!alias.contains(&OpCode::ForeachNextPlain));
+    assert!(foreach_opcodes(source, "literalCopy").contains(&OpCode::ForeachNextPlain));
+}
+
+#[test]
 fn foreach_reference_targets_bind_properties_and_dimensions() {
     assert_eq!(
         run_php(

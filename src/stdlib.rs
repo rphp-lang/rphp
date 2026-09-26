@@ -15917,11 +15917,22 @@ fn fn_define(
             "Warning",
             "define(): Argument #3 ($case_insensitive) is ignored since declaration of case-insensitive constants is no longer supported",
         )?;
-        if eg.exception.is_some() {
+    }
+    // The warning may leave a pending user exception, but PHP still snapshots
+    // and publishes a valid value. An invalid recursive value cannot replace
+    // that earlier exception, and must never reach the constant table.
+    let val = match arg!(ed, 1).snapshot_constant_value() {
+        Ok(value) => value,
+        Err(()) => {
+            if eg.exception.is_none() {
+                eg.exception = Some(crate::value::make_error_value(
+                    "ValueError",
+                    "define(): Argument #2 ($value) cannot be a recursive array",
+                ));
+            }
             return Ok(());
         }
-    }
-    let val = arg!(ed, 1).clone();
+    };
     if name == "__COMPILER_HALT_OFFSET__" || eg.find_constant(&name).is_some() {
         report_internal_diagnostic(
             eg,

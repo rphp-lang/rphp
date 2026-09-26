@@ -36,34 +36,40 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-cycle-remainder` checkpoint over `60136a25` aligns promoted-container
-ownership, weak collector snapshots, post-destructor counts and delegated-frame
-retirement while preserving live aliases, COW storage and callback roots.
+The `core-array-snapshots` checkpoint over `9c737a7a` aligns dynamic constant
+array snapshots and foreach targets promoted by literal references. It
+preserves reference/COW boundaries, object identity and diagnostic priority.
 The complete 7,174-case stable core is
-**6,829 pass / 6 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
-exact **+7/-0**. Zend/lang is **5,351/6/116/125 plus 1 timeout**;
+**6,831 pass / 4 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
+exact **+2/-0**. Zend/lang is **5,353/4/116/125 plus 1 timeout**;
 strings/array stays **1,478/0/68/29**. No other status changed. The known
 `new_oom.phpt` timeout stays visible, never a pass.
 
-All seven supplying GC/generator cases and three adjacent PHPTs pass.
-The slice adds 106 original CLI regressions and two value units, with 413
-exact oracle comparisons including the accepted parent set. Five Cargo configurations,
+Both supplying PHPTs pass. The slice adds 29 original CLI regressions and
+one compiler proof, with 426 focused/adjacent Cargo passes and 445 exact
+oracle comparisons including the accepted parent set. Five Cargo configurations,
 all-targets, exact no-loss, Composer/Symfony S0--S3 and unsafe policy/self-tests
-pass, including nested pre-commit destruction and suspended operand order.
+pass.
 Unsafe inventory remains 1,627 blocks / 289 functions with unchanged ceilings
 and ignored counts. Exact hashes and results are in
 [compatibility status](compatibility.md).
 
-The next core remainder has **two PHPT failures**: `constant_arrays` and
-`foreach/foreach_002` (under `Zend/tests`, `.phpt`). Original reductions separate
-constant reference-stripping from ordinary COW and self-target iteration;
-shared DAGs must not be rejected as recursion and object identities must survive
-constant snapshots. A separate shutdown/global-string discovery remains an
-explicit follow-up. Four library failures remain outside this stream.
+There are **zero ordinary core failures** in this measured corpus. The four
+library failures remain outside this stream; unsupported cases, skips and the
+contained OOM timeout are not passes. The next core goal is the disclosed
+shutdown/global-string discovery: detached callbacks must not republish
+retired main-frame slots or lose surviving symbol values. Preserve the distinct
+object-retirement phase and diagnostic/handler behavior.
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
-here. Preserve every one of the 5,351 and 1,478 accepted passes. Performance
+here. Preserve every one of the 5,353 and 1,478 accepted passes. Performance
 remains deferred; host gates retain the 6 GiB/no-swap limit, two build/test
 workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding cycle-ownership checkpoint
+
+The `core-cycle-remainder` checkpoint over `60136a25` added seven exact
+passes without loss, reaching 6,829 passes and six failures. It aligned
+promoted-container ownership, collector snapshots and delegated-frame retirement.
 
 ### Preceding reference-retirement checkpoint
 
@@ -5780,11 +5786,11 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
-Current AMD64 stable-core status is 6,829 pass / 6 fail / 184 skip / 154
+Current AMD64 stable-core status is 6,831 pass / 4 fail / 184 skip / 154
 unsupported / 1 explicitly contained OOM timeout / 0 crash. Date/DateTime is
 integrated; separate workstreams own Phar and PCRE. The core sweep continues
-from the remaining failure manifest, with performance intentionally deferred
-to the final aggregate pass.
+from original core holdouts and named unsupported capabilities, with performance
+intentionally deferred to the final aggregate pass.
 
 ## Cross-roadmap integration
 

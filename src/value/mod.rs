@@ -9009,6 +9009,84 @@ impl Value {
         }
     }
 
+    /// Snapshot a dynamically defined constant. Arrays acquire independent
+    /// entries, not PHP reference cells; objects, closures and resources keep
+    /// their identities. Only array ancestry is recursive, not a shared DAG
+    /// or an object which points back to an array.
+    #[cold]
+    pub(crate) fn snapshot_constant_value(&self) -> Result<Self, ()> {
+        let value = self.dereferenced();
+        let Some(array) = value.as_array() else {
+            return Ok(value.clone());
+        };
+        struct PendingArray<'a> {
+            identity: usize,
+            entries: PhpArrayIter<'a>,
+            output: PhpArray,
+            child_key: Option<ArrayKey>,
+        }
+        impl<'a> PendingArray<'a> {
+            fn new(source: &'a PhpArray, depth: usize) -> Self {
+                // Re-insertion deliberately resets the cursor and recomputes
+                // next-index from surviving keys, as a new constant requires.
+                let mut output = if source.is_packed() {
+                    PhpArray::with_packed_capacity(source.len())
+                } else {
+                    PhpArray::with_deferred_hash_capacity(source.len())
+                };
+                output.absorb_key_provenance_from(source);
+                if depth >= 256 && depth.is_multiple_of(64) {
+                    output.mark_deep_drop_stack_checkpoint();
+                }
+                Self {
+                    identity: source as *const PhpArray as usize,
+                    entries: source.iter(),
+                    output,
+                    child_key: None,
+                }
+            }
+        }
+
+        // These temporary snapshots are not releases of PHP-visible roots.
+        let _snapshot_roots = suppress_cycle_snapshot_roots();
+        let mut pending = vec![PendingArray::new(array, 0)];
+        let mut ancestors = std::collections::HashSet::from([pending[0].identity]);
+        let mut completed = HashMap::<usize, Value>::new();
+        while let Some(current) = pending.last_mut() {
+            if let Some((key, value)) = current.entries.next() {
+                let value = value.dereferenced();
+                if let Some(child) = value.as_array() {
+                    let identity = child as *const PhpArray as usize;
+                    if let Some(snapshot) = completed.get(&identity) {
+                        current.output.set(key, snapshot.clone());
+                    } else {
+                        if !ancestors.insert(identity) {
+                            return Err(());
+                        }
+                        current.child_key = Some(key);
+                        pending.push(PendingArray::new(child, pending.len()));
+                    }
+                } else {
+                    current.output.set(key, value.clone());
+                }
+            } else {
+                let finished = pending.pop().expect("pending constant array");
+                ancestors.remove(&finished.identity);
+                let snapshot = Value::array(finished.output);
+                if let Some(parent) = pending.last_mut() {
+                    parent.output.set(
+                        parent.child_key.take().expect("pending constant child"),
+                        snapshot.clone(),
+                    );
+                    completed.insert(finished.identity, snapshot);
+                } else {
+                    return Ok(snapshot);
+                }
+            }
+        }
+        unreachable!("constant snapshot always has a root")
+    }
+
     /// Check if this value is a reference.
     #[inline]
     pub fn is_reference(&self) -> bool {
