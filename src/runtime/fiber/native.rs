@@ -23,6 +23,18 @@ pub(crate) enum NativeCallbackOutcome {
     Suspended(Value),
 }
 
+/// A native builtin may retain explicit progress, never a suspended Rust
+/// stack. Every PHP-owned edge must be exposed to the Fiber collector.
+pub(crate) trait NativeOperation {
+    fn run(
+        &mut self,
+        eg: &mut ExecutorGlobals,
+        caller: *mut ExecuteData,
+        input: Option<FiberInput>,
+    ) -> Result<NativeCallbackOutcome, VmError>;
+    fn cycle_snapshot(&self) -> (Vec<Value>, Vec<usize>);
+}
+
 /// An Iterator-backed yield-from advances each protocol method exactly once,
 /// including when the current method has parked its detached user activation.
 pub(crate) struct IteratorContinuation {
@@ -129,6 +141,7 @@ impl IteratorContinuation {
 
 pub(crate) struct NativeCallback {
     callback: ResolvedCallback,
+    arguments: Vec<Value>,
     state: CoroutineExecutionState,
     pub(super) boundary: *mut ExecuteData,
     pub(super) suspension: Option<FiberSuspension>,
@@ -146,8 +159,15 @@ impl NativeCallback {
             .collect()
     }
     pub(crate) fn new(callback: ResolvedCallback) -> Pin<Box<Self>> {
+        Self::with_arguments(callback, Vec::new())
+    }
+    pub(crate) fn with_arguments(
+        callback: ResolvedCallback,
+        arguments: Vec<Value>,
+    ) -> Pin<Box<Self>> {
         Box::pin(Self {
             callback,
+            arguments,
             state: CoroutineExecutionState::new(),
             boundary: std::ptr::null_mut(),
             suspension: None,
@@ -159,6 +179,7 @@ impl NativeCallback {
 
     pub(crate) fn cycle_snapshot(&self) -> (Vec<Value>, Vec<usize>) {
         let (mut values, mut frames) = self.state.cycle_snapshot();
+        values.extend(self.arguments.iter().filter_map(Value::clone_cycle_handle));
         // The native invocation retains its receiver independently of the PHP
         // frame. This engine keepalive is not a collectable Fiber edge: PHP
         // keeps a parked Iterator -> Fiber cycle alive through that native
@@ -180,6 +201,11 @@ impl NativeCallback {
                 let (children, release_frames) = release.cycle_snapshot();
                 values.extend(children);
                 frames.extend(release_frames);
+            }
+            if let FiberSuspension::Call { call, .. } = suspension {
+                let (children, call_frames) = call.cycle_snapshot();
+                values.extend(children);
+                frames.extend(call_frames);
             }
             if let FiberSuspension::GeneratorIteration { generator, .. } = suspension {
                 values.extend(generator.clone_cycle_handle());
@@ -226,11 +252,12 @@ impl NativeCallback {
             let mut generator_call = None;
             let mut generator_iteration = None;
             let mut native_release = None;
+            let mut native_call = None;
             let entry_result = if first {
                 initialize_suspended_callback_frame(
                     eg,
                     &(*this).callback,
-                    &[],
+                    &(*this).arguments,
                     &mut (*this).result,
                     logical_caller,
                 )
@@ -242,6 +269,18 @@ impl NativeCallback {
                     .expect("native callback must retain its suspension");
                 let input = input.expect("resuming a native callback requires Fiber input");
                 match (suspension, input) {
+                    (
+                        FiberSuspension::Call {
+                            frame,
+                            call,
+                            return_value,
+                            ..
+                        },
+                        input,
+                    ) => {
+                        native_call = Some((call, return_value, input));
+                        Ok(frame)
+                    }
                     (FiberSuspension::Release { frame, release, .. }, input) => {
                         native_release = Some((release, input));
                         Ok(frame)
@@ -318,7 +357,21 @@ impl NativeCallback {
                 Err(error) => Err(error),
                 Ok(_) if eg.exception.is_some() => Ok(()),
                 Ok(entry) => {
-                    if let Some((release, input)) = native_release {
+                    if let Some((call, return_value, input)) = native_call {
+                        match crate::vm::execute::resume_suspended_native_call(
+                            eg,
+                            entry,
+                            call,
+                            return_value,
+                            input,
+                        ) {
+                            Ok(Some(entry)) if eg.exception.is_none() => {
+                                execute_coroutine_frame(eg, entry, boundary)
+                            }
+                            Ok(_) => Ok(()),
+                            Err(error) => Err(error),
+                        }
+                    } else if let Some((release, input)) = native_release {
                         match crate::vm::execute::resume_suspended_native_release(
                             eg, entry, release, input,
                         ) {

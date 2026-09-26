@@ -10,6 +10,8 @@ fn internal_class_forbids_dynamic_properties(class_name: &str) -> bool {
             | "InternalIterator"
             | "SensitiveParameterValue"
             | "Directory"
+            | "Random\\Engine\\Secure"
+            | "Random\\Engine\\Xoshiro256StarStar"
     )
 }
 

@@ -128,7 +128,7 @@ fn op_clone_obj<'a>(
             let class_def = eg.class_table.get(obj.class_name.as_ref());
             let uncloneable = matches!(
                 obj.class_name.as_ref(),
-                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory" | "SplFileObject" | "GlobIterator"
+                "Generator" | "WeakReference" | "InternalIterator" | "ReflectionProperty" | "Directory" | "SplFileObject" | "GlobIterator" | "Random\\Engine\\Secure"
             )
                 || class_def
                     .is_some_and(|class_def| {

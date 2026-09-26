@@ -2479,7 +2479,7 @@ impl ExecutorGlobals {
         let runtime = self.fiber_runtime_ptr();
         // The active Fiber and its pinned context remain live until the
         // suspension sidecar unwinds to run_fiber().
-        fiber::FiberRuntime::suspend(runtime, self, frame, return_value, value, None, None)
+        fiber::FiberRuntime::suspend(runtime, self, frame, return_value, value, None, None, None)
     }
 
     pub(crate) fn suspend_native_generator_callback(
@@ -2495,6 +2495,7 @@ impl ExecutorGlobals {
             std::ptr::null_mut(),
             value,
             Some(generator),
+            None,
             None,
         )
     }
@@ -2513,6 +2514,26 @@ impl ExecutorGlobals {
             value,
             None,
             Some(release),
+            None,
+        )
+    }
+
+    pub(crate) fn suspend_native_call(
+        &mut self,
+        call: Box<crate::vm::execute::NativeCall>,
+        return_value: *mut Value,
+        value: Value,
+    ) -> Result<(), crate::vm::execute::VmError> {
+        let runtime = self.fiber_runtime_ptr();
+        fiber::FiberRuntime::suspend(
+            runtime,
+            self,
+            std::ptr::null_mut(),
+            return_value,
+            value,
+            None,
+            None,
+            Some(call),
         )
     }
 

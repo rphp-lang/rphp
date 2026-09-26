@@ -225,11 +225,13 @@ mod filesystem;
 mod formatted_io;
 mod hebrew;
 mod html_entities;
+mod image_info;
 mod iterator;
 mod pcre;
 pub(crate) mod phar;
 mod process;
 mod recursive_arrays;
+mod regex_fiber;
 mod runtime_info;
 mod sha256;
 mod sha512;
@@ -13487,6 +13489,7 @@ fn fn_clone(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> R
             | "Directory"
             | "SplFileObject"
             | "GlobIterator"
+            | "Random\\Engine\\Secure"
     ) || eg.class_table.get(&class_name).is_some_and(|class| {
         class.is_enum
             || class.name == "IteratorIterator"
@@ -20530,6 +20533,8 @@ fn var_dump_value_inner(
             let initialized_proxy = lazy_state.and_then(|state| state.proxy_instance.clone());
             let projection = builtin_classes::fixed_array::debug_projection(val, eg)
                 .or_else(|| builtin_classes::array_object::debug_projection(val, eg))
+                .or_else(|| builtin_classes::deque::debug_projection(val, eg))
+                .or_else(|| builtin_classes::random_engines::debug_projection(val))
                 .or_else(|| datetime_debug_projection(val, eg));
             let output = if let Some(projection) = projection {
                 drop(object);
@@ -34169,6 +34174,18 @@ fn fn_preg_replace_callback(
     } else {
         0
     };
+    if eg.has_active_fiber() && resolved.supports_suspended_root() {
+        return regex_fiber::start(
+            ed,
+            rv,
+            eg,
+            pattern_value,
+            subject_value,
+            resolved,
+            limit,
+            flags,
+        );
+    }
     let mut total_count = 0usize;
 
     if let Some(subjects) = subject_value.as_array() {

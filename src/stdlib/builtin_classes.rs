@@ -24,6 +24,7 @@ mod heap;
 pub(super) mod iterator_cursor;
 pub(super) mod iterator_delegate;
 pub(super) mod object_storage;
+pub(super) mod random_engines;
 mod recursive_filter;
 mod recursive_iterator;
 mod recursive_tree;
@@ -5330,6 +5331,7 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
         eg.register_class(class).unwrap();
     }
     funcs.extend(deque::register(eg));
+    funcs.extend(random_engines::register(eg));
     funcs.extend(heap::register_heaps(eg));
     funcs
 }

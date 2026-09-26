@@ -52,6 +52,12 @@ pub(crate) enum FiberReturnState {
 }
 
 enum FiberSuspension {
+    Call {
+        value: Value,
+        frame: *mut ExecuteData,
+        call: Box<crate::vm::execute::NativeCall>,
+        return_value: *mut Value,
+    },
     Release {
         value: Value,
         frame: *mut ExecuteData,
@@ -82,6 +88,7 @@ impl FiberSuspension {
     fn value(&self) -> &Value {
         match self {
             Self::Direct { value, .. }
+            | Self::Call { value, .. }
             | Self::Generator { value, .. }
             | Self::Release { value, .. }
             | Self::GeneratorIteration { value, .. } => value,
@@ -319,6 +326,11 @@ impl FiberRuntime {
             children.extend(values);
             frames.extend(release_frames);
         }
+        if let Some(FiberSuspension::Call { call, .. }) = &context.suspension {
+            let (values, call_frames) = call.cycle_snapshot();
+            children.extend(values);
+            frames.extend(call_frames);
+        }
         (children, frames)
     }
 
@@ -349,6 +361,7 @@ impl FiberRuntime {
         value: Value,
         native_generator: Option<crate::vm::generator::GeneratorRef>,
         native_release: Option<Box<crate::vm::execute::NativeRelease>>,
+        native_call: Option<Box<crate::vm::execute::NativeCall>>,
     ) -> Result<(), VmError> {
         // SAFETY: ExecutorGlobals supplies its live boxed registry and the VM
         // supplies the active Fiber::suspend frame. The pinned active context
@@ -558,7 +571,14 @@ impl FiberRuntime {
                 &mut context.suspension
             };
             assert!(suspension.is_none());
-            *suspension = Some(if let Some(release) = native_release {
+            *suspension = Some(if let Some(call) = native_call {
+                FiberSuspension::Call {
+                    value,
+                    frame,
+                    call,
+                    return_value,
+                }
+            } else if let Some(release) = native_release {
                 FiberSuspension::Release {
                     value,
                     frame,
@@ -683,6 +703,7 @@ impl FiberRuntime {
             let mut generator_call = None;
             let mut generator_iteration = None;
             let mut native_release = None;
+            let mut native_call = None;
             let entry = if let FiberInput::Start(arguments) = input {
                 let result = &mut (*context).result as *mut Value;
                 let frame = match initialize_suspended_callback_frame(
@@ -722,6 +743,19 @@ impl FiberRuntime {
                     .take()
                     .expect("resumed Fiber must retain its suspension boundary");
                 match (suspension, input) {
+                    (
+                        FiberSuspension::Call {
+                            frame,
+                            call,
+                            return_value,
+                            ..
+                        },
+                        input,
+                    ) => {
+                        (*context).force_closing |= matches!(&input, FiberInput::ForceClose(_));
+                        native_call = Some((call, return_value, input));
+                        frame
+                    }
                     (FiberSuspension::Release { frame, release, .. }, input) => {
                         (*context).force_closing |= matches!(&input, FiberInput::ForceClose(_));
                         native_release = Some((release, input));
@@ -802,6 +836,20 @@ impl FiberRuntime {
             (&mut *runtime).active.push(identity);
             let execution = if eg.exception.is_some() {
                 Ok(())
+            } else if let Some((call, return_value, input)) = native_call {
+                match crate::vm::execute::resume_suspended_native_call(
+                    eg,
+                    entry,
+                    call,
+                    return_value,
+                    input,
+                ) {
+                    Ok(Some(entry)) if eg.exception.is_none() => {
+                        execute_coroutine_frame(eg, entry, boundary)
+                    }
+                    Ok(_) => Ok(()),
+                    Err(error) => Err(error),
+                }
             } else if let Some((release, input)) = native_release {
                 match crate::vm::execute::resume_suspended_native_release(eg, entry, release, input)
                 {

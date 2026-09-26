@@ -473,6 +473,7 @@ fn serialize_value(
                     | "sensitiveparametervalue"
                     | "reflectionproperty"
                     | "directory"
+                    | "random\\engine\\secure"
             ) || file_info_class(eg, eg.class_by_id(class_id))
             {
                 Some(class_name.as_str())
@@ -679,6 +680,7 @@ fn allocate_object(eg: &mut ExecutorGlobals, class_name: &str) -> Result<Value, 
             | "internaliterator"
             | "reflectionproperty"
             | "directory"
+            | "random\\engine\\secure"
     ) || file_info_class(eg, class)
     {
         eg.exception = Some(crate::value::make_error_value(
@@ -843,8 +845,11 @@ pub(crate) fn populate_object_properties(
 ) -> Result<(), ()> {
     let class_id = object.as_object().map(|object| object.class_id).ok_or(())?;
     for (key, value) in properties.iter() {
-        let ArrayKey::String(key) = key else {
-            continue;
+        // Serialized object tables admit integer keys, but PHP object
+        // properties always have string names (unlike __unserialize arrays).
+        let key = match key {
+            ArrayKey::String(key) => key,
+            ArrayKey::Int(key) => key.to_string(),
         };
         let (storage_key, slot) = {
             let object = object.as_object().ok_or(())?;
@@ -868,6 +873,9 @@ pub(crate) fn populate_object_properties(
             return Err(());
         }
         if slot.is_none()
+            && !object
+                .as_object()
+                .is_some_and(|object| object.contains_property(&storage_key))
             && dynamic_property_diagnostic_frame.is_some()
             && !object
                 .as_object()
@@ -1807,7 +1815,13 @@ impl<'a> Parser<'a> {
                                 offset,
                             );
                         }
-                        populate_object_properties(eg, &object, class_name, &properties, None)?;
+                        populate_object_properties(
+                            eg,
+                            &object,
+                            class_name,
+                            &properties,
+                            Some(self.source_frame),
+                        )?;
                     }
                     object
                 };

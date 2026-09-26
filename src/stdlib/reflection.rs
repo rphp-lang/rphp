@@ -9230,9 +9230,21 @@ fn class_new_instance_without_constructor(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let Some((_, object)) = reflected_class_instance(ed, eg)? else {
+    let Some((owner, object)) = reflected_class_instance(ed, eg)? else {
         return return_value(rv, Value::null());
     };
+    if matches!(
+        owner.to_ascii_lowercase().as_str(),
+        "random\\engine\\secure" | "random\\engine\\xoshiro256starstar"
+    ) {
+        reflection_exception(
+            eg,
+            format!(
+                "Class {owner} is an internal class marked as final that cannot be instantiated without invoking its constructor"
+            ),
+        );
+        return Ok(());
+    }
     return_value(rv, object)
 }
 

@@ -7,59 +7,66 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-startup-source-lifecycle` checkpoint over `729366d2` executes
-configured native/local prepend, primary and append files as separate source
-units in one request. They share global/reference/COW state and one shutdown;
-main compilation occurs after prepend. The originally opened main file survives
-pathname replacement or unlink, while in-place writes remain visible. Inline
-CLI code ignores these units. Fatal-shutdown callbacks retain a live logical
-root descriptor; release-only lifetime failures found during review were fixed
-before acceptance.
+The `core-final-five` checkpoint over `c00dac57` closes the last five supported
+stable-core failures: namespace-relative ancestors, native random-engine clone
+capabilities, integer serialized object properties, image-info output-reference
+retirement and suspended native replacement callbacks. The five unchanged
+upstream cases (`bug55156`, `clone/clone_with_010`, `fibers/gh9735-004`,
+`gc/gc_043`, `gh17162`) move from **0/5 to 5/5**.
 
-The complete 7,174-case stable core is **6,875 pass / 5 fail / 194 skip /
-99 unsupported / 1 timeout / 0 crash**, exact **+2/-0**. Zend/lang is
-**5,389/5/118/86 plus 1 timeout**; strings/array remains **1,486/0/76/13**.
-The focused unchanged upstream set passes **3/3** versus parent **1/3**, exact
-runtime delta **+2/-0**: `exit/bug79948` and adjacent CLI `bug67741` are fixed.
-`tests/lang/bug32924` is newly admitted but already matched on the parent through
-its explicit include; it is coverage, not a third runtime fix. All three pass
-PHP 8.5.11 and the exact release. Original CLI tests verify the actual prepend
-identity and execution order beyond that upstream test's observability.
+The complete 7,174-case stable core is **6,880 pass / 0 fail / 194 skip /
+99 unsupported / 1 timeout / 0 crash**, exact **+5/-0**. Zend/lang is
+**5,394/0/118/86 plus 1 timeout**; strings/array remains **1,486/0/76/13**.
+Every previous pass is retained, and no other case changes status or failure
+category. No expectation, skip rule or unsupported classification was weakened.
 
-All **38 original CLI contracts** are byte-exact against reference PHP and the
-release binary; 43 adjacent INI/include/source-unit regressions also pass.
-The runner now applies test INI only to FILE, not SKIPIF/CLEAN, with original
-phase-isolation coverage and unchanged upstream tests. Every previous stable
-pass and failure stage is retained; the existing `new_oom` timeout is explicit.
+The implementation uses real Secure/Xoshiro256StarStar native state, independent
+cloning, seeding, jump and serialization behavior; checked GIF/PNG/JPEG/BMP
+headers; canonical typed-reference validation/destructor ordering; string-named
+object members; and PHP-owned native callback continuations. A parked call owns
+arguments and operation progress, not a suspended Rust stack or borrowed
+internal frame. Resumption creates a temporary internal frame and commits or
+throws once. Callback stacks and retained values expose their collector edges.
+The ordinary PCRE matcher/consumer is unchanged.
 
-Five complete Cargo configurations pass: default **6,851**, no-default **6,506**,
-erased **6,922**, reified **6,944**, all-features **6,995**;
-372 suites each, ignored 15/15/15/15/18, zero failures. All-feature/all-target
+All **19 original CLI contracts** are byte-exact against PHP 8.5.11 and the
+immutable release; **127 adjacent** Fiber/GC/clone/container regressions pass.
+Five complete Cargo configurations pass: default **6,870**, no-default **6,525**,
+erased **6,941**, reified **6,963**, all-features **7,014**; 373 suites each,
+ignored 15/15/15/15/18, zero failures or filtered tests. All-feature/all-target
 checks, unsafe policy/self-tests, runner isolation and all seven Composer/Symfony
-S0--S3 gates pass. Unsafe inventory remains **1,625 blocks / 289 functions**.
-Host gates use 6 GiB/no-swap limits, two build/test workers, at most four bounded
-PHPT workers and automatic cleanup. Performance remains deferred by the user.
+S0--S3 gates pass. Two reviewed unsafe blocks bring the inventory to
+**1,627 blocks / 289 functions**, within unchanged ceilings. Host gates use
+6 GiB/no-swap limits, two build/test workers, at most four bounded PHPT workers
+and automatic cleanup. Performance remains deferred by the user.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `9db9e02dd4d4e8278d5b2fc6ed83c17511d0c12408487db74764290614f18450`;
-full manifest `7080d8d719efc34a96764ff21962cd6733e20d90ee0904601f51768f1a57af48`;
-focused manifest `364a165a0a2a84aa4f674b8c07fa46792b8a0274e0e86c02fef044e15402403f`;
-Zend/lang pass set `b21a29598563d1874b7d29478f112feeb4f0bf34dd079fdd9394fd69732ef354`;
+candidate `7864e7f8eabbb5642fc0af4ea05be5adcd04b177f3d4fbb66a424890a1073475`;
+full manifest `4c77d93a2ba9ab88b4e790eea339c9ef03649dc57bcd99bc9b818f176ff2a319`;
+focused manifest `2754707a1bd204074a5b06f084195c3db67a2c17ce19170939c376de681a6d6d`;
+Zend/lang pass set `a18a10757f46bed8ff56e14d13b5eebd6c5bc2fb0682cef60ba3865cb826de26`;
 strings/array pass set `ee28d61f885e6e70e89ad7d68c7e773e2cb887d2df5e0f82ab6a5f4f9f434e4f`;
-combined pass set `3939a3158864354e5767f4a06132934f6415481be6d435fa7345e5b5195b4a52`;
-no-loss summary `35c366091ceafa9616e81dde8dc24cb1b1a3f25d913005661e7e1c59270f8977`;
-final evidence packet `3f870ec06adcf0aa387e7df8685688cdddfe4187f6d864fd312476280a08e067`.
+combined pass set `7d366130c45606a6af71adf537b8b3819202333e1f9fa656da22201421642555`;
+no-loss summary `4a693cb3ed30f218cca60268d30d2ed17796c040ad5fba08785bced22ad1c3c7`;
+final evidence packet `f90b066b6b40b3093d91e8ece5278e847777c6c0d679c1b33c45fee221efbec4`.
 
-This is not complete PHP compatibility. URL/user-wrapper startup loading and
-general parser diagnostic equivalence are not claimed. Five stable failures
-(four library contracts plus `bug55156` parser behavior), 194 skips, 99
-unsupported cases and the known timeout remain open. The next core priority is
+Zero supported stable-core failures is not complete PHP compatibility: skips,
+unsupported cases and the contained `new_oom` timeout remain non-passes.
+Randomizer/the rest of ext/random, other image formats/user-wrapper dispatch
+and arbitrary native callback suspension are not claimed. The PCRE engine,
+Phar and Date/DateTime implementations are unchanged. Next admission requires
 request-owned allocation limits and safe OOM finalization: 35 tests are excluded
-solely by `memory_limit`. An isolated 15-case diagnostic showed 3 pass, 4 fail,
-3 timeout and 5 crash against 15 reference passes, rejecting startup-only INI
-admission. Finite budgets remain unsupported until enforced before mutation.
-Tokenizer/parser, Phar, PCRE, Date/DateTime and general-library algorithms stay
-outside this workstream.
+solely by `memory_limit`. The isolated 15-case diagnostic remains 3 pass, 4 fail,
+3 timeout and 5 crash against 15 reference passes; startup-only INI admission
+was rejected. Finite budgets remain unsupported until enforced before mutation.
+
+### Preceding startup-source checkpoint
+
+The `core-startup-source-lifecycle` checkpoint over `729366d2` aligned native
+prepend/main/append execution, file-handle identity and one request shutdown.
+It reached 6,875 stable passes and five failures, exact +2/-0, with 38 original
+CLI contracts and full gates. Runner test INI is isolated to FILE, not
+SKIPIF/CLEAN; URL/user-wrapper startup loading remains outside that claim.
 
 ### Preceding optimizer-admission checkpoint
 

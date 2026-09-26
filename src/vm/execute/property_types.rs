@@ -193,7 +193,7 @@ pub(crate) fn assign_internal_object_property(
         if eg.exception.is_some() || result.is_some() {
             return Ok(eg.exception.is_none());
         }
-        if eg
+        if internal_class_forbids_dynamic_properties(&class_name) || eg
             .find_class(&class_name)
             .is_some_and(|class| class.is_readonly)
         {
@@ -630,7 +630,7 @@ fn prepare_property_assignment_with_diagnostic(
 
 #[cold]
 #[inline(never)]
-fn prepare_reference_assignment_scalar(
+pub(crate) fn prepare_reference_assignment_scalar(
     value: Value,
     constraints: &[crate::value::ReferencePropertyConstraint],
     eg: &ExecutorGlobals,

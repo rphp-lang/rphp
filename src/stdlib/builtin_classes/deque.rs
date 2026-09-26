@@ -653,10 +653,29 @@ fn debug_info(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    ensure(arg!(ed, 0), eg);
-    let mut output = array_object::member_properties(arg!(ed, 0), eg);
-    let object = arg!(ed, 0).as_object().unwrap();
-    let state = object.native_object_state::<Deque>().unwrap();
+    ret!(
+        rv,
+        debug_projection(arg!(ed, 0), eg).expect("deque receiver")
+    );
+}
+
+/// Nested debug output uses the same native projection as a direct hook call,
+/// without requiring mutable executor access or initializing native storage.
+pub(in crate::stdlib) fn debug_projection(receiver: &Value, eg: &ExecutorGlobals) -> Option<Value> {
+    let object = receiver.as_object()?;
+    if !eg.class_is_a(&object.class_name, "SplDoublyLinkedList") {
+        return None;
+    }
+    let fallback = Deque {
+        mode: if eg.class_is_a(&object.class_name, "SplStack") {
+            4
+        } else {
+            0
+        },
+        ..Deque::default()
+    };
+    let state = object.native_object_state::<Deque>().unwrap_or(&fallback);
+    let mut output = array_object::member_properties(receiver, eg);
     let mut values = PhpArray::with_packed_capacity(state.len);
     let mut slot = state.head;
     while let Some(current) = slot {
@@ -670,7 +689,7 @@ fn debug_info(
         Value::long(i64::from(state.mode)),
     );
     output.set_str("\0SplDoublyLinkedList\0dllist", Value::array(values));
-    ret!(rv, Value::array(output));
+    Some(Value::array(output))
 }
 
 #[cold]

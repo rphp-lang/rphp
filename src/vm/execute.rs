@@ -2312,6 +2312,7 @@ include!("execute/scalar_calls.rs");
 include!("execute/object_calls.rs");
 include!("execute/composed_calls.rs");
 include!("execute/call_frames.rs");
+include!("execute/native_calls.rs");
 include!("execute/baseline_entry.rs");
 include!("execute/callback_array_pipeline.rs");
 include!("execute/baseline_control_ops.rs");

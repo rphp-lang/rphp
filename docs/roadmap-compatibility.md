@@ -36,27 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-startup-source-lifecycle` checkpoint over `729366d2` closes
-native/local prepend/main/append execution in one request, preserving globals,
-references, delayed compilation, primary file-handle identity, return/exit,
-diagnostic handlers and one final shutdown. The root descriptor remains alive
-through pending fatal callbacks. Inline CLI code ignores startup units.
+The `core-final-five` checkpoint over `c00dac57` closes all five supported
+stable-core failures through namespace-relative ancestors, real native random
+engines, numeric serialized object members, image-info output references and
+owned native callback continuations. Suspended calls retain progress and GC
+edges without retaining a Rust stack or borrowed internal frame.
 
-Stable core is **6,875 pass / 5 fail / 194 skip / 99 unsupported / 1 timeout /
-0 crash**, exact **+2/-0** measured coverage. The unchanged focused set is
-**3/3** against parent **1/3**, runtime **+2/-0** including its adjacent CLI
-case; `bug32924` is admission of an already matching case, not a third fix.
-All 38 original CLI contracts match reference
-PHP 8.5.11 and the exact release; 43 adjacent regressions, five Cargo variants,
-all targets, unsafe/runner checks and seven Composer/Symfony S0--S3 gates pass.
-No earlier pass or failure stage is lost. Runner test INI is isolated to FILE;
-SKIPIF/CLEAN retain the base profile. See [exact evidence](compatibility.md).
+Stable core is **6,880 pass / 0 fail / 194 skip / 99 unsupported / 1 timeout /
+0 crash**, exact **+5/-0**. All five unchanged targets move from fail to pass;
+no other status/category changes and no earlier pass is lost. Nineteen original
+CLI contracts match PHP 8.5.11 and the immutable release; 127 adjacent tests,
+five complete Cargo variants, all targets, unsafe/runner checks and all seven
+Composer/Symfony S0--S3 gates pass. See [exact evidence](compatibility.md).
 
-The five remaining stable failures belong to four library contracts and the
-existing `bug55156` parser behavior. Skips, unsupported cases and the contained
-`new_oom` timeout are not passes. URL/user-wrapper startup loading and general
-parser diagnostics are explicit non-claims. No tokenizer/parser, Phar, PCRE,
-Date/DateTime or general library implementation was changed.
+This is zero supported stable failure debt, not complete PHP compatibility.
+Skips, unsupported cases and the contained `new_oom` timeout remain non-passes.
+The rest of ext/random, other image formats/user-wrapper dispatch and arbitrary
+native callback suspension are explicit non-claims. The existing PCRE engine,
+Phar and Date/DateTime implementations are unchanged.
 
 Next: request-owned allocation limits, checked reservation before mutation and
 safe OOM finalization. Thirty-five tests are excluded solely by `memory_limit`;
@@ -68,6 +65,13 @@ independent core passes waiting for an INI allowlist.
 
 Performance remains deferred. Keep the 6 GiB/no-swap host boundary, two
 build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding startup-source checkpoint
+
+The `core-startup-source-lifecycle` checkpoint over `729366d2` reached 6,875
+stable passes and five failures, exact +2/-0, aligning native startup files,
+primary file-handle identity and request shutdown with 38 original CLI contracts
+and full gates. Runner test INI is isolated to FILE, not SKIPIF/CLEAN.
 
 ### Preceding optimizer-admission checkpoint
 

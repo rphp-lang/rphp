@@ -39,7 +39,7 @@ impl Parser {
     }
 
     fn parse_generic_ancestor(&mut self) -> Result<GenericAncestor, String> {
-        let name = self.parse_qualified_name()?;
+        let name = self.parse_qualified_or_namespace_relative_name()?;
         self.finish_generic_ancestor(name)
     }
 

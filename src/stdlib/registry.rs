@@ -4444,6 +4444,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ParamTypeHint::String
     );
     register_radix_conversions(eg, &mut funcs);
+    image_info::register(eg, &mut funcs);
 
     // --- Environment / system ---
     reg_typed!(
