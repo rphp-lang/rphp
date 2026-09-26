@@ -248,28 +248,31 @@ subjects, flags, match modes, split flags, replacements, filter/grep and quote
 is byte-identical to PHP 8.5.11. Focused coverage is **116/116** regex units and
 **99/99** PCRE-facing E2E/CLI cases.
 
-The combined five-configuration matrix immediately before the final disjoint
-core rebase passes default **6,205**, no-default **5,871**, erased **6,276**,
+The combined five-configuration matrix before the subsequent disjoint core
+series passes default **6,205**, no-default **5,871**, erased **6,276**,
 reified **6,298**, all-features **6,349**, plus all-targets. The final
-`c914d242` rebase passes all **215/215** PCRE-focused cases and all-feature /
-all-target compilation. Composer/Symfony S0--S3, unsafe policy, and exact
-post-rebase no-loss pass sets (**5,295** Zend/lang and **1,478** strings/array)
-are green. The current-parent 128-pair run keeps controls bounded by **+1.06%**;
-`preg_match` without groups improves by **10.46%**, no-literal count is
-**+1.13%**, and grouped and match-all output lanes improve by 48% and 47%.
+`3052d8b5` rebase passes all **215/215** PCRE-focused cases and all-feature /
+all-target compilation. Exact current-parent stable-core no-loss is
+**6,880/0/194/99 plus one contained timeout** over 7,174 cases, with the same
+manifest as the parent. The 128-pair run keeps controls within **+0.57%** and
+startup at **+0.33%**; `preg_match` without groups improves by **4.82%**,
+no-literal count is **+1.15%**, and grouped and match-all output lanes improve
+by 47%.
 
 SHA-256 evidence: candidate
-`e3222dc3bb835c49726d7d17b921d0e5b6d3b8420f36b222dec1570792d4632b`;
+`ff30a202f54fd378812e80e7a6d6e3366044e12d3e74531ddc9d26397a97756b`;
 PCRE manifest/summary
 `40adafe84226b6b941e6f0c7e1c174d989e21c88902b32a7d766c3b4dca33166` /
-`983ef6dbb36fbea4220fa3dfa3eb43e4ff704415807f41c0e420f261fa21c837`;
+`8f414eea67dcfc98e1da42139d5af3fa6d7f355959d232df534cfe0a9c6116b4`;
 generated differential output/script
 `27bef8ee981e7f690965af2720dec2f5908f7b6f6873ef3b0036f7acad3c3a0c` /
 `189309c6d7b42f762ef3b7bcb1cfeb73a949f1fdad7cc323f11511a173c3d8cb`;
-combined matrix and final current-parent regex/control performance evidence
-`e5037c5505c25ca207239243d3ac64ae036bf4757cfff2201ff24828594d2024` /
-`f869ad937290fd312c284a31437678f400fd70b3dfb70e09b94bff55c4b0b3d9` /
-`0f2f8975daaaaed801866e1c4fe55e5f356de453e5ba9e25d779dee22673ddbc`.
+current-parent stable manifest/summary
+`4c77d93a2ba9ab88b4e790eea339c9ef03649dc57bcd99bc9b818f176ff2a319` /
+`bd78e1a93fe0b51038df827d4a990fb9c87c60902c0ba010ba5057ed97916547`;
+final current-parent regex/control performance evidence
+`8f2959818095de17a38f1c490970f8b34275ad53776508263b056e9fb949da90` /
+`5a8f95895ad5936f59ffefdd0a3839edbfca07c0f7ac9dfd25ec39ac14d80bf5`.
 
 ### Preceding mutable-iteration checkpoint
 

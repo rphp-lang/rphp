@@ -387,42 +387,41 @@ forms, grep/invert and quote; all **54,844** output lines are byte-identical to
 PHP 8.5.11. The on-demand builtin audit reports PCRE **11 present / 0 missing /
 0 shape mismatch / 0 metadata mismatch**.
 
-The complete combined Cargo matrix immediately before the final disjoint core
-rebase passes default **6,205**, no-default **5,871**, erased **6,276**,
-reified **6,298** and all-features **6,349** tests, plus all-targets. After the
-rebase onto `c914d242`, all **215/215** PCRE-focused cases and the
-all-feature/all-target compile gate pass again. Composer and Symfony S0--S3,
-formatting, public-data hygiene and unsafe policy are green; production unsafe
-inventory remains at its accepted **1,627 blocks / 289 functions**. Exact
-broad no-loss preserves the complete post-rebase **5,295** Zend/lang and
-**1,478** strings/array parent pass sets.
+The complete combined Cargo matrix before the subsequent disjoint core series
+passes default **6,205**, no-default **5,871**, erased **6,276**, reified
+**6,298** and all-features **6,349** tests, plus all-targets. After the final
+rebase onto `3052d8b5`, all **215/215** PCRE-focused cases and an all-feature /
+all-target compile gate pass again. Formatting, public-data hygiene and unsafe
+policy are green; production unsafe inventory remains at its accepted **1,627
+blocks / 289 functions**. Exact current-parent no-loss is the complete
+7,174-case stable core: **6,880 pass / 0 fail / 194 skip / 99 unsupported /
+1 timeout / 0 crash**, with a manifest byte-identical to the parent evidence.
 
 The final current-parent 128-pair regex packet puts `preg_match` without groups
-at **-10.46%**, group miss at **-7.71%**, no-literal count at **+1.13%** and
-UTF-8 count at **-0.15%**. Callback grouped improves by **48.16%**, match-all
-output by **46.96%**, fixed-prefix count by **24.64%**, and all three ordinary
-callback lanes improve by **7.48--16.83%**. Independent controls are bounded
-between **-0.41%** and **+1.06%**. All benchmark outputs are exact. Native
-PCRE2 machine-code JIT remains the sole PCRE implementation non-claim; this
-native interpreter does not pretend to provide it.
+at **-4.82%**, group miss at **-4.48%**, no-literal count at **+1.15%** and
+UTF-8 count at **-0.71%**. Callback grouped improves by **47.19%**, match-all
+output by **47.15%**, fixed-prefix count by **23.86%**, and the three ordinary
+callback lanes improve by **1.32--10.68%**. Independent controls are bounded
+between **-1.97%** and **+0.57%**; startup is **+0.33%**. All benchmark outputs
+are exact. Native PCRE2 machine-code JIT remains the sole PCRE implementation
+non-claim; this native interpreter does not pretend to provide it.
 
 SHA-256 evidence: candidate
-`e3222dc3bb835c49726d7d17b921d0e5b6d3b8420f36b222dec1570792d4632b`;
+`ff30a202f54fd378812e80e7a6d6e3366044e12d3e74531ddc9d26397a97756b`;
 PCRE manifest/summary
 `40adafe84226b6b941e6f0c7e1c174d989e21c88902b32a7d766c3b4dca33166` /
-`983ef6dbb36fbea4220fa3dfa3eb43e4ff704415807f41c0e420f261fa21c837`;
+`8f414eea67dcfc98e1da42139d5af3fa6d7f355959d232df534cfe0a9c6116b4`;
 generated output/script
 `27bef8ee981e7f690965af2720dec2f5908f7b6f6873ef3b0036f7acad3c3a0c` /
 `189309c6d7b42f762ef3b7bcb1cfeb73a949f1fdad7cc323f11511a173c3d8cb`;
-combined matrix and final current-parent regex/control performance packets
-`e5037c5505c25ca207239243d3ac64ae036bf4757cfff2201ff24828594d2024` /
-`f869ad937290fd312c284a31437678f400fd70b3dfb70e09b94bff55c4b0b3d9` /
-`0f2f8975daaaaed801866e1c4fe55e5f356de453e5ba9e25d779dee22673ddbc`;
-Zend/lang and strings/array pass sets
-`d58064be481e0945a85e1fbad59ae9090bfe71e3214c4613d8611cb9958f23e3` /
-`3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
+current-parent stable manifest/summary
+`4c77d93a2ba9ab88b4e790eea339c9ef03649dc57bcd99bc9b818f176ff2a319` /
+`bd78e1a93fe0b51038df827d4a990fb9c87c60902c0ba010ba5057ed97916547`;
+final current-parent regex/control performance packets
+`8f2959818095de17a38f1c490970f8b34275ad53776508263b056e9fb949da90` /
+`5a8f95895ad5936f59ffefdd0a3839edbfca07c0f7ac9dfd25ec39ac14d80bf5`;
 builtin-audit report
-`c292879f174d3e81a729d1cd96b942ec0ea58694dbaf557c0bf80a5b69d08c62`.
+`c86f194c32ab9fe1b1a8abbff9f7943f5cefcc30478de22f37a699436c805e4c`.
 
 ### Preceding mutable-iteration checkpoint
 
