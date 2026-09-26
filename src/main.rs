@@ -210,6 +210,26 @@ fn emit_disabled_function_startup_warnings(settings: &[(String, String)]) {
     }
 }
 
+fn emit_request_startup_warning(settings: &[(String, String)], message: &str) {
+    use rphp::runtime::startup::setting;
+    if stdlib::startup_error_reporting(settings) & 2 == 0 {
+        return;
+    }
+    let enabled = |name, default| {
+        setting(settings, name).map_or(default, |value| value != "" && value != "0")
+    };
+    if enabled("log_errors", false) {
+        eprintln!("PHP Warning:  {message} in Unknown on line 0");
+    }
+    if enabled("display_errors", true) && enabled("display_startup_errors", true) {
+        if startup_display_errors_uses_stderr(settings) {
+            eprintln!("Warning: {message} in Unknown on line 0");
+        } else {
+            println!("\nWarning: {message} in Unknown on line 0");
+        }
+    }
+}
+
 fn read_source(action: CliAction) -> Result<Vec<u8>, String> {
     match action {
         CliAction::Inline(code) => {
@@ -308,6 +328,30 @@ fn main() {
         stats::reset();
     }
 
+    // A configured handler resolves at request startup, before parsing and
+    // user declarations. Keep descriptor owners alive with the one executor;
+    // empty/default requests retain their existing initialization order.
+    let initialize_request = || {
+        let mut eg = ExecutorGlobals::new();
+        stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
+        stdlib::set_startup_config(&ini_settings);
+        let stdlib = stdlib::register_stdlib(&mut eg);
+        stdlib::register_request_globals(&mut eg, script_name.as_deref(), &arguments);
+        let coroutines = register_coroutine_api(&mut eg);
+        eg.apply_disabled_functions();
+        (eg, stdlib, coroutines)
+    };
+    let output_handler = stdlib::startup_output_handler(&ini_settings);
+    let mut startup_request = if output_handler.is_empty() {
+        None
+    } else {
+        let mut request = initialize_request();
+        if let Some(warning) = stdlib::start_output_handler(&mut request.0, output_handler) {
+            emit_request_startup_warning(&ini_settings, &warning);
+        }
+        Some(request)
+    };
+
     let tokens = Lexer::new_bytes(&source)
         .with_source_offset_base(source_offset_base)
         .tokenize_included_source()
@@ -341,8 +385,14 @@ fn main() {
         .with_source_context(source_file, source_directory)
         .compile(&stmts)
         .unwrap_or_else(|failure| {
-            let mut eg = ExecutorGlobals::new();
-            stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
+            let mut fallback;
+            let eg = if let Some(request) = startup_request.as_mut() {
+                &mut request.0
+            } else {
+                fallback = ExecutorGlobals::new();
+                stdlib::apply_startup_ini_settings(&mut fallback, &ini_settings);
+                &mut fallback
+            };
             eg.emit_compile_deprecations(&failure.deprecations);
             if failure.deprecations.is_empty() {
                 eprintln!("Fatal error: {}", failure.message);
@@ -354,12 +404,10 @@ fn main() {
     let compiler_halt_source = result.main.source_file.to_string();
     let compiler_halt_offset = result.compiler_halt_offset;
     let main_func = make_user_function(result.main);
-    let mut eg = ExecutorGlobals::new();
+    let (mut eg, _stdlib, _coroutines) = startup_request.unwrap_or_else(initialize_request);
     if let Some(offset) = compiler_halt_offset {
         eg.register_compiler_halt_offset(compiler_halt_source, offset);
     }
-    stdlib::apply_startup_ini_settings(&mut eg, &ini_settings);
-    stdlib::set_startup_config(&ini_settings);
     eg.generic_metadata = result.generic_metadata;
     eg.constant_attributes = result.constant_attributes;
     eg.constant_expressions = result.constant_expressions;
@@ -370,11 +418,6 @@ fn main() {
         eg.record_included_file(executed_file);
     }
 
-    // Register stdlib
-    let _stdlib = stdlib::register_stdlib(&mut eg);
-    stdlib::register_request_globals(&mut eg, script_name.as_deref(), &arguments);
-    let _coroutines = register_coroutine_api(&mut eg);
-    eg.apply_disabled_functions();
     // Register declared functions
     for (name, func) in &result.functions {
         eg.register_function(name, &func.common as *const FunctionCommon)

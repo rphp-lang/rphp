@@ -516,6 +516,31 @@ fn parse_entry_key(
     }
 }
 
+/// Reuse the INI scanner for a single CLI startup string. The CLI preserves
+/// a leading non-alphanumeric byte by quoting the entire supplied value.
+pub(super) fn startup_cli_string(raw: &str) -> String {
+    if let Some(value) = raw
+        .strip_prefix('\'')
+        .and_then(|value| value.strip_suffix('\''))
+    {
+        return value.to_string();
+    }
+    let quoted;
+    let source = if raw
+        .as_bytes()
+        .first()
+        .is_some_and(|byte| !byte.is_ascii_alphanumeric() && !matches!(byte, b'"' | b'\''))
+    {
+        quoted = format!("\"{raw}\"");
+        quoted.as_str()
+    } else {
+        raw
+    };
+    parse_value(source, INI_SCANNER_NORMAL, 1, true)
+        .map(|value| value.echo_to_string())
+        .unwrap_or_else(|_| raw.to_string())
+}
+
 fn parse_value(
     raw: &str,
     mode: i64,

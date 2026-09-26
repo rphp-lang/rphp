@@ -17165,6 +17165,39 @@ const OUTPUT_HANDLER_REMOVABLE: i64 = 64;
 const OUTPUT_HANDLER_DEFAULT_FLAGS: i64 =
     OUTPUT_HANDLER_CLEANABLE | OUTPUT_HANDLER_FLUSHABLE | OUTPUT_HANDLER_REMOVABLE;
 
+/// Only nonempty startup handlers require the function registry before source
+/// compilation. An empty setting keeps the ordinary CLI initialization path.
+pub fn startup_output_handler(settings: &[(String, String)]) -> String {
+    settings
+        .iter()
+        .rev()
+        .find(|(name, _)| name == "output_handler")
+        .map_or_else(String::new, |(_, value)| {
+            parse_ini::startup_cli_string(value)
+        })
+}
+
+/// Validate before user declarations exist, but use the same buffer and
+/// callback machinery as ob_start(). Invalid callbacks warn and do not abort
+/// request startup; the CLI owns the display/logging policy.
+#[cold]
+pub fn start_output_handler(eg: &mut ExecutorGlobals, name: String) -> Option<String> {
+    if name.is_empty() {
+        return None;
+    }
+    let callback = Value::string(name);
+    if resolve_callback_with_cache(&callback, eg, None, None).is_none() {
+        let message = format!(
+            "PHP Request Startup: {}",
+            ordinary_callback_invalid_reason(&callback, eg)
+        );
+        eg.record_last_error(2, &message, "Unknown", 0);
+        return Some(message);
+    }
+    eg.push_output_buffer(Some(callback), 0, OUTPUT_HANDLER_DEFAULT_FLAGS);
+    None
+}
+
 fn fn_ob_start(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -17254,6 +17287,10 @@ fn transform_output_buffer(
         Value::binary_string(&raw)
     };
     let arguments = [callback_input, Value::long(mode)];
+    // A prior uncaught script exception is not a failure of this handler.
+    // The callback must run normally and only a replacement it throws can
+    // change the output policy or replace the pending request exception.
+    let pending_exception = eg.exception.take();
     let previous_handler_depth = eg.enter_output_handler();
     let transformed = if let Some(ed) = caller
         && !ed.is_null()
@@ -17263,16 +17300,33 @@ fn transform_output_buffer(
         && unsafe { (*(*ed).func).fn_type == FunctionType::Internal }
     {
         call_resolved_with_values_from_internal(ed, eg, &resolved, &arguments, true)
+    } else if caller.is_none() {
+        call_resolved_with_values_from(
+            eg,
+            &resolved,
+            &arguments,
+            eg.current_execute_data.get(),
+            "Unknown",
+            0,
+            true,
+        )
     } else {
         call_resolved_with_values(eg, &resolved, &arguments)
     };
     eg.leave_output_handler(previous_handler_depth);
     let transformed = transformed?;
-    // A throwing display handler does not consume the bytes it was asked to
-    // transform. Final request flushing passes the original payload through;
-    // explicit clean operations still discard it through their phase policy.
-    if eg.exception.is_some() {
-        return Ok(raw);
+    let handler_threw = eg.exception.is_some();
+    if handler_threw && caller.is_none() && eg.exception_handler.is_some() {
+        return handle_final_output_exception(eg, buffer, raw, pending_exception);
+    }
+    if !handler_threw {
+        eg.exception = pending_exception;
+    }
+    // Explicit flushing preserves the payload when a catchable handler throws.
+    // Request-final failure discards that buffer instead; no user call can
+    // catch this phase and there is no successful transformed output.
+    if handler_threw {
+        return Ok(if caller.is_none() { Vec::new() } else { raw });
     }
     if transformed.value_type() == ValueType::False {
         Ok(raw)
@@ -17281,6 +17335,40 @@ fn transform_output_buffer(
     } else {
         Ok(transformed.echo_to_string().into_bytes())
     }
+}
+
+/// The global exception handler runs while the failed final buffer is still
+/// observable and locked. A successful handler preserves its raw bytes plus
+/// callback output; a second failure or exit discards them. The parent buffers
+/// are processed only after this boundary has succeeded.
+#[cold]
+fn handle_final_output_exception(
+    eg: &mut ExecutorGlobals,
+    buffer: &mut crate::runtime::OutputBuffer,
+    raw: Vec<u8>,
+    pending_exception: Option<Value>,
+) -> Result<Vec<u8>, VmError> {
+    eg.restore_output_buffer(crate::runtime::OutputBuffer {
+        data: raw,
+        handler: buffer.handler.take(),
+        chunk_size: buffer.chunk_size,
+        flags: buffer.flags,
+        started: buffer.started,
+        disabled: false,
+    });
+    let result = dispatch_pending_uncaught_exception_handlers(eg, eg.current_execute_data.get());
+    // Every buffer-stack mutation is rejected by the output-handler lock,
+    // including from the exception callback; reads and writes remain valid.
+    *buffer = eg
+        .pop_output_buffer()
+        .expect("locked final buffer remains present");
+    let output = std::mem::take(&mut buffer.data);
+    result?;
+    if eg.exception.is_some() {
+        return Ok(Vec::new());
+    }
+    eg.exception = pending_exception;
+    Ok(output)
 }
 
 /// Run every top-level chunk threshold crossed by a PHP-visible write. The
@@ -17322,7 +17410,10 @@ pub(crate) fn write_php_output(
     caller: Option<*mut ExecuteData>,
 ) -> Result<(), VmError> {
     eg.write_output(data);
-    if eg.output_buffer_chunk_ready() {
+    // Callback output cannot synchronously re-enter a running output handler.
+    // In particular, a final exception callback may append to the observable
+    // failed buffer beyond its original chunk threshold.
+    if eg.output_buffer_chunk_ready() && !eg.is_output_handler_active() {
         flush_ready_output_buffers(eg, caller)?;
     }
     let (file, line) = caller.map_or_else(Default::default, user_frame_source);
@@ -17603,6 +17694,7 @@ pub(crate) fn flush_all_output_buffers(eg: &mut ExecutorGlobals) -> Result<(), V
         // destructor reached from those captures must therefore observe the
         // display-handler re-entry guard.
         let previous_handler_depth = eg.enter_output_handler();
+        let pending_exception = eg.exception.as_ref().and_then(Value::object_identity);
         let transformed = transform_output_buffer(eg, &mut buffer, OUTPUT_HANDLER_FINAL, None);
         let handler = buffer.handler.take();
         let destructor_result = handler.as_ref().map_or(Ok(()), |handler| {
@@ -17626,6 +17718,13 @@ pub(crate) fn flush_all_output_buffers(eg: &mut ExecutorGlobals) -> Result<(), V
         if let Err(error) = destructor_result {
             eg.flush_output();
             return Err(error);
+        }
+        if eg.exception.is_some()
+            && eg.exception.as_ref().and_then(Value::object_identity) != pending_exception
+        {
+            // Request-final failure aborts the remaining buffer callbacks.
+            // Do not flush a parent buffer after a child handler has failed.
+            break;
         }
     }
     Ok(())
@@ -31535,7 +31634,7 @@ pub fn startup_date_timezone_warning(settings: &[(String, String)]) -> Option<St
         .then(|| format!("Invalid date.timezone value '{value}', using 'UTC' instead"))
 }
 
-/// Apply the admitted request-startup INI subset after compilation. Unknown
+/// Apply the admitted request-startup INI subset. Unknown
 /// CLI definitions remain accepted by the CLI but are not published through
 /// `ini_get()` until their observable runtime contract is implemented.
 pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String, String)]) {
@@ -31550,6 +31649,11 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
         let raw_value = value.as_str();
         let value = value.trim();
         match normalized.as_str() {
+            "output_handler" if name == "output_handler" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, parse_ini::startup_cli_string(raw_value));
+            }
             "disable_functions" if name == "disable_functions" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -31749,7 +31853,9 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("display_errors") {
         ret!(rv, Value::string("1"));
     }
-    if option.eq_ignore_ascii_case("disable_functions") {
+    if option.eq_ignore_ascii_case("disable_functions")
+        || option.eq_ignore_ascii_case("output_handler")
+    {
         ret!(rv, Value::string(""));
     }
     if option.eq_ignore_ascii_case("variables_order") {
@@ -31801,7 +31907,7 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         return Some(value.clone());
     }
     Some(match option {
-        "disable_functions" => String::new(),
+        "disable_functions" | "output_handler" => String::new(),
         "variables_order" => "EGPCS".to_string(),
         "display_errors" | "report_memleaks" | "allow_url_fopen" => "1".to_string(),
         "zend.assertions" => eg.assertion_state.startup_mode.to_string(),
@@ -31863,7 +31969,7 @@ fn fn_ini_set(
     };
     if matches!(
         option.as_str(),
-        "allow_url_fopen" | "disable_functions" | "variables_order"
+        "allow_url_fopen" | "disable_functions" | "variables_order" | "output_handler"
     ) {
         ret!(rv, Value::bool(false));
     }

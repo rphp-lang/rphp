@@ -386,24 +386,40 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
     }
     let pending_uncaught = eg.exception.take();
     let pending_uncaught_identity = pending_uncaught.as_ref().and_then(Value::object_identity);
+    let mut requested_exit = match &execution {
+        Err(VmError::Exit(code)) => Some(*code),
+        _ => None,
+    };
     let mut shutdown_error = None;
-    if execution.is_ok() && eg.shutdown_functions.is_some() {
+    if (execution.is_ok() || requested_exit.is_some()) && eg.shutdown_functions.is_some() {
         shutdown_error = crate::stdlib::run_shutdown_functions(eg, frame).err();
     }
     if eg.exception.is_none() {
         eg.exception = pending_uncaught;
     }
-    if let Err(error) = execution {
+    if let Err(error) = execution
+        && requested_exit.is_none()
+    {
         crate::value::end_object_handle_request();
         return Err(error);
     }
     if let Err(error) = finish_request_shutdown(eg, frame, shutdown_error) {
-        let _ = finish_request_handler_shutdown(eg, frame);
-        crate::value::end_object_handle_request();
-        return Err(error);
+        if let VmError::Exit(code) = error {
+            requested_exit = Some(code);
+        } else {
+            let _ = finish_request_handler_shutdown(eg, frame);
+            crate::value::end_object_handle_request();
+            return Err(error);
+        }
     }
 
+    // Keep the retired root as the logical caller of request-final callbacks.
+    // Its slots are no longer readable, but traces still end at {main}.
+    let previous_output_caller = eg.current_execute_data.replace(frame);
+    let output_exception_identity = eg.exception.as_ref().and_then(Value::object_identity);
     let output_result = crate::stdlib::flush_all_output_buffers(eg);
+    let output_replaced_exception = output_exception_identity.is_some()
+        && eg.exception.as_ref().and_then(Value::object_identity) != output_exception_identity;
     let handler_dispatch_result = if output_result.is_ok()
         && eg.exception.is_some()
         && eg.exception_handler.is_some()
@@ -415,6 +431,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         Ok(())
     };
     let handler_shutdown_result = finish_request_handler_shutdown(eg, frame);
+    eg.current_execute_data.set(previous_output_caller);
     crate::value::end_object_handle_request();
     output_result?;
     handler_dispatch_result?;
@@ -428,16 +445,36 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
             return Err(VmError::Parse(format_parse_error(&exc)));
         }
         if let Some((identity, rendered)) = prepared_uncaught
-            && exc.object_identity() == Some(identity)
         {
-            return Err(VmError::Fatal(rendered));
+            if exc.object_identity() == Some(identity) {
+                return Err(VmError::Fatal(rendered));
+            }
+            if output_replaced_exception {
+                // The script fatal is already committed when request output
+                // shutdown begins. A handler failure adds a second fatal; it
+                // cannot erase the first diagnostic.
+                let separator = if crate::stdlib::ini_default(eg, "display_errors")
+                    .as_deref().is_some_and(|value| value.eq_ignore_ascii_case("stderr"))
+                {
+                    "\n"
+                } else {
+                    "\n\n"
+                };
+                return Err(VmError::Fatal(format!(
+                    "{rendered}{separator}Fatal error: {}",
+                    format_uncaught_throwable(eg, &exc)
+                )));
+            }
         }
         return Err(VmError::Fatal(format_uncaught_throwable(eg, &exc)));
     }
 
     eg.finalize_pending_named_classes()?;
 
-    Ok(return_value)
+    // exit() stops execution, not request finalization: shutdown callbacks,
+    // destructors and output handlers still run, and their failures take
+    // precedence over the requested successful exit status.
+    requested_exit.map_or(Ok(return_value), |code| Err(VmError::Exit(code)))
 }
 
 #[cold]
