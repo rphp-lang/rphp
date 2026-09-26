@@ -2,7 +2,7 @@
 name = "rphp"
 version = "0.1.0-alpha.1"
 edition = "2024"
-rust-version = "1.93.1"
+rust-version = "1.98.1"
 description = "Experimental PHP-compatible runtime implemented independently in Rust"
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/rphp-lang/rphp"

@@ -44,7 +44,9 @@ guarantee.
 ## Build and run
 
 Install [Rustup](https://rustup.rs/) and clone the repository. Rustup will use
-the toolchain pinned in `rust-toolchain.toml`.
+Rust 1.98.1 (including Cargo and rustfmt) pinned in `rust-toolchain.toml`.
+This is also the minimum supported Rust version; the language edition remains
+2024.
 
 Native bcrypt compatibility requires dynamically linked
 [libxcrypt](https://github.com/besser82/libxcrypt) >= 4.4 and `pkg-config`.

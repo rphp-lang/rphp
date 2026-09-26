@@ -1636,7 +1636,7 @@ fn resolve_nonexact_string_offset_key(
     };
     Ok(match key {
         StringOffsetKey::Exact(_) => unreachable!("exact string keys stay on the inline lane"),
-        StringOffsetKey::Cast(index) if direct_probe && source.value_type() == ValueType::Double => {
+        StringOffsetKey::Cast(_) if direct_probe && source.value_type() == ValueType::Double => {
             let index = match value_to_array_key(source) {
                 Ok(ArrayKey::Int(index)) => index,
                 Ok(ArrayKey::String(_)) => {

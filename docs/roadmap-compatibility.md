@@ -36,6 +36,16 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `rust-1.98.1-upgrade` checkpoint over `a636e797` moves the pinned and minimum
+Rust version to 1.98.1 (rustfmt 1.9.0), retaining edition 2024 and the unchanged
+lockfile. Both release profiles preserve the exact stable manifest and all
+6,881 passes, **+0/-0**. Five full Cargo variants, all targets, 13 original OOM
+oracles per profile, seven Composer/Symfony gates and unsafe/static checks pass.
+The short six-canary A/B is recorded as diagnostic evidence, not an unchanged
+performance claim. See [exact evidence](compatibility.md).
+
+### Preceding OOM checkpoint and remaining scope
+
 The `core-oom-budget` checkpoint over `a54a684d` closes `new_oom` through
 request-owned reservations, checked growth, COW/reference preservation and
 bounded fatal output/shutdown handling. Native mutation side-exits under a finite

@@ -7,6 +7,38 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### Rust 1.98.1 toolchain checkpoint
+
+The `rust-1.98.1-upgrade` checkpoint over `a636e797` pins Rust/Cargo 1.98.1
+and rustfmt 1.9.0, and raises the minimum supported Rust version to 1.98.1.
+Edition 2024, dependencies, the lockfile and PHP behavior are unchanged; the
+only runtime-source edit removes an unused, immediately shadowed binding.
+
+On Linux AMD64, both `release` and `max-perf` retain the byte-identical
+7,174-case stable manifest: **6,881 pass / 0 fail / 194 skip / 99 unsupported**,
+exact **+0/-0**, without timeout/crash. Both artifacts match all 13 original
+OOM CLI oracles against PHP 8.5.11. All five complete Cargo configurations
+retain the pass/ignore counts below; all-targets, the seven Composer/Symfony
+gates, format, unsafe and runner/matrix self-tests pass. No test is removed,
+filtered or newly ignored. The matrix peaks at 5 GiB with zero swap under
+the unchanged 6 GiB host cap.
+
+A short CPU-pinned, 12-pair release comparison preserves all six PHP output
+checksums. Paired medians versus the accepted Rust 1.93.1 artifact are startup
+-6.92%, calls -8.70%, objects +2.24%, arrays -0.49%, strings +0.86% and recursive
+JIT -2.93%. These millisecond-scale canaries are diagnostic, not a claim of
+unchanged performance; broader optimization remains deferred. macOS/AArch64
+execution and further PHP coverage are not claimed by this compiler upgrade.
+
+SHA-256 evidence: release
+`210302f56c07d51992649a28e0872fc31e774db92188b548642f39cdf7f8c1eb`;
+max-perf `5dd963c527bfa2e6d2c8cb809fbdfa88a0dd2520f5503a0026131073f606734d`;
+matrix `06976849ea16f6bda637f33beb9eae067c78da6c85fe91bbf12f61bf1a8a61f3`;
+evidence packet `f0abc672a88e7950f97f0bacd98a73a440f66f845afe7a59aa9eb92dd199f0e9`.
+Stable manifest and pass-set hashes are unchanged from the checkpoint below.
+
+### Preceding OOM checkpoint
+
 The `core-oom-budget` checkpoint over `a54a684d` fixes the remaining stable-core
 timeout, `Zend/tests/new_oom.phpt`. Request-owned storage reservations replace
 process-wide allocator snapshots: arrays, objects, properties, strings, closures,
