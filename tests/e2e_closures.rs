@@ -861,3 +861,45 @@ echo preg_replace_callback('/x/', $context->replace(), 'x-x');
         "9|321|031221|3x-3x"
     );
 }
+
+#[test]
+fn bound_closure_variadic_unpack_keeps_surplus_arguments() {
+    // The bound `$this` receiver lives in the last compiled variable of a
+    // closure. Surplus unpacked arguments overlap that slot until they are
+    // packed into the variadic array, so the receiver must be installed after
+    // packing. A regression here surfaced as PHPStan's Nette container builder
+    // reporting "Argument #2 must be of type Parameter, Method given".
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Parameter { function __construct(public string $n) {} }
+class Method {
+    function iife(array $params): void {
+        (function (Parameter ...$params) { echo count($params), "|"; })(...array_values($params));
+    }
+    function viaVar(array $params): void {
+        $f = function (Parameter ...$p) { echo count($p), "|"; };
+        $f(...$params);
+    }
+    function firstAndRest(array $params): void {
+        (function ($first, ...$p) {
+            echo json_encode([get_class($first), array_map(fn ($v) => get_class($v), $p)]), "|";
+        })(...$params);
+        echo get_class($this), "|";
+    }
+    function three(): void {
+        (function (...$p) { echo json_encode(array_map(fn ($v) => get_class($v), $p)), "|"; })(
+            ...[new Parameter('x'), new Parameter('y'), new Parameter('z')]
+        );
+    }
+}
+$m = new Method;
+$m->iife(['a' => new Parameter('a'), 'b' => new Parameter('b')]);
+$m->viaVar([new Parameter('a'), new Parameter('b')]);
+$m->firstAndRest([new Parameter('a'), new Parameter('b')]);
+$m->three();
+"#,
+        ),
+        r#"2|2|["Parameter",["Parameter"]]|Method|["Parameter","Parameter","Parameter"]|"#
+    );
+}

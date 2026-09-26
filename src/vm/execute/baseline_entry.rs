@@ -1752,7 +1752,6 @@ where
                 .map(|index| (*frame).cv((start + index) as u32).clone_closure_capture())
                 .collect::<Vec<_>>()
         });
-        initialize_bound_this_frame(frame, func_ptr, bound_this, closure_scope_class_id);
 
         // Detached callback entry bypasses DoFcall, whose full path normally
         // materializes the variadic bucket. Internal handlers use the same ABI in
@@ -1798,6 +1797,11 @@ where
                 frame_slot_set(frame, destination as *mut Value, capture);
             }
         }
+        // Install the bound receiver only after surplus arguments were packed
+        // into the variadic bucket and captures moved into place: its CV is
+        // the last one, so with more public arguments than parameters a raw
+        // argument still sits there until packing has consumed it.
+        initialize_bound_this_frame(frame, func_ptr, bound_this, closure_scope_class_id);
 
         // Source opcodes validate user arguments while executing their Send*
         // sequence. Engine-dispatched callbacks enter here after that sequence,
