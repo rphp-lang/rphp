@@ -98,7 +98,7 @@ fn include_path_setter_matches_weak_values_and_errors() {
             "
         ),
         concat!(
-            ".|1:alpha|1:alpha|1:alpha|alpha:12||",
+            ".|1:alpha|1:alpha|\nDeprecated: set_include_path(): Passing null to parameter #1 ($include_path) of type string is deprecated in <main> on line 5\n1:alpha|alpha:12||",
             "TypeError:set_include_path(): Argument #1 ($include_path) must be of type string, array given|",
             "ValueError:set_include_path(): Argument #1 ($include_path) must not contain any null bytes"
         )
@@ -162,6 +162,7 @@ fn stream_resolve_include_path_matches_weak_values_and_errors() {
             "
         ),
         concat!(
+            "\nDeprecated: stream_resolve_include_path(): Passing null to parameter #1 ($filename) of type string is deprecated in <main> on line 2\n",
             "1:1:1:1:1|",
             "TypeError:stream_resolve_include_path(): Argument #1 ($filename) must be of type string, array given|",
             "TypeError:stream_resolve_include_path(): Argument #1 ($filename) must be of type string, resource given|",

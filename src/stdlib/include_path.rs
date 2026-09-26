@@ -3,18 +3,16 @@
 use std::path::{Component, Path, PathBuf};
 
 use crate::runtime::ExecutorGlobals;
-use crate::value::{Value, ValueType};
+use crate::value::Value;
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
-use super::streams::checked_args::{argument_error, given_type_name};
+use super::streams::checked_args::argument_error;
 
 mod report;
 
 pub(super) use report::fn_stream_resolve_include_path;
 
-const INCLUDE_PATH_STATE: &str = "\0rphp-include-path";
-const INCLUDE_PATH_VALUE: &str = "current";
 const DEFAULT_INCLUDE_PATH: &str = ".";
 
 #[cold]
@@ -32,20 +30,17 @@ pub(super) fn fn_set_include_path(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = argument(execute_data, 0);
-    let path = match path_argument(value, eg, "set_include_path", "include_path") {
-        Ok(path) => path,
-        Err(()) => return Ok(()),
+    let Some(path) = path_argument(execute_data, eg, "set_include_path", "include_path")? else {
+        return Ok(());
     };
     if path.is_empty() {
         return return_value(return_pointer, Value::bool(false));
     }
 
     let previous = current(eg).to_string();
-    eg.static_vars
-        .entry(INCLUDE_PATH_STATE.to_string())
-        .or_default()
-        .insert(INCLUDE_PATH_VALUE.to_string(), Value::string(path));
+    eg.ini_overrides
+        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+        .insert("include_path".to_string(), path);
     return_value(return_pointer, Value::string(previous))
 }
 
@@ -164,10 +159,10 @@ pub(crate) fn resolve_for_open_from(
 }
 
 pub(crate) fn current(eg: &ExecutorGlobals) -> &str {
-    eg.static_vars
-        .get(INCLUDE_PATH_STATE)
-        .and_then(|state| state.get(INCLUDE_PATH_VALUE))
-        .and_then(Value::as_str)
+    eg.ini_overrides
+        .as_deref()
+        .and_then(|state| state.get("include_path"))
+        .map(String::as_str)
         .unwrap_or(DEFAULT_INCLUDE_PATH)
 }
 
@@ -186,36 +181,15 @@ fn path_separator() -> char {
     if cfg!(windows) { ';' } else { ':' }
 }
 
-fn weak_string(value: &Value) -> Option<String> {
-    match value.value_type() {
-        ValueType::String => value.as_str().map(str::to_string),
-        ValueType::True | ValueType::Long | ValueType::Double => Some(value.echo_to_string()),
-        ValueType::Null | ValueType::False => Some(String::new()),
-        ValueType::Undef
-        | ValueType::Array
-        | ValueType::Object
-        | ValueType::Resource
-        | ValueType::Reference
-        | ValueType::Closure => None,
-    }
-}
-
 fn path_argument(
-    value: &Value,
+    execute_data: *mut ExecuteData,
     eg: &mut ExecutorGlobals,
     function: &str,
     name: &str,
-) -> Result<String, ()> {
-    let Some(path) = weak_string(value) else {
-        argument_error(
-            eg,
-            "TypeError",
-            format!(
-                "{function}(): Argument #1 (${name}) must be of type string, {} given",
-                given_type_name(value)
-            ),
-        );
-        return Err(());
+) -> Result<Option<String>, VmError> {
+    let Some(path) = super::typed_internal_string_argument(execute_data, eg, function, 0, name)?
+    else {
+        return Ok(None);
     };
     if path.contains('\0') {
         argument_error(
@@ -223,18 +197,9 @@ fn path_argument(
             "ValueError",
             format!("{function}(): Argument #1 (${name}) must not contain any null bytes"),
         );
-        return Err(());
+        return Ok(None);
     }
-    Ok(path)
-}
-
-fn argument<'a>(execute_data: *mut ExecuteData, index: u32) -> &'a Value {
-    let value = unsafe { (*execute_data).cv(index) };
-    if value.is_reference() {
-        unsafe { &*value.as_ref_ptr() }
-    } else {
-        value
-    }
+    Ok(Some(path))
 }
 
 fn return_value(pointer: *mut Value, value: Value) -> Result<(), VmError> {
@@ -248,7 +213,6 @@ fn return_value(pointer: *mut Value, value: Value) -> Result<(), VmError> {
 mod tests {
     use super::{bypasses_search, resolve_existing, resolve_for_open};
     use crate::runtime::ExecutorGlobals;
-    use crate::value::Value;
 
     #[test]
     fn resolver_uses_order_and_bypasses_explicit_paths() {
@@ -262,18 +226,15 @@ mod tests {
         std::fs::write(second.join("probe.txt"), b"second").unwrap();
 
         let mut eg = ExecutorGlobals::new();
-        eg.static_vars.insert(
-            super::INCLUDE_PATH_STATE.to_string(),
-            std::collections::HashMap::from([(
-                super::INCLUDE_PATH_VALUE.to_string(),
-                Value::string(format!(
-                    "{}{}{}",
-                    first.to_string_lossy(),
-                    super::path_separator(),
-                    second.to_string_lossy()
-                )),
-            )]),
-        );
+        eg.ini_overrides = Some(Box::new(std::collections::HashMap::from([(
+            "include_path".to_string(),
+            format!(
+                "{}{}{}",
+                first.to_string_lossy(),
+                super::path_separator(),
+                second.to_string_lossy()
+            ),
+        )])));
         let expected = std::fs::canonicalize(first.join("probe.txt"))
             .unwrap()
             .to_string_lossy()

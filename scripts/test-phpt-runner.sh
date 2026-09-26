@@ -151,6 +151,11 @@ $binaryRecord = json_decode(
 );
 if (unsupported_rphp_ini_directives($supported) !== []
     || unsupported_rphp_ini_directives($diagnostics) !== []
+    || unsupported_rphp_ini_directives("include_path=first:second\n") !== []
+    || unsupported_rphp_ini_directives("include_path=.\nauto_prepend_file=pre.php\n") !== ["auto_prepend_file"]
+    || target_command("/rphp", "rphp", "test.php", "include_path=first:second\n", "") !== [
+        "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html", "-d", "include_path=first:second", "test.php",
+    ]
     || unsupported_rphp_ini_directives("error_log=relative.log\n") !== []
     || unsupported_rphp_ini_directives("error_log=syslog\n") !== ["error_log"]
     || unsupported_rphp_ini_directives("error_log=\"syslog\"\n") !== ["error_log"]

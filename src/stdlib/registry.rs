@@ -3138,14 +3138,30 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
 
     // --- Filesystem ---
     #[cfg(feature = "include-path")]
-    reg!("get_include_path", include_path::fn_get_include_path, 0, 0);
+    reg_typed!(
+        "get_include_path",
+        include_path::fn_get_include_path,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string())
+        ])
+    );
     #[cfg(feature = "include-path")]
-    reg!(
+    reg_typed!(
         "set_include_path",
         include_path::fn_set_include_path,
         1,
         1,
-        "include_path"
+        ["include_path"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string())
+        ])
     );
     #[cfg(feature = "include-path")]
     reg!(
@@ -4589,8 +4605,57 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "replace",
         "response_code"
     );
-    reg!("ini_get", fn_ini_get, 1, 1, "option");
-    reg!("ini_set", fn_ini_set, 2, 2, "option", "value");
+    let ini_result = || {
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    };
+    let ini_value = || {
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::String,
+            ParamTypeHint::Int,
+            ParamTypeHint::Float,
+            ParamTypeHint::Bool,
+            ParamTypeHint::ClassName("null".to_string()),
+        ])
+    };
+    reg_typed!(
+        "ini_get",
+        fn_ini_get,
+        1,
+        1,
+        ["option"],
+        [ParamTypeHint::String],
+        ini_result()
+    );
+    reg_typed!(
+        "ini_set",
+        fn_ini_set,
+        2,
+        2,
+        ["option", "value"],
+        [ParamTypeHint::String, ini_value()],
+        ini_result()
+    );
+    reg_typed!(
+        "ini_alter",
+        fn_ini_alter,
+        2,
+        2,
+        ["option", "value"],
+        [ParamTypeHint::String, ini_value()],
+        ini_result()
+    );
+    reg_typed!(
+        "ini_restore",
+        fn_ini_restore,
+        1,
+        1,
+        ["option"],
+        [ParamTypeHint::String],
+        ParamTypeHint::Void
+    );
     reg!(
         "ini_parse_quantity",
         parse_ini::fn_ini_parse_quantity,

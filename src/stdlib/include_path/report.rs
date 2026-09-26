@@ -7,7 +7,7 @@ use crate::value::Value;
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 
-use super::{argument, current, path_argument, path_separator, return_value};
+use super::{current, path_argument, path_separator, return_value};
 
 #[cold]
 pub(in crate::stdlib) fn fn_stream_resolve_include_path(
@@ -15,10 +15,10 @@ pub(in crate::stdlib) fn fn_stream_resolve_include_path(
     return_pointer: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let value = argument(execute_data, 0);
-    let filename = match path_argument(value, eg, "stream_resolve_include_path", "filename") {
-        Ok(filename) => filename,
-        Err(()) => return Ok(()),
+    let Some(filename) =
+        path_argument(execute_data, eg, "stream_resolve_include_path", "filename")?
+    else {
+        return Ok(());
     };
     let value = resolve_reported_path(eg, &filename)
         .map(Value::string)
@@ -87,7 +87,6 @@ mod tests {
 
     use super::{local_file_uri_path, resolve_reported_path};
     use crate::runtime::ExecutorGlobals;
-    use crate::value::Value;
 
     #[test]
     fn reporting_canonicalizes_candidates_and_accepts_only_local_file_uris() {
@@ -96,13 +95,10 @@ mod tests {
         std::fs::create_dir_all(&first).unwrap();
 
         let mut eg = ExecutorGlobals::new();
-        eg.static_vars.insert(
-            super::super::INCLUDE_PATH_STATE.to_string(),
-            std::collections::HashMap::from([(
-                super::super::INCLUDE_PATH_VALUE.to_string(),
-                Value::string(first.to_string_lossy().into_owned()),
-            )]),
-        );
+        eg.ini_overrides = Some(Box::new(std::collections::HashMap::from([(
+            "include_path".to_string(),
+            first.to_string_lossy().into_owned(),
+        )])));
         let expected = std::fs::canonicalize(&first)
             .unwrap()
             .to_string_lossy()

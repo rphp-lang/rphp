@@ -17182,6 +17182,11 @@ fn fn_error_reporting(
             return Ok(());
         };
         eg.set_error_reporting(level);
+        // Persistent INI configuration is distinct from the temporary `@`
+        // execution mask, even without a command-line override.
+        eg.ini_overrides
+            .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+            .insert("error_reporting".to_string(), level.to_string());
     }
     ret!(rv, Value::long(previous));
 }
@@ -31690,6 +31695,8 @@ pub fn startup_date_timezone_warning(settings: &[(String, String)]) -> Option<St
         .then(|| format!("Invalid date.timezone value '{value}', using 'UTC' instead"))
 }
 
+const INI_STARTUP_VALUES: &str = "\0rphp-ini-startup-values";
+
 /// Apply the admitted request-startup INI subset. Unknown
 /// CLI definitions remain accepted by the CLI but are not published through
 /// `ini_get()` until their observable runtime contract is implemented.
@@ -31705,6 +31712,19 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
         let raw_value = value.as_str();
         let value = value.trim();
         match normalized.as_str() {
+            "include_path" if name == "include_path" => {
+                let value = parse_ini::startup_cli_string(raw_value);
+                if !value.is_empty() {
+                    eg.ini_overrides
+                        .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                        .insert(normalized, value);
+                } else if let Some(overrides) = eg.ini_overrides.as_deref_mut() {
+                    // CLI definitions are last-wins before INI validation:
+                    // an empty final definition falls back to the default,
+                    // not to an earlier command-line value.
+                    overrides.remove("include_path");
+                }
+            }
             setting if setting == name && diagnostics::ini_default(setting).is_some() => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -31831,6 +31851,17 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
             _ => {}
         }
     }
+    // A cold request-owned snapshot, not another live INI store. Capture it
+    // before any user API (including GC/error_reporting/include-path writers)
+    // can mutate the current values. No hot ExecutorGlobals field is needed.
+    if let Some(values) = eg.ini_overrides.as_deref() {
+        let snapshot = values
+            .iter()
+            .map(|(key, value)| (key.clone(), Value::string(value.clone())))
+            .collect();
+        eg.static_vars
+            .insert(INI_STARTUP_VALUES.to_string(), snapshot);
+    }
 }
 
 fn normalize_error_reporting_ini(value: &str) -> (String, i64) {
@@ -31890,76 +31921,13 @@ fn fn_ini_get(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let option = arg_str!(ed, 0);
-    // Both settings have dedicated request fields that every admitted writer
-    // keeps synchronized. Avoid allocating a lowercase lookup key on the
-    // ordinary sidecar-free path. When a sidecar exists, the canonical lookup
-    // below must retain the original spelling of values such as `17junk`.
-    if eg.ini_overrides.is_none() {
-        if option.eq_ignore_ascii_case("precision") {
-            ret!(rv, Value::string(eg.precision.to_string()));
-        }
-        if option.eq_ignore_ascii_case("serialize_precision") {
-            ret!(rv, Value::string(eg.serialize_precision.to_string()));
-        }
-    }
-    let normalized = option.to_ascii_lowercase();
-    if let Some(value) = eg
-        .ini_overrides
-        .as_deref()
-        .and_then(|overrides| overrides.get(&normalized))
-    {
-        ret!(rv, Value::string(value.clone()));
-    }
-    if option.eq_ignore_ascii_case("display_errors") {
-        ret!(rv, Value::string("1"));
-    }
-    if option.eq_ignore_ascii_case("disable_functions")
-        || option.eq_ignore_ascii_case("output_handler")
-    {
-        ret!(rv, Value::string(""));
-    }
-    if option.eq_ignore_ascii_case("variables_order") {
-        ret!(rv, Value::string("EGPCS"));
-    }
-    if option.eq_ignore_ascii_case("allow_url_fopen") {
-        ret!(rv, Value::string("1"));
-    }
-    if option.eq_ignore_ascii_case("zend.enable_gc") {
-        ret!(rv, Value::string(if eg.gc_enabled { "1" } else { "0" }));
-    }
-    if option.eq_ignore_ascii_case("precision") {
-        ret!(rv, Value::string(eg.precision.to_string()));
-    }
-    if option.eq_ignore_ascii_case("serialize_precision") {
-        ret!(rv, Value::string(eg.serialize_precision.to_string()));
-    }
-    if option.eq_ignore_ascii_case("arg_separator.output") {
-        ret!(rv, Value::string("&"));
-    }
-    if let Some(value) = diagnostics::ini_default(&normalized) {
-        ret!(rv, Value::string(value));
-    }
-    if let Some(value) = admitted_iconv_ini_default(&normalized) {
-        ret!(rv, Value::string(value));
-    }
-    ret!(rv, Value::bool(false));
-}
-
-#[cold]
-#[inline(never)]
-#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
-fn admitted_iconv_ini_default(option: &str) -> Option<&'static str> {
-    match option {
-        "default_charset" => Some("UTF-8"),
-        "internal_encoding"
-        | "input_encoding"
-        | "output_encoding"
-        | "iconv.internal_encoding"
-        | "iconv.input_encoding"
-        | "iconv.output_encoding" => Some(""),
-        _ => None,
-    }
+    let Some(option) = typed_internal_string_argument(ed, eg, "ini_get", 0, "option")? else {
+        return Ok(());
+    };
+    ret!(
+        rv,
+        ini_default(eg, &option).map_or_else(|| Value::bool(false), Value::string)
+    );
 }
 
 pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
@@ -31970,6 +31938,10 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
     {
         return Some(value.clone());
     }
+    ini_base_default(eg, option)
+}
+
+fn ini_base_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
     if let Some(value) = diagnostics::ini_default(option) {
         return Some(value.to_string());
     }
@@ -31987,6 +31959,8 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         "zend.exception_ignore_args" => "0".to_string(),
         "precision" => eg.precision.to_string(),
         "serialize_precision" => eg.serialize_precision.to_string(),
+        "include_path" => ".".to_string(),
+        "error_reporting" => crate::PHP_E_ALL.to_string(),
         "zend.enable_gc" => if eg.gc_enabled { "1" } else { "0" }.to_string(),
         "memory_limit" => "-1".to_string(),
         "zend.exception_string_param_max_len" => "15".to_string(),
@@ -32029,16 +32003,104 @@ fn fn_ini_set(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let option = arg_str!(ed, 0).to_ascii_lowercase();
-    let value = arg!(ed, 1).echo_to_string_with_precision(eg.precision);
+    ini_set_call(ed, rv, eg, "ini_set")
+}
+
+fn fn_ini_alter(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ini_set_call(ed, rv, eg, "ini_alter")
+}
+
+#[cold]
+fn ini_set_call(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<(), VmError> {
+    let Some(option) = typed_internal_string_argument(ed, eg, function, 0, "option")? else {
+        return Ok(());
+    };
+    let argument = owned_argument(ed, 1);
+    let argument = argument.dereferenced();
+    if !matches!(
+        argument.value_type(),
+        ValueType::String
+            | ValueType::Long
+            | ValueType::Double
+            | ValueType::True
+            | ValueType::False
+            | ValueType::Null
+    ) {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "{function}(): Argument #2 ($value) must be of type string|int|float|bool|null"
+            ),
+        ));
+        return Ok(());
+    }
+    let value = argument.echo_to_string_with_precision(eg.precision);
+    let previous = apply_ini_option(ed, eg, function, option, value)?;
+    ret!(
+        rv,
+        previous.map_or_else(|| Value::bool(false), Value::string)
+    );
+}
+
+#[cold]
+fn fn_ini_restore(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(option) = typed_internal_string_argument(ed, eg, "ini_restore", 0, "option")? else {
+        return Ok(());
+    };
+    let original = eg
+        .static_vars
+        .get(INI_STARTUP_VALUES)
+        .and_then(|snapshot| snapshot.get(&option))
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .or_else(|| match option.as_str() {
+            // These defaults have live request fields and therefore must not
+            // be recovered from an already changed runtime value.
+            "precision" => Some("14".to_string()),
+            "serialize_precision" => Some("-1".to_string()),
+            "error_reporting" => Some(crate::PHP_E_ALL.to_string()),
+            "zend.enable_gc" | "assert.exception" => Some("1".to_string()),
+            _ => ini_base_default(eg, &option),
+        });
+    if let Some(original) = original {
+        apply_ini_option(ed, eg, "ini_restore", option, original)?;
+    }
+    ret!(rv, Value::null());
+}
+
+#[cold]
+fn apply_ini_option(
+    ed: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    option: String,
+    value: String,
+) -> Result<Option<String>, VmError> {
     let Some(previous) = ini_default(eg, &option) else {
-        ret!(rv, Value::bool(false));
+        return Ok(None);
     };
     if matches!(
         option.as_str(),
         "allow_url_fopen" | "disable_functions" | "variables_order" | "output_handler"
     ) {
-        ret!(rv, Value::bool(false));
+        return Ok(None);
+    }
+
+    if option == "include_path" && value.is_empty() {
+        return Ok(None);
     }
 
     if option == "date.timezone" && !date::is_supported_timezone(&value) {
@@ -32048,10 +32110,10 @@ fn fn_ini_set(
             2,
             "Warning",
             &format!(
-                "ini_set(): Invalid date.timezone value '{value}', using '{previous}' instead"
+                "{function}(): Invalid date.timezone value '{value}', using '{previous}' instead"
             ),
         )?;
-        ret!(rv, Value::bool(false));
+        return Ok(None);
     }
 
     if option == "memory_limit" {
@@ -32067,7 +32129,7 @@ fn fn_ini_set(
                     "Failed to set memory limit to {requested} bytes (Current memory usage is {current} bytes)"
                 ),
             )?;
-            ret!(rv, Value::bool(false));
+            return Ok(None);
         }
     }
 
@@ -32077,7 +32139,7 @@ fn fn_ini_set(
             .ok()
             .filter(|value| (-1..=1).contains(value))
         else {
-            ret!(rv, Value::bool(false));
+            return Ok(None);
         };
         if (eg.assertion_state.startup_mode < 0) != (requested < 0) {
             report_internal_diagnostic(
@@ -32087,35 +32149,35 @@ fn fn_ini_set(
                 "Warning",
                 "zend.assertions may be completely enabled or disabled only in php.ini",
             )?;
-            ret!(rv, Value::bool(false));
+            return Ok(None);
         }
         eg.assertion_state.active = requested > 0;
         eg.ini_overrides
             .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
             .insert(option, requested.to_string());
-        ret!(rv, Value::string(previous));
+        return Ok(Some(previous));
     }
 
     if option == "precision" {
         let Some(precision) = parse_precision_ini(&value) else {
-            ret!(rv, Value::bool(false));
+            return Ok(None);
         };
         eg.precision = precision;
         eg.ini_overrides
             .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
             .insert(option, value);
-        ret!(rv, Value::string(previous));
+        return Ok(Some(previous));
     }
 
     if option == "serialize_precision" {
         let Some(precision) = parse_precision_ini(&value) else {
-            ret!(rv, Value::bool(false));
+            return Ok(None);
         };
         eg.serialize_precision = precision;
         eg.ini_overrides
             .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
             .insert(option, value);
-        ret!(rv, Value::string(previous));
+        return Ok(Some(previous));
     }
 
     if option == "zend.exception_string_param_max_len"
@@ -32123,7 +32185,7 @@ fn fn_ini_set(
             .parse::<i64>()
             .is_ok_and(|value| (0..=1_000_000).contains(&value))
     {
-        ret!(rv, Value::bool(false));
+        return Ok(None);
     }
     if option == "fiber.stack_size" && value.parse::<i64>().is_ok_and(|value| value < 0) {
         report_internal_diagnostic(
@@ -32133,7 +32195,7 @@ fn fn_ini_set(
             "Warning",
             "fiber.stack_size must be a positive number",
         )?;
-        ret!(rv, Value::bool(false));
+        return Ok(None);
     }
     if option == "zend.enable_gc" {
         set_gc_enabled(eg, gc_ini_boolean(&value));
@@ -32141,10 +32203,39 @@ fn fn_ini_set(
     if option == "assert.exception" {
         eg.assertion_state.exception = ini_boolean(&value);
     }
+    if option == "error_reporting" {
+        // Runtime ini_set consumes an integer prefix, unlike the startup
+        // parser, which also evaluates INI constant expressions.
+        eg.set_error_reporting(i64::from(ini_signed_integer_prefix(&value) as i32));
+    }
     eg.ini_overrides
         .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
         .insert(option, value);
-    ret!(rv, Value::string(previous));
+    Ok(Some(previous))
+}
+
+/// The INI error mask uses a saturating signed-long decimal prefix followed
+/// by conversion to PHP's 32-bit error mask, without quantity suffixes or
+/// runtime evaluation of constant names.
+fn ini_signed_integer_prefix(value: &str) -> i64 {
+    let bytes = value
+        .trim_start_matches(|c: char| c.is_ascii_whitespace())
+        .as_bytes();
+    let (negative, digits) = match bytes {
+        [b'-', rest @ ..] => (true, rest),
+        [b'+', rest @ ..] => (false, rest),
+        _ => (false, bytes),
+    };
+    let mut result = 0i64;
+    for digit in digits.iter().copied().take_while(u8::is_ascii_digit) {
+        let digit = i64::from(digit - b'0');
+        result = if negative {
+            result.saturating_mul(10).saturating_sub(digit)
+        } else {
+            result.saturating_mul(10).saturating_add(digit)
+        };
+    }
+    result
 }
 
 /// GC's boolean INI contract uses keywords or an integer prefix, not a full
