@@ -6483,9 +6483,15 @@ fn fn_hash_update(
         ));
         return Ok(());
     };
-    if let Some(buffer) = buffer_value.as_string_mut_if_unique() {
+    if let Some(buffer) = buffer_value.as_string_mut_if_unique(data.len().saturating_mul(2)) {
         buffer.extend(data.iter().copied().map(char::from));
     } else {
+        crate::request_memory::check(
+            buffer_value
+                .as_str()
+                .map_or(0, str::len)
+                .saturating_add(data.len().saturating_mul(2)),
+        );
         let mut buffer = hash_string_bytes(buffer_value)
             .expect("validated HashContext buffer remains a string")
             .into_owned();
@@ -9828,6 +9834,7 @@ fn fn_str_repeat(
         .len()
         .checked_mul(times)
         .ok_or_else(|| allocation_failure(usize::MAX))?;
+    crate::request_memory::check(total_bytes);
     let mut repeated = Vec::new();
     repeated
         .try_reserve_exact(total_bytes)
@@ -10062,6 +10069,7 @@ fn fn_str_pad(
     }
 
     let target_length = usize::try_from(length).unwrap_or(usize::MAX);
+    crate::request_memory::check(target_length);
     let padding_length = target_length - input_bytes.len();
     let left_length = match pad_type {
         STR_PAD_LEFT => padding_length,
@@ -17344,6 +17352,9 @@ fn transform_output_buffer(
     caller: Option<*mut ExecuteData>,
 ) -> Result<Vec<u8>, VmError> {
     let raw = std::mem::take(&mut buffer.data);
+    // Keep the input charged through the callback; an emptied/restored buffer
+    // must not retain a cumulative quota after its old allocation is freed.
+    let raw_allocation = std::mem::take(&mut buffer.allocation);
     if buffer.disabled {
         return Ok(raw);
     }
@@ -17401,7 +17412,7 @@ fn transform_output_buffer(
     let transformed = transformed?;
     let handler_threw = eg.exception.is_some();
     if handler_threw && caller.is_none() && eg.exception_handler.is_some() {
-        return handle_final_output_exception(eg, buffer, raw, pending_exception);
+        return handle_final_output_exception(eg, buffer, raw, raw_allocation, pending_exception);
     }
     if !handler_threw {
         eg.exception = pending_exception;
@@ -17430,9 +17441,11 @@ fn handle_final_output_exception(
     eg: &mut ExecutorGlobals,
     buffer: &mut crate::runtime::OutputBuffer,
     raw: Vec<u8>,
+    allocation: crate::request_memory::Allocation,
     pending_exception: Option<Value>,
 ) -> Result<Vec<u8>, VmError> {
     eg.restore_output_buffer(crate::runtime::OutputBuffer {
+        allocation,
         data: raw,
         handler: buffer.handler.take(),
         chunk_size: buffer.chunk_size,
@@ -17447,6 +17460,7 @@ fn handle_final_output_exception(
         .pop_output_buffer()
         .expect("locked final buffer remains present");
     let output = std::mem::take(&mut buffer.data);
+    let _allocation = std::mem::take(&mut buffer.allocation);
     result?;
     if eg.exception.is_some() {
         return Ok(Vec::new());
@@ -17517,24 +17531,78 @@ fn user_frame_source(frame: *mut ExecuteData) -> (String, usize) {
 #[inline(never)]
 pub(crate) fn enforce_memory_limit(
     eg: &ExecutorGlobals,
-    attempted: usize,
-    file: &str,
-    line: usize,
+    _attempted: usize,
+    _file: &str,
+    _line: usize,
 ) -> Result<(), VmError> {
-    let limit = ini_default(eg, "memory_limit")
+    eg.memory_budget.enforce();
+    Ok(())
+}
+
+pub(crate) fn configured_memory_limit(eg: &ExecutorGlobals) -> i64 {
+    ini_default(eg, "memory_limit")
         .map(|value| parse_ini::parse_ini_quantity_value(&value))
-        .unwrap_or(-1);
-    if limit <= 0 {
-        return Ok(());
+        .unwrap_or(-1)
+}
+
+#[cold]
+pub(crate) fn memory_exhausted(
+    eg: &mut ExecutorGlobals,
+    exhausted: crate::request_memory::Exhausted,
+) -> VmError {
+    if eg.memory_budget.is_reporting() {
+        // An exhausted reporting reserve must not recursively construct more
+        // PHP trace objects or reenter output callbacks. Preserve the original
+        // recorded fatal; the outer reporter will still publish it.
+        return VmError::Fatal(format!(
+            "Allowed memory size of {} bytes exhausted (tried to allocate {} bytes)",
+            exhausted.limit, exhausted.attempted
+        ));
     }
-    let current = runtime_info::current_allocator_bytes();
-    if current <= limit {
-        return Ok(());
+    let _diagnostic = eg.memory_budget.diagnostic_scope();
+    let caller = eg.current_execute_data.get();
+    let (file, line) = user_frame_source(caller);
+    let message = format!(
+        "Allowed memory size of {} bytes exhausted (tried to allocate {} bytes)",
+        exhausted.limit, exhausted.attempted
+    );
+    eg.record_last_error(1, &message, &file, line);
+    // PHP discards output buffers while its allocator is in fatal-reporting
+    // mode. Their CLEAN|FINAL callbacks see intact storage and may allocate
+    // from the bounded diagnostic reserve, before ordinary shutdown resumes
+    // under the original limit. Never publish the transformed buffer payload.
+    let saved_exception = eg.exception.take();
+    while let Some(mut buffer) = eg.pop_output_buffer() {
+        let _ = crate::vm::execute::catch_memory_exhaustion(eg, |eg| {
+            transform_output_buffer(
+                eg,
+                &mut buffer,
+                OUTPUT_HANDLER_CLEAN | OUTPUT_HANDLER_FINAL,
+                None,
+            )
+        });
     }
-    Err(VmError::Fatal(format!(
-        "Allowed memory size of {limit} bytes exhausted (tried to allocate {} bytes) in {file} on line {line}",
-        attempted.max(1)
-    )))
+    eg.exception = saved_exception;
+    let mut rendered = format!("{message} in {file} on line {line}");
+    let location_end = rendered.len();
+    if ini_default(eg, "fatal_error_backtraces")
+        .as_deref()
+        .is_none_or(ini_boolean)
+    {
+        let trace = if caller.is_null() {
+            PhpArray::new()
+        } else {
+            collect_live_debug_backtrace(caller, 2, 64, eg, true)
+        };
+        rendered.push_str("\nStack trace:\n");
+        rendered.push_str(&crate::vm::trace::format_throwable_trace(
+            &trace,
+            exception_string_param_max_len(eg),
+            eg,
+        ));
+    }
+    diagnostics::remember_terminal(eg, &rendered, &file, line, false, location_end);
+    VmError::Fatal(rendered)
 }
 
 #[cold]
@@ -24879,6 +24947,7 @@ pub(crate) fn resolved_callback_into_closure(
     let has_heap_captures = resolved.use_vars.iter().any(Value::needs_cleanup);
     let static_vars = resolved.closure_static_vars;
     Value::closure(PhpClosure {
+        allocation: crate::request_memory::Allocation::default(),
         object_handle: 0,
         func: resolved.func_ptr,
         called_scope_class_id: resolved.called_scope_class_id,
@@ -31853,6 +31922,14 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
         let raw_value = value.as_str();
         let value = value.trim();
         match normalized.as_str() {
+            "memory_limit" if name == "memory_limit" => {
+                let value = parse_ini::startup_cli_string(raw_value);
+                eg.memory_budget
+                    .set_limit(parse_ini::parse_ini_quantity_value(&value));
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, value);
+            }
             "include_path" if name == "include_path" => {
                 let value = parse_ini::startup_cli_string(raw_value);
                 if !value.is_empty() {
@@ -32273,8 +32350,8 @@ fn apply_ini_option(
 
     if option == "memory_limit" {
         let requested = parse_ini::parse_ini_quantity_value(&value);
-        let current = runtime_info::current_allocator_bytes();
-        if requested > 0 && requested < current {
+        let current = eg.memory_budget.usage();
+        if !eg.memory_budget.set_limit(requested) {
             report_internal_diagnostic(
                 eg,
                 ed,

@@ -2265,6 +2265,19 @@ impl std::fmt::Display for VmError {
 
 impl std::error::Error for VmError {}
 
+pub(crate) fn catch_memory_exhaustion<T>(
+    eg: &mut ExecutorGlobals,
+    body: impl FnOnce(&mut ExecutorGlobals) -> Result<T, VmError>,
+) -> Result<T, VmError> {
+    match std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| body(eg))) {
+        Ok(result) => result,
+        Err(payload) => match payload.downcast::<crate::request_memory::Exhausted>() {
+            Ok(exhausted) => Err(crate::stdlib::memory_exhausted(eg, *exhausted)),
+            Err(payload) => std::panic::resume_unwind(payload),
+        },
+    }
+}
+
 #[cfg(test)]
 mod vm_error_display_tests {
     use super::VmError;
@@ -3242,6 +3255,12 @@ unsafe fn execute_quick_loop_backedge(
     opline: &Instruction,
 ) -> Result<(), VmError> {
     let target = opline.op1 as usize;
+    if eg.memory_budget.is_limited() {
+        // Allocation-capable native kernels cannot unwind. Finite budgets
+        // retain the canonical checked interpreter writes and failure point.
+        (*frame).opline = op_array.instructions().as_ptr().add(target);
+        return Ok(());
+    }
     let block_idx = opline.extended_value as usize - 1;
 
     if let Some(plan) = op_array.block_plans.get(block_idx) {

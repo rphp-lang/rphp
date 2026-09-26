@@ -36,35 +36,41 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-final-five` checkpoint over `c00dac57` closes all five supported
-stable-core failures through namespace-relative ancestors, real native random
-engines, numeric serialized object members, image-info output references and
-owned native callback continuations. Suspended calls retain progress and GC
-edges without retaining a Rust stack or borrowed internal frame.
+The `core-oom-budget` checkpoint over `a54a684d` closes `new_oom` through
+request-owned reservations, checked growth, COW/reference preservation and
+bounded fatal output/shutdown handling. Native mutation side-exits under a finite
+budget; allocation failure never unwinds through a C ABI or from `Value::drop`.
 
-Stable core is **6,880 pass / 0 fail / 194 skip / 99 unsupported / 1 timeout /
-0 crash**, exact **+5/-0**. All five unchanged targets move from fail to pass;
-no other status/category changes and no earlier pass is lost. Nineteen original
-CLI contracts match PHP 8.5.11 and the immutable release; 127 adjacent tests,
-five complete Cargo variants, all targets, unsafe/runner checks and all seven
+Stable core is **6,881 pass / 0 fail / 194 skip / 99 unsupported / 0 timeout /
+0 crash**, exact **+1/-0**; only `new_oom` changes status. Thirteen original CLI
+contracts match PHP 8.5.11 byte-exactly, and five allocation unit regressions,
+five full Cargo variants, all targets, unsafe/runner checks and all seven
 Composer/Symfony S0--S3 gates pass. See [exact evidence](compatibility.md).
 
 This is zero supported stable failure debt, not complete PHP compatibility.
-Skips, unsupported cases and the contained `new_oom` timeout remain non-passes.
-The rest of ext/random, other image formats/user-wrapper dispatch and arbitrary
-native callback suspension are explicit non-claims. PCRE is completed by the
-separate native-PCRE checkpoint below; Phar and Date/DateTime are unchanged.
+The 16-case allocation diagnostic is now 15 pass / 1 independent Fiber failure,
+without timeout/crash. Broad diagnostic exploration is 22 pass / 12 skip /
+1 fail / 1 timeout. All 35 `memory_limit`-only exclusions remain unadmitted;
+Zend arena byte equivalence and all compiler/library allocation paths are not
+claimed. The separate stack-limit group also depends on `zend_test`.
 
-Next: request-owned allocation limits, checked reservation before mutation and
-safe OOM finalization. Thirty-five tests are excluded solely by `memory_limit`;
-the bounded 15-case baseline is 3 pass / 4 fail / 3 timeout / 5 crash against
-15 reference passes. Startup-only admission was rejected; no finite budget may
-be admitted without enforcement and no host safety limit may be relaxed.
-The separate stack-limit group also depends on `zend_test`; it is not eight
-independent core passes waiting for an INI allowlist.
+Next: preserve nested user-frame ownership when a generator suspends through
+a Fiber. A finite seven-step original destructor chain already diverges without
+OOM, localizing `fibers/gh19983` to continuation lifetime, not allocator tuning.
+The independent compile/runtime operator stress timeout remains visible at the
+same deadline. Neither is a reason for fixture-specific admission or relaxed
+host safety limits.
 
 Performance remains deferred. Keep the 6 GiB/no-swap host boundary, two
 build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding final-five checkpoint
+
+The `core-final-five` checkpoint over `c00dac57` reached 6,880 stable passes,
+exact +5/-0, through namespace-relative ancestors, native random engines,
+serialized members, image-info references and owned callback continuations.
+Its 19 original CLI contracts, 127 adjacent regressions and full gates passed;
+PCRE was subsequently integrated independently.
 
 ### Preceding startup-source checkpoint
 

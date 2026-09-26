@@ -19,7 +19,7 @@ fn hash_entry_layout_stays_compact() {
     // PHP's reset/current/next/prev/key API requires one persistent cursor per
     // array. Keep the resulting allocation envelope explicit so later fields
     // cannot grow every array unnoticed.
-    assert_eq!(std::mem::size_of::<PhpArray>(), 128);
+    assert_eq!(std::mem::size_of::<PhpArray>(), 144);
 }
 
 #[test]
@@ -491,7 +491,13 @@ fn string_value_key_reuses_source_allocation_and_keeps_cow() {
     };
     assert_eq!(Rc::as_ptr(&entry_key.0), original_ptr);
 
-    unsafe { key.as_string_mut().unwrap().push_str("-changed") };
+    // SAFETY: no borrowed slice survives here, and the exact append size is
+    // reserved before detaching the shared key owner.
+    unsafe {
+        key.as_string_mut("-changed".len())
+            .unwrap()
+            .push_str("-changed")
+    };
     assert_eq!(key.as_str(), Some("shared-changed"));
     assert_eq!(array.get_str("shared").and_then(Value::as_long), Some(7));
 }

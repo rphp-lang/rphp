@@ -6278,6 +6278,7 @@ fn op_create_closure(
             std::rc::Rc::new(std::cell::RefCell::new(std::collections::HashMap::new()))
         });
     let closure = PhpClosure {
+        allocation: crate::request_memory::Allocation::default(),
         object_handle: 0,
         func: func_ptr,
         called_scope_class_id,

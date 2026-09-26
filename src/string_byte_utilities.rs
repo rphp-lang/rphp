@@ -181,6 +181,14 @@ fn wordwrap_has_existing_break(input: &[u8], position: usize, line_break: &[u8])
 }
 
 pub fn wordwrap(input: &[u8], width: i64, line_break: &[u8], cut: bool) -> (Vec<u8>, bool) {
+    // PHP checks the potential expanded buffer even when a long unbroken
+    // word ultimately remains uncut. Keep the calculation overflow-safe and
+    // reject it before building either the source copy or inserted breaks.
+    let breaks = input.len() / (width.max(1) as usize);
+    let maximum = input
+        .len()
+        .saturating_add(breaks.saturating_mul(line_break.len()));
+    crate::request_memory::check(maximum);
     let mut output = Vec::with_capacity(input.len());
     let mut current = 0usize;
     let mut line_length = 0i128;

@@ -80,68 +80,6 @@ fn fn_php_ini_loaded_file(
     return_value(rv, Value::bool(false))
 }
 
-fn proc_self_field(file: &str, field: usize) -> Option<u64> {
-    let text = std::fs::read_to_string(file).ok()?;
-    text.split_whitespace().nth(field)?.parse().ok()
-}
-
-fn resident_bytes() -> i64 {
-    proc_self_field("/proc/self/statm", 1).map_or(0, |pages| (pages * 4096) as i64)
-}
-
-fn peak_resident_bytes() -> i64 {
-    let Ok(status) = std::fs::read_to_string("/proc/self/status") else {
-        return resident_bytes();
-    };
-    status
-        .lines()
-        .find_map(|line| line.strip_prefix("VmHWM:"))
-        .and_then(|rest| rest.split_whitespace().next())
-        .and_then(|kilobytes| kilobytes.parse::<i64>().ok())
-        .map_or_else(resident_bytes, |kilobytes| kilobytes * 1024)
-}
-
-#[cfg(all(target_os = "linux", target_env = "gnu"))]
-fn allocator_bytes(real_usage: bool) -> i64 {
-    // SAFETY: mallinfo2 has no arguments and returns its snapshot by value.
-    // The process allocator remains alive for the entire request.
-    let info = unsafe { libc::mallinfo2() };
-    let bytes = if real_usage {
-        info.arena.saturating_add(info.hblkhd)
-    } else {
-        // Zend's request allocator reports committed usage in page-backed
-        // chunks. glibc includes small-bin, arena and bookkeeping variations
-        // in `uordblks`; project those implementation details back to Zend's
-        // 64-KiB request chunk granularity.
-        info.uordblks.saturating_add(info.hblkhd) / 65_536 * 65_536
-    };
-    i64::try_from(bytes).unwrap_or(i64::MAX)
-}
-
-#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
-fn allocator_bytes(_real_usage: bool) -> i64 {
-    resident_bytes()
-}
-
-pub(crate) fn current_allocator_bytes() -> i64 {
-    allocator_bytes(false)
-}
-
-fn memory_report(
-    ed: *mut ExecuteData,
-    rv: *mut Value,
-    eg: &mut ExecutorGlobals,
-    function: &str,
-    measure: fn() -> i64,
-) -> Result<(), VmError> {
-    if optional_argument(ed, 0).is_some()
-        && super::typed_internal_bool_argument(ed, eg, function, 0, "real_usage")?.is_none()
-    {
-        return Ok(());
-    }
-    return_value(rv, Value::long(measure()))
-}
-
 fn fn_memory_get_usage(
     ed: *mut ExecuteData,
     rv: *mut Value,
@@ -158,7 +96,12 @@ fn fn_memory_get_usage(
         false
     };
     crate::value::prune_dead_cycle_root_storage();
-    return_value(rv, Value::long(allocator_bytes(real_usage)))
+    eg.memory_budget.collect_strings();
+    let _ = real_usage;
+    return_value(
+        rv,
+        Value::long(eg.memory_budget.usage().min(i64::MAX as usize) as i64),
+    )
 }
 
 fn fn_memory_get_peak_usage(
@@ -166,16 +109,25 @@ fn fn_memory_get_peak_usage(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    memory_report(ed, rv, eg, "memory_get_peak_usage", peak_resident_bytes)
+    if optional_argument(ed, 0).is_some()
+        && super::typed_internal_bool_argument(ed, eg, "memory_get_peak_usage", 0, "real_usage")?
+            .is_none()
+    {
+        return Ok(());
+    }
+    return_value(
+        rv,
+        Value::long(eg.memory_budget.peak().min(i64::MAX as usize) as i64),
+    )
 }
 
 fn fn_memory_reset_peak_usage(
     _ed: *mut ExecuteData,
     rv: *mut Value,
-    _eg: &mut ExecutorGlobals,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    // The resident high-water mark belongs to the kernel; PHP's allocator
-    // peak has no separate counterpart here.
+    eg.memory_budget.collect_strings();
+    eg.memory_budget.reset_peak();
     return_value(rv, Value::null())
 }
 

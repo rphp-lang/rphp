@@ -12,6 +12,7 @@ const PENDING_STACK_PAGE_SIZE: usize = 16 * 1024;
 struct VmStackPage {
     prev: *mut VmStackPage,
     allocation_size: usize,
+    allocation: crate::request_memory::Allocation,
     // data follows after header
 }
 
@@ -25,6 +26,19 @@ pub struct VmStack {
 }
 
 impl VmStack {
+    /// Initial request stacks exist before execution installs the budget.
+    /// Adopt them on entry; subsequent pages charge before allocating.
+    pub(crate) fn account_request(&mut self) {
+        let mut page = self.current_page;
+        // SAFETY: this stack exclusively owns its live, acyclic page chain.
+        unsafe {
+            while let Some(header) = page.as_mut() {
+                header.allocation.grow_to(header.allocation_size);
+                page = header.prev;
+            }
+        }
+    }
+
     pub fn new() -> Self {
         Self::with_page_size(DEFAULT_STACK_PAGE_SIZE)
     }
@@ -207,14 +221,18 @@ impl VmStack {
     }
 
     fn alloc_page(size: usize) -> *mut VmStackPage {
+        let allocation = crate::request_memory::Allocation::new(size);
         let layout = std::alloc::Layout::from_size_align(size, 4096).unwrap();
         let ptr = unsafe { std::alloc::alloc_zeroed(layout) };
         if ptr.is_null() {
             panic!("VM stack allocation failed");
         }
         unsafe {
-            (*(ptr as *mut VmStackPage)).prev = std::ptr::null_mut();
-            (*(ptr as *mut VmStackPage)).allocation_size = size;
+            (ptr as *mut VmStackPage).write(VmStackPage {
+                prev: std::ptr::null_mut(),
+                allocation_size: size,
+                allocation,
+            });
         }
         ptr as *mut VmStackPage
     }
@@ -230,6 +248,7 @@ impl Drop for VmStack {
             let allocation_size = unsafe { (*page).allocation_size };
             let layout = std::alloc::Layout::from_size_align(allocation_size, 4096).unwrap();
             unsafe {
+                std::ptr::drop_in_place(page);
                 std::alloc::dealloc(page as *mut u8, layout);
             }
             page = prev;

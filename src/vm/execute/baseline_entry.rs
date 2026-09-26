@@ -201,6 +201,22 @@ fn execute_request(
     main_func: &UserFunction,
     body: Option<&mut dyn FnMut(&mut ExecutorGlobals, *mut ExecuteData) -> Result<(), VmError>>,
 ) -> Result<Value, VmError> {
+    let _memory_scope = eg.memory_budget.enter();
+    let limit = crate::stdlib::configured_memory_limit(eg);
+    eg.memory_budget.set_limit(limit);
+    catch_memory_exhaustion(eg, |eg| {
+        eg.memory_budget.prepare_request();
+        eg.vm_stack.account_request();
+        eg.pending_call_stack.account_request();
+        execute_request_inner(eg, main_func, body)
+    })
+}
+
+fn execute_request_inner(
+    eg: &mut ExecutorGlobals,
+    main_func: &UserFunction,
+    body: Option<&mut dyn FnMut(&mut ExecutorGlobals, *mut ExecuteData) -> Result<(), VmError>>,
+) -> Result<Value, VmError> {
     crate::value::begin_object_handle_request();
     crate::value::initialize_cycle_collection(eg.gc_enabled);
     let func_ptr = &main_func.common as *const FunctionCommon;
@@ -421,6 +437,11 @@ fn execute_request(
     if let Err(error) = execution
         && requested_exit.is_none()
     {
+        if eg.memory_budget.exhausted() {
+            eg.begin_post_fatal_output();
+            let _ = crate::stdlib::run_shutdown_functions(eg, frame);
+            let _ = crate::stdlib::flush_all_output_buffers(eg);
+        }
         crate::value::end_object_handle_request();
         return Err(error);
     }

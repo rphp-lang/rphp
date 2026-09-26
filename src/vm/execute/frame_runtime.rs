@@ -340,7 +340,7 @@ fn move_heap_source_to_primitive_cv(
     debug_assert!(u32::from(source_index) >= declared_cvs);
     debug_assert!(u32::from(destination_index) < declared_cvs);
     debug_assert!((destination.value_type() as u8) <= ValueType::Double as u8);
-    debug_assert!(matches!(source.value_type(), ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource));
+    debug_assert!(matches!(source.value_type(), ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource));
     *destination = std::mem::replace(source, Value::undef());
     destination.clear_internal_argument_snapshot();
     if frame.num_cvs + frame.num_temps <= 64 {

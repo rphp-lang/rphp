@@ -88,6 +88,7 @@ fn prepare_concat_operand_value(
 
 #[inline]
 fn concatenate_string_values(left: &Value, right: &Value) -> Value {
+    crate::request_memory::check(left.as_str().map_or(0, str::len).saturating_add(right.as_str().map_or(0, str::len)));
     if !left.is_binary_string() && !right.is_binary_string() {
         let left = left.as_str();
         let right = right.as_str();
@@ -116,6 +117,7 @@ fn concatenate_string_values(left: &Value, right: &Value) -> Value {
 /// forcing the larger generic concat helper into every caller.
 #[inline(always)]
 fn concatenate_proven_string_values(left: &Value, right: &Value) -> Value {
+    crate::request_memory::check(left.as_str().map_or(0, str::len).saturating_add(right.as_str().map_or(0, str::len)));
     if !left.is_binary_string() && !right.is_binary_string() {
         let left = left.as_str();
         let right = right.as_str();

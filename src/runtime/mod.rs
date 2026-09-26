@@ -567,6 +567,7 @@ impl ActiveRuntimeClassRelation {
 }
 
 pub(crate) struct OutputBuffer {
+    pub(crate) allocation: crate::request_memory::Allocation,
     pub(crate) data: Vec<u8>,
     pub(crate) handler: Option<Value>,
     /// A positive threshold asks PHP to pass the accumulated chunk through
@@ -822,6 +823,7 @@ struct ClassNameIndex {
 }
 
 pub struct ExecutorGlobals {
+    pub(crate) memory_budget: crate::request_memory::Budget,
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
     pub pending_call_stack: VmStack,
@@ -978,7 +980,7 @@ pub struct ExecutorGlobals {
     /// handlers after an uncaught fatal has been established. The CLI emits
     /// the fatal diagnostic first and drains this sparse buffer afterwards,
     /// matching PHP's request-finalization order.
-    post_fatal_output: std::cell::RefCell<Option<Vec<u8>>>,
+    post_fatal_output: std::cell::RefCell<Option<(Vec<u8>, crate::request_memory::Allocation)>>,
     /// Whether at least one non-empty byte reached the underlying request
     /// sink. Buffered and empty writes do not publish headers in PHP.
     headers_sent: Cell<bool>,
@@ -2051,6 +2053,7 @@ impl ExecutorGlobals {
 
     pub fn new() -> Self {
         Self {
+            memory_budget: crate::request_memory::Budget::default(),
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
             current_execute_data: Cell::new(std::ptr::null_mut()),
@@ -2191,6 +2194,7 @@ impl ExecutorGlobals {
     /// Create EG with captured output (for testing)
     pub fn with_output(output: Box<dyn Write>) -> Self {
         Self {
+            memory_budget: crate::request_memory::Budget::default(),
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
             current_execute_data: Cell::new(std::ptr::null_mut()),
@@ -11625,10 +11629,22 @@ impl ExecutorGlobals {
             .rev()
             .find(|buffer| !buffer.disabled)
         {
+            let needed = buffer.data.len().saturating_add(data.len());
+            if needed > buffer.data.capacity() {
+                buffer.allocation.grow_to(
+                    std::mem::size_of::<OutputBuffer>().saturating_add(
+                        needed.max(buffer.data.capacity().saturating_mul(2)).max(8),
+                    ),
+                );
+            }
             buffer.data.extend_from_slice(data);
             return;
         }
-        if let Some(output) = self.post_fatal_output.borrow_mut().as_mut() {
+        if let Some((output, allocation)) = self.post_fatal_output.borrow_mut().as_mut() {
+            let needed = output.len().saturating_add(data.len());
+            if needed > output.capacity() {
+                allocation.grow_to(needed.max(output.capacity().saturating_mul(2)).max(8));
+            }
             output.extend_from_slice(data);
             return;
         }
@@ -11641,7 +11657,7 @@ impl ExecutorGlobals {
     pub(crate) fn begin_post_fatal_output(&self) {
         let mut output = self.post_fatal_output.borrow_mut();
         if output.is_none() {
-            *output = Some(Vec::new());
+            *output = Some((Vec::new(), crate::request_memory::Allocation::default()));
         }
     }
 
@@ -11650,7 +11666,7 @@ impl ExecutorGlobals {
     /// buffers: execute() has finalized them before returning the fatal.
     pub fn flush_post_fatal_output(&self) {
         let output = self.post_fatal_output.borrow_mut().take();
-        let Some(output) = output else {
+        let Some((output, _allocation)) = output else {
             return;
         };
         if !output.is_empty() && !self.headers_sent.get() {
@@ -11678,6 +11694,7 @@ impl ExecutorGlobals {
 
     pub(crate) fn push_output_buffer(&self, handler: Option<Value>, chunk_size: usize, flags: i64) {
         self.output_buffers.borrow_mut().push(OutputBuffer {
+            allocation: crate::request_memory::Allocation::new(std::mem::size_of::<OutputBuffer>()),
             data: Vec::new(),
             handler,
             chunk_size,
@@ -11706,10 +11723,10 @@ impl ExecutorGlobals {
     }
 
     pub(crate) fn output_buffer_contents(&self) -> Option<Vec<u8>> {
-        self.output_buffers
-            .borrow()
-            .last()
-            .map(|buffer| buffer.data.clone())
+        self.output_buffers.borrow().last().map(|buffer| {
+            crate::request_memory::check(buffer.data.len());
+            buffer.data.clone()
+        })
     }
 
     pub(crate) fn enter_output_handler(&self) -> usize {

@@ -3482,6 +3482,7 @@ fn function_get_closure(
     return_value(
         rv,
         Value::closure(PhpClosure {
+            allocation: crate::request_memory::Allocation::default(),
             object_handle: 0,
             func: function as *const FunctionCommon,
             called_scope_class_id: 0,
@@ -10327,6 +10328,7 @@ fn method_get_closure(
     return_value(
         rv,
         Value::closure(PhpClosure {
+            allocation: crate::request_memory::Allocation::default(),
             object_handle: 0,
             func: function as *const FunctionCommon,
             called_scope_class_id,

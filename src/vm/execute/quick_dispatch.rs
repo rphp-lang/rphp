@@ -133,7 +133,7 @@ unsafe fn run_quick_long_ops_loop(
         let slot = string_append_mask.trailing_zeros() as usize;
         string_append_mask &= string_append_mask - 1;
         let value = &mut *slot_base.add(slot);
-        let Some(string) = value.as_string_mut_if_unique() else {
+        let Some(string) = value.as_string_mut_if_unique(0) else {
             stats::inc_quick_loop_guard_failed();
             return Ok(QuickLoopOutcome::GuardFailed);
         };

@@ -13,6 +13,7 @@ pub mod parser;
 pub mod path_decomposition;
 pub mod quoted_printable;
 pub mod regex;
+mod request_memory;
 #[cfg(feature = "resource-lifetime")]
 mod resource_handle;
 pub mod runtime;

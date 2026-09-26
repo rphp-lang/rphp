@@ -254,13 +254,15 @@ impl NativeCallback {
             let mut native_release = None;
             let mut native_call = None;
             let entry_result = if first {
-                initialize_suspended_callback_frame(
-                    eg,
-                    &(*this).callback,
-                    &(*this).arguments,
-                    &mut (*this).result,
-                    logical_caller,
-                )
+                crate::vm::execute::catch_memory_exhaustion(eg, |eg| {
+                    initialize_suspended_callback_frame(
+                        eg,
+                        &(*this).callback,
+                        &(*this).arguments,
+                        &mut (*this).result,
+                        logical_caller,
+                    )
+                })
                 .inspect(|frame| (*this).boundary = *frame)
             } else {
                 let suspension = (*this)

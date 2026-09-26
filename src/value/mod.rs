@@ -511,21 +511,6 @@ impl IndexedDynamicProperties {
         result
     }
 
-    fn from_linear_with_entry(
-        linear: LinearDynamicProperties,
-        new_key: String,
-        new_value: Value,
-    ) -> Self {
-        let mut result = Self::with_capacity(linear.entries.len() + 1);
-        for (position, (key, value)) in linear.entries.into_iter().enumerate() {
-            let key = SharedStringKey::from_owned(key);
-            result.entries.push((key.clone(), value));
-            result.index.insert(key, position);
-        }
-        result.insert_owned(new_key, new_value);
-        result
-    }
-
     #[inline]
     fn find(&self, key: &str) -> Option<usize> {
         self.index.get(key).copied()
@@ -600,6 +585,8 @@ enum DynamicPropertyStorage {
 /// tier preserves insertion order and exposes guarded positions to inline
 /// caches; indexed entries and their index share one string allocation.
 pub struct DynamicPropertyMap {
+    allocation: crate::request_memory::Allocation,
+    key_bytes: usize,
     storage: DynamicPropertyStorage,
     /// Magic-property recursion guards and the deprecated object-array cursor
     /// share one already-cold allocation. The map itself may contain no
@@ -679,6 +666,8 @@ impl DynamicPropertyAux {
 impl Clone for DynamicPropertyMap {
     fn clone(&self) -> Self {
         Self {
+            allocation: self.allocation.clone(),
+            key_bytes: self.key_bytes,
             storage: self.storage.clone(),
             // A cloned PHP object starts outside any magic operation even if
             // cloning was requested from inside a getter or setter, and its
@@ -689,6 +678,16 @@ impl Clone for DynamicPropertyMap {
 }
 
 impl DynamicPropertyMap {
+    fn storage_bytes(capacity: usize) -> usize {
+        let capacity = capacity
+            .max(4)
+            .checked_next_power_of_two()
+            .unwrap_or(usize::MAX);
+        let slot = std::mem::size_of::<(String, Value)>()
+            + 2 * std::mem::size_of::<(SharedStringKey, usize)>();
+        std::mem::size_of::<Self>().saturating_add(capacity.saturating_mul(slot))
+    }
+
     #[inline]
     fn clone_native_array_auxiliary(&self) -> Option<Box<DynamicPropertyAux>> {
         let source = self.auxiliary.as_ref()?;
@@ -723,6 +722,7 @@ impl DynamicPropertyMap {
     }
 
     pub(crate) fn with_capacity(capacity: usize) -> Self {
+        let allocation = crate::request_memory::Allocation::new(Self::storage_bytes(capacity));
         let storage = if capacity <= SMALL_DYNAMIC_PROPERTY_CAPACITY {
             DynamicPropertyStorage::Small(SmallDynamicProperties::new())
         } else if capacity <= LINEAR_DYNAMIC_PROPERTY_CAPACITY {
@@ -731,6 +731,8 @@ impl DynamicPropertyMap {
             DynamicPropertyStorage::Indexed(IndexedDynamicProperties::with_capacity(capacity))
         };
         Self {
+            allocation,
+            key_bytes: 0,
             storage,
             auxiliary: None,
         }
@@ -738,7 +740,12 @@ impl DynamicPropertyMap {
 
     fn from_hash_map(properties: HashMap<String, Value>) -> Self {
         if properties.len() > LINEAR_DYNAMIC_PROPERTY_CAPACITY {
+            let key_bytes = properties.keys().map(String::len).sum::<usize>();
             return Self {
+                allocation: crate::request_memory::Allocation::new(
+                    Self::storage_bytes(properties.len()).saturating_add(key_bytes),
+                ),
+                key_bytes,
                 storage: DynamicPropertyStorage::Indexed(IndexedDynamicProperties::from_hash_map(
                     properties,
                 )),
@@ -754,6 +761,7 @@ impl DynamicPropertyMap {
 
     fn clone_for_php_object(&self) -> Self {
         if let DynamicPropertyStorage::Small(small) = &self.storage {
+            let allocation = self.allocation.clone();
             // Existing slots already have unique keys in insertion order.
             // Copy their PHP owners directly, without searching each key in
             // the progressively rebuilt map. This does not alias the slots.
@@ -764,6 +772,8 @@ impl DynamicPropertyMap {
                 }
             }
             return Self {
+                allocation,
+                key_bytes: self.key_bytes,
                 storage: DynamicPropertyStorage::Small(copied),
                 auxiliary: self.clone_native_array_auxiliary(),
             };
@@ -948,6 +958,17 @@ impl DynamicPropertyMap {
     }
 
     pub(crate) fn insert_owned(&mut self, key: String, value: Value) {
+        if self.get(&key).is_none() {
+            let key_bytes = self.key_bytes.saturating_add(key.len());
+            let storage_bytes = self
+                .allocation
+                .bytes()
+                .saturating_sub(self.key_bytes)
+                .max(Self::storage_bytes(self.len().saturating_add(1)));
+            self.allocation
+                .grow_to(storage_bytes.saturating_add(key_bytes));
+            self.key_bytes = key_bytes;
+        }
         if let DynamicPropertyStorage::Indexed(indexed) = &mut self.storage {
             indexed.insert_owned(key, value);
             return;
@@ -962,15 +983,14 @@ impl DynamicPropertyMap {
                 return;
             }
 
-            let DynamicPropertyStorage::Linear(linear) = std::mem::replace(
-                &mut self.storage,
-                DynamicPropertyStorage::Small(SmallDynamicProperties::new()),
-            ) else {
-                unreachable!();
-            };
-            self.storage = DynamicPropertyStorage::Indexed(
-                IndexedDynamicProperties::from_linear_with_entry(linear, key, value),
-            );
+            // Key interning is checked and may fail. Build before replacing
+            // the old table, retaining exact reference cells across the move.
+            let mut indexed = IndexedDynamicProperties::with_capacity(linear.entries.len() + 1);
+            for (name, value) in &linear.entries {
+                indexed.insert_owned(name.clone(), value.clone_closure_capture());
+            }
+            indexed.insert_owned(key, value);
+            self.storage = DynamicPropertyStorage::Indexed(indexed);
             return;
         }
         if let DynamicPropertyStorage::Small(small) = &mut self.storage {
@@ -1035,6 +1055,8 @@ impl DynamicPropertyMap {
                 }
             }
         }
+        self.key_bytes = self.key_bytes.saturating_sub(key.len());
+        self.allocation.release_bytes(key.len());
         true
     }
 
@@ -1153,6 +1175,7 @@ impl std::fmt::Debug for DynamicPropertyMap {
 /// PHP object — class instance with properties.
 #[derive(Debug, Clone)]
 pub struct PhpObject {
+    allocation: crate::request_memory::Allocation,
     /// Shared with the class layout for declared objects. Dynamic/internal
     /// objects still own one interned name for their lifetime.
     pub class_name: Rc<str>,
@@ -1160,7 +1183,7 @@ pub struct PhpObject {
     pub class_id: u32,
     /// Low bits hold the request-local Zend object-store handle; the high bits
     /// retain destructor and sparse deep-release state. Packing the lifecycle
-    /// values here preserves the 72-byte PhpObject layout.
+    /// values here leaves request allocation ownership in its own field.
     pub(crate) lifecycle: u32,
     /// Shared name → slot mapping owned by the class definition.
     pub property_layout: Rc<ObjectLayout>,
@@ -1180,7 +1203,7 @@ fn instance_property_reference_owner(handle: u32, slot: usize) -> usize {
 }
 
 #[cfg(target_pointer_width = "64")]
-const _: [(); 72] = [(); std::mem::size_of::<PhpObject>()];
+const _: [(); 88] = [(); std::mem::size_of::<PhpObject>()];
 
 thread_local! {
     /// Every decoded JSON object is the same dynamic `stdClass`. Sharing its
@@ -1946,6 +1969,45 @@ pub(crate) fn prune_dead_cycle_root_storage() {
     });
 }
 
+/// Physical collector capacity belongs to the request, even when all entries
+/// are weak. Sampling cannot allocate, run PHP or unwind from Value::drop.
+pub(crate) fn request_cycle_storage_bytes() -> Option<usize> {
+    CYCLE_ROOTS
+        .try_with(|state| {
+            let state = state.try_borrow().ok()?;
+            if !state.active {
+                return Some(0);
+            }
+            let candidates = state
+                .candidates
+                .capacity()
+                .saturating_mul(std::mem::size_of::<CycleCandidate>());
+            // HashMap capacity excludes spare buckets/control bytes. Reserve the
+            // same bounded two-slot envelope used by checked PHP hash storage.
+            let indices = state
+                .indices
+                .capacity()
+                .saturating_mul(2 * std::mem::size_of::<(usize, usize)>());
+            let callbacks = state
+                .callback_roots
+                .capacity()
+                .saturating_mul(2 * std::mem::size_of::<usize>());
+            let unadmitted = state.unadmitted.as_ref().map_or(0, |entries| {
+                entries
+                    .capacity()
+                    .saturating_mul(2 * std::mem::size_of::<(usize, CycleCandidate)>())
+            });
+            Some(
+                candidates
+                    .saturating_add(indices)
+                    .saturating_add(callbacks)
+                    .saturating_add(unadmitted),
+            )
+        })
+        .ok()
+        .flatten()
+}
+
 pub(crate) fn cycle_root_snapshot() -> Vec<Value> {
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
@@ -2333,6 +2395,11 @@ impl PhpObject {
         debug_assert_eq!(property_layout.len(), property_values.len());
         let class_name = property_layout.class_name();
         Self {
+            allocation: crate::request_memory::Allocation::new(
+                std::mem::size_of::<Self>()
+                    + 24
+                    + property_values.capacity() * std::mem::size_of::<Value>(),
+            ),
             class_name,
             class_id,
             lifecycle: 0,
@@ -2359,6 +2426,9 @@ impl PhpObject {
 
     pub fn dynamic(class_name: String, class_id: u32, properties: HashMap<String, Value>) -> Self {
         Self {
+            allocation: crate::request_memory::Allocation::new(
+                std::mem::size_of::<Self>() + 24 + class_name.len(),
+            ),
             class_name: Rc::from(class_name),
             class_id,
             lifecycle: 0,
@@ -2385,6 +2455,7 @@ impl PhpObject {
         let (class_name, property_layout) =
             STD_CLASS_METADATA.with(|metadata| (Rc::clone(&metadata.0), Rc::clone(&metadata.1)));
         Self {
+            allocation: crate::request_memory::Allocation::new(std::mem::size_of::<Self>() + 24),
             class_name,
             class_id: 0,
             lifecycle: 0,
@@ -2542,11 +2613,15 @@ impl PhpObject {
             .dynamic_properties
             .get_or_insert_with(|| Box::new(DynamicPropertyMap::with_capacity(0)));
         let storage = std::mem::replace(&mut properties.storage, table.storage);
+        let allocation = std::mem::replace(&mut properties.allocation, table.allocation);
+        let key_bytes = std::mem::replace(&mut properties.key_bytes, table.key_bytes);
         properties
             .auxiliary
             .get_or_insert_with(|| Box::new(DynamicPropertyAux::new()))
             .detached_property_table = true;
         DynamicPropertyMap {
+            allocation,
+            key_bytes,
             storage,
             auxiliary: None,
         }
@@ -2885,6 +2960,7 @@ impl PhpObject {
 
     pub(crate) fn clone_for_php(&self) -> Self {
         Self {
+            allocation: self.allocation.clone(),
             class_name: self.class_name.clone(),
             class_id: self.class_id,
             // A prior exceptional traversal may have proved that this shallow
@@ -3165,6 +3241,7 @@ mod cleanup_tests;
 /// Transitions from packed to an explicit-key representation, then from the
 /// bounded representations to the general hash, are one-way and automatic.
 pub struct PhpArray {
+    allocation: crate::request_memory::Allocation,
     storage: ArrayStorage,
     next_int_key: i64,
     cursor: Cell<usize>,
@@ -3409,6 +3486,9 @@ pub(crate) unsafe extern "C" fn native_long_array_set(
     key: i64,
     value: i64,
 ) -> u32 {
+    if crate::request_memory::is_limited() {
+        return 0;
+    }
     let Some(array) = array.as_mut() else {
         return 0;
     };
@@ -3425,6 +3505,9 @@ pub(crate) unsafe extern "C" fn native_long_array_set_deferred(
     key: i64,
     value: i64,
 ) -> u32 {
+    if crate::request_memory::is_limited() {
+        return 0;
+    }
     let Some(context) = context.as_mut() else {
         return 0;
     };
@@ -3488,12 +3571,15 @@ struct SharedStringKey(Rc<String>);
 impl SharedStringKey {
     #[inline]
     fn new(value: &str) -> Self {
-        Self(Rc::new(value.to_string()))
+        crate::request_memory::check(value.len());
+        Self::from_owned(value.to_string())
     }
 
     #[inline]
     fn from_owned(value: String) -> Self {
-        Self(Rc::new(value))
+        let owner = Rc::new(value);
+        crate::request_memory::reserve_string(&owner, owner.capacity());
+        Self(owner)
     }
 
     /// Share the immutable Rc-backed storage already owned by a PHP string.
@@ -3919,8 +4005,31 @@ pub(crate) fn normalize_array_key_for_external_storage(
 }
 
 impl PhpArray {
+    fn storage_bytes(capacity: usize, hash: bool) -> usize {
+        // Ordered entries and both split hash indexes must fit before any
+        // representation transition moves values out of the old storage.
+        let entry_size = if hash {
+            std::mem::size_of::<(ArrayEntryKey, Value)>()
+                + 2 * std::mem::size_of::<(SharedStringKey, usize)>()
+                + 2 * std::mem::size_of::<(i64, usize)>()
+        } else {
+            std::mem::size_of::<Value>()
+        };
+        (std::mem::size_of::<Self>() + 16).saturating_add(capacity.saturating_mul(entry_size))
+    }
+
+    fn storage_allocation(capacity: usize, hash: bool) -> crate::request_memory::Allocation {
+        crate::request_memory::Allocation::new(Self::storage_bytes(capacity, hash))
+    }
+
+    fn reserve_accounted_entries(&mut self, len: usize, hash: bool) {
+        let capacity = len.max(4).checked_next_power_of_two().unwrap_or(usize::MAX);
+        self.allocation.grow_to(Self::storage_bytes(capacity, hash));
+    }
+
     pub fn new() -> Self {
         Self {
+            allocation: crate::request_memory::Allocation::new(std::mem::size_of::<Self>() + 16),
             storage: ArrayStorage::Packed(Vec::new()),
             next_int_key: 0,
             cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
@@ -3968,39 +4077,19 @@ impl PhpArray {
         let original_next_int_key = self.next_int_key;
         let original_cursor = self.cursor.get();
         let had_string_keys = self.has_string_keys();
-        // This is a representation-only transition of the same PHP array.
-        // Move its Values instead of applying array-COW clone semantics: even
-        // an otherwise singleton reference cell must retain its identity.
-        let storage = std::mem::replace(&mut self.storage, ArrayStorage::Packed(Vec::new()));
-        let entries = match storage {
-            ArrayStorage::Packed(values) => values
-                .into_iter()
-                .enumerate()
-                .map(|(key, value)| (ArrayKey::Int(key as i64), value))
-                .collect::<Vec<_>>(),
-            ArrayStorage::SmallHash(small) => small
-                .entries
-                .into_iter()
-                .flatten()
-                .map(|(key, value)| (key.to_public(), value))
-                .collect(),
-            ArrayStorage::LinearHash(linear) => linear
-                .entries
-                .into_iter()
-                .map(|(key, value)| (key.to_public(), value))
-                .collect(),
-            ArrayStorage::Hash { entries, .. } => entries
-                .into_iter()
-                .map(|(key, value)| (key.to_public(), value))
-                .collect(),
-        };
+        // Build before publishing: checked key/storage allocations can fail.
+        // Retain reference cells verbatim, not PHP by-value/COW semantics, so
+        // both success and rollback preserve their original identities.
         let mut rebuilt = if had_string_keys {
-            Self::with_deferred_hash_capacity(entries.len())
+            Self::with_deferred_hash_capacity(self.len())
         } else {
-            Self::with_packed_capacity(entries.len())
+            Self::with_packed_capacity(self.len())
         };
-        for (key, value) in entries {
-            rebuilt.set(normalize_array_key_for_external_storage(key, false), value);
+        for (key, value) in self.iter() {
+            rebuilt.set(
+                normalize_array_key_for_external_storage(key, false),
+                value.clone_closure_capture(),
+            );
         }
         // Rebuilding the physical storage must not make a previously used
         // integer slot reusable, nor reset PHP's observable internal pointer.
@@ -4318,6 +4407,7 @@ impl PhpArray {
     /// Create packed storage with capacity known from an array literal.
     pub fn with_packed_capacity(capacity: usize) -> Self {
         Self {
+            allocation: Self::storage_allocation(capacity, false),
             storage: ArrayStorage::Packed(Vec::with_capacity(capacity)),
             next_int_key: 0,
             cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
@@ -4329,12 +4419,14 @@ impl PhpArray {
     pub fn with_hash_capacity(capacity: usize) -> Self {
         if capacity <= SMALL_HASH_CAPACITY {
             return Self {
+                allocation: Self::storage_allocation(capacity, true),
                 storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
                 next_int_key: 0,
                 cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
             };
         }
         Self {
+            allocation: Self::storage_allocation(capacity, true),
             storage: ArrayStorage::Hash {
                 entries: Vec::with_capacity(capacity),
                 str_index: HashMap::with_capacity(capacity),
@@ -4352,6 +4444,7 @@ impl PhpArray {
     pub(crate) fn with_deferred_hash_capacity(capacity: usize) -> Self {
         if capacity <= SMALL_HASH_CAPACITY {
             return Self {
+                allocation: Self::storage_allocation(capacity, true),
                 storage: ArrayStorage::SmallHash(SmallHashStorage::new()),
                 next_int_key: 0,
                 cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
@@ -4359,6 +4452,7 @@ impl PhpArray {
         }
         if capacity <= LINEAR_HASH_CAPACITY {
             return Self {
+                allocation: Self::storage_allocation(capacity, true),
                 storage: ArrayStorage::LinearHash(LinearHashStorage::with_capacity(capacity)),
                 next_int_key: 0,
                 cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
@@ -4524,6 +4618,10 @@ impl PhpArray {
         if !self.can_push() {
             return false;
         }
+        self.reserve_accounted_entries(
+            self.len().saturating_add(1),
+            !matches!(self.storage, ArrayStorage::Packed(_)),
+        );
         self.track_nested_release_value(&val);
         let key = self.next_int_key;
         if key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
@@ -4600,6 +4698,14 @@ impl PhpArray {
         let Some(next_int_key) = self.next_int_key.checked_add(count) else {
             return false;
         };
+        let capacity = packed
+            .len()
+            .saturating_add(values.len())
+            .max(4)
+            .checked_next_power_of_two()
+            .unwrap_or(usize::MAX);
+        self.allocation
+            .grow_to(Self::storage_bytes(capacity, false));
         // The full batch has already passed the key/overflow guards. Its
         // exact length lets Vec reserve once and publish the initialized tail
         // without repeating the capacity check for every scalar element.
@@ -4620,7 +4726,22 @@ impl PhpArray {
         if i64::try_from(packed.len()).ok() != Some(self.next_int_key) {
             return false;
         }
-        packed.try_reserve(additional).is_ok()
+        let previous = self.allocation.bytes();
+        let capacity = packed
+            .len()
+            .saturating_add(additional)
+            .max(4)
+            .checked_next_power_of_two()
+            .unwrap_or(usize::MAX);
+        self.allocation
+            .grow_to(Self::storage_bytes(capacity, false));
+        if packed.try_reserve(additional).is_ok() {
+            true
+        } else {
+            self.allocation
+                .release_bytes(self.allocation.bytes() - previous);
+            false
+        }
     }
 
     /// Reserve canonical indexed-hash storage for a bounded native write
@@ -4640,6 +4761,13 @@ impl PhpArray {
             return false;
         };
 
+        let capacity = entries
+            .len()
+            .saturating_add(additional)
+            .max(4)
+            .checked_next_power_of_two()
+            .unwrap_or(usize::MAX);
+        self.allocation.grow_to(Self::storage_bytes(capacity, true));
         entries.reserve(additional);
         // Progression-only integer hashes intentionally keep their arithmetic
         // prefix and empty canonical index. Reserve buckets only after the
@@ -4673,6 +4801,10 @@ impl PhpArray {
 
     /// Set by integer key
     pub fn set_int(&mut self, key: i64, val: Value) {
+        if self.get_int(key).is_none() {
+            let hash = !matches!(self.storage, ArrayStorage::Packed(_)) || key != self.next_int_key;
+            self.reserve_accounted_entries(self.len().saturating_add(1), hash);
+        }
         self.track_nested_release_value(&val);
         if self.next_int_key == 0 && self.cursor.get() & ARRAY_INT_KEY_INITIALIZED == 0 {
             self.cursor
@@ -4794,6 +4926,9 @@ impl PhpArray {
 
     /// Set by string key
     pub fn set_str(&mut self, key: &str, val: Value) {
+        if self.get_str(key).is_none() {
+            self.reserve_accounted_entries(self.len().saturating_add(1), true);
+        }
         self.track_nested_release_value(&val);
         // String key → always hash mode
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
@@ -4846,6 +4981,9 @@ impl PhpArray {
     /// allocation. Streaming decoders use this to move parsed object keys
     /// directly into PHP array storage instead of copying their bytes.
     pub(crate) fn set_owned_str(&mut self, key: String, val: Value) {
+        if self.get_str(&key).is_none() {
+            self.reserve_accounted_entries(self.len().saturating_add(1), true);
+        }
         self.track_nested_release_value(&val);
         if matches!(&self.storage, ArrayStorage::Packed(_)) {
             self.transition_to_hash();
@@ -4920,6 +5058,9 @@ impl PhpArray {
     /// allocating a second copy of the same immutable key bytes.
     pub fn set_str_value(&mut self, key: &Value, val: Value) {
         let key_text = key.as_str().expect("set_str_value requires a string Value");
+        if self.get_str(key_text).is_none() {
+            self.reserve_accounted_entries(self.len().saturating_add(1), true);
+        }
         // Ordinary userland keys stay on the allocation-sharing hot path.
         // Storage conversion is needed only when a non-ASCII key crosses the
         // ordinary/binary representation boundary; ASCII has identical
@@ -5973,6 +6114,7 @@ impl PhpArray {
     /// PHP-visible reference cells remain aliases only while another storage
     /// location still owns them; ordinary nested values keep their COW owners.
     pub(crate) fn project_values(&self) -> Self {
+        let allocation = Self::storage_allocation(self.len(), false);
         #[inline(always)]
         fn projected(value: &Value) -> Value {
             if value.is_owned_reference() && value.owned_reference_is_aliased() {
@@ -6000,6 +6142,7 @@ impl PhpArray {
             }
         };
         Self {
+            allocation,
             next_int_key: values.len() as i64,
             storage: ArrayStorage::Packed(values),
             cursor: Cell::new(
@@ -6168,6 +6311,7 @@ impl ExactSizeIterator for PhpArrayValues<'_> {}
 
 impl Clone for PhpArray {
     fn clone(&self) -> Self {
+        let allocation = self.allocation.clone();
         let cloned_storage = match &self.storage {
             ArrayStorage::Packed(values) => ArrayStorage::Packed(
                 values
@@ -6208,6 +6352,7 @@ impl Clone for PhpArray {
             },
         };
         Self {
+            allocation,
             storage: cloned_storage,
             next_int_key: self.next_int_key,
             cursor: Cell::new(self.cursor.get()),
@@ -6254,6 +6399,7 @@ mod closure_ownership_tests {
 
     fn closure_with_capture(capture: Value) -> Value {
         Value::closure(PhpClosure {
+            allocation: crate::request_memory::Allocation::default(),
             object_handle: 0,
             func: std::ptr::null(),
             called_scope_class_id: 0,
@@ -6367,6 +6513,7 @@ mod closure_ownership_tests {
 pub(crate) type ClosureStaticVars = Rc<RefCell<HashMap<String, Value>>>;
 
 pub struct PhpClosure {
+    pub(crate) allocation: crate::request_memory::Allocation,
     /// Request-local Zend object-store handle. Closures are PHP objects and
     /// therefore consume the same diagnostic handle sequence as instances.
     pub(crate) object_handle: u32,
@@ -6429,6 +6576,7 @@ impl WeakPhpObject {
 
 impl Clone for PhpClosure {
     fn clone(&self) -> Self {
+        let allocation = self.allocation.clone();
         let static_vars = self.static_vars.as_ref().map(|source| {
             let values: HashMap<String, Value> = source
                 .as_ref()
@@ -6452,6 +6600,7 @@ impl Clone for PhpClosure {
             Rc::new(RefCell::new(values))
         });
         Self {
+            allocation,
             object_handle: 0,
             func: self.func,
             called_scope_class_id: self.called_scope_class_id,
@@ -6909,7 +7058,12 @@ impl Value {
     /// Mutation (.=) uses COW: detach if shared, mutate in place if sole owner.
     #[inline]
     pub fn string(s: impl Into<String>) -> Self {
-        let rc = Rc::new(s.into());
+        let s = s.into();
+        crate::request_memory::check(
+            s.capacity()
+                .saturating_add(std::mem::size_of::<String>() + 16),
+        );
+        let rc = Rc::new(s);
         Self::shared_string(rc)
     }
 
@@ -7034,6 +7188,7 @@ impl Value {
     /// Create a PHP byte string through the runtime's lossless Latin-1 bridge.
     #[inline]
     pub(crate) fn binary_string(bytes: &[u8]) -> Self {
+        crate::request_memory::check(bytes.len().saturating_mul(2));
         let mut value = Self::string(php_byte_string_from_bytes(bytes.iter().copied()));
         value.type_info |= Self::BINARY_STRING_FLAG;
         value
@@ -7074,6 +7229,7 @@ impl Value {
     /// compiled metadata whose PHP values can share the same bytes.
     #[inline]
     pub(crate) fn shared_string(rc: Rc<String>) -> Self {
+        crate::request_memory::reserve_string(&rc, rc.capacity());
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,
@@ -7213,6 +7369,18 @@ impl Value {
     /// Clone = Rc refcount bump; binding creates a distinct payload and identity.
     #[inline]
     pub fn closure(mut c: PhpClosure) -> Self {
+        // A PHP closure owns a callable binding, not just its capture vector.
+        // Reserve that descriptor even though this representation shares the
+        // executable function pointer until a bind/invocation materializes it.
+        // Bytecode and literals remain shared, never charged per closure.
+        c.allocation.grow_to(
+            (std::mem::size_of::<PhpClosure>() + std::mem::size_of::<FunctionCommon>() + 16)
+                .saturating_add(
+                    c.captures
+                        .capacity()
+                        .saturating_mul(std::mem::size_of::<Value>()),
+                ),
+        );
         if c.captures.capacity() != 0 {
             stats::inc_closure_capture_storage_allocation();
         }
@@ -8132,27 +8300,51 @@ impl Value {
     /// Get mutable string reference with COW semantics.
     /// If sole owner (refcount == 1): returns mutable reference in place (no allocation).
     /// If shared (refcount > 1): detaches — clones the String into a new Rc, updates pointer.
-    /// SAFETY: caller must ensure no outstanding borrows of this string exist.
+    /// # Safety
+    /// The caller must hold the only mutable view and no outstanding borrowed
+    /// string slices. It must not append more than `additional` bytes before
+    /// acquiring another checked mutable view.
     #[inline]
-    pub unsafe fn as_string_mut(&mut self) -> Option<&mut String> {
+    pub unsafe fn as_string_mut(&mut self, additional: usize) -> Option<&mut String> {
         if self.value_type() != ValueType::String {
             return None;
         }
-        self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
         let rc_ptr = self.data.ptr as *mut String;
         // Reconstruct Rc without consuming it (ManuallyDrop prevents decrement)
         let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
         if Rc::strong_count(&rc) == 1 {
+            let needed = rc.len().saturating_add(additional);
+            let capacity = if needed > rc.capacity() {
+                needed.max(rc.capacity().saturating_mul(2)).max(8)
+            } else {
+                rc.capacity()
+            };
+            crate::request_memory::reserve_string(&rc, capacity);
+            self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
             // Sole owner — mutate in place. No allocation, no Rc overhead.
             Some(&mut *rc_ptr)
         } else {
             // Shared — COW detach: clone String, create new sole-owner Rc
+            crate::request_memory::check(
+                rc.len()
+                    .saturating_add(additional)
+                    .max(rc.len().saturating_mul(2))
+                    .saturating_add(40),
+            );
             let cloned = (*rc_ptr).clone();
             // Drop the ManuallyDrop wrapper and then the actual from_raw:
             // we need to decrement our old reference
-            Rc::decrement_strong_count(rc_ptr as *const String);
             let new_rc = Rc::new(cloned);
+            let needed = new_rc.len().saturating_add(additional);
+            let capacity = if needed > new_rc.capacity() {
+                needed.max(new_rc.capacity().saturating_mul(2)).max(8)
+            } else {
+                new_rc.capacity()
+            };
+            crate::request_memory::reserve_string(&new_rc, capacity);
+            Rc::decrement_strong_count(rc_ptr as *const String);
             self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
+            self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
             Some(&mut *(self.data.ptr as *mut String))
         }
     }
@@ -8161,7 +8353,7 @@ impl Value {
     /// Guarded regions use this before retaining a raw string pointer; shared
     /// strings fall back so the canonical opcode performs the detach.
     #[inline]
-    pub(crate) fn as_string_mut_if_unique(&mut self) -> Option<&mut String> {
+    pub(crate) fn as_string_mut_if_unique(&mut self, additional: usize) -> Option<&mut String> {
         if self.value_type() != ValueType::String {
             return None;
         }
@@ -8171,6 +8363,13 @@ impl Value {
             if Rc::strong_count(&rc) != 1 {
                 return None;
             }
+            let needed = rc.len().saturating_add(additional);
+            let capacity = if needed > rc.capacity() {
+                needed.max(rc.capacity().saturating_mul(2)).max(8)
+            } else {
+                rc.capacity()
+            };
+            crate::request_memory::reserve_string(&rc, capacity);
             self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
             Some(&mut *rc_ptr)
         }
@@ -8254,7 +8453,6 @@ impl Value {
             return None;
         }
         let immutable_literal = self.is_immutable_array_literal();
-        self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
         unsafe {
             let rc_ptr = self.data.ptr as *mut PhpArray;
             let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
@@ -8279,6 +8477,7 @@ impl Value {
                 array.mark_immutable_cow_children();
             }
             array.mark_mutated();
+            self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
             Some(array)
         }
     }
@@ -9891,6 +10090,8 @@ mod dynamic_property_clone_tests {
                 }
             }
             let properties = DynamicPropertyMap {
+                allocation: crate::request_memory::Allocation::default(),
+                key_bytes: 0,
                 storage: DynamicPropertyStorage::Small(small),
                 auxiliary: None,
             };
@@ -10007,7 +10208,7 @@ mod native_array_options_tests {
         // These are scalar request metadata, not additional PHP value owners.
         assert_eq!(std::mem::size_of::<NativeArrayOptions>(), 8);
         #[cfg(target_pointer_width = "64")]
-        assert_eq!(std::mem::size_of::<PhpObject>(), 72);
+        assert_eq!(std::mem::size_of::<PhpObject>(), 88);
     }
 
     #[test]

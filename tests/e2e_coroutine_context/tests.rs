@@ -171,9 +171,10 @@ fn repeated_resume_and_discard_cleans_slots_exception_and_finally_state() {
                 .is_empty()
         );
 
-        unsafe { witness.as_string_mut().unwrap() }.push('!');
+        // SAFETY: both witnesses are unborrowed and append one ASCII byte.
+        unsafe { witness.as_string_mut(1).unwrap() }.push('!');
         assert_eq!(witness.as_str().unwrap().as_ptr(), original_string_storage);
-        unsafe { pending_witness.as_string_mut().unwrap() }.push('!');
+        unsafe { pending_witness.as_string_mut(1).unwrap() }.push('!');
         assert_eq!(
             pending_witness.as_str().unwrap().as_ptr(),
             original_pending_storage

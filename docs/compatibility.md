@@ -7,59 +7,69 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-final-five` checkpoint over `c00dac57` closes the last five supported
-stable-core failures: namespace-relative ancestors, native random-engine clone
-capabilities, integer serialized object properties, image-info output-reference
-retirement and suspended native replacement callbacks. The five unchanged
-upstream cases (`bug55156`, `clone/clone_with_010`, `fibers/gh9735-004`,
-`gc/gc_043`, `gh17162`) move from **0/5 to 5/5**.
+The `core-oom-budget` checkpoint over `a54a684d` fixes the remaining stable-core
+timeout, `Zend/tests/new_oom.phpt`. Request-owned storage reservations replace
+process-wide allocator snapshots: arrays, objects, properties, strings, closures,
+VM pages and output buffers enforce finite limits before their checked growth.
+Physical COW copies are charged separately; aliases are not, and late drops
+release the original owner's charge. Failed writes preserve existing values,
+reference cells and append cursors. Collector capacity is sampled at safe VM
+boundaries, never by throwing from `Value::drop`.
 
-The complete 7,174-case stable core is **6,880 pass / 0 fail / 194 skip /
-99 unsupported / 1 timeout / 0 crash**, exact **+5/-0**. Zend/lang is
-**5,394/0/118/86 plus 1 timeout**; strings/array remains **1,486/0/76/13**.
-Every previous pass is retained, and no other case changes status or failure
-category. No expectation, skip rule or unsupported classification was weakened.
+OOM is an uncatchable PHP fatal with preserved source/error state and shutdown
+ordering. A private Rust unwind is caught at VM boundaries, not raised by a
+global allocator or across native C calls. Finite budgets side-exit mutating
+native regions. Fatal output callbacks use a bounded reporting allowance;
+their transformed payload is discarded. The memory reports describe owned
+reservations, not byte-exact Zend arena/`real_usage` accounting. Complete
+allocation coverage of compiler and library temporaries is not claimed.
 
-The implementation uses real Secure/Xoshiro256StarStar native state, independent
-cloning, seeding, jump and serialization behavior; checked GIF/PNG/JPEG/BMP
-headers; canonical typed-reference validation/destructor ordering; string-named
-object members; and PHP-owned native callback continuations. A parked call owns
-arguments and operation progress, not a suspended Rust stack or borrowed
-internal frame. Resumption creates a temporary internal frame and commits or
-throws once. Callback stacks and retained values expose their collector edges.
-The ordinary PCRE matcher/consumer is unchanged.
+The complete 7,174-case stable core is **6,881 pass / 0 fail / 194 skip /
+99 unsupported / 0 timeout / 0 crash**, exact **+1/-0**. Zend/lang is
+**5,395/0/118/86**; strings/array remains **1,486/0/76/13**. Every previous pass is
+retained; only `new_oom` changes status, from timeout to pass. No expectation,
+timeout, skip rule, unsupported classification or host safety limit was weakened.
 
-All **19 original CLI contracts** are byte-exact against PHP 8.5.11 and the
-immutable release; **127 adjacent** Fiber/GC/clone/container regressions pass.
-Five complete Cargo configurations pass: default **6,870**, no-default **6,525**,
-erased **6,941**, reified **6,963**, all-features **7,014**; 373 suites each,
-ignored 15/15/15/15/18, zero failures or filtered tests. All-feature/all-target
-checks, unsafe policy/self-tests, runner isolation and all seven Composer/Symfony
-S0--S3 gates pass. Two reviewed unsafe blocks bring the inventory to
-**1,627 blocks / 289 functions**, within unchanged ceilings. Host gates use
-6 GiB/no-swap limits, two build/test workers, at most four bounded PHPT workers
-and automatic cleanup. Performance remains deferred by the user.
+All **13 original CLI contracts** match PHP 8.5.11 and the immutable release
+byte-for-byte (stdout, stderr and exit); five allocation unit regressions pass.
+The 16-case allocation diagnostic improves from **3 pass / 4 fail / 4 timeout /
+5 crash** to **15 pass / 1 fail / 0 timeout / 0 crash**, with no lost pass. Its
+remaining `fibers/gh19983` failure also reproduces in a finite, non-OOM original
+case: a nested suspended generator loses its user-frame lifetime. The broader
+36-case diagnostic is **22 pass / 12 skip / 1 fail / 1 timeout**; the other
+holdout is `runtime_compile_time_binary_operands` at the unchanged 3-second
+deadline. These runs explicitly use diagnostic `--target-kind php`; the 35
+`memory_limit`-only exclusions remain unadmitted in normal coverage.
+
+Five complete Cargo configurations pass: default **6,935**, no-default **6,590**,
+erased **7,006**, reified **7,028**, all-features **7,079**; ignored
+15/15/15/15/18, zero failures or filtered tests. All-feature/all-target checks,
+unsafe policy/self-tests, runner isolation and all seven Composer/Symfony
+S0--S3 gates pass. Unsafe inventory remains **1,627 blocks / 289 functions**,
+within unchanged ceilings. Host gates use 6 GiB/no-swap limits, two build/test
+workers, at most four PHPT workers and automatic cleanup. Performance is deferred
+by the user, not asserted unchanged. Zero supported stable-core failures is not
+complete PHP compatibility; all 293 skipped/unsupported cases remain non-passes.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `7864e7f8eabbb5642fc0af4ea05be5adcd04b177f3d4fbb66a424890a1073475`;
-full manifest `4c77d93a2ba9ab88b4e790eea339c9ef03649dc57bcd99bc9b818f176ff2a319`;
-focused manifest `2754707a1bd204074a5b06f084195c3db67a2c17ce19170939c376de681a6d6d`;
-Zend/lang pass set `a18a10757f46bed8ff56e14d13b5eebd6c5bc2fb0682cef60ba3865cb826de26`;
+candidate `65443abb421d0930aabd1f0097c3a8ff0ff151e31bb35703dcbcc6d21931152c`;
+full manifest `f86e4e098cc809485e466255bbe498a41746c51520f0b30cffaf5074f316decb`;
+Zend/lang pass set `6593cd80d63e28964681dd49e24730bf62847535629ae57be4ca02f37b2fc98a`;
 strings/array pass set `ee28d61f885e6e70e89ad7d68c7e773e2cb887d2df5e0f82ab6a5f4f9f434e4f`;
-combined pass set `7d366130c45606a6af71adf537b8b3819202333e1f9fa656da22201421642555`;
-no-loss summary `4a693cb3ed30f218cca60268d30d2ed17796c040ad5fba08785bced22ad1c3c7`;
-final evidence packet `f90b066b6b40b3093d91e8ece5278e847777c6c0d679c1b33c45fee221efbec4`.
+combined pass set `54853df66d0bc05d98a73894d6a13f3a10082b56430f7f9a991b79be08bb079f`;
+no-loss summary `83f89047109b4f096da2d45de674468476747008148d93a00fc6ad0909094ef0`;
+diagnostic manifest `755ff91794d565f6755ec9ce9064e34f3546ce7c7aa3f240198a0c43a6813153`;
+final evidence packet `47da4345e58f0b311370ff0fabe2e5b93e69ce98287e64f736a79d051cba3468`.
 
-Zero supported stable-core failures is not complete PHP compatibility: skips,
-unsupported cases and the contained `new_oom` timeout remain non-passes.
-Randomizer/the rest of ext/random, other image formats/user-wrapper dispatch
-and arbitrary native callback suspension are not claimed. PCRE is completed
-independently by the native-PCRE checkpoint below; Phar and Date/DateTime are
-unchanged. Next admission requires
-request-owned allocation limits and safe OOM finalization: 35 tests are excluded
-solely by `memory_limit`. The isolated 15-case diagnostic remains 3 pass, 4 fail,
-3 timeout and 5 crash against 15 reference passes; startup-only INI admission
-was rejected. Finite budgets remain unsupported until enforced before mutation.
+### Preceding final-five checkpoint
+
+The `core-final-five` checkpoint over `c00dac57` closed the last five supported
+stable failures through namespace-relative ancestors, native random-engine clone
+capabilities, integer serialized object properties, image-info output references
+and owned native callback continuations. It reached 6,880 stable passes, exact
++5/-0, with 19 original CLI contracts, 127 adjacent regressions and full gates.
+PCRE was then integrated independently. Neither checkpoint claims all remaining
+library contracts or arbitrary native callback suspension.
 
 ### Preceding startup-source checkpoint
 

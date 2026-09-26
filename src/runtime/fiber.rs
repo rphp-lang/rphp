@@ -706,13 +706,15 @@ impl FiberRuntime {
             let mut native_call = None;
             let entry = if let FiberInput::Start(arguments) = input {
                 let result = &mut (*context).result as *mut Value;
-                let frame = match initialize_suspended_callback_frame(
-                    eg,
-                    &(*context).callback,
-                    &arguments,
-                    result,
-                    root_caller,
-                ) {
+                let frame = match crate::vm::execute::catch_memory_exhaustion(eg, |eg| {
+                    initialize_suspended_callback_frame(
+                        eg,
+                        &(*context).callback,
+                        &arguments,
+                        result,
+                        root_caller,
+                    )
+                }) {
                     Ok(frame) => frame,
                     Err(error) => {
                         (*context).state.exchange(eg);

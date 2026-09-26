@@ -2370,6 +2370,10 @@ unsafe fn validate_reference_return_after_finally(
 
 /// Inner loop for RPHP's authoritative baseline executor.
 fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
+    catch_memory_exhaustion(eg, |eg| execute_ex_inner(eg, initial_frame))
+}
+
+fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     // SAFETY: the executor enters with a live user activation and its metadata.
     let mut activation = (initial_frame, unsafe { (*initial_frame).op_array() });
     let mut tick: u8 = 255; // One interrupt counter across all frame transitions.
@@ -2973,7 +2977,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 // both operands and checking the target twice.
                                 let moved = opline._pad & ASSIGN_CV_MOVE_SOURCE != 0
                                     && matches!(opline.op2_type, OpType::Tmp | OpType::Var)
-                                    && matches!(source_type, ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource);
+                                    && matches!(source_type, ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource);
                                 let destination = (*frame).cv_mut(opline.op1 as u32) as *mut Value;
                                 if moved {
                                     // The move guard proves this already-resolved
@@ -3022,7 +3026,7 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                                 value
                             } else if matches!(
                                 (&*source).value_type(),
-                                ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource
+                                ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource
                             ) {
                                 // Consume the bitmap edge with the value. A
                                 // stale edge would send the now-empty TMP
@@ -3472,17 +3476,17 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             rhs.echo_to_string_with_precision(eg.precision)
                         };
                         let storage = crate::value::php_byte_string_from_bytes(rhs.bytes());
-                        let destination = dest_ref.as_string_mut().unwrap_unchecked();
+                        let destination = dest_ref.as_string_mut(storage.len()).unwrap_unchecked();
                         destination.push_str(&storage);
                     } else if rhs.value_type() == ValueType::String {
                         // Same-provenance strings append without conversion or
                         // allocation while the destination remains unique.
                         let rhs_s = rhs.as_str().unwrap();
-                        let s = dest_ref.as_string_mut().unwrap_unchecked();
+                        let s = dest_ref.as_string_mut(rhs_s.len()).unwrap_unchecked();
                         s.push_str(rhs_s);
                     } else {
                         let rhs_str = rhs.echo_to_string_with_precision(eg.precision);
-                        let s = dest_ref.as_string_mut().unwrap_unchecked();
+                        let s = dest_ref.as_string_mut(rhs_str.len()).unwrap_unchecked();
                         s.push_str(&rhs_str);
                     }
                 } else {
