@@ -36,40 +36,46 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-output-handler-startup` checkpoint over `daa98eb0` validates and
-initializes real CLI output handlers before parsing/user declarations. It
-preserves startup diagnostics, read-only configuration, nested buffers, exit
-finalization and pending exceptions. Global exception handlers observe the
-failed final buffer without re-entering its callback or mutating its stack.
+The `core-diagnostic-policy` checkpoint over `fbadbfe8` unifies configured
+diagnostic display/logging, repeated-error suppression, HTML/charset output,
+binary message identity and runtime compile-fatal traces. Error handlers run
+before suppression; prepared terminal origins survive shutdown diagnostics.
 
 The complete 7,174-case stable core is
-**6,850 pass / 4 fail / 192 skip / 127 unsupported / 1 timeout / 0 crash**,
-exact **+7/-0**. Zend/lang stays **5,365/4/116/113 plus 1 timeout**;
-strings/array is **1,485/0/76/14**. Fifteen unchanged output-handler PHPTs become
-seven passes and eight genuine extension/locale skips. These are admission
-gains, not htmlentities implementation fixes; both binaries agree with the new
-runner. Every earlier pass and unrelated status/failure stage is preserved.
-The known `new_oom.phpt` timeout and four library failures remain visible.
+**6,858 pass / 4 fail / 193 skip / 118 unsupported / 1 timeout / 0 crash**,
+exact **+8/-0**. Zend/lang is **5,372/4/117/105 plus 1 timeout**;
+strings/array is **1,486/0/76/13**. The 13-case shared-runner diagnostic packet
+is **11 pass / 1 independent fail / 1 genuine skip**, true **+10/-0**.
+Three gains are outside the stable corpus; stable `bug39542` is admission-only.
+Every earlier pass and unrelated status/failure stage is preserved. The known
+`new_oom.phpt` timeout and four library failures remain visible.
 
-The slice adds 65 original CLI regressions: 64 are PHP 8.5.11 byte-exact and
-one asserts only startup-before-parse ordering. Focused/adjacent Cargo covers
-159 tests; all 63 inline release-oracle specimens are byte-exact. Five Cargo configurations,
-all targets, PHPT no-loss, all seven Composer/Symfony S0--S3 gates and unsafe
-policy/self-tests pass. Unsafe inventory remains 1,627 blocks / 289 functions;
-ceilings and ignored counts are unchanged. Exact evidence is in
+The slice adds 51 PHP 8.5.11 byte-exact original CLI regressions;
+focused/adjacent Cargo covers 265 tests and all 50 inline release-oracle
+specimens agree. Five Cargo configurations, all targets, PHPT no-loss,
+all seven Composer/Symfony S0--S3 gates and unsafe policy/self-tests pass.
+Six older expectations were updated only after exact PHP oracle confirmation.
+Unsafe inventory remains 1,627 blocks / 289 functions; ceilings and ignored
+counts are unchanged. Exact evidence is in
 [compatibility status](compatibility.md).
 
 There are **zero ordinary core failures in this measured corpus**, not complete
-PHP compatibility: four library failures, 127 unsupported cases and the OOM
-timeout remain. The next data-selected admission candidate is diagnostic policy
-(repeated errors, fatal backtraces, display/logging and HTML output). Baseline
-the unchanged core and adjacent cases before implementation; do not count
-extension skips as passes. General malformed INI syntax, parser diagnostic
-spelling and library output-introspection APIs remain explicit non-claims.
+PHP compatibility: four library failures, 118 unsupported cases and the OOM
+timeout remain. The next read-only admission candidate is shared include-path
+and startup-source configuration. Baseline unchanged core/adjacent cases before
+implementation; do not count extension skips as passes. Syslog, primary-parser
+fatal routing, unconfigured CLI channel equivalence, general malformed INI
+syntax and the independent `ini_set_types` holdout remain explicit non-claims.
 
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
 here. Performance remains deferred; host gates retain the 6 GiB/no-swap limit,
 two build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding output-handler checkpoint
+
+The `core-output-handler-startup` checkpoint over `daa98eb0` reached 6,850
+stable passes and four library failures, exact +7/-0 through honest INI
+admission. It aligned startup handlers and failed final-buffer ordering.
 
 ### Preceding trait-constant checkpoint
 

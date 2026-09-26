@@ -249,6 +249,40 @@ pub struct CompileDeprecation {
 pub struct CompileFailure {
     pub message: String,
     pub deprecations: Vec<CompileDeprecation>,
+    pub diagnostic: Option<Box<CompileFatalDiagnostic>>,
+}
+
+/// Structured origin retained before the CLI diagnostic envelope is rendered.
+/// Runtime-compiled source units need this for error_get_last and backtraces;
+/// consumers must not recover locations by parsing arbitrary error text.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompileFatalDiagnostic {
+    pub message: String,
+    pub file: String,
+    pub line: usize,
+}
+
+#[derive(Default)]
+struct CompileDiagnostics {
+    deprecations: Vec<CompileDeprecation>,
+    fatal: Option<Box<CompileFatalDiagnostic>>,
+}
+
+// Existing warning writers keep their vector interface. The fatal snapshot
+// shares their already allocated compilation-unit owner and allocates only
+// on failure, rather than adding an allocation to every child compiler.
+impl std::ops::Deref for CompileDiagnostics {
+    type Target = Vec<CompileDeprecation>;
+
+    fn deref(&self) -> &Self::Target {
+        &self.deprecations
+    }
+}
+
+impl std::ops::DerefMut for CompileDiagnostics {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.deprecations
+    }
 }
 
 impl std::fmt::Display for CompileFailure {
@@ -3315,7 +3349,7 @@ pub struct Compiler {
     /// compiler in this compilation unit. This is cold compiler state only.
     generic_use_sites: Rc<RefCell<Vec<PendingGenericUseSite>>>,
     /// Declaration-time deprecations shared by nested function compilers.
-    compile_deprecations: Rc<RefCell<Vec<CompileDeprecation>>>,
+    compile_deprecations: Rc<RefCell<CompileDiagnostics>>,
     /// Deferred error from compile_expr (which can't return Result)
     deferred_error: Option<String>,
     /// Reference signatures for functions known from parent scope (inherited
@@ -3758,7 +3792,7 @@ impl Compiler {
             generic_declarations: Vec::new(),
             generic_inheritances: Vec::new(),
             generic_use_sites: Rc::new(RefCell::new(Vec::new())),
-            compile_deprecations: Rc::new(RefCell::new(Vec::new())),
+            compile_deprecations: Rc::new(RefCell::new(CompileDiagnostics::default())),
             deferred_error: None,
             known_ref_args: HashMap::new(),
             known_value_constructors: HashSet::new(),
@@ -6024,7 +6058,8 @@ impl Compiler {
         let compile_deprecations = Rc::clone(&self.compile_deprecations);
         self.compile_inner(stmts).map_err(|message| CompileFailure {
             message,
-            deprecations: compile_deprecations.borrow().clone(),
+            deprecations: compile_deprecations.borrow().deprecations.clone(),
+            diagnostic: compile_deprecations.borrow().fatal.clone(),
         })
     }
 
@@ -6298,7 +6333,7 @@ impl Compiler {
             constant_attributes: self.constant_attributes.borrow().clone(),
             constant_expressions: self.constant_expressions.borrow().clone(),
             generic_metadata,
-            deprecations: self.compile_deprecations.borrow().clone(),
+            deprecations: self.compile_deprecations.borrow().deprecations.clone(),
         })
     }
 
@@ -15134,6 +15169,11 @@ impl Compiler {
             Some(case_line) if line > case_line => (NON_ENUM_CASE_ERROR, case_line),
             _ => (message, line),
         };
+        self.compile_deprecations.borrow_mut().fatal = Some(Box::new(CompileFatalDiagnostic {
+            message: message.to_string(),
+            file: self.source_file.clone(),
+            line,
+        }));
         if self.source_file.is_empty() {
             format!("{message} on line {line}")
         } else {

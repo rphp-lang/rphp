@@ -610,8 +610,22 @@ impl Default for AssertionState {
 pub(crate) struct PhpErrorRecord {
     pub(crate) level: i64,
     pub(crate) message: String,
+    pub(crate) message_is_binary: bool,
     pub(crate) file: String,
     pub(crate) line: usize,
+    pub(crate) trace: Option<Box<Value>>,
+}
+
+/// Immutable publication metadata for the fatal already committed before
+/// request shutdown. Later shutdown warnings may replace `last_error`.
+pub(crate) struct PhpTerminalDiagnostic {
+    pub(crate) rendered: String,
+    /// End of the diagnostic's source location, before an optional fatal trace.
+    pub(crate) location_end: usize,
+    pub(crate) file: String,
+    pub(crate) line: usize,
+    pub(crate) binary: bool,
+    pub(crate) report: bool,
 }
 
 #[derive(Default)]
@@ -930,6 +944,7 @@ pub struct ExecutorGlobals {
     /// `@` or the current reporting mask. Allocated strings stay on this cold
     /// observability path and do not enlarge call frames or values.
     pub(crate) last_error: Option<PhpErrorRecord>,
+    pub(crate) terminal_diagnostic: Option<Box<PhpTerminalDiagnostic>>,
     pub(crate) exception_handler: Option<crate::value::Value>,
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
     /// Request-shutdown callbacks retain resolved callable state and supplied
@@ -1838,7 +1853,8 @@ impl ExecutorGlobals {
         diagnostics: &[crate::compiler::compile::CompileDeprecation],
     ) {
         for diagnostic in diagnostics {
-            self.emit_unhandled_compile_diagnostic(diagnostic);
+            self.emit_unhandled_compile_diagnostic(diagnostic, None)
+                .expect("startup diagnostics cannot invoke an output handler");
         }
     }
 
@@ -1865,7 +1881,7 @@ impl ExecutorGlobals {
                 break;
             }
             if !handled {
-                self.emit_unhandled_compile_diagnostic(diagnostic);
+                self.emit_unhandled_compile_diagnostic(diagnostic, Some(caller))?;
             }
         }
         Ok(())
@@ -1874,35 +1890,33 @@ impl ExecutorGlobals {
     fn emit_unhandled_compile_diagnostic(
         &mut self,
         diagnostic: &crate::compiler::compile::CompileDeprecation,
-    ) {
+        caller: Option<*mut ExecuteData>,
+    ) -> Result<(), crate::vm::execute::VmError> {
         let (level, label) = if diagnostic.warning {
             (2, "Warning")
         } else {
             (8192, "Deprecated")
         };
-        self.record_last_error(
+        crate::stdlib::diagnostics::publish(
+            self,
+            caller,
             level,
+            label,
             &diagnostic.message,
             &diagnostic.file,
             diagnostic.line,
-        );
-        if self.error_reporting & level != 0 {
-            self.write_output(
-                format!(
-                    "\n{label}: {} in {} on line {}\n",
-                    diagnostic.message, diagnostic.file, diagnostic.line,
-                )
-                .as_bytes(),
-            );
-        }
+            self.error_reporting & level != 0,
+        )
     }
 
     pub(crate) fn record_last_error(&mut self, level: i64, message: &str, file: &str, line: usize) {
         self.last_error = Some(PhpErrorRecord {
             level,
             message: message.to_string(),
+            message_is_binary: false,
             file: file.to_string(),
             line,
+            trace: None,
         });
     }
 
@@ -2106,6 +2120,7 @@ impl ExecutorGlobals {
             error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
+            terminal_diagnostic: None,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
@@ -2245,6 +2260,7 @@ impl ExecutorGlobals {
             error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
+            terminal_diagnostic: None,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
             shutdown_functions: None,
@@ -5903,7 +5919,13 @@ impl ExecutorGlobals {
     ) -> Result<Option<ClassDef>, String> {
         if let Some(class_def) = self.pending_runtime_classes.remove(declaration_key) {
             if let Some(previous) = self.find_class(&class_def.name) {
-                return Err(Self::class_like_redeclaration_error(previous, &class_def));
+                let message = Self::class_like_redeclaration_message(previous, &class_def);
+                let file = class_def.source_file.as_deref().unwrap_or("");
+                self.record_last_error(64, &message, file, class_def.declaration_line);
+                return Err(format!(
+                    "{message} in {file} on line {}",
+                    class_def.declaration_line
+                ));
             }
             let class_key = class_def.name.to_ascii_lowercase();
             if self.active_runtime_class_relations.contains_key(&class_key) {
@@ -5921,9 +5943,15 @@ impl ExecutorGlobals {
             return Ok(Some(class_def));
         }
         if let Some(class_name) = self.declared_runtime_classes.get(declaration_key) {
-            return Err(self.find_class(class_name).map_or_else(
-                || format!("Cannot declare class {class_name}, because the name is already in use"),
-                |previous| Self::class_like_redeclaration_error(previous, previous),
+            if let Some(previous) = self.find_class(class_name) {
+                let message = Self::class_like_redeclaration_message(previous, previous);
+                let file = previous.source_file.clone().unwrap_or_default();
+                let line = previous.declaration_line;
+                self.record_last_error(64, &message, &file, line);
+                return Err(format!("{message} in {file} on line {line}"));
+            }
+            return Err(format!(
+                "Cannot declare class {class_name}, because the name is already in use"
             ));
         }
         Ok(None)
@@ -8591,6 +8619,18 @@ impl ExecutorGlobals {
     /// enum colliding with another kind uses that non-enum kind.
     #[cold]
     fn class_like_redeclaration_error(previous: &ClassDef, current: &ClassDef) -> String {
+        let message = Self::class_like_redeclaration_message(previous, current);
+        let location = current
+            .source_file
+            .as_ref()
+            .map_or_else(String::new, |file| {
+                format!(" in {file} on line {}", current.declaration_line)
+            });
+        format!("{message}{location}")
+    }
+
+    #[cold]
+    fn class_like_redeclaration_message(previous: &ClassDef, current: &ClassDef) -> String {
         let diagnostic_owner = if previous.is_enum && !current.is_enum {
             current
         } else {
@@ -8614,14 +8654,8 @@ impl ExecutorGlobals {
                     previous.declaration_line
                 )
             });
-        let current_location = current
-            .source_file
-            .as_ref()
-            .map_or_else(String::new, |file| {
-                format!(" in {file} on line {}", current.declaration_line)
-            });
         format!(
-            "Cannot redeclare {kind} {}{previous_location}{current_location}",
+            "Cannot redeclare {kind} {}{previous_location}",
             diagnostic_owner.name
         )
     }
@@ -11611,6 +11645,14 @@ impl ExecutorGlobals {
     /// transport to publish bytes already handed to it.
     pub fn flush_output(&self) {
         let _ = self.output.borrow_mut().flush();
+    }
+
+    /// Publish a prepared fatal before the deferred shutdown output. The CLI
+    /// is past normal buffer callbacks here; neither sink may capture it.
+    pub fn write_fatal_output(&self, data: &[u8]) {
+        let mut sink = self.output.borrow_mut();
+        let _ = sink.write_all(data);
+        let _ = sink.flush();
     }
 
     pub(crate) fn push_output_buffer(&self, handler: Option<Value>, chunk_size: usize, flags: i64) {

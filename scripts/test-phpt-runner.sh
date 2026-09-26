@@ -143,26 +143,35 @@ require $argv[3];
 $supported = "zend.assertions=0\nassert.exception=1\ndate.timezone=UTC\nerror_reporting=E_ALL\nprecision=17\nserialize_precision=17\nzend.exception_ignore_args=1\nzend.exception_string_param_max_len=23";
 $highlightSupported = "highlight.string=#DD0000\nhighlight.comment=#FF8000\nhighlight.keyword=#007700\nhighlight.default=#0000BB\nhighlight.html=#000000";
 $unsupported = "zend.assertions=1\nmemory_limit=64M";
+$diagnostics = "display_errors=stderr\nlog_errors=1\nhtml_errors=1\nignore_repeated_errors=1\nignore_repeated_source=1\nfatal_error_backtraces=1\ndocref_root=/manual/\ndocref_ext=.php\nerror_log=\n";
 $binaryRecord = json_decode(
     encode_manifest_record(["actual_excerpt" => "\xFF"]),
     true,
     flags: JSON_THROW_ON_ERROR,
 );
 if (unsupported_rphp_ini_directives($supported) !== []
+    || unsupported_rphp_ini_directives($diagnostics) !== []
+    || unsupported_rphp_ini_directives("error_log=relative.log\n") !== []
+    || unsupported_rphp_ini_directives("error_log=syslog\n") !== ["error_log"]
+    || unsupported_rphp_ini_directives("error_log=\"syslog\"\n") !== ["error_log"]
+    || target_command("/rphp", "rphp", "test.php", "fatal_error_backtraces=1\ndocref_ext=.php\n", "") !== [
+        "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html",
+        "-d", "fatal_error_backtraces=1", "-d", "docref_ext=.php", "test.php",
+    ]
     || unsupported_rphp_ini_directives("output_handler=\n") !== []
     || unsupported_rphp_ini_directives("output_handler=htmlspecialchars\n") !== []
     || unsupported_rphp_ini_directives("output_handler=\nfilter.default=special_chars\n") !== ["filter.default"]
     || target_command("/rphp", "rphp", "test.php", "output_handler=htmlspecialchars\n", "") !== [
-        "/rphp", "-d", "output_handler=htmlspecialchars", "test.php",
+        "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html", "-d", "output_handler=htmlspecialchars", "test.php",
     ]
     || unsupported_rphp_ini_directives("disable_functions=strlen,count\nvariables_order=EGPCS\n") !== []
     || target_command("/rphp", "rphp", "test.php", "disable_functions=strlen,count\nvariables_order=EGPCS\n", "") !== [
-        "/rphp", "-d", "disable_functions=strlen,count", "-d", "variables_order=EGPCS", "test.php",
+        "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html", "-d", "disable_functions=strlen,count", "-d", "variables_order=EGPCS", "test.php",
     ]
     || unsupported_rphp_ini_directives("zend.enable_gc=0\n") !== []
     || unsupported_rphp_ini_directives("zend.enable_gc=1\n") !== []
     || target_command("/rphp", "rphp", "test.php", "zend.enable_gc=0\n", "") !== [
-        "/rphp", "-d", "zend.enable_gc=0", "test.php",
+        "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html", "-d", "zend.enable_gc=0", "test.php",
     ]
     || unsupported_rphp_ini_directives("allow_url_fopen=0\n") !== []
     || unsupported_rphp_ini_directives("allow_url_include=1\n") !== ["allow_url_include"]
@@ -171,6 +180,7 @@ if (unsupported_rphp_ini_directives($supported) !== []
     || $binaryRecord !== ["actual_excerpt" => "\u{FFFD}"]
     || target_command("/rphp", "rphp", "test.php", $supported, "") !== [
         "/rphp",
+        "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html",
         "-d",
         "zend.assertions=0",
         "-d",

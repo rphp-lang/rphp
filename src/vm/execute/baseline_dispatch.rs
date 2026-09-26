@@ -986,10 +986,10 @@ pub(crate) fn report_scalar_coercion_diagnostic_at(
     let (level, label, message) = diagnostic.details(source);
     let handled = crate::stdlib::dispatch_php_error(eg, frame, level, &message, file, line)?;
     if !handled {
-        eg.record_last_error(level, &message, file, line);
-    }
-    if !handled && eg.error_reporting & level != 0 {
-        eg.write_output(format!("\n{label}: {message} in {file} on line {line}\n").as_bytes());
+        crate::stdlib::diagnostics::publish(
+            eg, Some(frame), level, label, &message, file, line,
+            eg.error_reporting & level != 0,
+        )?;
     }
     Ok(())
 }
@@ -3524,18 +3524,16 @@ fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Resu
                             } else {
                                 op_array.source_file.as_str()
                             };
-                            if eg.error_reporting & 2 != 0 {
-                                crate::stdlib::write_php_output(
-                                    eg,
-                                    format!(
-                                        "\nWarning: Undefined variable ${name} in {file} on line {}\n",
-                                        opline.extended_value
-                                    )
-                                    .as_bytes(),
-                                    Some(frame),
-                                )?;
-                                resume_pending_exception!();
-                            }
+                            crate::stdlib::report_diagnostic_from(
+                                eg,
+                                frame,
+                                file,
+                                opline.extended_value as usize,
+                                2,
+                                "Warning",
+                                &format!("Undefined variable ${name}"),
+                            )?;
+                            resume_pending_exception!();
                         }
                     }
                 } else if val.value_type() == ValueType::String {

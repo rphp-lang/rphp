@@ -399,6 +399,27 @@ fn html_translation_encoding_argument(
     )
 }
 
+/// Diagnostic publication uses the same charset/invalid-byte rules without
+/// entering a PHP callable (which could recursively report another error).
+#[cold]
+pub(super) fn escape_diagnostic_html(eg: &ExecutorGlobals, bytes: &[u8]) -> Vec<u8> {
+    let charset = super::ini_default(eg, "default_charset").unwrap_or_default();
+    let charset = charset.split('\0').next().unwrap_or_default();
+    let flags = 2 | ENT_SUBSTITUTE;
+    match HtmlTranslationEncoding::parse(charset).unwrap_or(HtmlTranslationEncoding::Utf8) {
+        HtmlTranslationEncoding::Utf8 => {
+            let text = sanitize_html_utf8(bytes, flags).unwrap_or_default();
+            encode_html_special_chars(&text, flags, true).into_bytes()
+        }
+        HtmlTranslationEncoding::Legacy(encoding) => crate::value::php_byte_string_bytes(
+            &encode_html_entities_legacy(bytes, flags, true, encoding, false).unwrap_or_default(),
+        ),
+        HtmlTranslationEncoding::BasicOnly(encoding) => crate::value::php_byte_string_bytes(
+            &encode_html_entities_basic_multibyte(bytes, flags, true, encoding).unwrap_or_default(),
+        ),
+    }
+}
+
 /// htmlspecialchars($string, $flags = ENT_QUOTES|ENT_SUBSTITUTE,
 ///     $encoding = null, $double_encode = true): string
 pub(super) fn fn_htmlspecialchars(

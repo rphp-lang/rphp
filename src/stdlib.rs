@@ -53,6 +53,8 @@ use crate::vm::opcode::OpCode;
 
 mod calendar;
 pub(crate) mod crypt;
+pub(crate) mod diagnostics;
+pub use diagnostics::publish_cli_fatal;
 #[cfg(target_os = "linux")]
 mod gettext;
 #[cfg(target_os = "linux")]
@@ -16656,9 +16658,15 @@ fn fn_error_get_last(
     };
     let mut result = PhpArray::with_hash_capacity(4);
     result.set_str("type", Value::long(error.level));
-    result.set_str("message", Value::string(error.message.clone()));
+    result.set_str(
+        "message",
+        diagnostics::message_value(&error.message, error.message_is_binary),
+    );
     result.set_str("file", Value::string(error.file.clone()));
     result.set_str("line", Value::long(error.line as i64));
+    if let Some(trace) = &error.trace {
+        result.set_str("trace", (**trace).clone());
+    }
     ret!(rv, Value::array(result));
 }
 
@@ -16690,6 +16698,18 @@ pub(crate) fn dispatch_php_error(
     file: &str,
     line: usize,
 ) -> Result<bool, VmError> {
+    dispatch_php_error_encoded(eg, ed, level, message, false, file, line)
+}
+
+fn dispatch_php_error_encoded(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    level: i64,
+    message: &str,
+    binary: bool,
+    file: &str,
+    line: usize,
+) -> Result<bool, VmError> {
     if level & eg.error_handler_levels == 0 {
         return Ok(false);
     }
@@ -16715,7 +16735,7 @@ pub(crate) fn dispatch_php_error(
     eg.active_error_handler_generation = handler_generation;
     let arguments = [
         Value::long(level),
-        Value::string(message.to_string()),
+        diagnostics::message_value(message, binary),
         Value::string(file.to_string()),
         Value::long(line as i64),
     ];
@@ -16890,8 +16910,38 @@ pub(crate) fn report_internal_diagnostic(
     label: &str,
     message: &str,
 ) -> Result<bool, VmError> {
+    report_internal_encoded_diagnostic(eg, ed, level, label, message, false)
+}
+
+pub(crate) fn report_internal_encoded_diagnostic(
+    eg: &mut ExecutorGlobals,
+    ed: *mut ExecuteData,
+    level: i64,
+    label: &str,
+    message: &str,
+    binary: bool,
+) -> Result<bool, VmError> {
     let (file, line) = internal_call_source(ed);
-    report_diagnostic_from(eg, ed, &file, line, level, label, message)
+    let handled = dispatch_php_error_encoded(eg, ed, level, message, binary, &file, line)?;
+    if !handled {
+        let function = (level < 256 || level == 8192)
+            .then(|| crate::vm::execute::displayed_frame_function_name(eg, ed));
+        diagnostics::publish_with_context(
+            eg,
+            (!ed.is_null()).then_some(ed),
+            level,
+            label,
+            message,
+            &file,
+            line,
+            eg.error_reporting & level != 0,
+            diagnostics::MessageContext {
+                binary,
+                function: function.as_deref(),
+            },
+        )?;
+    }
+    Ok(handled)
 }
 
 pub(crate) fn report_diagnostic_from(
@@ -16905,11 +16955,16 @@ pub(crate) fn report_diagnostic_from(
 ) -> Result<bool, VmError> {
     let handled = dispatch_php_error(eg, ed, level, message, &file, line)?;
     if !handled {
-        eg.record_last_error(level, message, &file, line);
-    }
-    if !handled && eg.error_reporting & level != 0 {
-        let diagnostic = format!("\n{label}: {message} in {file} on line {line}\n");
-        write_php_output(eg, diagnostic.as_bytes(), (!ed.is_null()).then_some(ed))?;
+        diagnostics::publish(
+            eg,
+            (!ed.is_null()).then_some(ed),
+            level,
+            label,
+            message,
+            file,
+            line,
+            eg.error_reporting & level != 0,
+        )?;
     }
     Ok(handled)
 }
@@ -16923,6 +16978,7 @@ fn fn_trigger_error(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let message = arg_str!(ed, 0).into_owned();
+    let message_is_binary = arg_opt!(ed, 0).is_some_and(Value::is_binary_string);
     let level = arg_opt!(ed, 1).map_or(E_USER_NOTICE, Value::to_long_val);
     if !matches!(
         level,
@@ -16959,7 +17015,7 @@ fn fn_trigger_error(
         E_USER_DEPRECATED => "Deprecated",
         _ => unreachable!(),
     };
-    report_internal_diagnostic(eg, ed, level, label, &message)?;
+    report_internal_encoded_diagnostic(eg, ed, level, label, &message, message_is_binary)?;
     ret!(rv, Value::bool(true));
 }
 
@@ -31649,6 +31705,11 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
         let raw_value = value.as_str();
         let value = value.trim();
         match normalized.as_str() {
+            setting if setting == name && diagnostics::ini_default(setting).is_some() => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(normalized, parse_ini::startup_cli_string(raw_value));
+            }
             "output_handler" if name == "output_handler" => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
@@ -31876,6 +31937,9 @@ fn fn_ini_get(
     if option.eq_ignore_ascii_case("arg_separator.output") {
         ret!(rv, Value::string("&"));
     }
+    if let Some(value) = diagnostics::ini_default(&normalized) {
+        ret!(rv, Value::string(value));
+    }
     if let Some(value) = admitted_iconv_ini_default(&normalized) {
         ret!(rv, Value::string(value));
     }
@@ -31905,6 +31969,9 @@ pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> 
         .and_then(|overrides| overrides.get(option))
     {
         return Some(value.clone());
+    }
+    if let Some(value) = diagnostics::ini_default(option) {
+        return Some(value.to_string());
     }
     Some(match option {
         "disable_functions" | "output_handler" => String::new(),

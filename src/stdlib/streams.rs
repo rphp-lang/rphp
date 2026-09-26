@@ -717,7 +717,7 @@ fn fn_fopen(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            super::report_internal_diagnostic(
+            super::report_internal_encoded_diagnostic(
                 eg,
                 execute_data,
                 2,
@@ -725,6 +725,7 @@ fn fn_fopen(
                 &format!(
                     "fopen({path}): Failed to open stream: \"{class}::stream_open\" call failed"
                 ),
+                path_snapshot.is_binary_string(),
             )?;
             return return_value(return_pointer, Value::bool(false));
         }
@@ -749,12 +750,13 @@ fn fn_fopen(
                 std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
                 _ => error.to_string(),
             };
-            super::report_internal_diagnostic(
+            super::report_internal_encoded_diagnostic(
                 eg,
                 execute_data,
                 2,
                 "Warning",
                 &format!("fopen({path}): Failed to open stream: {reason}"),
+                path_snapshot.is_binary_string(),
             )?;
             Value::bool(false)
         }

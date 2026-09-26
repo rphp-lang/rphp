@@ -145,7 +145,12 @@ function target_command(
     string $args,
 ): array {
     if ($kind === 'rphp') {
-        return [$target, ...ini_arguments($ini), $file, ...script_arguments($args)];
+        // Match the reference/run-tests diagnostic profile. Test-local INI
+        // arguments come last so they can deliberately override either value.
+        return [
+            $target, '-d', 'fatal_error_backtraces=0', '-d', 'docref_ext=.html',
+            ...ini_arguments($ini), $file, ...script_arguments($args),
+        ];
     }
     return [
         $target,

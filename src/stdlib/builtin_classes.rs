@@ -690,10 +690,18 @@ fn fn_throwable_to_string(
             .map(Value::dereferenced)
             .and_then(Value::as_str)
             .unwrap_or_default();
+        let message_bytes = object
+            .get_property("message")
+            .map(Value::dereferenced)
+            .filter(|value| value.is_binary_string())
+            .and_then(Value::php_string_bytes);
         let mut rendered = object.class_name.to_string();
+        let mut message_span = None;
         if !message.is_empty() {
             rendered.push_str(": ");
+            let start = rendered.len();
             rendered.push_str(message);
+            message_span = Some(start..rendered.len());
         }
         if let Some(((file, line), trace)) = object
             .get_property("file")
@@ -730,12 +738,21 @@ fn fn_throwable_to_string(
                 eg,
             ));
         }
+        let rendered = if let Some((bytes, span)) = message_bytes.zip(message_span) {
+            let mut output = Vec::with_capacity(rendered.len());
+            output.extend_from_slice(rendered[..span.start].as_bytes());
+            output.extend_from_slice(&bytes);
+            output.extend_from_slice(rendered[span.end..].as_bytes());
+            Value::binary_string(&output)
+        } else {
+            Value::string(rendered)
+        };
         drop(object);
         if let Some(mut object) = arg!(ed, 0).as_object_mut() {
             let key = throwable_property_key(eg, &object, "string");
-            object.set_property(&key, Value::string(&rendered));
+            object.set_property(&key, rendered.clone());
         }
-        ret!(rv, Value::string(rendered));
+        ret!(rv, rendered);
     }
     let mut messages = std::collections::HashMap::new();
     let mut seen = std::collections::HashSet::new();
@@ -766,7 +783,7 @@ fn fn_throwable_to_string(
         if eg.exception.is_some() {
             return Ok(());
         }
-        messages.insert(identity, message.as_str().unwrap_or_default().to_string());
+        messages.insert(identity, message);
         let Some(previous) = previous.filter(|previous| {
             previous
                 .dereferenced()
@@ -781,9 +798,9 @@ fn fn_throwable_to_string(
         crate::vm::execute::format_throwable_string_with_messages(eg, &thrown, &messages);
     if let Some(mut object) = arg!(ed, 0).as_object_mut() {
         let key = throwable_property_key(eg, &object, "string");
-        object.set_property(&key, Value::string(&rendered));
+        object.set_property(&key, rendered.clone());
     }
-    ret!(rv, Value::string(rendered));
+    ret!(rv, rendered);
 }
 
 fn bind_closure_value(

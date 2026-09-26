@@ -197,7 +197,7 @@ fn included_and_evaluated_units_report_their_own_compile_fatal_origin() {
     assert_eq!(
         stderr,
         format!(
-            "\nFatal error: Cannot use list as key element in {} on line 4\n",
+            "\nFatal error: Cannot use list as key element in {} on line 4\nStack trace:\n#0 {{main}}\n",
             included.display()
         )
     );
@@ -218,7 +218,7 @@ echo "EVAL-AFTER\n";
     assert_eq!(
         stderr,
         format!(
-            "\nFatal error: Cannot use list as key element in {}(3) : eval()'d code on line 3\n",
+            "\nFatal error: Cannot use list as key element in {}(3) : eval()'d code on line 3\nStack trace:\n#0 {{main}}\n",
             evaluated.display()
         )
     );

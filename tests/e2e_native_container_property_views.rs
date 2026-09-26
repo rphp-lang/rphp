@@ -88,15 +88,17 @@ fn debug_deprecation_exception_obeys_each_output_boundary() {
             output.status.code(),
             Some(if mode == "print" { 255 } else { 0 })
         );
-        // The existing CLI sends engine fatals to stderr. This test covers
-        // projection unwinding, not the separate display_errors routing policy.
+        // Explicit display_errors=1 publishes both the warning and the engine
+        // fatal on stdout, matching PHP 8.5's projection/output boundary.
         let diagnostic = String::from_utf8(output.stderr).unwrap();
         let text = String::from_utf8(output.stdout).unwrap();
         assert!(text.starts_with("first\ndiagnostic\n"), "{text}");
         assert!(!text.contains("second\n"));
         if mode == "print" {
-            assert!(diagnostic.starts_with("\nFatal error: __debuginfo() must return an array"));
+            assert!(diagnostic.is_empty(), "{diagnostic}");
+            assert!(text.contains("\nFatal error: __debuginfo() must return an array"));
             assert!(text.contains("Warning: Uncaught Exception: debug stopped"));
+            assert!(text.find("Warning: Uncaught").unwrap() < text.find("Fatal error:").unwrap());
             assert!(!text.contains("caught:"));
             assert!(!text.contains("end\n"));
         } else {

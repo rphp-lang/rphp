@@ -145,7 +145,7 @@ declare_once_per_call();
             "/virtual",
         )
         .to_string(),
-        "Cannot redeclare class LocalDeclaration (previously declared in /virtual/runtime-redeclaration.php:3) in /virtual/runtime-redeclaration.php on line 3"
+        "Cannot redeclare class LocalDeclaration (previously declared in /virtual/runtime-redeclaration.php:3) in /virtual/runtime-redeclaration.php on line 3\nStack trace:\n#0 /virtual/runtime-redeclaration.php(6): declare_once_per_call()\n#1 {main}"
     );
 }
 

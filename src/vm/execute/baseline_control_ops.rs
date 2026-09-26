@@ -119,7 +119,7 @@ fn op_declare_class<'a>(
         .to_string();
     let Some(class_def) = eg
         .take_runtime_class_declaration(&declaration_key)
-        .map_err(VmError::Fatal)?
+        .map_err(|error| crate::stdlib::diagnostics::recorded_compile_fatal(eg, error, Some(frame)))?
     else {
         return Ok(ColdResult::Done);
     };
@@ -675,6 +675,19 @@ fn execute_source_unit(
     }
 }
 
+#[cold]
+fn source_unit_compile_fatal(
+    eg: &mut ExecutorGlobals,
+    error: crate::compiler::compile::CompileFailure,
+    caller: Option<(*mut ExecuteData, &crate::compiler::OpArray)>,
+) -> VmError {
+    crate::stdlib::diagnostics::compile_fatal(
+        eg,
+        error,
+        caller.map(|(frame, _)| frame),
+    )
+}
+
 fn take_source_unit_displaced_exception(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -841,7 +854,7 @@ fn execute_source_unit_inner(
                             &canonical,
                         ));
                     }
-                    return Err(VmError::CompileFatal(error.message));
+                    return Err(source_unit_compile_fatal(eg, error, caller));
                 };
                 let class_name = imported_class_name(&stmts, owner)
                     .unwrap_or_else(|| owner.trim_start_matches('\\').to_string());
@@ -861,7 +874,7 @@ fn execute_source_unit_inner(
                             &canonical,
                         ));
                     }
-                    return Err(VmError::CompileFatal(error.message));
+                    return Err(source_unit_compile_fatal(eg, error, caller));
                 }
                 compile_attempts += 1;
             }
@@ -879,7 +892,7 @@ fn execute_source_unit_inner(
                         &canonical,
                     ));
                 }
-                return Err(VmError::CompileFatal(error.message));
+                return Err(source_unit_compile_fatal(eg, error, caller));
             }
         }
     };
@@ -1557,10 +1570,11 @@ fn report_include_warning(
         eg.discard_detached_trace_origin(frame as usize);
     }
     if !handled {
-        eg.record_last_error(2, message, &file, line);
-    }
-    if !handled && eg.error_reporting & 2 != 0 {
-        eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
+        crate::stdlib::diagnostics::publish_with_context(
+            eg, Some(frame), 2, "Warning", message, &file, line,
+            eg.error_reporting & 2 != 0,
+            crate::stdlib::diagnostics::MessageContext { binary: false, function: Some(function) },
+        )?;
     }
     Ok(())
 }

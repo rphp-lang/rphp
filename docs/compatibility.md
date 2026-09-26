@@ -7,65 +7,73 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-output-handler-startup` checkpoint over `daa98eb0` initializes real
-nonempty CLI output handlers before parsing and user declarations, with PHP
-startup warnings and read-only INI state. Existing buffers implement explicit
-flush/clean and request finalization. Exit still runs shutdown callbacks and
-destructors; final handler failures preserve diagnostic order, pending script
-exceptions and global exception-handler access to the locked buffer. Empty
-settings retain the ordinary initialization path.
+The `core-diagnostic-policy` checkpoint over `fbadbfe8` unifies cold diagnostic
+publication: configured display/logging, repeated-error suppression, HTML and
+charset rendering, binary message identity, and runtime compile-fatal traces.
+Handlers still run before suppression; shutdown warnings cannot replace an
+already prepared fatal's origin or reporting mask. Structured compiler origins
+and live caller snapshots preserve sensitive-argument handling and last-error
+traces without reconstructing locations from message text.
 
-The complete 7,174-case stable core is **6,850 pass / 4 fail / 192 skip /
-127 unsupported / 1 timeout / 0 crash**, exact **+7/-0**. Zend/lang is unchanged
-at **5,365/4/116/113 plus 1 timeout**; strings/array is **1,485/0/76/14**.
-Admitting fifteen unchanged `output_handler` PHPTs yields seven passes and
-eight genuine skips (six unavailable mbstring, two locale). Both binaries agree
-under the newly admitted runner: these are admission gains, not htmlentities
-implementation fixes. No previous pass, unrelated status or failure stage is
-lost. Four failures remain in Random, PCRE, SPL serialization and
-`getimagesize()`; `new_oom.phpt` remains a visible contained timeout.
+The complete 7,174-case stable core is **6,858 pass / 4 fail / 193 skip /
+118 unsupported / 1 timeout / 0 crash**, exact **+8/-0**. Zend/lang is
+**5,372/4/117/105 plus 1 timeout**; strings/array is **1,486/0/76/13**.
+The same-runner 13-case diagnostic packet changes from **1/11/1** to
+**11/1/1** (pass/fail/skip), a true **+10/-0**. Three gains are adjacent output
+and last-error cases outside the stable corpus; stable `bug39542` is explicitly
+an admission-only gain, already passing on the parent with the new runner.
+`bug79919` becomes a genuine SimpleXML skip, not a pass. No earlier pass,
+unrelated status or failure stage is lost. Four library failures and the known
+contained `new_oom.phpt` timeout remain visible.
 
-The slice adds **65 original CLI regressions**: 64 PHP 8.5.11 byte-exact
-stdout/stderr/status checks and one frontend-order negative whose parser wording
-is not claimed. Focused/adjacent Cargo covers **159 tests**. The exact release
-matches all **63 inline oracle specimens**, with file/stdin handling covered by
-the original CLI tests. Cases include callback validation, INI spelling,
-nested buffers, exit, pending exceptions, failed final callbacks, handler
-replacement and prevention of recursive chunk flushing.
+There are **51 original PHP 8.5.11 byte-exact CLI regressions** and **265**
+focused/adjacent Cargo tests. The immutable release matches all **50 inline
+oracle specimens**; the additional default-backtrace case is reference-checked
+by the CLI suite. Six older expectations were corrected only after the PHP
+oracle confirmed default fatal backtraces and explicit display output routing;
+the rejected first matrix remains in the evidence. Production sources and the
+release did not change during this test-only correction.
 
 The `test-fast` matrix retains debug assertions and overflow checks: default
-**6,731**, no-default **6,396**, erased **6,802**, reified **6,824**, all-features
-**6,875**, across 369 suites per configuration. Ignored counts remain
+**6,782**, no-default **6,447**, erased **6,853**, reified **6,875**, all-features
+**6,926**, across 370 suites per configuration. Ignored counts remain
 15/15/15/15/18. All-feature/all-target checks, exact no-loss, all seven
 Composer/Symfony S0--S3 gates, runner regressions, formatting and unsafe
-policy/self-tests pass; no new warning kind is introduced. Source and release
-stayed frozen. Unsafe inventory remains **1,627 blocks / 289 functions** with
-unchanged ceilings. Host gates retain a 6 GiB/no-swap limit, two build/test
-workers, at most four PHPT workers and automatic cleanup.
+policy/self-tests pass, with no new warning kind. Unsafe inventory remains
+**1,627 blocks / 289 functions**, with unchanged ceilings. Host gates retain a
+6 GiB/no-swap limit, two build/test workers, at most four PHPT workers and
+automatic cleanup.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `3d7989bb78aa5fb06a7e3d638c065ff679e3563d7e9556de86eb8138a71f752d`;
+candidate `ad58bc989366fe744f777737022e2e7abef14069cf4e7e5200cab1104f5fb4c6`;
 parent/candidate full manifests
-`2305ef31d704509bf46f7851ed923c30f58a3cf2b196272228ca2cefdfdd052c` /
-`0a337c6291861137259ebbed85f0f99566d83b71bd4d14624a61a75abb7a3993`;
-unchanged Zend/lang pass set
-`fe1cd4bd25713b69ed23c4f0bded11e2a682590d18844d612a5347c74c617294`;
+`0a337c6291861137259ebbed85f0f99566d83b71bd4d14624a61a75abb7a3993` /
+`9105a76cf345d3da8372a8fc88501ed3c9ddf8981a86c719a596f4133e8f004e`;
+Zend/lang pass set
+`3cae062af6c05fe25ad0b401ba15c342493f3f69d93397d01b3cfbd74a2dc4c2`;
 strings/array pass set
-`b4eac54e6ded3e48fd4d93bd16d51bda58aebeb638ea379bbf9467ae5316981d`;
+`ee28d61f885e6e70e89ad7d68c7e773e2cb887d2df5e0f82ab6a5f4f9f434e4f`;
 combined pass set
-`c3e3fa508bad8539fa334772ce6f36bd038e7557d61379bdfccc8d6f620c27c0`;
+`798d7d75fcec8e61713ff1fd638cabb0c2c27499653ccf9794507a3281687051`;
 no-loss summary
-`b4f270373b30e4704f3fd271c556a25e3b7172a5c9da95ae32d608e8413bb410`;
+`619d6b7757c1d0e65eafaf29ddbc6b9c788bc5d103e3e0757f0e3e72e747680a`;
 final evidence packet
-`9f0b5fc780c070b4c5a5ff39274135d05b72036a02fd96bda7d9feca0364b786`.
+`27fe3f2844129cabc68ba58387220368739636de606121c439b21934faff34ed`.
 
-Performance remains deferred. Zero ordinary core failures in this measured
-corpus is not complete PHP compatibility. Unsupported cases, skips,
-allocation-limit equivalence, general malformed INI syntax and library
-`ob_list_handlers`/`ob_get_status` remain non-claims. Runtime fatal-output
-suppression and diagnostic INI policies are the next read-only admission
-candidate. Tokenizer/parser, Phar, PCRE, Date/DateTime and general-library
-implementation remain outside this stream.
+Performance remains deferred. Zero ordinary core failures in this corpus is
+not complete PHP compatibility. Syslog, primary-parser/startup fatal routing,
+general malformed INI syntax, allocation-limit equivalence and the independent
+`ini_set_types` user-agent/ZPP holdout are not claimed. Unconfigured CLI fatal
+output retains its historical stderr channel. The next read-only admission
+candidate is shared include-path/startup-source configuration. Tokenizer/parser,
+Phar, PCRE, Date/DateTime and general-library implementation stay outside scope.
+
+### Preceding output-handler checkpoint
+
+The `core-output-handler-startup` checkpoint over `daa98eb0` initialized real
+CLI output handlers before parsing/user declarations and aligned final buffer
+failure ordering. It reached 6,850 stable passes and four library failures,
+exact +7/-0 through honest INI admission, with 65 original CLI regressions.
 
 ### Preceding trait-constant checkpoint
 

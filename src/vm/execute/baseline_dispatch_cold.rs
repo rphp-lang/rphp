@@ -296,11 +296,9 @@ fn report_php_diagnostic(
     }
     let handled = handled?;
     if !handled {
-        eg.record_last_error(level, message, file, line);
-    }
-    if !handled && report_builtin {
-        let diagnostic = format!("\n{label}: {message} in {file} on line {line}\n");
-        crate::stdlib::write_php_output(eg, diagnostic.as_bytes(), Some(frame))?;
+        crate::stdlib::diagnostics::publish(
+            eg, Some(frame), level, label, message, file, line, report_builtin,
+        )?;
     }
     Ok(())
 }
@@ -760,12 +758,10 @@ fn report_user_call_diagnostic(
         line,
     )?;
     if !handled {
-        eg.record_last_error(level, diagnostic, file, line);
-    }
-    if !handled && eg.error_reporting & level != 0 {
-        eg.write_output(
-            format!("\n{label}: {diagnostic} in {file} on line {line}\n").as_bytes(),
-        );
+        crate::stdlib::diagnostics::publish(
+            eg, (!caller.is_null()).then_some(caller), level, label, diagnostic,
+            file, line, eg.error_reporting & level != 0,
+        )?;
     }
     Ok(())
 }

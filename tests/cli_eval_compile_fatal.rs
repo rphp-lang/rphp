@@ -37,6 +37,6 @@ echo "after\n";
     assert_eq!(stdout, "shutdown:4437\n");
     assert_eq!(
         stderr,
-        "\nFatal error: Cannot use \"self\" as a class name as it is reserved in Standard input code(4) : eval()'d code on line 1\n"
+        "\nFatal error: Cannot use \"self\" as a class name as it is reserved in Standard input code(4) : eval()'d code on line 1\nStack trace:\n#0 {main}\n"
     );
 }

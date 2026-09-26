@@ -472,29 +472,15 @@ fn main() {
             exit_after_pending_shutdown(&mut eg, code);
         }
         Err(execute::VmError::Parse(message)) => {
-            eg.flush_output();
-            eprintln!("\nParse error: {message}");
+            stdlib::publish_cli_fatal(&eg, "Parse error", &message);
             exit_after_pending_shutdown(&mut eg, 255);
         }
         Err(execute::VmError::CompileFatal(message)) => {
-            eg.flush_output();
-            if startup_display_errors_uses_stderr(&ini_settings) {
-                eprintln!("Fatal error: {message}");
-            } else {
-                eprintln!("\nFatal error: {message}");
-            }
+            stdlib::publish_cli_fatal(&eg, "Fatal error", &message);
             exit_after_pending_shutdown(&mut eg, 255);
         }
         Err(e) => {
-            // Explicit stderr diagnostics have no display separator, just as
-            // in the compile-fatal branch above. Preserve the default display
-            // boundary when no stderr policy was requested.
-            eg.flush_output();
-            if startup_display_errors_uses_stderr(&ini_settings) {
-                eprintln!("Fatal error: {e}");
-            } else {
-                eprintln!("\nFatal error: {e}");
-            }
+            stdlib::publish_cli_fatal(&eg, "Fatal error", &e.to_string());
             exit_after_pending_shutdown(&mut eg, 255);
         }
     }

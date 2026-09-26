@@ -354,7 +354,7 @@ echo 'after';
 
     assert_eq!(
         error.to_string(),
-        "Cannot use \"self\" as a class name as it is reserved in /app/eval-compile-fatal.php(3) : eval()'d code on line 1"
+        "Cannot use \"self\" as a class name as it is reserved in /app/eval-compile-fatal.php(3) : eval()'d code on line 1\nStack trace:\n#0 {main}"
     );
 }
 
@@ -685,7 +685,9 @@ echo 'after';
 
     assert_eq!(
         error.to_string(),
-        format!("Cannot use \"self\" as a class name as it is reserved in {canonical} on line 1")
+        format!(
+            "Cannot use \"self\" as a class name as it is reserved in {canonical} on line 1\nStack trace:\n#0 {{main}}"
+        )
     );
 }
 

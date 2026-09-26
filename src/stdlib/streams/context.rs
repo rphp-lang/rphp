@@ -111,6 +111,7 @@ pub(super) fn fn_fopen(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     let path = argument_string(execute_data, 0);
+    let path_is_binary = argument(execute_data, 0).is_binary_string();
     let mode = argument_string(execute_data, 1);
     if let Some(value) = optional_argument(execute_data, 2)
         && !matches!(
@@ -177,7 +178,7 @@ pub(super) fn fn_fopen(
             if eg.exception.is_some() {
                 return Ok(());
             }
-            super::super::report_internal_diagnostic(
+            super::super::report_internal_encoded_diagnostic(
                 eg,
                 execute_data,
                 2,
@@ -185,6 +186,7 @@ pub(super) fn fn_fopen(
                 &format!(
                     "fopen({open_path}): Failed to open stream: \"{class}::stream_open\" call failed"
                 ),
+                path_is_binary,
             )?;
             return return_value(return_pointer, Value::bool(false));
         }
@@ -207,12 +209,13 @@ pub(super) fn fn_fopen(
                 std::io::ErrorKind::PermissionDenied => "Permission denied".to_string(),
                 _ => error.to_string(),
             };
-            super::super::report_internal_diagnostic(
+            super::super::report_internal_encoded_diagnostic(
                 eg,
                 execute_data,
                 2,
                 "Warning",
                 &format!("fopen({open_path}): Failed to open stream: {reason}"),
+                path_is_binary,
             )?;
             Value::bool(false)
         }

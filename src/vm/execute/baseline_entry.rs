@@ -267,6 +267,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
                     continue;
                 }
                 if let Some(rendered) = rendered {
+                    let rendered_binary = rendered.is_binary_string();
                     let rendered = rendered.as_str().unwrap_or_default();
                     let (file, line, type_error_definition_site) =
                         effective.as_object().map_or_else(
@@ -323,6 +324,9 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
                         } else {
                             &file
                         };
+                        let thrown_file = if rendered_binary {
+                            crate::value::php_byte_string_from_bytes(thrown_file.bytes())
+                        } else { thrown_file.to_string() };
                         let rendered = if rendered.contains("\nStack trace:")
                             || replaced_during_render
                             || (!file.is_empty() && file != "[no active file]")
@@ -333,7 +337,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
                         } else {
                             format!("Uncaught {rendered}")
                         };
-                        (identity, rendered)
+                        (identity, rendered, rendered_binary)
                     });
                     break;
                 }
@@ -352,9 +356,10 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         if !parse_error {
             let rendered = prepared_uncaught
                 .as_ref()
-                .filter(|(identity, _)| exception.object_identity() == Some(*identity))
-                .map(|(_, rendered)| rendered.clone())
+                .filter(|(identity, _, _)| exception.object_identity() == Some(*identity))
+                .map(|(_, rendered, _)| rendered.clone())
                 .unwrap_or_else(|| format_uncaught_throwable(eg, &exception));
+            let binary = prepared_uncaught.as_ref().is_some_and(|(_, _, binary)| *binary);
             let (file, line) = exception.as_object().map_or_else(
                 || ("Unknown".to_string(), 0),
                 |object| {
@@ -373,11 +378,14 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
                     )
                 },
             );
-            let last_error_suffix = format!(" in {file} on line {line}");
+            let suffix_file = if binary { crate::value::php_byte_string_from_bytes(file.bytes()) } else { file.clone() };
+            let last_error_suffix = format!(" in {suffix_file} on line {line}");
             let last_error_message = rendered
                 .strip_suffix(&last_error_suffix)
                 .unwrap_or(&rendered);
             eg.record_last_error(1, last_error_message, &file, line);
+            eg.last_error.as_mut().expect("recorded throwable").message_is_binary = binary;
+            crate::stdlib::diagnostics::remember_terminal(eg, &rendered, &file, line, binary, rendered.len());
         }
         // Request-final callbacks and resource close hooks run before the CLI
         // publishes either exception class, but their output follows the
@@ -444,7 +452,7 @@ pub fn execute(eg: &mut ExecutorGlobals, main_func: &UserFunction) -> Result<Val
         }) {
             return Err(VmError::Parse(format_parse_error(&exc)));
         }
-        if let Some((identity, rendered)) = prepared_uncaught
+        if let Some((identity, rendered, _binary)) = prepared_uncaught
         {
             if exc.object_identity() == Some(identity) {
                 return Err(VmError::Fatal(rendered));
@@ -500,15 +508,15 @@ fn format_parse_error(thrown: &Value) -> String {
 
 #[cold]
 pub(crate) fn format_uncaught_throwable(eg: &ExecutorGlobals, thrown: &Value) -> String {
-    format_throwable_chain(eg, thrown, true, None)
+    format_throwable_chain(eg, thrown, true, None).echo_to_string()
 }
 
 #[cold]
 pub(crate) fn format_throwable_string_with_messages(
     eg: &ExecutorGlobals,
     thrown: &Value,
-    messages: &HashMap<usize, String>,
-) -> String {
+    messages: &HashMap<usize, Value>,
+) -> Value {
     format_throwable_chain(eg, thrown, false, Some(messages))
 }
 
@@ -517,18 +525,18 @@ fn format_throwable_chain(
     eg: &ExecutorGlobals,
     thrown: &Value,
     uncaught: bool,
-    messages: Option<&HashMap<usize, String>>,
-) -> String {
+    messages: Option<&HashMap<usize, Value>>,
+) -> Value {
     struct Segment {
         class_name: String,
-        message: String,
+        message: Value,
         location: Option<(String, i64, PhpArray)>,
     }
 
     fn snapshot(
         eg: &ExecutorGlobals,
         value: &Value,
-        messages: Option<&HashMap<usize, String>>,
+        messages: Option<&HashMap<usize, Value>>,
     ) -> Option<Segment> {
         let object = value.as_object()?;
         let class_name = object.class_name.to_string();
@@ -541,8 +549,8 @@ fn format_throwable_chain(
                 object
                     .get_property("message")
                     .map(Value::dereferenced)
-                    .map(Value::echo_to_string)
-                    .unwrap_or_default()
+                    .cloned()
+                    .unwrap_or_else(|| Value::string(""))
             });
         let location = object
             .get_property("file")
@@ -592,7 +600,7 @@ fn format_throwable_chain(
 
     let Some(final_segment) = snapshot(eg, thrown, messages) else {
         let message = thrown.echo_to_string();
-        return if message.is_empty() {
+        return Value::string(if message.is_empty() {
             if uncaught {
                 "Uncaught Exception".to_string()
             } else {
@@ -602,7 +610,7 @@ fn format_throwable_chain(
             format!("Uncaught Exception: {message}")
         } else {
             format!("Exception: {message}")
-        };
+        });
     };
     let final_location = final_segment
         .location
@@ -629,6 +637,12 @@ fn format_throwable_chain(
     }
     segments.reverse();
 
+    let binary = segments.iter().any(|segment| segment.message.is_binary_string());
+    fn append_text(output: &mut String, text: &str, binary: bool) {
+        if binary { output.extend(text.bytes().map(char::from)); }
+        else { output.push_str(text); }
+    }
+
     let mut rendered = String::new();
     for (index, segment) in segments.into_iter().enumerate() {
         if index == 0 && uncaught {
@@ -636,38 +650,43 @@ fn format_throwable_chain(
         } else if index != 0 {
             rendered.push_str("\n\nNext ");
         }
-        rendered.push_str(&segment.class_name);
-        if !segment.message.is_empty() {
+        append_text(&mut rendered, &segment.class_name, binary);
+        let message = segment.message.as_str().unwrap_or_default();
+        if !message.is_empty() {
             rendered.push_str(": ");
-            rendered.push_str(&segment.message);
+            append_text(&mut rendered, message, binary && !segment.message.is_binary_string());
         }
         if let Some((file, line, trace)) = segment.location {
             if segment.class_name == "TypeError"
-                && segment.message.contains(", called in ")
-                && segment.message.contains(" on line ")
+                && message.contains(", called in ")
+                && message.contains(" on line ")
             {
                 rendered.push_str(" and defined in ");
             } else {
                 rendered.push_str(" in ");
             }
-            rendered.push_str(&file);
+            append_text(&mut rendered, &file, binary);
             rendered.push(':');
             rendered.push_str(&line.to_string());
             rendered.push_str("\nStack trace:\n");
-            rendered.push_str(&crate::vm::trace::format_throwable_trace(
+            append_text(&mut rendered, &crate::vm::trace::format_throwable_trace(
                 &trace,
                 crate::stdlib::exception_string_param_max_len(eg),
                 eg,
-            ));
+            ), binary);
         }
     }
     if uncaught && let Some((file, line)) = final_location {
         rendered.push_str("\n  thrown in ");
-        rendered.push_str(if file.is_empty() { "Unknown" } else { &file });
+        append_text(&mut rendered, if file.is_empty() { "Unknown" } else { &file }, binary);
         rendered.push_str(" on line ");
         rendered.push_str(&line.to_string());
     }
-    rendered
+    if binary {
+        Value::binary_string(&crate::value::php_byte_string_bytes(&rendered))
+    } else {
+        Value::string(rendered)
+    }
 }
 
 /// Call a PHP function by FunctionCommon pointer with given arguments.

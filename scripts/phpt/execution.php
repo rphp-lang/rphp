@@ -17,6 +17,15 @@ function unsupported_rphp_ini_directives(string $section): array
         // and PHP ignores it; admit the same inert key for RPHP.
         'date_default_timezone_set("america/sao_paulo")' => true,
         'error_reporting' => true,
+        'display_errors' => true,
+        'log_errors' => true,
+        'html_errors' => true,
+        'ignore_repeated_errors' => true,
+        'ignore_repeated_source' => true,
+        'fatal_error_backtraces' => true,
+        'docref_root' => true,
+        'docref_ext' => true,
+        'error_log' => true,
         'highlight.comment' => true,
         'highlight.default' => true,
         'highlight.html' => true,
@@ -51,7 +60,9 @@ function unsupported_rphp_ini_directives(string $section): array
         $name = strtolower($separator === false
             ? $definition
             : substr($definition, 0, $separator));
-        if (!isset($supported[$name])) {
+        // File/stderr logging is implemented; platform syslog is not.
+        $value = $separator === false ? '' : substr($definition, $separator + 1);
+        if (!isset($supported[$name]) || ($name === 'error_log' && trim($value, "\"'") === 'syslog')) {
             $unsupported[$name] = true;
         }
     }
