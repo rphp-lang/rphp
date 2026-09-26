@@ -90,6 +90,22 @@ pub(super) enum NativeIconvError {
     Other(i32),
 }
 
+#[derive(Clone, Copy)]
+pub(crate) enum NativeCtypeClass {
+    Alnum,
+    Alpha,
+    Blank,
+    Control,
+    Digit,
+    Graph,
+    Lower,
+    Print,
+    Punctuation,
+    Space,
+    Upper,
+    HexDigit,
+}
+
 #[cfg(target_os = "linux")]
 pub(super) struct NativeInput<'a> {
     original: &'a [u8],
@@ -166,6 +182,17 @@ pub(super) enum NativeCall<'a> {
     },
     #[cfg(target_os = "linux")]
     IconvVersion,
+    #[cfg(target_os = "linux")]
+    Ctype {
+        class: NativeCtypeClass,
+        byte: u8,
+        result: &'a Cell<bool>,
+    },
+    #[cfg(target_os = "linux")]
+    CtypeLowercase {
+        byte: u8,
+        result: &'a Cell<u8>,
+    },
 }
 
 /// All process-global native mutations, raw calls, and returned-pointer reads
@@ -191,6 +218,34 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
             }
             #[cfg(target_os = "linux")]
             call => {
+                if let NativeCall::Ctype {
+                    class,
+                    byte,
+                    result,
+                } = call
+                {
+                    let byte = c_int::from(byte);
+                    let matched = match class {
+                        NativeCtypeClass::Alnum => libc::isalnum(byte),
+                        NativeCtypeClass::Alpha => libc::isalpha(byte),
+                        NativeCtypeClass::Blank => libc::isblank(byte),
+                        NativeCtypeClass::Control => libc::iscntrl(byte),
+                        NativeCtypeClass::Digit => libc::isdigit(byte),
+                        NativeCtypeClass::Graph => libc::isgraph(byte),
+                        NativeCtypeClass::Lower => libc::islower(byte),
+                        NativeCtypeClass::Print => libc::isprint(byte),
+                        NativeCtypeClass::Punctuation => libc::ispunct(byte),
+                        NativeCtypeClass::Space => libc::isspace(byte),
+                        NativeCtypeClass::Upper => libc::isupper(byte),
+                        NativeCtypeClass::HexDigit => libc::isxdigit(byte),
+                    } != 0;
+                    result.set(matched);
+                    return Some(Vec::new());
+                }
+                if let NativeCall::CtypeLowercase { byte, result } = call {
+                    result.set(libc::tolower(c_int::from(byte)) as u8);
+                    return Some(Vec::new());
+                }
                 if let NativeCall::IconvVersion = &call {
                     #[cfg(target_env = "gnu")]
                     {
@@ -369,6 +424,8 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     ),
                     NativeCall::Iconv { .. } => unreachable!(),
                     NativeCall::IconvVersion => unreachable!(),
+                    NativeCall::Ctype { .. } => unreachable!(),
+                    NativeCall::CtypeLowercase { .. } => unreachable!(),
                     NativeCall::StrColl { .. } => unreachable!(),
                     NativeCall::SetEnvironment(..) => unreachable!(),
                 };
@@ -448,6 +505,50 @@ pub(super) fn compare_locale_strings(left: &[u8], right: &[u8]) -> i64 {
         result: &result,
     });
     i64::from(result.get())
+}
+
+#[inline]
+pub(crate) fn ctype_byte_matches(class: NativeCtypeClass, byte: u8) -> bool {
+    #[cfg(target_os = "linux")]
+    {
+        let result = Cell::new(false);
+        let _ = invoke_native(NativeCall::Ctype {
+            class,
+            byte,
+            result: &result,
+        });
+        return result.get();
+    }
+    #[cfg(not(target_os = "linux"))]
+    match class {
+        NativeCtypeClass::Alnum => byte.is_ascii_alphanumeric(),
+        NativeCtypeClass::Alpha => byte.is_ascii_alphabetic(),
+        NativeCtypeClass::Blank => matches!(byte, b'\t' | b' '),
+        NativeCtypeClass::Control => byte.is_ascii_control(),
+        NativeCtypeClass::Digit => byte.is_ascii_digit(),
+        NativeCtypeClass::Graph => byte.is_ascii_graphic(),
+        NativeCtypeClass::Lower => byte.is_ascii_lowercase(),
+        NativeCtypeClass::Print => byte.is_ascii_graphic() || byte == b' ',
+        NativeCtypeClass::Punctuation => byte.is_ascii_punctuation(),
+        NativeCtypeClass::Space => byte.is_ascii_whitespace(),
+        NativeCtypeClass::Upper => byte.is_ascii_uppercase(),
+        NativeCtypeClass::HexDigit => byte.is_ascii_hexdigit(),
+    }
+}
+
+#[inline]
+pub(crate) fn ctype_lowercase_byte(byte: u8) -> u8 {
+    #[cfg(target_os = "linux")]
+    {
+        let result = Cell::new(byte);
+        let _ = invoke_native(NativeCall::CtypeLowercase {
+            byte,
+            result: &result,
+        });
+        return result.get();
+    }
+    #[cfg(not(target_os = "linux"))]
+    byte.to_ascii_lowercase()
 }
 
 #[cfg(test)]

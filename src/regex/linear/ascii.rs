@@ -2,7 +2,7 @@
 
 use super::super::{
     Anchor, CaptureView, ClassItem, Match, NewlineConvention, Node, Regex, RegexFlags, chars_equal,
-    is_word_char, match_class_item, match_shorthand,
+    ctype_lowercase_byte, is_word_char, match_class_item, match_shorthand,
 };
 
 const PREFIX_LIMIT: usize = 32;
@@ -390,15 +390,15 @@ fn match_terminal_class(
     {
         let (lower, upper) = if flags.case_insensitive {
             (
-                (*lower as u8).to_ascii_lowercase(),
-                (*upper as u8).to_ascii_lowercase(),
+                ctype_lowercase_byte(*lower as u8),
+                ctype_lowercase_byte(*upper as u8),
             )
         } else {
             (*lower as u8, *upper as u8)
         };
         while repetitions < target && current < bytes.len() {
             let candidate = if flags.case_insensitive {
-                bytes[current].to_ascii_lowercase()
+                ctype_lowercase_byte(bytes[current])
             } else {
                 bytes[current]
             };
@@ -617,7 +617,7 @@ fn match_ascii_class_item(item: &ClassItem, candidate: u8, flags: RegexFlags) ->
         ClassItem::Literal(literal) if literal.is_ascii() => {
             let literal = *literal as u8;
             if flags.case_insensitive {
-                candidate.eq_ignore_ascii_case(&literal)
+                ctype_lowercase_byte(candidate) == ctype_lowercase_byte(literal)
             } else {
                 candidate == literal
             }
@@ -625,9 +625,9 @@ fn match_ascii_class_item(item: &ClassItem, candidate: u8, flags: RegexFlags) ->
         ClassItem::Range(lower, upper) if lower.is_ascii() && upper.is_ascii() => {
             let (candidate, lower, upper) = if flags.case_insensitive {
                 (
-                    candidate.to_ascii_lowercase(),
-                    (*lower as u8).to_ascii_lowercase(),
-                    (*upper as u8).to_ascii_lowercase(),
+                    ctype_lowercase_byte(candidate),
+                    ctype_lowercase_byte(*lower as u8),
+                    ctype_lowercase_byte(*upper as u8),
                 )
             } else {
                 (candidate, *lower as u8, *upper as u8)

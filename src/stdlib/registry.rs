@@ -4805,6 +4805,24 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::Mixed],
         ParamTypeHint::Bool
     );
+    for name in [
+        "ctype_alnum",
+        "ctype_alpha",
+        "ctype_cntrl",
+        "ctype_digit",
+        "ctype_graph",
+        "ctype_lower",
+        "ctype_print",
+        "ctype_punct",
+        "ctype_space",
+        "ctype_upper",
+        "ctype_xdigit",
+    ] {
+        let pointer = eg
+            .find_function(name)
+            .expect("ctype function was just registered");
+        eg.register_internal_function_reflection_metadata(pointer, vec![None], "ctype");
+    }
 
     // See streams::register_extensions: this append-only Apple path keeps the
     // admitted hot-code layout stable as new cold stream handlers are added.

@@ -1,6 +1,17 @@
 mod common;
 
+use std::sync::Mutex;
+
 use common::run_php;
+
+static CTYPE_LOCALE_STATE: Mutex<()> = Mutex::new(());
+
+fn run_ctype(source: &str) -> String {
+    let _guard = CTYPE_LOCALE_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    run_php(source)
+}
 
 const CTYPE_FUNCTIONS: &str = r#"[
     'ctype_alnum', 'ctype_alpha', 'ctype_cntrl', 'ctype_digit',
@@ -9,9 +20,66 @@ const CTYPE_FUNCTIONS: &str = r#"[
 ]"#;
 
 #[test]
+fn ctype_extension_identity_is_public_and_case_insensitive() {
+    assert_eq!(
+        run_ctype(
+            r#"<?php
+echo (int) extension_loaded('ctype'), (int) extension_loaded('CTYPE'),
+    (int) in_array('ctype', get_loaded_extensions(), true), '|';
+foreach (['ctype_alnum', 'ctype_xdigit'] as $name) {
+    echo (new ReflectionFunction($name))->getExtensionName(), '|';
+}
+echo (int) extension_loaded('missing-rphp-extension'), "\n";
+"#,
+        ),
+        "111|ctype|ctype|0\n"
+    );
+}
+
+#[test]
+fn ctype_observes_the_active_process_locale() {
+    assert_eq!(
+        run_ctype(
+            r#"<?php
+$before = setlocale(LC_CTYPE, '0');
+setlocale(LC_CTYPE, 'C');
+echo (int) ctype_alpha("\xe4"), (int) ctype_lower("\xe4"),
+    preg_match('/\w/', "\xe4"), '|';
+$locale = setlocale(LC_CTYPE, 'cs_CZ.ISO-8859-2');
+if ($locale === false) {
+    echo "locale-unavailable|";
+} else {
+    echo (int) ctype_alpha("\xe4"), (int) ctype_lower("\xe4"),
+        preg_match('/\w/', "\xe4"), '|';
+}
+setlocale(LC_CTYPE, $before);
+echo (int) ctype_alpha('A'), "\n";
+"#,
+        ),
+        if setlocale_cs_cz_iso_8859_2_available() {
+            "000|111|1\n"
+        } else {
+            "000|locale-unavailable|1\n"
+        }
+    );
+}
+
+fn setlocale_cs_cz_iso_8859_2_available() -> bool {
+    // The locale is intentionally optional on developer and CI hosts. The
+    // same program still proves that the C locale is not inherited from the
+    // environment; when the locale exists it additionally exercises the
+    // high-byte classification transition.
+    unsafe {
+        let locale = c"cs_CZ.ISO-8859-2";
+        !libc::setlocale(libc::LC_CTYPE, locale.as_ptr()).is_null()
+            && !libc::setlocale(libc::LC_CTYPE, c"C".as_ptr()).is_null()
+    }
+}
+
+#[test]
 fn ctype_surface_exposes_all_php_85_signatures() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 foreach ({CTYPE_FUNCTIONS} as $name) {{
     $function = new ReflectionFunction($name);
@@ -37,7 +105,7 @@ foreach ({CTYPE_FUNCTIONS} as $name) {{
 #[test]
 fn ctype_full_byte_sets_match_the_c_locale_contract() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 foreach ({CTYPE_FUNCTIONS} as $name) {{
     $hits = [];
@@ -67,7 +135,7 @@ foreach ({CTYPE_FUNCTIONS} as $name) {{
 #[test]
 fn ctype_requires_every_byte_and_rejects_empty_or_non_ascii_strings() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 $values = ['', 'AA', 'A!', "A\0", "A\n", "\x80", "\xff", 'é'];
 foreach ({CTYPE_FUNCTIONS} as $name) {{
@@ -96,7 +164,7 @@ foreach ({CTYPE_FUNCTIONS} as $name) {{
 #[test]
 fn ctype_integer_legacy_mapping_covers_boundaries_and_large_values() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 $values = [-129,-128,-1,0,9,10,11,12,13,32,33,47,48,57,58,64,65,70,71,90,91,96,97,102,103,122,123,126,127,128,255,256,1000,PHP_INT_MAX,PHP_INT_MIN];
 foreach ({CTYPE_FUNCTIONS} as $name) {{
@@ -125,7 +193,7 @@ foreach ({CTYPE_FUNCTIONS} as $name) {{
 #[test]
 fn ctype_non_string_types_deprecate_without_coercion() {
     assert_eq!(
-        run_php(
+        run_ctype(
             r#"<?php
 error_reporting(E_ALL);
 set_error_handler(static function (int $severity, string $message): bool {
@@ -169,7 +237,7 @@ fclose($stream);
 #[test]
 fn every_ctype_integer_path_uses_its_canonical_deprecation_name() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 set_error_handler(static function (int $severity, string $message): bool {{
     echo $severity, ':', $message, '|';
@@ -197,7 +265,7 @@ foreach ({CTYPE_FUNCTIONS} as $name) echo (int) $name(65), "\n";
 #[test]
 fn ctype_deprecation_is_reentrant_snapshots_the_argument_and_can_throw() {
     assert_eq!(
-        run_php(
+        run_ctype(
             r#"<?php
 $value = 48;
 set_error_handler(function (int $severity, string $message) use (&$value): bool {
@@ -219,7 +287,7 @@ catch (Throwable $error) { echo $error::class, ':', $error->getMessage(), "\n"; 
 #[test]
 fn ctype_mixed_contract_is_identical_under_strict_types() {
     assert_eq!(
-        run_php(
+        run_ctype(
             r#"<?php declare(strict_types=1);
 set_error_handler(static function (int $severity, string $message): bool {
     echo $severity, ':', $message, '|';
@@ -243,7 +311,7 @@ foreach ([65, 65.0, null, true, 'A'] as $value) {
 #[test]
 fn ctype_functions_share_named_dynamic_first_class_and_callback_dispatch() {
     assert_eq!(
-        run_php(
+        run_ctype(
             r#"<?php
 $dynamic = 'ctype_digit';
 $first = ctype_xdigit(...);
@@ -262,7 +330,7 @@ echo implode('', array_map('ctype_upper', ['ABC', 'AbC'])), "\n";
 #[test]
 fn ctype_registration_owns_arity_and_named_argument_errors() {
     assert_eq!(
-        run_php(
+        run_ctype(
             r#"<?php
 foreach ([
     static fn () => ctype_alpha(),
@@ -285,7 +353,7 @@ foreach ([
 #[test]
 fn ctype_inventory_is_case_insensitive_and_available_to_namespaced_fallback() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 namespace CtypeProbe;
 echo (int) \function_exists('CTYPE_ALPHA'), ':',
@@ -303,7 +371,7 @@ echo "\n";
 #[test]
 fn ctype_reads_references_without_mutating_or_detaching_them() {
     assert_eq!(
-        run_php(&format!(
+        run_ctype(&format!(
             r#"<?php
 $text = 'Az09';
 $alias =& $text;

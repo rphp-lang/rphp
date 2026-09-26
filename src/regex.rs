@@ -10,6 +10,8 @@ use std::cell::RefCell;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::rc::Rc;
 
+use crate::stdlib::native_process::{NativeCtypeClass, ctype_byte_matches, ctype_lowercase_byte};
+
 mod linear;
 mod unicode;
 mod unicode_bidi_classes;
@@ -251,6 +253,27 @@ impl PosixClass {
     #[inline(never)]
     #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
     fn matches(self, c: char, unicode: bool) -> bool {
+        if !unicode {
+            let Ok(byte) = u8::try_from(c as u32) else {
+                return false;
+            };
+            return match self {
+                Self::Alnum => ctype_byte_matches(NativeCtypeClass::Alnum, byte),
+                Self::Alpha => ctype_byte_matches(NativeCtypeClass::Alpha, byte),
+                Self::Ascii => byte.is_ascii(),
+                Self::Blank => ctype_byte_matches(NativeCtypeClass::Blank, byte),
+                Self::Cntrl => ctype_byte_matches(NativeCtypeClass::Control, byte),
+                Self::Digit => ctype_byte_matches(NativeCtypeClass::Digit, byte),
+                Self::Graph => ctype_byte_matches(NativeCtypeClass::Graph, byte),
+                Self::Lower => ctype_byte_matches(NativeCtypeClass::Lower, byte),
+                Self::Print => ctype_byte_matches(NativeCtypeClass::Print, byte),
+                Self::Punct => ctype_byte_matches(NativeCtypeClass::Punctuation, byte),
+                Self::Space => ctype_byte_matches(NativeCtypeClass::Space, byte),
+                Self::Upper => ctype_byte_matches(NativeCtypeClass::Upper, byte),
+                Self::Word => ctype_byte_matches(NativeCtypeClass::Alnum, byte) || byte == b'_',
+                Self::Xdigit => ctype_byte_matches(NativeCtypeClass::HexDigit, byte),
+            };
+        }
         let is_letter = || unicode::category_has_initial(c, 'L');
         let is_number = || unicode::category_has_initial(c, 'N');
         let is_decimal = || unicode::category_is(c, "Nd");
@@ -4265,11 +4288,15 @@ fn match_balanced_delimiter_quantifier(
 #[inline]
 fn chars_equal(left: char, right: char, flags: RegexFlags) -> bool {
     if flags.case_insensitive {
-        unicode::caseless_equal(
-            left,
-            right,
-            flags.unicode_mode.utf() || flags.unicode_mode.ucp(),
-        )
+        if flags.unicode_mode.utf() || flags.unicode_mode.ucp() {
+            unicode::caseless_equal(left, right, true)
+        } else {
+            let (Ok(left), Ok(right)) = (u8::try_from(left as u32), u8::try_from(right as u32))
+            else {
+                return false;
+            };
+            ctype_lowercase_byte(left) == ctype_lowercase_byte(right)
+        }
     } else {
         left == right
     }
@@ -4789,11 +4816,11 @@ fn is_word_boundary(chars: &[char], pos: usize, unicode: bool) -> bool {
 }
 
 fn is_word_char(c: char, unicode: bool) -> bool {
-    (if unicode {
-        c.is_alphanumeric()
-    } else {
-        c.is_ascii_alphanumeric()
-    }) || c == '_'
+    if unicode {
+        return c.is_alphanumeric() || c == '_';
+    }
+    u8::try_from(c as u32)
+        .is_ok_and(|byte| ctype_byte_matches(NativeCtypeClass::Alnum, byte) || byte == b'_')
 }
 
 fn match_shorthand(sh: Shorthand, c: char, unicode: bool) -> bool {
@@ -4817,24 +4844,26 @@ fn match_shorthand(sh: Shorthand, c: char, unicode: bool) -> bool {
         )
     };
     match sh {
-        Shorthand::Digit => c.is_ascii_digit(),
-        Shorthand::NonDigit => !c.is_ascii_digit(),
+        Shorthand::Digit => {
+            if unicode {
+                c.is_ascii_digit()
+            } else {
+                u8::try_from(c as u32)
+                    .is_ok_and(|byte| ctype_byte_matches(NativeCtypeClass::Digit, byte))
+            }
+        }
+        Shorthand::NonDigit => !match_shorthand(Shorthand::Digit, c, unicode),
         Shorthand::Word => is_word_char(c, unicode),
         Shorthand::NonWord => !is_word_char(c, unicode),
         Shorthand::Space => {
             if unicode {
                 c.is_whitespace()
             } else {
-                c.is_ascii_whitespace()
+                u8::try_from(c as u32)
+                    .is_ok_and(|byte| ctype_byte_matches(NativeCtypeClass::Space, byte))
             }
         }
-        Shorthand::NonSpace => {
-            if unicode {
-                !c.is_whitespace()
-            } else {
-                !c.is_ascii_whitespace()
-            }
-        }
+        Shorthand::NonSpace => !match_shorthand(Shorthand::Space, c, unicode),
         Shorthand::HorizontalSpace => horizontal_space(),
         Shorthand::NonHorizontalSpace => !horizontal_space(),
         Shorthand::VerticalSpace => vertical_space(),
@@ -4855,10 +4884,14 @@ fn match_class_item(item: &ClassItem, c: char, flags: RegexFlags) -> bool {
                     let lower = unicode::simple_case_fold(*lo);
                     let upper = unicode::simple_case_fold(*hi);
                     folded >= lower && folded <= upper
-                } else if c.is_ascii() && lo.is_ascii() && hi.is_ascii() {
-                    let folded = c.to_ascii_lowercase();
-                    let lower = lo.to_ascii_lowercase();
-                    let upper = hi.to_ascii_lowercase();
+                } else if let (Ok(candidate), Ok(lower), Ok(upper)) = (
+                    u8::try_from(c as u32),
+                    u8::try_from(*lo as u32),
+                    u8::try_from(*hi as u32),
+                ) {
+                    let folded = ctype_lowercase_byte(candidate);
+                    let lower = ctype_lowercase_byte(lower);
+                    let upper = ctype_lowercase_byte(upper);
                     folded >= lower && folded <= upper
                 } else {
                     false

@@ -36,6 +36,26 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-extension-foundation` checkpoint over `cbc5c6da` honestly admits
+Ctype on Linux. Its 11 functions expose PHP 8.5 call metadata and classify
+bytes through the active native `LC_CTYPE`; adjacent non-UCP PCRE byte classes,
+word boundaries and caseless matching use the same locale semantics. Original
+regressions, all 49 upstream Ctype tests and the combined Ctype/PCRE packet are
+green. The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip /
+99 unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
+variants, all-targets, Composer S0, unsafe/static and runner checks pass.
+Performance is deferred by user direction. See [exact evidence](compatibility.md).
+
+This does not claim PHPUnit compatibility. The runtime startup probe now finds
+Ctype and Tokenizer; its next honest extension blockers are `filter`, `json`,
+`libxml`, `dom`, `xmlwriter` and `mbstring`. Work proceeds as bounded extension
+checkpoints in that dependency order: complete Filter state/call contracts,
+close JSON's remaining public incompatibilities, then build the shared XML
+foundation before DOM/XMLWriter, followed by Mbstring. Extension identity is
+published only after the relevant surface and upstream differential gate pass.
+
+### Preceding Rust 1.98.1 checkpoint
+
 The `rust-1.98.1-upgrade` checkpoint over `a636e797` moves the pinned and minimum
 Rust version to 1.98.1 (rustfmt 1.9.0), retaining edition 2024 and the unchanged
 lockfile. Both release profiles preserve the exact stable manifest and all

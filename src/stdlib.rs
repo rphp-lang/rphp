@@ -64,7 +64,7 @@ pub(crate) mod include_path;
 mod json_decode;
 mod legacy_encoding;
 mod meta_tags;
-mod native_process;
+pub(crate) mod native_process;
 mod pack;
 mod parse_ini;
 mod random;
@@ -31664,6 +31664,8 @@ fn fn_nl_langinfo(
 
 const LOADED_EXTENSION_NAMES: &[&str] = &[
     "calendar",
+    #[cfg(target_os = "linux")]
+    "ctype",
     "date",
     #[cfg(target_os = "linux")]
     "gettext",
@@ -32902,10 +32904,11 @@ fn ctype_apply(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
     function: &str,
-    predicate: impl Fn(u8) -> bool,
+    class: native_process::NativeCtypeClass,
     positive_large_matches: bool,
     negative_large_matches: bool,
 ) -> Result<(), VmError> {
+    let predicate = |byte| native_process::ctype_byte_matches(class, byte);
     if let Some(matches) = ctype_string_matches(arg!(ed, 0), &predicate) {
         ret!(rv, Value::bool(matches));
     }
@@ -32939,7 +32942,7 @@ fn fn_ctype_alnum(
         rv,
         eg,
         "ctype_alnum",
-        |byte| byte.is_ascii_alphanumeric(),
+        native_process::NativeCtypeClass::Alnum,
         true,
         false,
     )
@@ -32955,7 +32958,7 @@ fn fn_ctype_alpha(
         rv,
         eg,
         "ctype_alpha",
-        |byte| byte.is_ascii_alphabetic(),
+        native_process::NativeCtypeClass::Alpha,
         false,
         false,
     )
@@ -32971,7 +32974,7 @@ fn fn_ctype_cntrl(
         rv,
         eg,
         "ctype_cntrl",
-        |byte| byte <= 0x1f || byte == 0x7f,
+        native_process::NativeCtypeClass::Control,
         false,
         false,
     )
@@ -32987,7 +32990,7 @@ fn fn_ctype_digit(
         rv,
         eg,
         "ctype_digit",
-        |byte| byte.is_ascii_digit(),
+        native_process::NativeCtypeClass::Digit,
         true,
         false,
     )
@@ -33003,7 +33006,7 @@ fn fn_ctype_graph(
         rv,
         eg,
         "ctype_graph",
-        |byte| (0x21..=0x7e).contains(&byte),
+        native_process::NativeCtypeClass::Graph,
         true,
         true,
     )
@@ -33019,7 +33022,7 @@ fn fn_ctype_lower(
         rv,
         eg,
         "ctype_lower",
-        |byte| byte.is_ascii_lowercase(),
+        native_process::NativeCtypeClass::Lower,
         false,
         false,
     )
@@ -33035,7 +33038,7 @@ fn fn_ctype_print(
         rv,
         eg,
         "ctype_print",
-        |byte| (0x20..=0x7e).contains(&byte),
+        native_process::NativeCtypeClass::Print,
         true,
         true,
     )
@@ -33051,7 +33054,7 @@ fn fn_ctype_punct(
         rv,
         eg,
         "ctype_punct",
-        |byte| (0x21..=0x7e).contains(&byte) && !byte.is_ascii_alphanumeric(),
+        native_process::NativeCtypeClass::Punctuation,
         false,
         false,
     )
@@ -33067,7 +33070,7 @@ fn fn_ctype_space(
         rv,
         eg,
         "ctype_space",
-        |byte| (0x09..=0x0d).contains(&byte) || byte == b' ',
+        native_process::NativeCtypeClass::Space,
         false,
         false,
     )
@@ -33083,7 +33086,7 @@ fn fn_ctype_upper(
         rv,
         eg,
         "ctype_upper",
-        |byte| byte.is_ascii_uppercase(),
+        native_process::NativeCtypeClass::Upper,
         false,
         false,
     )
@@ -33099,7 +33102,7 @@ fn fn_ctype_xdigit(
         rv,
         eg,
         "ctype_xdigit",
-        |byte| byte.is_ascii_hexdigit(),
+        native_process::NativeCtypeClass::HexDigit,
         true,
         false,
     )

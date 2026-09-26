@@ -7,6 +7,46 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: Ctype
+
+The `phpunit-extension-foundation` checkpoint over `cbc5c6da` admits the
+Linux Ctype extension honestly: all 11 public functions are registered with
+their PHP 8.5 signatures and Reflection extension ownership, and
+`extension_loaded('ctype')` is true only where the active native `LC_CTYPE`
+classification is used. Empty strings, scalar coercion, deprecations and
+locale-sensitive byte classification are covered by original regressions.
+
+The same native locale table now supplies non-UCP PCRE byte shorthands, POSIX
+classes, word boundaries and caseless matching. Unicode/UCP behavior remains
+on the existing Unicode path. With task-local `cs_CZ.ISO-8859-2`, `de_DE` and
+`pt_PT` locale data, the complete upstream `ext/ctype` suite passes **49/49**.
+The combined `ext/ctype` plus `ext/pcre` packet is **200 pass / 0 fail / 12 skip
+/ 2 unsupported**, with no timeout or crash.
+
+The unchanged 7,174-case stable ledger is **6,881 pass / 0 fail / 194 skip /
+99 unsupported**, exact **+0/-0** with an identical 6,881-path pass set. Five
+complete Cargo configurations pass: default **6,937**, no-default **6,592**,
+erased **7,008**, reified **7,030**, all-features **7,081**; ignored
+15/15/15/15/18, with all-targets, Composer S0, format, unsafe policy and runner
+self-tests green. Performance was explicitly deferred and no performance claim
+is made.
+
+This is the first PHPUnit extension checkpoint, not a PHPUnit compatibility
+claim. A direct startup probe now finds Ctype and Tokenizer, while `dom`,
+`filter`, `json`, `libxml`, `mbstring` and `xmlwriter` remain honest missing
+extensions. Filter completion/admission is the next bounded step.
+
+SHA-256 evidence: release
+`f9e63967a9872a0f4574d5d1396117e732256753bd20bf39095bcd1241b1f8ca`;
+stable manifest
+`926a939a14e9d9ad2121220c286376201d8991e08bf8908cc8836578c1cb51d3`;
+stable pass set
+`54853df66d0bc05d98a73894d6a13f3a10082b56430f7f9a991b79be08bb079f`;
+Ctype/PCRE manifest
+`d7002dd652e1cd2320a75eb445ccd75b3284ddbb7fada28f617a8fd5b3593fc3`;
+Cargo matrix
+`1acf4dc6920432ada34fffacb5e3572dfd8072b44e5ab1b3d851ef04d3b10cab`.
+
 ### Rust 1.98.1 toolchain checkpoint
 
 The `rust-1.98.1-upgrade` checkpoint over `a636e797` pins Rust/Cargo 1.98.1
