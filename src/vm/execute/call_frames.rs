@@ -1184,10 +1184,81 @@ pub(crate) fn run_request_handler_destructors(
     let candidates = collect_retiring_root_destructors(eg, |visit| {
         for root in roots { visit(root); }
         for root in eg.globals.values() { visit(root); }
+        // The active callbacks remain callable while their captures retire.
+        // Count their canonical handles alongside the temporary root views.
+        if let Some(root) = &eg.error_handler { visit(root); }
+        if let Some(root) = &eg.exception_handler { visit(root); }
     }, false);
     run_collected_value_destructors(
         eg, candidates, logical_caller, true, false, false,
     ).map(|_| ())
+}
+
+/// Surviving arrays/reference cells still expose their values to late
+/// callbacks, but user object destructors have already run in object-handle
+/// order. Keep only weak work items across callbacks so their mutations can
+/// release an unrelated object immediately rather than retaining a snapshot.
+#[cold]
+fn run_request_surviving_global_destructors(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let mut pending_exception = eg.exception.take();
+    loop {
+        let mut candidates = Vec::new();
+        {
+            let _snapshot = crate::value::suppress_cycle_snapshot_roots();
+            let mut pending: Vec<_> = eg.globals.values()
+                .filter_map(Value::clone_cycle_handle).collect();
+            let mut seen = std::collections::HashSet::new();
+            while let Some(value) = pending.pop() {
+                let Some((identity, _)) = value.cycle_node() else { continue; };
+                if !seen.insert(identity) { continue; }
+                let suspended_fiber = eg.fiber_status(identity)
+                    == Some(crate::runtime::fiber::FiberStatus::Suspended);
+                let pending_destructor = !value.is_object_destructor_retired()
+                    && value.as_object().is_some_and(|object| {
+                        eg.class_has_destructor(object.class_id, &object.class_name)
+                    });
+                if (suspended_fiber || pending_destructor)
+                    && let Some(owner) = value.weak_object_owner()
+                {
+                    candidates.push((value.object_handle(), owner));
+                }
+                value.for_each_cycle_child_handle(|child| pending.push(child));
+            }
+        }
+        if candidates.is_empty() {
+            eg.exception = pending_exception;
+            return Ok(());
+        }
+        candidates.sort_by_key(|(handle, _)| *handle);
+        for (_, weak_owner) in candidates {
+            let Some(owner) = weak_owner.upgrade() else { continue; };
+            if let Some(identity) = owner.object_identity() {
+                if eg.has_fiber_context(identity) {
+                    eg.force_close_fiber_object(identity, logical_caller)?;
+                }
+            }
+            run_cycle_object_destructor_from(eg, &owner, Some(logical_caller))?;
+            let Some(replacement) = eg.exception.take() else { continue; };
+            if let Some(displaced) = pending_exception.take() {
+                append_replaced_exception(&replacement, &displaced, eg);
+            }
+            match crate::stdlib::dispatch_uncaught_exception_handler(eg, logical_caller, &replacement) {
+                Ok(true) => {}
+                Ok(false) => {
+                    let effective = eg.exception.take().unwrap_or_else(|| replacement.clone());
+                    if effective.object_identity() != replacement.object_identity() {
+                        append_replaced_exception(&effective, &replacement, eg);
+                    }
+                    eg.exception = Some(effective);
+                    return Ok(());
+                }
+                Err(error) => return Err(error),
+            }
+        }
+    }
 }
 
 #[cold]
@@ -1439,6 +1510,15 @@ pub(crate) fn run_cycle_object_destructor(
     eg: &mut ExecutorGlobals,
     owner: &Value,
 ) -> Result<(), VmError> {
+    run_cycle_object_destructor_from(eg, owner, None)
+}
+
+#[cold]
+fn run_cycle_object_destructor_from(
+    eg: &mut ExecutorGlobals,
+    owner: &Value,
+    shutdown_caller: Option<*mut ExecuteData>,
+) -> Result<(), VmError> {
     let Some(object) = owner.as_object() else {
         return Ok(());
     };
@@ -1453,7 +1533,13 @@ pub(crate) fn run_cycle_object_destructor(
     if eg.find_method_info(&class_name, "__destruct").is_some()
         && owner.mark_object_destructed()
     {
-        let _ = call_magic_method(eg, owner, "__destruct", &[])?;
+        if let Some(caller) = shutdown_caller {
+            let _ = call_magic_method_from_logical_caller(
+                eg, caller, true, false, owner, "__destruct", &[],
+            )?;
+        } else {
+            let _ = call_magic_method(eg, owner, "__destruct", &[])?;
+        }
     }
     Ok(())
 }
@@ -1662,14 +1748,32 @@ fn run_frame_destructors_filtered(
                 let retire_consumer = frame_references == 1
                     && representative.as_object().is_some_and(|object| object.class_name.is_empty());
                 let receiver = representative.clone();
+                let mut expected_references = frame_references + 1;
+                if root_frame && matches!((&*base.add(index)).value_type(), ValueType::Object | ValueType::Closure)
+                    && let Some((_, name)) = op_array.main_scope_vars.iter()
+                        .find(|(cv, _)| *cv as usize == index)
+                {
+                    let mirrored = eg.globals.get(name).is_some_and(|global| {
+                        !global.is_reference() && global.vm_release_identity() == Some(identity)
+                    });
+                    if frame_references == 1 + usize::from(mirrored) {
+                        // Removing an unshared symbol precedes its callback.
+                        // The retained receiver keeps the object alive while
+                        // `global`/`$GLOBALS` correctly observe the unset name.
+                        eg.globals.remove(name);
+                        frame_slot_set(frame, base.cast_mut().add(index), Value::undef());
+                        expected_references = 1;
+                        counts.insert(identity, 0);
+                    }
+                }
                 progressed |= run_final_object_destructor_tree(
                     eg,
                     receiver,
-                    frame_references + 1,
+                    expected_references,
                     Some(&counts),
                     false,
                     logical_caller,
-                    false,
+                    root_frame && !live_generators_only,
                     detached_caller_at_current_site,
                     false,
                 )?;

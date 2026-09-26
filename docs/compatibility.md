@@ -7,63 +7,68 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-array-snapshots` checkpoint over `9c737a7a` completes the two
-remaining ordinary core failures in the measured corpus. Dynamic constants
-snapshot array entries without retaining PHP reference cells, reject array
-cycles without rejecting shared DAGs, preserve object/resource identity and
-diagnostic order, and rebuild cursor/next-index state. Foreach specialization
-now accounts for CVs promoted by array-literal references; ordinary by-value
-targets keep the existing plain path.
+The `core-shutdown-symbols` checkpoint over `85df66e8` closes the disclosed
+post-frame global-string holdout. Late handler/generator callbacks observe
+surviving strings, arrays, references and resources without republishing cleared
+CVs. Unshared direct objects retire before their callbacks; shared objects and
+reference cells retain their distinct PHP lifetime. Active handlers, suspended
+Fibers, reentrant typed-property writes and shutdown traces use the same
+canonical boundaries.
 
-The complete 7,174-case stable core is **6,831 pass / 4 fail / 184 skip /
-154 unsupported / 1 timeout / 0 crash**, exact **+2/-0**. Zend/lang is
-**5,353/4/116/125 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All 6,829 accepted parent passes remain passes; no other status changed.
-Both `Zend/tests/constant_arrays.phpt` and
-`Zend/tests/foreach/foreach_002.phpt` pass. The known
-`Zend/tests/new_oom.phpt` timeout remains visible, never a pass.
+The complete 7,174-case stable core remains **6,831 pass / 4 fail / 184 skip /
+154 unsupported / 1 timeout / 0 crash**, exact **+0/-0**. Zend/lang is
+**5,353/4/116/125 plus 1 timeout**; strings/array is **1,478/0/68/29**.
+All accepted passes and statuses are preserved. One known library failure
+(`Zend/tests/gh17162.phpt`, missing `getimagesize()`) moves from output to runtime
+failure because its previously omitted late destructor now runs. An independent
+original missing-call/fatal-trace oracle proves that lifecycle behavior; the
+library remains a non-claim. The known `new_oom.phpt` timeout stays visible,
+never a pass.
 
-The slice adds **29 original CLI regressions and one compiler proof**;
-focused/adjacent Cargo gates pass **426/426**. **445 of 446 original
-comparisons** match PHP 8.5.11 stdout, stderr and exit status byte-exactly,
-including the complete accepted parent set. The one already-disclosed
-shutdown/global-string discovery remains a failing follow-up, not a pass.
+The slice adds **59 original CLI regressions**, with **488/488** focused and
+adjacent passes and **506/506** byte-exact PHP 8.5.11 oracle comparisons.
+The existing property-replacement test now explicitly cleans its live owner;
+a separate CLI regression checks PHP's fatal shutdown result and complete
+trace instead of relying on the old omitted destructor.
 
-The frozen-source `test-fast` matrix retains debug assertions and overflow
-checks: default **6,509**, no-default **6,174**, erased **6,580**, reified
-**6,602**, all-features **6,653**; ignored counts remain 15/15/15/15/18.
-All-feature/all-target checks, exact PHPT no-loss, Composer/Symfony S0--S3,
-formatting and unsafe policy/self-tests pass. Unsafe inventory stays
-**1,627 blocks / 289 functions**, with unchanged ceilings. Host gates retain
-the 6 GiB/no-swap limit, two build/test workers, at most four PHPT workers and
-automatic cleanup between variants.
+The `test-fast` matrix retains debug assertions and overflow checks: default
+**6,568**, no-default **6,233**, erased **6,639**, reified **6,661**, all-features
+**6,712**; ignored counts remain 15/15/15/15/18. All-feature/all-target checks,
+exact PHPT no-loss, all seven Composer/Symfony S0--S3 gates, formatting and unsafe
+policy/self-tests pass. A final same-line SAFETY-comment clarification changed
+no executable code; its equivalence is recorded in the evidence packet.
+Unsafe inventory stays **1,627 blocks / 289 functions**, with unchanged ceilings.
+Host gates retain the 6 GiB/no-swap limit, two build/test workers, at most four
+PHPT workers and automatic cleanup between variants.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `169a6f27c97a4e41c081951dd8492b25b5693450e31da88bec217d0e5f5ec097`;
+candidate `13bd4b6e1d9cbddcc60516fd91c8fb9ddadb2e3e3b8af7c4853c340bced58a47`;
 parent/candidate full manifests
-`7c48f6a39ce4ed9edae313254b1bd4fe961fd057663d5fd447cbcd050e11c297` /
-`f414d4cbcd448824e3eb5648c4bdcc60d0a067022fb1dc73618d0ed442b032f7`;
-two-case manifest
-`0ed6dccbad8a76a2b510735be4037c417cd858fc37cfcd4ea7e366372f709c4b`;
-Zend/lang pass set
+`f414d4cbcd448824e3eb5648c4bdcc60d0a067022fb1dc73618d0ed442b032f7` /
+`53711461adfc0736cd733797d857bb53ad98232f84d7178083fa9e7ef4bd20ce`;
+unchanged Zend/lang pass set
 `8df59861d81dcf2a01ef9d702163c1786042724d9da88624886f159b3c7cdbd4`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
 `c0222c8cf1a7d033934d6aafa423cbe699857414029925f995a3b65a9178be34`;
 no-loss summary
-`cc7e7e9919675219e7d29d9673dfad04182be1cd0351244dcc5889451e9918fa`;
+`b4f0fae070d9e9a0f6441535ac66ac3aa9f73494e5b15e29750f7d3a7b0143f3`;
 final evidence packet
-`cc02af8ba6eeaa5b6c4cb8ac104134ca3b6d9960018413c7a7d5af9d912050e9`.
+`b80c022d4dfafe86e2f158078ff81382018321b60a3036177029bcafb53615ad`.
 
-Performance remains deferred by user direction. The remaining PHPT failures
-are **four library** cases (Random, PCRE, SPL serialization and
-`getimagesize()`), with **zero ordinary failures in this core stream**. This is
-not a blanket PHP compatibility claim. The independent
-original shutdown/global-string discovery is also an explicit non-claim.
-Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are outside
-this train. Skips, unsupported cases and allocation-limit equivalence remain
-non-claims.
+Performance remains deferred by user direction. Four library failures (Random,
+PCRE, SPL serialization and `getimagesize()`), unsupported cases, skips and
+allocation-limit equivalence remain explicit non-claims; this is not complete
+PHP compatibility. The next core admission cluster is startup
+`disable_functions`/`variables_order`. Tokenizer/parser, Phar, PCRE, Date/DateTime
+and general-library implementation remain outside this stream.
+
+### Preceding array-snapshot checkpoint
+
+The `core-array-snapshots` checkpoint over `9c737a7a` added two exact passes
+without loss, reaching 6,831 passes and four library failures. It aligned
+reference-free constant array snapshots and foreach literal-reference targets.
 
 ### Preceding cycle-ownership checkpoint
 

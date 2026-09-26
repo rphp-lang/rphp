@@ -894,6 +894,9 @@ $slot = new ReplacementSlot();
 $slot->item = new ReplacementValue();
 replaceItem($slot);
 replaceItem($slot);
+// Exercise replacement while its owning symbol is still live. The distinct
+// shutdown error after retiring that symbol is covered by a CLI regression.
+$slot->item = null;
 "#,
         ),
         "object(ReplacementValue)#3 (0) {\n}\nNULL\nobject(ReplacementValue)#3 (0) {\n}\nobject(ReplacementValue)#3 (0) {\n}\n"

@@ -10,6 +10,7 @@ fn finish_request_shutdown(
     #[cfg(feature = "resource-lifetime")]
     let _resource_release_scope = eg.exception.as_ref()
         .map(|_| crate::resource_handle::ResourceReleaseScope::defer());
+    publish_detached_scope_globals(eg, frame);
     eg.release_gc_destructor_owner(frame)?;
     if let Err(error) = run_request_cycle_destructors(eg, frame) {
         return Err(error);
@@ -19,7 +20,50 @@ fn finish_request_shutdown(
     if let Err(error) = run_shutdown_frame_destructors(eg, frame) {
         return Err(error);
     }
-    unsafe { cleanup_frame_slots(frame) };
+    // The root frame stays allocated as a logical trace caller, but late
+    // callbacks read the surviving symbol table, never its cleared CVs.
+    // PHP retires unshared direct object/Closure globals in this phase;
+    // containers, shared objects and real reference cells remain readable.
+    // SAFETY: the request frame and its compiler-indexed CVs remain allocated
+    // until finish_request_handler_shutdown pops this logical trace caller.
+    let retired_values = unsafe {
+        sync_dirty_globals_to_frame(eg, &mut *frame);
+        let mut mirrors = HashMap::<usize, usize>::new();
+        for (cv, name) in &(*frame).op_array().main_scope_vars {
+            let value = (*frame).cv(*cv);
+            if matches!(value.value_type(), ValueType::Object | ValueType::Closure)
+                && let Some(identity) = value.vm_release_identity()
+                && eg.globals.get(name).is_some_and(|global| {
+                    global.value_type() == value.value_type()
+                        && global.vm_release_identity() == Some(identity)
+                })
+            {
+                *mirrors.entry(identity).or_default() += 1;
+            }
+        }
+        for (cv, name) in &(*frame).op_array().main_scope_vars {
+            let value = (*frame).cv(*cv);
+            globals_sync(&mut eg.globals, name, clone_scope_binding(value));
+        }
+        // Include dynamically named symbols that have no main CV as well.
+        // Decide the whole retirement set before dropping its first handle:
+        // two PHP aliases must not become an artificial last-owner sequence.
+        let retired: Vec<_> = eg.globals.iter().filter_map(|(name, value)| {
+            let unshared_object = matches!(value.value_type(), ValueType::Object | ValueType::Closure)
+                && value.vm_release_identity().is_some_and(|identity| {
+                    value.vm_release_strong_count() == Some(1 + mirrors.get(&identity).copied().unwrap_or(0))
+                });
+            (unshared_object || value.is_undef()).then(|| name.clone())
+        }).collect();
+        let retired_values: Vec<_> = retired.into_iter()
+            .filter_map(|name| eg.globals.remove(&name)).collect();
+        (*frame).retire_symbol_scope();
+        cleanup_frame_slots(frame);
+        retired_values
+    };
+    run_value_destructors(eg, &retired_values, frame)?;
+    drop(retired_values);
+    run_request_surviving_global_destructors(eg, frame)?;
     // Releasing the root symbol table may expose a Fiber/Generator cycle that
     // was still legitimately live during the pre-frame object-store pass.
     // Close those newly unreachable contexts before static roots are retired,
@@ -46,15 +90,17 @@ fn finish_request_handler_shutdown(
     // still throw. Retire handler-owned generators and objects only after both
     // final dispatch boundaries.
     let mut handler_roots = Vec::new();
-    handler_roots.extend(eg.error_handler.take());
     for (handler, _) in eg.error_handler_stack.drain(..) {
         handler_roots.extend(handler);
     }
-    handler_roots.extend(eg.exception_handler.take());
+    handler_roots.extend(eg.error_handler.as_ref().map(Value::clone_closure_capture));
     for handler in eg.exception_handler_stack.drain(..) {
         handler_roots.extend(handler);
     }
+    handler_roots.extend(eg.exception_handler.as_ref().map(Value::clone_closure_capture));
     run_request_handler_destructors(eg, &handler_roots, frame)?;
+    eg.error_handler = None;
+    eg.exception_handler = None;
     drop(handler_roots);
     pop_vm_call_frame(eg, frame);
     Ok(())
@@ -3352,6 +3398,7 @@ fn publish_detached_scope_globals(eg: &mut ExecutorGlobals, mut scope: *mut Exec
             let frame = &mut *scope;
             if frame.func.is_null()
                 || Function::from_common_ptr(frame.func).fn_type() != FunctionType::User
+                || frame.has_retired_symbol_scope()
             {
                 scope = frame.prev_execute_data;
                 continue;

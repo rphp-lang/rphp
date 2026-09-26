@@ -826,9 +826,9 @@ fn prepare_property_assignment_with_stringable(
         strict,
         called_class,
     );
-    // SAFETY: the active opcode still owns the receiver slot. Re-read it only
-    // after user code returns because that code may have replaced its value.
-    if unsafe { (&*receiver).as_object().is_none() } {
+    // SAFETY: the opcode owns this live slot across the synchronous callback.
+    // Re-borrow after re-entry, also accepting a promoted global reference cell.
+    if unsafe { (&*receiver).dereferenced().as_object().is_none() } {
         eg.exception = Some(make_error_value(
             "Error",
             &format!(

@@ -25,6 +25,9 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
             }
             frame = &mut *frame.prev_execute_data;
         }
+        if frame.has_retired_symbol_scope() {
+            return;
+        }
         let (vars, main_scope) = {
             let op_array = frame.op_array();
             if !op_array.main_scope_vars.is_empty() {
@@ -37,12 +40,12 @@ pub(crate) fn sync_dirty_globals_to_frame(eg: &mut ExecutorGlobals, frame: &mut 
             if eg.dirty_globals.contains(name)
                 && let Some(global) = eg.globals.get(name)
             {
-                // A callback-local `global` reference becomes an ordinary
-                // caller value again when no PHP storage location retained
-                // an alias. If the cell escaped (for example into a hooked
-                // property), the suspended caller must join that same cell.
+                // The main symbol table retains a `global` reference even
+                // after its last callback-local alias returns. Other callers
+                // only join the cell when another PHP storage location kept
+                // an alias (for example a hooked property).
                 let escaped_reference =
-                    global.is_owned_reference() && global.owned_reference_is_aliased();
+                    global.is_owned_reference() && (main_scope || global.owned_reference_is_aliased());
                 let value = if escaped_reference {
                     clone_scope_binding(global)
                 } else {

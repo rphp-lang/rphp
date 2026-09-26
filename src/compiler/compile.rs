@@ -12394,7 +12394,7 @@ impl Compiler {
                     fetch.result = result;
                     fetch.result_type = OpType::Tmp;
                     fetch._pad |= FETCH_GLOBAL_WARN_UNDEFINED;
-                    self.instructions.push(fetch);
+                    self.push_instruction_at_line(fetch, *line);
                     self.emit_completed_expression_release(first_operand_tmp, result, *line);
                     return (result, OpType::Tmp);
                 }

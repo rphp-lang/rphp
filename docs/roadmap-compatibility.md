@@ -36,34 +36,42 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-array-snapshots` checkpoint over `9c737a7a` aligns dynamic constant
-array snapshots and foreach targets promoted by literal references. It
-preserves reference/COW boundaries, object identity and diagnostic priority.
-The complete 7,174-case stable core is
+The `core-shutdown-symbols` checkpoint over `85df66e8` closes the disclosed
+post-frame global-string holdout. Late callbacks retain canonical surviving
+symbol bindings while direct object retirement, reference identity, suspended
+Fibers, active handlers and diagnostic origins keep their PHP-defined phases.
+
+The complete 7,174-case stable core remains
 **6,831 pass / 4 fail / 184 skip / 154 unsupported / 1 timeout / 0 crash**,
-exact **+2/-0**. Zend/lang is **5,353/4/116/125 plus 1 timeout**;
-strings/array stays **1,478/0/68/29**. No other status changed. The known
+exact **+0/-0**. Zend/lang is **5,353/4/116/125 plus 1 timeout**;
+strings/array is **1,478/0/68/29**. No pass or status is lost. The known
+`getimagesize()` library failure changes stage when its formerly omitted late
+destructor runs; the independent core lifecycle oracle is exact. The known
 `new_oom.phpt` timeout stays visible, never a pass.
 
-Both supplying PHPTs pass. The slice adds 29 original CLI regressions and
-one compiler proof, with 426 focused/adjacent Cargo passes and 445 exact
-oracle comparisons including the accepted parent set. Five Cargo configurations,
-all-targets, exact no-loss, Composer/Symfony S0--S3 and unsafe policy/self-tests
-pass.
-Unsafe inventory remains 1,627 blocks / 289 functions with unchanged ceilings
-and ignored counts. Exact hashes and results are in
+The slice adds 59 original CLI regressions. Focused/adjacent Cargo is 488/488,
+and all 506 original PHP 8.5.11 comparisons are exact. Five Cargo configurations,
+all targets, PHPT no-loss, all seven Composer/Symfony S0--S3 gates and unsafe
+policy/self-tests pass. Unsafe inventory remains 1,627 blocks / 289 functions;
+ceilings and ignored counts are unchanged. Exact evidence is in
 [compatibility status](compatibility.md).
 
-There are **zero ordinary core failures** in this measured corpus. The four
-library failures remain outside this stream; unsupported cases, skips and the
-contained OOM timeout are not passes. The next core goal is the disclosed
-shutdown/global-string discovery: detached callbacks must not republish
-retired main-frame slots or lose surviving symbol values. Preserve the distinct
-object-retirement phase and diagnostic/handler behavior.
+There are **zero ordinary core failures in this measured corpus**, not a blanket
+compatibility claim. Four library failures and 154 unsupported cases remain.
+The next data-selected core train admits startup `disable_functions` and
+`variables_order`: configuration must reach compiler eligibility, callable
+registration and request globals. Prove the twelve supplying paths with original
+oracles before admitting them; preserve every accepted pass.
+
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
-here. Preserve every one of the 5,353 and 1,478 accepted passes. Performance
-remains deferred; host gates retain the 6 GiB/no-swap limit, two build/test
-workers, bounded PHPT parallelism and automatic cleanup.
+here. Performance remains deferred; host gates retain the 6 GiB/no-swap limit,
+two build/test workers, bounded PHPT parallelism and automatic cleanup.
+
+### Preceding array-snapshot checkpoint
+
+The `core-array-snapshots` checkpoint over `9c737a7a` added two exact passes
+without loss, reaching 6,831 passes and four library failures. It aligned
+constant-array snapshots and foreach literal-reference targets.
 
 ### Preceding cycle-ownership checkpoint
 

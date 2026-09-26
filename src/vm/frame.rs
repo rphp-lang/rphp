@@ -85,6 +85,19 @@ impl ExecuteData {
     const CLOSURE_SCOPE: u8 = 1 << 4;
     const EXPLICIT_CLOSURE_INVOKE: u8 = 1 << 5;
     const EXPLICIT_CLOSURE_METHOD_SOURCE: u8 = 1 << 6;
+    const RETIRED_SYMBOL_SCOPE: u8 = 1 << 7;
+
+    /// A request-final frame may remain allocated for traces after its slots
+    /// have been released. Such a frame no longer owns PHP symbol bindings.
+    #[inline]
+    pub(crate) fn has_retired_symbol_scope(&self) -> bool {
+        self.call_kind_flags & Self::RETIRED_SYMBOL_SCOPE != 0
+    }
+
+    #[inline]
+    pub(crate) fn retire_symbol_scope(&mut self) {
+        self.call_kind_flags |= Self::RETIRED_SYMBOL_SCOPE;
+    }
 
     /// The final compiler-reserved TMP contains this anonymous activation's
     /// lexical class ID. A separate flag distinguishes scope zero from a frame

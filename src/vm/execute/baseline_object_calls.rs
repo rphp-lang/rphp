@@ -5711,6 +5711,9 @@ fn op_assign_obj_prop_inner<'a>(
                 assigned = prepared;
             }
         }
+        // String conversion may promote this live variable to a global
+        // reference. Resolve its current binding before committing storage.
+        let obj = obj.dereferenced();
         assigned = match prepare_reference_assignment_scalar(
             assigned,
             &property_constraints,
