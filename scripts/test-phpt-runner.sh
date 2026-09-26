@@ -212,6 +212,65 @@ if (unsupported_rphp_ini_directives($supported) !== []
   "$script_root/scripts/phpt/process.php" \
   "$script_root/scripts/phpt/execution.php"
 
+# Optional optimizer preferences must not pretend that its extension exists,
+# admit arbitrary optimizer directives, or rewrite a test's INI arguments.
+"$php_bin" -r '
+require $argv[1];
+require $argv[2];
+require $argv[3];
+$preferences = "opcache.enable=1\nopcache.enable_cli=0\nopcache.optimization_level=-1\nopcache.save_comments=1\n";
+if (unsupported_rphp_ini_directives($preferences) !== []
+    || target_command("/rphp", "rphp", "unit.php", $preferences, "") !== [
+        "/rphp", "-d", "fatal_error_backtraces=0", "-d", "docref_ext=.html",
+        "-d", "opcache.enable=1", "-d", "opcache.enable_cli=0",
+        "-d", "opcache.optimization_level=-1", "-d", "opcache.save_comments=1",
+        "unit.php",
+    ]
+) {
+    fwrite(STDERR, "unexpected optional optimizer preference routing\n");
+    exit(1);
+}
+foreach (["opcache.preload", "opcache.file_cache", "opcache.jit", "opcache.unknown", "opcache.save_comments_extra"] as $key) {
+    if (unsupported_rphp_ini_directives($preferences . "$key=1\n") !== [$key]) {
+        fwrite(STDERR, "unsupported optimizer directive was admitted\n");
+        exit(1);
+    }
+}
+' "$script_root/scripts/phpt/case.php" \
+  "$script_root/scripts/phpt/process.php" \
+  "$script_root/scripts/phpt/execution.php"
+
+"$php_bin" -r '
+const RPHP_PHPT_SUPPORTED_SECTIONS = ["TEST", "INI", "EXTENSIONS", "FILE", "EXPECT"];
+require $argv[1];
+require $argv[2];
+require $argv[3];
+require $argv[4];
+$optional = "--TEST--\nOriginal optional optimizer preference\n--INI--\nopcache.enable_cli=0\n--FILE--\n<?php echo 11 + 7; ?>\n--EXPECT--\n18\n";
+$file = $argv[5] . "/optional-optimizer.phpt";
+file_put_contents($file, $optional);
+$result = run_test($file, "optional-optimizer.phpt", $argv[6], "rphp", 3, []);
+if ($result["status"] !== "pass") {
+    fwrite(STDERR, "ordinary core body with optimizer preference did not run\n");
+    exit(1);
+}
+$required = str_replace("--INI--", "--EXTENSIONS--\nOPcache\n--INI--", $optional);
+file_put_contents($file, $required);
+$result = run_test($file, "required-optimizer.phpt", "/not-invoked", "rphp", 3, []);
+if ($result["status"] !== "skip"
+    || $result["category"] !== "extension"
+    || $result["reason"] !== "required extension unavailable: opcache"
+) {
+    fwrite(STDERR, "optimizer extension requirement was bypassed\n");
+    exit(1);
+}
+unlink($file);
+echo "Optional optimizer admission tests passed\n";
+' "$script_root/scripts/phpt/case.php" \
+  "$script_root/scripts/phpt/process.php" \
+  "$script_root/scripts/phpt/expectation.php" \
+  "$script_root/scripts/phpt/execution.php" "$fixture_copy" "$php_bin"
+
 # Exercise the public wrapper as well as the underlying PHP runner. A supplied
 # executable does not expose its Cargo features, so an unset label must match
 # the documented default-feature contract build.

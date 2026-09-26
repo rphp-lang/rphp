@@ -12,6 +12,14 @@ function unsupported_rphp_ini_directives(string $section): array
         'variables_order' => true,
         'output_handler' => true,
         'include_path' => true,
+        // Core-language cases can carry optional optimizer preferences; their
+        // reference results are also verified with OPcache disabled. RPHP
+        // leaves these extension-only INI entries unpublished. EXTENSIONS
+        // still gates real OPcache requirements; no wildcard is admitted.
+        'opcache.enable' => true,
+        'opcache.enable_cli' => true,
+        'opcache.optimization_level' => true,
+        'opcache.save_comments' => true,
         'date.timezone' => true,
         // Three historical ext/date fixtures put this PHP expression in the
         // INI section. run-tests.php passes it through as an unknown directive

@@ -7,72 +7,73 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-include-ini-state` checkpoint over `c304bdb5` gives startup INI,
-`ini_get`/`ini_set`/`ini_alter`/`ini_restore` and include-path consumers one
-request-local value store. A cold immutable startup snapshot supports repeated
-restoration without another hot executor field. Keys are case-sensitive;
-typed argument validation, rejected writes and reflection metadata agree with
-PHP. Persistent error-reporting configuration remains distinct from the
-temporary `@` execution mask.
+The `core-optional-optimizer-admission` checkpoint over `ec5dfbea` admits
+four explicit optimizer-preference INI keys for unchanged core-language
+PHPTs. It changes only the runner and original runner regressions, not Rust,
+runtime behavior or upstream code/expectations. OPcache APIs and INI entries
+remain unavailable in RPHP; real `EXTENSIONS` requirements still produce skips.
+Preload, file-cache, JIT and unknown optimizer directives remain unsupported.
 
-The complete 7,174-case stable core is **6,858 pass / 4 fail / 193 skip /
-118 unsupported / 1 timeout / 0 crash**, exact **+0/-0**. Zend/lang is
-**5,372/4/117/105 plus 1 timeout**; strings/array is **1,486/0/76/13**.
-The same-runner 16-case include/INI packet changes from **11 pass / 5 fail**
-to **15 pass / 1 independent fail**, true **+4/-0** outside the stable corpus.
-The gains are `get_include_path_basic`, `include_path`, `tests/func/007` and
-`ini_alter`. Ten existing include/autoload passes become admitted by the
-runner; these are not semantic gains or SPL implementation work.
-`spl_autoload_011` remains a destructor-retirement holdout. No previous exact
-pass, unrelated status or failure stage is lost. Four library failures and the
-known contained `new_oom.phpt` timeout remain visible.
+The complete 7,174-case stable core is **6,873 pass / 5 fail / 194 skip /
+101 unsupported / 1 timeout / 0 crash**, exact admission **+15/-0**.
+Zend/lang is **5,387/5/118/88 plus 1 timeout**; strings/array is unchanged at
+**1,486/0/76/13**. All 15 gains were already supported by the immutable runtime;
+they are newly measured coverage, not runtime fixes. The fifth failure is
+previously excluded `bug55156`, a qualified-name parser holdout, not a lost
+pass. `inheritance/gh16508` becomes a genuine OPcache extension skip. The four
+library failures and contained `new_oom.phpt` timeout remain unchanged.
 
-There are **31 original PHP 8.5.11 byte-exact CLI regressions**, with 306
-focused/adjacent Cargo cases covered by the final matrix. All 15 additional
-release-oracle specimens agree. Two older include-path expectations now
-require PHP-oracle-confirmed null-argument deprecations. Final review rejected
-the first candidate's temporary-mask INI behavior; two new regressions and a
-complete rerun cover the corrected immutable candidate.
+All 16 selected core PHPTs pass reference PHP 8.5.11 both normally and with
+OPcache explicitly disabled; `-n` alone does not unload its built-in extension.
+The unchanged RPHP release passes 15 and exposes the one parser failure.
+Original runner regressions prove exact INI forwarding, rejection of unknown
+keys and preservation of extension requirements. Runner isolation, PHP/shell
+syntax checks and full exact no-loss pass, with no new crash or timeout.
 
-The `test-fast` matrix retains debug assertions and overflow checks: default
-**6,813**, no-default **6,468**, erased **6,884**, reified **6,906**, all-features
-**6,957**, across 371 suites per configuration. Ignored counts remain
-15/15/15/15/18. All-feature/all-target checks, exact no-loss, all seven
-Composer/Symfony S0--S3 gates, runner regressions, formatting and unsafe
-policy/self-tests pass, with no new warning kind. Unsafe inventory is reduced
-to **1,625 blocks / 289 functions**, with unchanged ceilings. Host gates retain a
-6 GiB/no-swap limit, two build/test workers, at most four PHPT workers and
-automatic cleanup.
+The immediately preceding complete Cargo/framework evidence is reused because
+every Rust source, Cargo input, runtime test and the release binary is unchanged:
+default **6,813**, no-default **6,468**, erased **6,884**, reified **6,906**,
+all-features **6,957**, 371 suites each, ignored 15/15/15/15/18; all targets,
+unsafe policy/self-tests and all seven Composer/Symfony S0--S3 gates passed.
+No redundant rebuild or matrix was run. Unsafe inventory remains **1,625
+blocks / 289 functions**. Host PHPT gates retain the 6 GiB/no-swap limit,
+at most four workers, per-child memory/time limits and automatic cleanup.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
 candidate `6a66f1afdf98282bb9a4e89e25918c30e560aae8e3f3d3f02d7b01c9f55b59e4`;
 parent/candidate full manifests
-`9105a76cf345d3da8372a8fc88501ed3c9ddf8981a86c719a596f4133e8f004e` /
-`40724b7b3c858715f36249f5d315a01f51d04942ba165edbde8e2746a697e968`;
-focused parent/candidate manifests
-`8de65f6f61797b46303f9459c96891c18c22617953072e1373f0543e24d7b866` /
-`1cdf13d2d5a66125b942a3ea5c688af807e0af81b9a6ded52a1bb42b785902d0`;
+`40724b7b3c858715f36249f5d315a01f51d04942ba165edbde8e2746a697e968` /
+`e06e29168a7ce15ebc39ea3b94e5cd384ea526ba4b6725c582276b9e74c51222`;
+focused manifest
+`350cab5fe9983ffa1b0fd518f93e901dae93a7953ec1c9d980a3d68f632a7043`;
 Zend/lang pass set
-`3cae062af6c05fe25ad0b401ba15c342493f3f69d93397d01b3cfbd74a2dc4c2`;
+`b0ea06cdf8d69e9399936d8ffde63ab131535aada5ab16f1c68393e88cb7d15a`;
 strings/array pass set
 `ee28d61f885e6e70e89ad7d68c7e773e2cb887d2df5e0f82ab6a5f4f9f434e4f`;
 combined pass set
-`798d7d75fcec8e61713ff1fd638cabb0c2c27499653ccf9794507a3281687051`;
+`48a5f72a7ad3d9cf07b5f2698723d3eeadf191f9128ffcceece464f15509e3f3`;
 no-loss summary
-`059d97b557532f177bc5a9a90378d7027c3c0eac3d7972bf9b92bf9bc3c9d71f`;
+`9d4ce7b429193fc324e7c1f4a9dbd6de79b3f14dde42b0745a7cc74b54f137f8`;
 final evidence packet
+`8362d2d1fbfbedfe660f9a37c9aa993acc5482bc7a292729bd4f6745e02de3b8`;
+reused runtime correctness packet
 `3fd66b9c43c3bb400196db81d0ea5cce37fea9a466161e4b7045f28902f21ddc`.
 
-Performance remains deferred. Zero ordinary core failures in this corpus is
-not complete PHP compatibility. Auto-prepend/append request lifecycle,
-distribution-specific compiled include paths, general malformed INI syntax,
-allocation-limit equivalence and the independent `ini_set_types` holdout are
-not claimed. Unconfigured CLI fatal output retains its historical stderr
-channel. The next admission candidate has 16 unchanged core PHPTs with optional
-accelerator preferences: reference PHP passes all with OPcache disabled; the
-immutable candidate passes 15 and exposes one parser holdout. This is not an
-OPcache implementation claim. Tokenizer/parser, Phar, PCRE, Date/DateTime and
-general-library implementation stay outside scope.
+Performance remains deferred. This is neither complete PHP compatibility nor
+OPcache support. The next read-only priority is the shared memory-limit
+boundary (35 solely memory-configured cases); do not admit finite budgets
+without actual enforcement or relax host limits to make tests pass.
+Auto-prepend/append lifecycle and other unsupported configurations remain open.
+Tokenizer/parser, Phar, PCRE, Date/DateTime and general-library implementation
+stay outside scope, including the newly exposed parser holdout.
+
+### Preceding INI/include-path checkpoint
+
+The `core-include-ini-state` checkpoint over `c304bdb5` unified startup,
+runtime and restored configuration, including persistent versus suppressed
+error masks. It added four adjacent exact passes without loss and 31 original
+CLI regressions; ten existing autoload passes became admitted. Stable-core
+counts stayed 6,858/4/193/118 plus the known timeout, with the full gates.
 
 ### Preceding diagnostic checkpoint
 
