@@ -25,10 +25,25 @@ struct State {
     exhausted_limit: Cell<usize>,
     final_limit: Cell<usize>,
     reporting: Cell<bool>,
-    strings: RefCell<HashMap<usize, (std::rc::Weak<String>, usize)>>,
-    string_sweep: Cell<usize>,
+    strings: RefCell<StringCharges>,
+    // Sweep only once the map has grown past the live population measured by
+    // the previous sweep. Sweeps then cost O(1) amortized per reservation
+    // instead of one full map walk every fixed number of strings, which was
+    // quadratic in the number of live strings.
+    string_sweep_at: Cell<usize>,
     emergency: RefCell<Option<Box<[u8]>>>,
 }
+
+/// Pointer-keyed charge records. Identity keys are already well distributed
+/// after the cheap multiply-rotate mix; SipHash would dominate every string
+/// reservation.
+type StringCharges = HashMap<
+    usize,
+    (std::rc::Weak<String>, usize),
+    std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>,
+>;
+
+const STRING_SWEEP_FLOOR: usize = 4096;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Budget(Rc<State>);
@@ -107,14 +122,21 @@ impl Budget {
 
     pub(crate) fn collect_strings(&self) {
         let mut released = 0usize;
-        self.0.strings.borrow_mut().retain(|_, (owner, bytes)| {
-            if owner.strong_count() != 0 {
-                true
-            } else {
-                released = released.saturating_add(*bytes);
-                false
-            }
-        });
+        let live = {
+            let mut strings = self.0.strings.borrow_mut();
+            strings.retain(|_, (owner, bytes)| {
+                if owner.strong_count() != 0 {
+                    true
+                } else {
+                    released = released.saturating_add(*bytes);
+                    false
+                }
+            });
+            strings.len()
+        };
+        self.0
+            .string_sweep_at
+            .set(live.saturating_mul(2).max(STRING_SWEEP_FLOOR));
         self.release(released);
     }
 
@@ -280,11 +302,6 @@ pub(crate) fn reserve_string(owner: &Rc<String>, capacity: usize) {
     let Some(budget) = ACTIVE.with(|active| active.borrow().clone()) else {
         return;
     };
-    let tick = budget.0.string_sweep.get().wrapping_add(1);
-    budget.0.string_sweep.set(tick);
-    if tick.is_multiple_of(256) {
-        budget.collect_strings();
-    }
     let identity = Rc::as_ptr(owner) as usize;
     let bytes = capacity.saturating_add(std::mem::size_of::<String>() + 16);
     let previous = budget
@@ -294,6 +311,12 @@ pub(crate) fn reserve_string(owner: &Rc<String>, capacity: usize) {
         .get(&identity)
         .map_or(0, |(_, bytes)| *bytes);
     if bytes > previous {
+        if previous == 0
+            && budget.0.strings.borrow().len()
+                >= budget.0.string_sweep_at.get().max(STRING_SWEEP_FLOOR)
+        {
+            budget.collect_strings();
+        }
         budget.charge(bytes - previous);
         budget
             .0
