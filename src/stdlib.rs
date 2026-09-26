@@ -31650,6 +31650,14 @@ pub fn apply_startup_ini_settings(eg: &mut ExecutorGlobals, settings: &[(String,
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
                     .insert(normalized, value.to_string());
             }
+            "display_errors" | "log_errors" => {
+                eg.ini_overrides
+                    .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))
+                    .insert(
+                        normalized,
+                        crate::runtime::startup::ini_string(value).to_string(),
+                    );
+            }
             "date.timezone" if date::is_supported_timezone(value) => {
                 eg.ini_overrides
                     .get_or_insert_with(|| Box::new(std::collections::HashMap::new()))

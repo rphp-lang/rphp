@@ -976,9 +976,47 @@ fn deferred_class_constant(
             .unwrap_or(class_name);
         return Ok(Value::string(public_name));
     }
+    if let Some(definition) = eg.linking_class_constant(&class_name, constant) {
+        let definition = definition.ok_or_else(|| {
+            DeferredAttributeError::Message(format!(
+                "Undefined constant {source_class_name}::{constant}"
+            ))
+        })?;
+        if !eg.check_visibility(
+            scope.lexical_class.as_deref(),
+            &definition.declaring_class,
+            definition.visibility,
+        ) {
+            let visibility = if definition.visibility == Visibility::Private {
+                "private"
+            } else {
+                "protected"
+            };
+            return Err(DeferredAttributeError::Message(format!(
+                "Cannot access {visibility} constant {class_name}::{constant}"
+            )));
+        }
+        if let Some(error) = definition.evaluation_error.as_ref() {
+            return Err(DeferredAttributeError::Message(error.clone()));
+        }
+        if !definition.value_is_deferred {
+            return Ok(definition.value);
+        }
+        if !eg.enter_linking_constant(&class_name, constant) {
+            return Err(DeferredAttributeError::Message(format!(
+                "Cannot declare self-referencing constant {class_name}::{constant}"
+            )));
+        }
+        let result = evaluate_deferred_class_constant_definition(&definition, eg);
+        eg.leave_linking_constant(&class_name);
+        return result;
+    }
     if eg.find_class(&class_name).is_none()
         && !crate::stdlib::autoload::ensure_symbol_loaded(eg, &class_name)?
     {
+        if eg.exception.is_some() {
+            return Err(DeferredAttributeError::PendingException);
+        }
         return Err(DeferredAttributeError::Message(format!(
             "Class \"{class_name}\" not found"
         )));
@@ -1893,7 +1931,26 @@ pub(crate) fn evaluate_deferred_class_constant_value(
     definition: &ClassConstantDefinition,
     eg: &mut ExecutorGlobals,
 ) -> Result<Option<Value>, VmError> {
-    match evaluate_deferred_class_constant_definition(definition, eg) {
+    let result = evaluate_deferred_class_constant_definition(definition, eg);
+    publish_class_constant_evaluation(result, eg)
+}
+
+pub(crate) fn evaluate_class_constant_comparison_value(
+    definition: &ClassConstantDefinition,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<Value>, VmError> {
+    if !definition.value_is_deferred {
+        return Ok(Some(definition.value.clone()));
+    }
+    let result = evaluate_class_constant_expression(definition, eg);
+    publish_class_constant_evaluation(result, eg)
+}
+
+fn publish_class_constant_evaluation(
+    result: Result<Value, DeferredAttributeError>,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<Value>, VmError> {
+    match result {
         Ok(value) => Ok(Some(value)),
         Err(DeferredAttributeError::Message(error)) => {
             eg.exception = Some(make_error_value("Error", &error));
@@ -2015,6 +2072,28 @@ fn evaluate_deferred_class_constant_definition(
     definition: &ClassConstantDefinition,
     eg: &mut ExecutorGlobals,
 ) -> Result<Value, DeferredAttributeError> {
+    let value = evaluate_class_constant_expression(definition, eg)?;
+    normalize_deferred_class_constant_value(
+        value,
+        &definition.type_hint,
+        &definition.declaring_class,
+        eg,
+    )
+    .map_err(|value| {
+        DeferredAttributeError::TypedClassConstant(format!(
+            "Cannot assign {} to class constant {}::{} of type {}",
+            value.diagnostic_type_name(),
+            definition.declaring_class,
+            definition.name,
+            definition.type_hint.display_name()
+        ))
+    })
+}
+
+fn evaluate_class_constant_expression(
+    definition: &ClassConstantDefinition,
+    eg: &mut ExecutorGlobals,
+) -> Result<Value, DeferredAttributeError> {
     let (Some(expression), Some(scope)) =
         (&definition.source_expression, &definition.evaluation_scope)
     else {
@@ -2037,21 +2116,7 @@ fn evaluate_deferred_class_constant_definition(
         }
         result => result?,
     };
-    normalize_deferred_class_constant_value(
-        value,
-        &definition.type_hint,
-        &definition.declaring_class,
-        eg,
-    )
-    .map_err(|value| {
-        DeferredAttributeError::TypedClassConstant(format!(
-            "Cannot assign {} to class constant {}::{} of type {}",
-            value.diagnostic_type_name(),
-            definition.declaring_class,
-            definition.name,
-            definition.type_hint.display_name()
-        ))
-    })
+    Ok(value)
 }
 
 pub(crate) fn evaluate_deferred_property_default_value(

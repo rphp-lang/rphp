@@ -36,33 +36,35 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `core-startup-configuration` checkpoint over `5f35f871` aligns CLI
-`disable_functions` and `variables_order` across compiler eligibility, callable
-registration, aliases, Reflection and request globals. Include/eval share the
-startup policy; user replacements and diagnostic order retain PHP semantics.
+The `core-trait-constant-comparison` checkpoint over `c0adfe49` resolves deferred
+trait collision values in PHP order, preserves consumer scope and metadata
+priority, and keeps partial classes invisible to autoload. Non-colliding
+constants stay lazy; failed comparison preserves warning/fatal order.
 
 The complete 7,174-case stable core is
-**6,842 pass / 5 fail / 184 skip / 142 unsupported / 1 timeout / 0 crash**,
-exact **+11/-0**. Zend/lang is **5,364/5/116/113 plus 1 timeout**;
+**6,843 pass / 4 fail / 184 skip / 142 unsupported / 1 timeout / 0 crash**,
+exact **+1/-0**. Zend/lang is **5,365/4/116/113 plus 1 timeout**;
 strings/array is **1,478/0/68/29**. Every previous pass, status and failure stage
-is preserved. Of twelve newly executable paths, eleven pass and
-`Zend/tests/traits/constant_016.phpt` exposes a pre-existing deferred trait
-constant collision bug. The known `new_oom.phpt` timeout remains visible.
+is preserved. `Zend/tests/traits/constant_016.phpt` now passes, closing the last
+ordinary core failure in this measured corpus. The known `new_oom.phpt` timeout
+remains visible, alongside four library failures.
 
-The slice adds 54 original CLI regressions checked against PHP 8.5.11.
-Focused/adjacent Cargo covers 351 distinct tests; all eighteen release-oracle
+The slice adds 44 original CLI regressions checked against PHP 8.5.11.
+Focused/adjacent Cargo covers 218 distinct tests; all 44 release-oracle
 specimens are byte-exact. Five Cargo configurations,
 all targets, PHPT no-loss, all seven Composer/Symfony S0--S3 gates and unsafe
 policy/self-tests pass. Unsafe inventory remains 1,627 blocks / 289 functions;
 ceilings and ignored counts are unchanged. Exact evidence is in
 [compatibility status](compatibility.md).
 
-There is **one ordinary core failure in this measured corpus**, alongside four
-library failures and 142 unsupported cases. The next data-selected checkpoint
-resolves deferred trait constant values before collision comparison, preserving
-metadata priority, scope, evaluation order and no-collision laziness. Its small
-PHPT yield is justified by closing the last currently admitted ordinary core
-failure; it must still have original positive/negative oracles and exact no-loss.
+There are **zero ordinary core failures in this measured corpus**, not complete
+PHP compatibility: four library failures, 142 unsupported cases and the OOM
+timeout remain. The next data-selected candidate is startup `output_handler`,
+which alone blocks fifteen PHPT paths. Prove empty and non-empty policies,
+initialization order and buffer lifecycle before admitting the directive;
+separate newly exposed library debt from lost passes. Reference-crashing
+parent-relative trait forms and generic runtime fatal-output suppression remain
+explicit oracle/CLI limitations of the accepted comparison checkpoint.
 
 Tokenizer/parser, Phar, PCRE, Date/DateTime and general libraries are not owned
 here. Performance remains deferred; host gates retain the 6 GiB/no-swap limit,
@@ -5801,7 +5803,7 @@ complete selected suites, exact platform/configuration, zero hidden exclusions,
 zero unexplained crash/timeout, and a published list of every unsupported SAPI
 and extension. Until then, documentation must continue to say “tested subset.”
 
-Current AMD64 stable-core status is 6,842 pass / 5 fail / 184 skip / 142
+Current AMD64 stable-core status is 6,843 pass / 4 fail / 184 skip / 142
 unsupported / 1 explicitly contained OOM timeout / 0 crash. Date/DateTime is
 integrated; separate workstreams own Phar and PCRE. The core sweep continues
 from original core holdouts and named unsupported capabilities, with performance

@@ -6,12 +6,45 @@
 fn constant_definitions_compatible(
     left: &ClassConstantDefinition,
     right: &ClassConstantDefinition,
-) -> bool {
-    left.visibility == right.visibility
-        && left.type_hint == right.type_hint
-        && left.is_final == right.is_final
-        && left.evaluation_error == right.evaluation_error
-        && left.value.structurally_equal(&right.value)
+    eg: &mut ExecutorGlobals,
+) -> Result<bool, String> {
+    if left.visibility != right.visibility
+        || left.type_hint != right.type_hint
+        || left.is_final != right.is_final
+        || left.evaluation_error != right.evaluation_error
+    {
+        return Ok(false);
+    }
+    // A deferred initializer's placeholder is not its PHP value. Compare
+    // only colliding declarations, after metadata, and do not apply the
+    // eventual typed-constant coercion before this strict value comparison.
+    // Resolve the incoming trait declaration first, including autoload effects.
+    let Some(right) = crate::stdlib::reflection::evaluate_class_constant_comparison_value(right, eg)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    let Some(left) = crate::stdlib::reflection::evaluate_class_constant_comparison_value(left, eg)
+        .map_err(|error| error.to_string())?
+    else {
+        return Ok(false);
+    };
+    Ok(left.structurally_equal(&right))
+}
+
+fn rebind_trait_constant(
+    source: &ClassConstantDefinition,
+    owner: &str,
+    parent: Option<&str>,
+) -> ClassConstantDefinition {
+    let mut composed = source.clone();
+    composed.declaring_class = owner.to_string();
+    if let Some(scope) = composed.evaluation_scope.as_mut() {
+        let scope = std::rc::Rc::make_mut(scope);
+        scope.lexical_class = Some(owner.to_string());
+        scope.lexical_parent = parent.map(str::to_owned);
+    }
+    composed
 }
 
 fn class_constant_type_is_covariant(
@@ -145,17 +178,18 @@ fn merge_parent_constant_definitions(
 
 fn merge_trait_constant_definitions(
     owner: &str,
+    parent: Option<&str>,
     trait_name: &str,
     target: &mut Vec<ClassConstantDefinition>,
     trait_constants: &[ClassConstantDefinition],
     origins: &mut std::collections::HashMap<String, String>,
     source_file: Option<&str>,
     declaration_line: usize,
+    eg: &mut ExecutorGlobals,
 ) -> Result<(), String> {
     let location = class_constant_declaration_location(source_file, declaration_line);
     for source in trait_constants {
-        let mut composed = source.clone();
-        composed.declaring_class = owner.to_string();
+        let composed = rebind_trait_constant(source, owner, parent);
         if let Some(position) = target
             .iter()
             .position(|constant| constant.name == composed.name)
@@ -174,14 +208,19 @@ fn merge_trait_constant_definitions(
                 }
                 origins.insert(composed.name.clone(), trait_name.to_string());
                 target[position] = composed;
-            } else if !constant_definitions_compatible(existing, &composed) {
-                let existing_owner = origins
-                    .get(&composed.name)
-                    .map_or(owner, String::as_str);
-                return Err(format!(
-                    "{} and {} define the same constant ({}) in the composition of {}. However, the definition differs and is considered incompatible. Class was composed{}",
-                    existing_owner, trait_name, composed.name, owner, location
-                ));
+            } else {
+                // Only the already composed prefix is visible. Later constants
+                // cannot satisfy dependencies in the current comparison.
+                eg.refresh_linking_class_constants(owner, target);
+                if !constant_definitions_compatible(existing, &composed, eg)? {
+                    let existing_owner = origins
+                        .get(&composed.name)
+                        .map_or(owner, String::as_str);
+                    return Err(format!(
+                        "{} and {} define the same constant ({}) in the composition of {}. However, the definition differs and is considered incompatible. Class was composed{}",
+                        existing_owner, trait_name, composed.name, owner, location
+                    ));
+                }
             }
         } else {
             origins.insert(composed.name.clone(), trait_name.to_string());
@@ -189,6 +228,77 @@ fn merge_trait_constant_definitions(
         }
     }
     Ok(())
+}
+
+/// An expression-only view of a composing class. This is never inserted into
+/// the public class table: autoload callbacks must still see the class as
+/// unavailable until its complete link succeeds.
+struct LinkingClassConstants {
+    definitions: Vec<ClassConstantDefinition>,
+    evaluating: Vec<String>,
+}
+
+impl ExecutorGlobals {
+    fn install_linking_class_constants(
+        &mut self,
+        class: &ClassDef,
+    ) -> (bool, Option<Box<LinkingClassConstants>>) {
+        let key = class.name.to_ascii_lowercase();
+        let inserted = !self.active_runtime_class_relations.contains_key(&key);
+        let relation = self.active_runtime_class_relations.entry(key)
+            .or_insert_with(|| ActiveRuntimeClassRelation::from_class(class));
+        let previous = relation.constant_scope.replace(Box::new(LinkingClassConstants {
+            definitions: Vec::new(),
+            evaluating: Vec::new(),
+        }));
+        (inserted, previous)
+    }
+
+    fn refresh_linking_class_constants(&mut self, owner: &str, definitions: &[ClassConstantDefinition]) {
+        if let Some(scope) = self.active_runtime_class_relations.get_mut(&owner.to_ascii_lowercase())
+            .and_then(|relation| relation.constant_scope.as_mut()) {
+            scope.definitions.clear();
+            scope.definitions.extend_from_slice(definitions);
+        }
+    }
+
+    fn restore_linking_class_constants(
+        &mut self,
+        owner: &str,
+        saved: (bool, Option<Box<LinkingClassConstants>>),
+    ) {
+        let key = owner.to_ascii_lowercase();
+        if saved.0 {
+            self.active_runtime_class_relations.remove(&key);
+        } else if let Some(relation) = self.active_runtime_class_relations.get_mut(&key) {
+            relation.constant_scope = saved.1;
+        }
+    }
+
+    pub(crate) fn linking_class_constant(
+        &self,
+        owner: &str,
+        name: &str,
+    ) -> Option<Option<ClassConstantDefinition>> {
+        let scope = self.active_runtime_class_relations.get(&owner.to_ascii_lowercase())?
+            .constant_scope.as_ref()?;
+        Some(scope.definitions.iter().find(|definition| definition.name == name).cloned())
+    }
+
+    pub(crate) fn enter_linking_constant(&mut self, owner: &str, name: &str) -> bool {
+        let Some(scope) = self.active_runtime_class_relations.get_mut(&owner.to_ascii_lowercase())
+            .and_then(|relation| relation.constant_scope.as_mut()) else { return false };
+        if scope.evaluating.iter().any(|active| active == name) { return false; }
+        scope.evaluating.push(name.to_string());
+        true
+    }
+
+    pub(crate) fn leave_linking_constant(&mut self, owner: &str) {
+        if let Some(scope) = self.active_runtime_class_relations.get_mut(&owner.to_ascii_lowercase())
+            .and_then(|relation| relation.constant_scope.as_mut()) {
+            scope.evaluating.pop();
+        }
+    }
 }
 
 fn merge_interface_constant_definitions(

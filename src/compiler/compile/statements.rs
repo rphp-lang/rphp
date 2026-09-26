@@ -5705,6 +5705,7 @@ impl Compiler {
                     &resolved_class,
                     resolved_parent.as_deref(),
                     constants,
+                    false,
                 )?;
                 // Compile class declaration — store class info as a literal
                 // Each class method gets compiled like a function
@@ -6927,7 +6928,7 @@ impl Compiler {
                 let resolved_extends: Vec<String> =
                     extends.iter().map(|e| self.resolve_name(&e.name)).collect();
                 let compiled_constants =
-                    self.compile_class_constants(&resolved_iface, None, constants)?;
+                    self.compile_class_constants(&resolved_iface, None, constants, false)?;
                 let mut compiled_properties = Vec::new();
                 for property in properties {
                     self.validate_attribute_target(
@@ -7652,7 +7653,7 @@ impl Compiler {
                 }
 
                 let compiled_constants =
-                    self.compile_class_constants(&resolved_trait, None, constants)?;
+                    self.compile_class_constants(&resolved_trait, None, constants, true)?;
                 let resolved_uses = uses
                     .iter()
                     .map(|used_trait| self.resolve_name(&used_trait.name))
@@ -8395,7 +8396,7 @@ impl Compiler {
                 }
 
                 let compiled_constants =
-                    self.compile_class_constants(&resolved_enum, None, constants)?;
+                    self.compile_class_constants(&resolved_enum, None, constants, false)?;
                 let compiled_attributes = self.compile_attributes_in_scope(
                     attributes,
                     1,
@@ -8560,6 +8561,7 @@ impl Compiler {
         owner: &str,
         parent: Option<&str>,
         constants: &[ClassConstant],
+        trait_scope: bool,
     ) -> Result<Vec<ClassConstantDefinition>, String> {
         let mut names = std::collections::HashSet::new();
         for constant in constants {
@@ -8666,7 +8668,11 @@ impl Compiler {
         let mut evaluation_errors = vec![None; constants.len()];
         let mut deferred_values = callable_factories
             .iter()
-            .map(Option::is_some)
+            .enumerate()
+            .map(|(index, factory)| {
+                factory.is_some()
+                    || (trait_scope && trait_property_default_rebinds_class(&constants[index].value))
+            })
             .collect::<Vec<_>>();
         let mut remaining = deferred_values.iter().filter(|deferred| !**deferred).count();
         while remaining != 0 {
@@ -8698,7 +8704,7 @@ impl Compiler {
                 let unresolved = constants
                     .iter()
                     .enumerate()
-                    .filter(|(index, _)| values[*index].is_none())
+                    .filter(|(index, _)| values[*index].is_none() && !deferred_values[*index])
                     .map(|(index, constant)| {
                         let reason = self
                             .eval_const_expr_in_source(&constant.value, &known)

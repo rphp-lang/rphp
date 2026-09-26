@@ -546,6 +546,8 @@ struct ActiveRuntimeClassRelation {
     /// A class linked during this relation has already relied on it for a
     /// method-variance proof, so PHP can no longer roll the declaration back.
     has_variance_dependents: Cell<bool>,
+    /// Sparse expression-only scope for deferred trait constant collisions.
+    constant_scope: Option<Box<LinkingClassConstants>>,
 }
 
 impl ActiveRuntimeClassRelation {
@@ -559,6 +561,7 @@ impl ActiveRuntimeClassRelation {
                 .any(|(name, _, _, _, _)| name.eq_ignore_ascii_case("__toString")),
             outstanding_variance_dependencies: Vec::new(),
             has_variance_dependents: Cell::new(false),
+            constant_scope: None,
         }
     }
 }
@@ -7985,15 +7988,30 @@ impl ExecutorGlobals {
                         ));
                     }
                 }
-                merge_trait_constant_definitions(
+                let has_deferred_collision = trait_def.constants.iter().any(|incoming| {
+                    class_def.constants.iter().any(|existing| {
+                        existing.name == incoming.name
+                            && existing.declaring_class == class_name
+                            && (existing.value_is_deferred || incoming.value_is_deferred)
+                    })
+                });
+                let constant_scope = has_deferred_collision
+                    .then(|| self.install_linking_class_constants(&class_def));
+                let constant_result = merge_trait_constant_definitions(
                     &class_name,
+                    class_def.parent.as_deref(),
                     trait_name,
                     &mut class_def.constants,
                     &trait_def.constants,
                     &mut composed_trait_constant_origins,
                     declaration_file.as_deref(),
                     declaration_line,
-                )?;
+                    self,
+                );
+                if let Some(saved) = constant_scope {
+                    self.restore_linking_class_constants(&class_name, saved);
+                }
+                constant_result?;
                 merge_trait_property_definitions(
                     &mut class_def.properties,
                     &trait_properties,

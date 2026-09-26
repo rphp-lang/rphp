@@ -7,61 +7,63 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
-The `core-startup-configuration` checkpoint over `5f35f871` implements CLI
-`disable_functions` and `variables_order` through compiler eligibility,
-callable registration, Reflection and request globals. Disabled builtins can
-be replaced by user functions without stale intrinsic or by-reference lowering;
-include/eval inherit the same policy. Internal aliases remain independent,
-and startup warnings preserve PHP's order and output routing.
+The `core-trait-constant-comparison` checkpoint over `c0adfe49` resolves deferred
+constant values before trait collision comparison. Incoming trait values are
+evaluated first; metadata rejection precedes evaluation, and raw strict values
+are compared before typed-constant coercion. Consumer scope and the already
+composed constant prefix are available without publicly exposing a partial
+class. Non-colliding declarations remain lazy; initializer failures preserve
+warning/fatal order and cannot resume composition through user handlers.
 
-The complete 7,174-case stable core is **6,842 pass / 5 fail / 184 skip /
-142 unsupported / 1 timeout / 0 crash**, exact **+11/-0**. Zend/lang is
-**5,364/5/116/113 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
-All previous passes, statuses and failure stages are preserved. Twelve
-previously unsupported cases now execute: eleven pass, while
-`Zend/tests/traits/constant_016.phpt` exposes an independent deferred-constant
-composition failure that also reproduces on the parent with diagnostic-only
-admission. This is newly measured debt, not a lost pass. The known
-`new_oom.phpt` timeout stays visible, never a pass.
+The complete 7,174-case stable core is **6,843 pass / 4 fail / 184 skip /
+142 unsupported / 1 timeout / 0 crash**, exact **+1/-0**. Zend/lang is
+**5,365/4/116/113 plus 1 timeout**; strings/array stays **1,478/0/68/29**.
+`Zend/tests/traits/constant_016.phpt` now passes. No previous pass, other status
+or failure stage changes. This closes the last ordinary core failure in this
+measured corpus, not every unsupported PHP capability. The four remaining
+failures belong to Random, PCRE, SPL serialization and `getimagesize()`;
+`new_oom.phpt` remains a visible contained timeout, never a pass.
 
-The slice adds **54 original CLI regressions**, checked against PHP 8.5.11.
-Focused/adjacent Cargo covers **351 distinct tests**; the eighteen original
-release-oracle specimens are byte-exact for stdout, stderr and exit status.
-Runner regressions verify both new INI directives without modifying upstream
-PHP code or expectations.
+All **44 original CLI regressions** and their release oracles match PHP 8.5.11
+byte-exactly, including stdout/stderr, exit status, autoload order, repeated
+consumers and array snapshots. Focused/adjacent Cargo covers **218 tests**;
+the 264-case trait/constant PHPT packet is **262 pass / 1 skip / 1 unsupported**.
+The deliberately small PHPT delta closes the last admitted core failure through
+one general composition rule rather than a fixture-specific exception.
 
 The `test-fast` matrix retains debug assertions and overflow checks: default
-**6,622**, no-default **6,287**, erased **6,693**, reified **6,715**, all-features
-**6,766**; ignored counts remain 15/15/15/15/18. All-feature/all-target checks,
-exact PHPT no-loss, all seven Composer/Symfony S0--S3 gates, formatting and unsafe
-policy/self-tests pass. Production, tests and the release candidate remained
-unchanged throughout the final packet.
-Unsafe inventory stays **1,627 blocks / 289 functions**, with unchanged ceilings.
-Host gates retain the 6 GiB/no-swap limit, two build/test workers, at most four
-PHPT workers and automatic cleanup between variants.
+**6,666**, no-default **6,331**, erased **6,737**, reified **6,759**, all-features
+**6,810**; ignored counts remain 15/15/15/15/18. All-feature/all-target checks,
+exact no-loss, all seven Composer/Symfony S0--S3 gates, runner regressions,
+formatting and unsafe policy/self-tests pass. Source and release stayed frozen.
+Unsafe inventory remains **1,627 blocks / 289 functions**, with unchanged
+ceilings. Gates retain the 6 GiB/no-swap limit, two build/test workers, four
+PHPT workers maximum and cleanup hooks; the matrix reclaimed 31.7 GiB of builds.
 
 SHA-256 evidence for php-src `fcc29c8d6d6ee6f5ba2d941f0a2a6ea6aa6ee633`:
-candidate `00b488f3bd45ab1bc71d9641051c5f2b4eb1735696c7fa6dc5c1d18c66f22184`;
+candidate `8686e09724bb39e1c8c2c6fddbe96b20e61fea1c1b8182b094780efe2471da13`;
 parent/candidate full manifests
-`53711461adfc0736cd733797d857bb53ad98232f84d7178083fa9e7ef4bd20ce` /
-`9d18a5b65a2bc137a39f66423f69a13cfab7be19b26100d5235e472700c7c419`;
+`9d18a5b65a2bc137a39f66423f69a13cfab7be19b26100d5235e472700c7c419` /
+`2305ef31d704509bf46f7851ed923c30f58a3cf2b196272228ca2cefdfdd052c`;
 Zend/lang pass set
-`4e2d976158a431306306bfc251914154ea4284e423cc765ebac6d19a9e165d81`;
+`fe1cd4bd25713b69ed23c4f0bded11e2a682590d18844d612a5347c74c617294`;
 unchanged strings/array pass set
 `3be322c4f29093c2abc62005ad8b08f31faac54a918057f64c7e5dba497ab72e`;
 combined pass set
-`5d3fca2f563768bcb6cc0de97663406fa3e90fd39be3cb2219011859b4b5fe00`;
+`d8bbe52e757a8ba85ce37170f503d51aa2a783bc4694ea1a01593208922b43ef`;
 no-loss summary
-`8dc5053220c5d7f5ca01946c65af95293e518b40bcb39599507be7b1c85813a9`;
+`92a5c1f13e2411171738ff822d39b967800b43e975a452623e8acdbb4e6a719f`;
 final evidence packet
-`338a38c271c9f6288621b51a3a45ad3f0d218c7dfed7423ab4966b86ad62b6ea`.
+`64bddfe6df70d97e65620db3e08d00463d1b1de18a999640c186b5f213bb9297`.
 
-Performance remains deferred by user direction. Four library failures (Random,
-PCRE, SPL serialization and `getimagesize()`), unsupported cases, skips and
-allocation-limit equivalence remain explicit non-claims; this is not complete
-PHP compatibility. The next core checkpoint resolves the newly admitted trait
-constant collision boundary. Tokenizer/parser, Phar, PCRE, Date/DateTime and
-general-library implementation remain outside this stream.
+Performance remains deferred. A parent-relative collision crashes reference
+PHP 8.5.11 and is excluded from differential acceptance, not claimed as passing.
+Generic runtime `ini_set('display_errors', '0')` fatal suppression remains a
+separate CLI limitation. Unsupported cases, skips and allocation-limit
+equivalence are explicit non-claims. The next candidate is startup
+`output_handler`, currently blocking fifteen otherwise admitted PHPT paths.
+Tokenizer/parser, Phar, PCRE, Date/DateTime and general-library implementation
+remain outside this stream.
 
 ### Preceding shutdown-symbol checkpoint
 

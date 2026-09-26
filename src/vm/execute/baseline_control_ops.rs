@@ -376,6 +376,36 @@ fn op_declare_class<'a>(
     }
 
     if let Err(error) = eg.register_runtime_compiled_class(class_def) {
+        if let Some(exception) = eg.exception.take() {
+            // A failed value comparison terminates class composition. PHP
+            // exposes an initializer/autoloader exception as an unhandled
+            // warning before that fatal; neither catch nor an exception
+            // handler may resume the partially composed declaration.
+            let index = op_array.instructions.iter()
+                .position(|instruction| std::ptr::eq(instruction, opline))
+                .expect("DeclareClass belongs to its op array");
+            attach_throwable_origin(&exception, eg, frame, op_array, index);
+            let message = format_uncaught_throwable(eg, &exception);
+            let file = op_array.source_file.as_str();
+            let line = op_array.source_line(index).unwrap_or(0);
+            eg.record_last_error(2, &message, file, line);
+            if eg.error_reporting & 2 != 0 {
+                let display = crate::stdlib::ini_default(eg, "display_errors")
+                    .unwrap_or_else(|| "1".to_string());
+                let log = crate::stdlib::ini_default(eg, "log_errors")
+                    .is_some_and(|value| crate::stdlib::ini_boolean(&value));
+                if log {
+                    eg.flush_output();
+                    eprintln!("PHP Warning:  {message}");
+                }
+                if display.eq_ignore_ascii_case("stderr") {
+                    eg.flush_output();
+                    eprintln!("Warning: {message}");
+                } else if crate::stdlib::ini_boolean(&display) {
+                    crate::stdlib::write_php_output(eg, format!("\nWarning: {message}\n").as_bytes(), Some(frame))?;
+                }
+            }
+        }
         eg.abort_runtime_class_link(&class_name);
         // Reached enum declaration/link failures are uncatchable compile
         // fatals. Dependency-kind errors have already taken their catchable
