@@ -51,15 +51,32 @@ const SMALL_PAGE_SIZE: usize = 1 << 16;
 const SMALL_PAGE_MASK: usize = !(SMALL_PAGE_SIZE - 1);
 const MEDIUM_PAGE_SIZE: usize = 1 << 20;
 const MEDIUM_PAGE_MASK: usize = !(MEDIUM_PAGE_SIZE - 1);
-/// First block offset inside a page, and the header in front of a large
-/// block: a multiple of 16 keeps 16-byte alignment for every class whose
-/// block size is a multiple of 16.
+/// The header in front of a large block: a multiple of 16 keeps the block
+/// 16-byte aligned.
 const PAGE_HEADER: usize = 128;
 /// Free pages and free large blocks sit in stacks of 64 KiB-aligned entries
-/// of the reservation. An entry's link word lives here, past `PageHeader`,
-/// so writing a page header never touches a word a stale pop may read.
+/// of the reservation. A large block's link word lives here, inside its
+/// header; a page's lives in its header entry (`HEADER_LINK`). Either way it
+/// is metadata only accessed atomically, never block memory a stale pop
+/// could race.
 const STACK_LINK: usize = PAGE_HEADER - 8;
 const STACK_UNIT_SHIFT: u32 = 16;
+/// Page headers live in an array at the start of the reservation: one
+/// 128-byte entry per 64 KiB unit, a medium page using the entry of its
+/// first unit. Headers inside the pages all sat at 64 KiB-aligned
+/// addresses, that is in one L1 set (8 ways) and one or two L2 sets, so a
+/// workload touching more than a handful of pages missed on every header.
+/// Contiguous entries spread over all sets and share TLB entries.
+const HEADER_SHIFT: u32 = 7;
+const HEADER_SIZE: usize = 1 << HEADER_SHIFT;
+/// A pooled page's stack link, in its header entry past `PageHeader`.
+const HEADER_LINK: usize = HEADER_SIZE - 8;
+/// The first block of a page starts at one of 16 offsets 64 bytes apart,
+/// chosen by the page's address, so the first (under LIFO reuse often the
+/// hottest) blocks of different pages do not share cache sets either. A
+/// multiple of 16 keeps 16-byte classes aligned.
+const COLOR_STEP: usize = 64;
+const COLORS: usize = 16;
 /// Largest size served by the table-driven small classes.
 const MAX_SMALL: usize = 1024;
 /// Largest size served by the size-class pages.
@@ -156,9 +173,9 @@ const RETIRED: u32 = 1 << 31;
 /// an available page that emptied and for a retired page.
 const CURRENT_BIAS: u32 = 1;
 
-/// Per-page bookkeeping at the start of every page. Fields marked "owner"
-/// are touched only by the owning thread. The first cache line holds what
-/// the fast paths use; the second what other threads write.
+/// Per-page bookkeeping, one entry of the header array per page. Fields
+/// marked "owner" are touched only by the owning thread. The first cache
+/// line holds what the fast paths use; the second what other threads write.
 #[repr(C)]
 struct PageHeader {
     /// LIFO of blocks freed by the owner (owner).
@@ -191,13 +208,15 @@ struct PageHeader {
     /// Doubly linked list of every page the owner holds (owner).
     next_page: Cell<*mut PageHeader>,
     prev_page: Cell<*mut PageHeader>,
+    /// Address of the page this header describes.
+    start: usize,
 }
 
 const LISTING_NONE: u32 = 0;
 const LISTING_AVAIL: u32 = 1;
 const LISTING_CURRENT: u32 = 2;
 
-const _: () = assert!(std::mem::size_of::<PageHeader>() <= STACK_LINK);
+const _: () = assert!(std::mem::size_of::<PageHeader>() <= HEADER_LINK);
 // Remote freers write only the second cache line.
 const _: () = assert!(std::mem::offset_of!(PageHeader, owner_state) >= 64);
 const _: () = assert!(std::mem::offset_of!(PageHeader, prev_avail) + 8 <= 64);
@@ -495,21 +514,24 @@ fn heap() -> &'static ThreadHeap {
     unsafe { &*ptr }
 }
 
-/// Reserved address range: `[base, base + reserve)`; small pages below
-/// `base + half`, medium pages below `base + large_start`, large blocks
-/// above.
+/// Reserved address range: `[base, base + reserve)`, `base` 64 KiB aligned.
+/// The header array fills `[base, base + small_start)`, small pages follow
+/// below `base + half`, medium pages below `base + large_start`, large
+/// blocks above.
 #[repr(C, align(64))]
 struct Range {
     base: AtomicUsize,
     half: AtomicUsize,
     reserve: AtomicUsize,
     large_start: AtomicUsize,
+    small_start: AtomicUsize,
 }
 static RANGE: Range = Range {
     base: AtomicUsize::new(0),
     half: AtomicUsize::new(0),
     reserve: AtomicUsize::new(0),
     large_start: AtomicUsize::new(0),
+    small_start: AtomicUsize::new(0),
 };
 /// Next never-used address per region.
 static SMALL_CURSOR: AtomicUsize = AtomicUsize::new(0);
@@ -608,15 +630,21 @@ impl PageStack {
     }
 }
 
-/// The link word of a stack entry.
+/// The link word of a stack entry: in the page's header entry, or in the
+/// large block's header.
 ///
 /// # Safety
 /// `entry` is a 64 KiB-aligned entry of the reservation.
 #[inline]
 unsafe fn stack_link(entry: usize) -> &'static AtomicUsize {
+    let link = if pool_offset(entry) < RANGE.large_start.load(Ordering::Relaxed) {
+        header_of(entry) as usize + HEADER_LINK
+    } else {
+        entry + STACK_LINK
+    };
     // SAFETY: per the contract the word lies inside the mapped reservation,
     // and every bit pattern is a valid `AtomicUsize`.
-    unsafe { &*((entry + STACK_LINK) as *const AtomicUsize) }
+    unsafe { &*(link as *const AtomicUsize) }
 }
 
 /// Fully free pages per region: resident ones, and ones whose body went
@@ -696,9 +724,14 @@ fn reserve_range() -> bool {
                     libc::madvise(base, size, libc::MADV_HUGEPAGE);
                 }
             }
-            let base = base as usize;
-            let half = size / 2;
-            let large_start = half + size / 4;
+            let raw = base as usize;
+            let base = (raw + LARGE_UNIT - 1) & !(LARGE_UNIT - 1);
+            let reserve = (raw + size - base) & !(LARGE_UNIT - 1);
+            let half = (reserve / 2) & MEDIUM_PAGE_MASK;
+            let large_start = half + ((reserve / 4) & !(LARGE_UNIT - 1));
+            // One header entry per 64 KiB unit below the large region.
+            let small_start = ((large_start >> STACK_UNIT_SHIFT) << HEADER_SHIFT)
+                .next_multiple_of(SMALL_PAGE_SIZE);
             match RANGE
                 .base
                 .compare_exchange(0, base, Ordering::AcqRel, Ordering::Acquire)
@@ -706,26 +739,21 @@ fn reserve_range() -> bool {
                 Ok(_) => {
                     RANGE.half.store(half, Ordering::Release);
                     RANGE.large_start.store(large_start, Ordering::Release);
-                    SMALL_CURSOR.store(
-                        (base + SMALL_PAGE_SIZE - 1) & SMALL_PAGE_MASK,
-                        Ordering::Release,
-                    );
+                    RANGE.small_start.store(small_start, Ordering::Release);
+                    SMALL_CURSOR.store(base + small_start, Ordering::Release);
                     MEDIUM_CURSOR.store(
                         (base + half + MEDIUM_PAGE_SIZE - 1) & MEDIUM_PAGE_MASK,
                         Ordering::Release,
                     );
-                    LARGE_CURSOR.store(
-                        (base + large_start + LARGE_UNIT - 1) & !(LARGE_UNIT - 1),
-                        Ordering::Release,
-                    );
+                    LARGE_CURSOR.store(base + large_start, Ordering::Release);
                     #[cfg(feature = "php-heap-debug")]
-                    debug_reserve_map(size);
-                    RANGE.reserve.store(size, Ordering::Release);
+                    debug_reserve_map(reserve);
+                    RANGE.reserve.store(reserve, Ordering::Release);
                     return true;
                 }
                 Err(_) => {
                     // SAFETY: another thread won the race; release ours.
-                    unsafe { libc::munmap(base as *mut libc::c_void, size) };
+                    unsafe { libc::munmap(raw as *mut libc::c_void, size) };
                     // Wait for the winner to publish the cursors.
                     while RANGE.reserve.load(Ordering::Acquire) == 0 {
                         std::hint::spin_loop();
@@ -779,29 +807,55 @@ fn in_pool(ptr: usize) -> bool {
     pool_offset(ptr) < RANGE.reserve.load(Ordering::Relaxed)
 }
 
-/// Header of the page holding a small or medium pool pointer with the given
+/// Header entry of the page starting at `page`.
+#[inline(always)]
+fn header_of(page: usize) -> *mut PageHeader {
+    let base = RANGE.base.load(Ordering::Relaxed);
+    (base + (((page - base) >> STACK_UNIT_SHIFT) << HEADER_SHIFT)) as *mut PageHeader
+}
+
+/// Header entry of the small page holding `offset` (from the base).
+#[inline(always)]
+fn small_header(base: usize, offset: usize) -> *mut PageHeader {
+    (base + ((offset >> STACK_UNIT_SHIFT) << HEADER_SHIFT)) as *mut PageHeader
+}
+
+/// Start of the page holding a small or medium pool pointer with the given
 /// offset.
 #[inline(always)]
-fn page_header_at(ptr: usize, offset: usize) -> *mut PageHeader {
+fn page_start_at(ptr: usize, offset: usize) -> usize {
     let mask = if offset < RANGE.half.load(Ordering::Relaxed) {
         SMALL_PAGE_MASK
     } else {
         MEDIUM_PAGE_MASK
     };
-    (ptr & mask) as *mut PageHeader
+    ptr & mask
+}
+
+/// Header of the page holding a small or medium pool pointer with the given
+/// offset.
+#[inline(always)]
+fn page_header_at(ptr: usize, offset: usize) -> *mut PageHeader {
+    header_of(page_start_at(ptr, offset))
 }
 
 /// Header of the page holding a small or medium pool pointer.
-#[inline(always)]
+#[cfg(test)]
 fn page_header(ptr: usize) -> *mut PageHeader {
     page_header_at(ptr, pool_offset(ptr))
 }
 
 /// Address of the page holding a pool pointer (diagnostics; only meaningful
-/// for pointers inside the reservation).
+/// for small and medium pool pointers).
 #[inline(always)]
 pub fn page_of(ptr: usize) -> usize {
-    page_header(ptr) as usize
+    page_start_at(ptr, pool_offset(ptr))
+}
+
+/// Offset of a page's first block: 64-byte steps chosen by the page address.
+#[inline]
+fn page_color(page: usize, page_size: usize) -> usize {
+    ((page / page_size) % COLORS) * COLOR_STEP
 }
 
 #[inline(always)]
@@ -830,18 +884,15 @@ fn os_page_size() -> usize {
     size
 }
 
-/// Return an entry's body to the OS, keeping the OS page that holds its
-/// header and stack link. `MADV_DONTNEED` needs an OS-page-aligned start
-/// and the header is only 128 bytes, so the release starts at the next OS
-/// page. Returns whether the kernel dropped the range.
+/// Return `[start, end)` to the OS. `MADV_DONTNEED` needs OS-page-aligned
+/// bounds (a 128-byte header offset made the kernel reject every call with
+/// `EINVAL`); callers keep whatever metadata must stay resident outside the
+/// range. Returns whether the kernel dropped the range.
 ///
 /// # Safety
-/// `[entry, entry + len)` is mapped private anonymous memory of the caller,
-/// `entry + len` is OS-page aligned, and nothing past the first OS page
-/// holds data anyone still needs.
-unsafe fn reclaim_body(entry: usize, len: usize) -> bool {
-    let start = (entry + PAGE_HEADER).next_multiple_of(os_page_size());
-    let end = entry + len;
+/// `[start, end)` is mapped private anonymous memory of the caller whose
+/// contents nobody needs any more; both bounds are OS-page aligned.
+unsafe fn reclaim(start: usize, end: usize) -> bool {
     if start >= end {
         return false;
     }
@@ -930,8 +981,12 @@ unsafe fn free_large(ptr: *mut u8) {
     // SAFETY: the block is free and ours; entries are 64 KiB aligned and
     // `bytes` is a multiple of 64 KiB.
     unsafe {
+        // The first OS page keeps the header and the stack link.
         if LARGE_WARM_BYTES.load(Ordering::Relaxed) >= LARGE_POOL_RESIDENT_BYTES
-            && reclaim_body(entry, bytes)
+            && reclaim(
+                (entry + PAGE_HEADER).next_multiple_of(os_page_size()),
+                entry + bytes,
+            )
         {
             LARGE_COLD[units - 1].push(entry);
         } else {
@@ -1149,15 +1204,15 @@ fn drain_remote(heap: &ThreadHeap) {
     }
 }
 
-/// Initialize `page` for `class` (untouched or recycled memory). The stack
-/// link past the header is left alone.
+/// Initialize the header entry of `page` for `class`. The stack link past
+/// the header struct is left alone.
 ///
 /// # Safety
 /// `page` is a page-aligned address inside the right region of the
 /// reservation that no other thread references.
 #[inline]
 unsafe fn init_page(page: usize, class: usize) -> *mut PageHeader {
-    let header = page as *mut PageHeader;
+    let header = header_of(page);
     let page_size = if class < NUM_SMALL_CLASSES {
         SMALL_PAGE_SIZE
     } else {
@@ -1166,12 +1221,12 @@ unsafe fn init_page(page: usize, class: usize) -> *mut PageHeader {
     // Debug mode: the page's free bits belong to its previous layout.
     #[cfg(feature = "php-heap-debug")]
     debug_clear_range(page, page_size);
-    // SAFETY: per the contract; every field is written before the page
-    // becomes reachable.
+    // SAFETY: per the contract the header entry is ours; every field is
+    // written before the page becomes reachable.
     unsafe {
         header.write(PageHeader {
             local_free: Cell::new(0),
-            bump: Cell::new(page + PAGE_HEADER),
+            bump: Cell::new(page + page_color(page, page_size)),
             end: page + page_size,
             used: Cell::new(0),
             block_size: CLASS_SIZES[class],
@@ -1185,6 +1240,7 @@ unsafe fn init_page(page: usize, class: usize) -> *mut PageHeader {
             next_queued: AtomicUsize::new(0),
             next_page: Cell::new(std::ptr::null_mut()),
             prev_page: Cell::new(std::ptr::null_mut()),
+            start: page,
         });
     }
     header
@@ -1229,13 +1285,16 @@ fn new_page(class: usize) -> *mut PageHeader {
 }
 
 /// Put a detached, fully free page nobody references into its region's
-/// pool. Beyond the resident budget its body goes back to the OS.
+/// pool. Beyond the resident budget its memory goes back to the OS (the
+/// header entry, with the stack link, stays).
 ///
 /// # Safety
-/// `page` is a live pool page with no owner and no live blocks.
+/// `page` is the header of a live pool page with no owner and no live
+/// blocks.
 #[cold]
 unsafe fn pool_page(page: *mut PageHeader) {
-    let entry = page as usize;
+    // SAFETY: per the contract.
+    let entry = unsafe { (*page).start };
     let (warm, cold, budget, page_size) = if is_small_page(entry) {
         (
             &SMALL_WARM,
@@ -1251,9 +1310,9 @@ unsafe fn pool_page(page: *mut PageHeader) {
             MEDIUM_PAGE_SIZE,
         )
     };
-    // SAFETY: per the contract the page is ours alone and its body free.
+    // SAFETY: per the contract the page is ours alone and holds nothing.
     unsafe {
-        if warm.count.load(Ordering::Relaxed) >= budget && reclaim_body(entry, page_size) {
+        if warm.count.load(Ordering::Relaxed) >= budget && reclaim(entry, entry + page_size) {
             cold.push(entry);
         } else {
             warm.push(entry);
@@ -1799,8 +1858,13 @@ fn debug_large(block: usize, freeing: bool) {
 fn debug_check_free(page: &PageHeader, block: usize, size: usize, align: usize) {
     let class = page.class as usize;
     let slot = page.block_size as usize;
-    let page_base = page as *const PageHeader as usize;
-    let misaligned = (block - page_base - PAGE_HEADER) % slot != 0;
+    let page_size = if class < NUM_SMALL_CLASSES {
+        SMALL_PAGE_SIZE
+    } else {
+        MEDIUM_PAGE_SIZE
+    };
+    let first = page.start + page_color(page.start, page_size);
+    let misaligned = block < first || (block - first) % slot != 0;
     let wrong_class = class_for(size, align) != Some(class);
     if misaligned || wrong_class {
         let mut buffer = [0u8; 256];
@@ -1943,9 +2007,9 @@ unsafe fn debug_report_double_free(page: &PageHeader, block: usize) -> ! {
 ))]
 mod fast_asm {
     use super::{
-        CLASS_BY_SIZE, CLASS_BY_SIZE_16, MAX_ALIGN, MAX_SMALL, PageHeader, SMALL_PAGE_MASK,
-        SMALL_PAGE_SIZE, ThreadHeap, alloc_other, alloc_slow, dealloc_other, free_cold, heap,
-        remote_free,
+        CLASS_BY_SIZE, CLASS_BY_SIZE_16, HEADER_SHIFT, MAX_ALIGN, MAX_SMALL, PageHeader,
+        STACK_UNIT_SHIFT, ThreadHeap, alloc_other, alloc_slow, dealloc_other, free_cold, heap,
+        remote_free, small_header,
     };
     use std::mem::offset_of;
 
@@ -2017,8 +2081,9 @@ mod fast_asm {
             "sub rax, qword ptr [rcx + {base}]",
             "cmp rax, qword ptr [rcx + {small_limit}]",
             "jae {other}",
-            "mov rax, rdi",
-            "and rax, {page_mask}",
+            "shr rax, {unit_shift}",
+            "shl rax, {header_shift}",
+            "add rax, qword ptr [rcx + {base}]",
             "cmp qword ptr [rax + {owner}], rcx",
             "jne {remote}",
             "mov r8, qword ptr [rax + {local_free}]",
@@ -2029,7 +2094,8 @@ mod fast_asm {
             "ret",
             base = const offset_of!(ThreadHeap, base),
             small_limit = const offset_of!(ThreadHeap, small_limit),
-            page_mask = const -(SMALL_PAGE_SIZE as i64),
+            unit_shift = const STACK_UNIT_SHIFT,
+            header_shift = const HEADER_SHIFT,
             owner = const offset_of!(PageHeader, owner),
             local_free = const offset_of!(PageHeader, local_free),
             used = const offset_of!(PageHeader, used),
@@ -2068,10 +2134,18 @@ mod fast_asm {
     /// # Safety
     /// Entered from `dealloc` only, for a small-page block of another
     /// thread's page.
-    unsafe extern "C" fn free_remote_entry(ptr: *mut u8) {
+    unsafe extern "C" fn free_remote_entry(
+        ptr: *mut u8,
+        _size: usize,
+        _align: usize,
+        heap: *const ThreadHeap,
+    ) {
         let block = ptr as usize;
+        // SAFETY: `dealloc` passes the calling thread's heap, whose cached
+        // base places this small-page block.
+        let base = unsafe { (*heap).base.get() };
         // SAFETY: a live small-page pool block and its page header.
-        unsafe { remote_free(block, &*((block & SMALL_PAGE_MASK) as *const PageHeader)) }
+        unsafe { remote_free(block, &*small_header(base, block - base)) }
     }
 
     /// # Safety
@@ -2083,9 +2157,13 @@ mod fast_asm {
         _align: usize,
         heap: *const ThreadHeap,
     ) {
-        let page = (ptr as usize & SMALL_PAGE_MASK) as *mut PageHeader;
-        // SAFETY: the page is ours and the block already counted off.
-        unsafe { free_cold(page, &*heap) }
+        // SAFETY: `dealloc` passes the calling thread's heap, whose cached
+        // base places this small-page block; the page is ours and the block
+        // already counted off.
+        unsafe {
+            let base = (*heap).base.get();
+            free_cold(small_header(base, ptr as usize - base), &*heap)
+        }
     }
 }
 
@@ -2150,8 +2228,9 @@ fn fast_alloc(size: usize, align: usize) -> *mut u8 {
 unsafe fn fast_dealloc(ptr: *mut u8, size: usize, align: usize) {
     let heap = heap();
     let block = ptr as usize;
-    if block.wrapping_sub(heap.base.get()) < heap.small_limit.get() {
-        let page = (block & SMALL_PAGE_MASK) as *mut PageHeader;
+    let offset = block.wrapping_sub(heap.base.get());
+    if offset < heap.small_limit.get() {
+        let page = small_header(heap.base.get(), offset);
         #[cfg(feature = "php-heap-debug")]
         // SAFETY: a pool pointer has an initialized page header.
         debug_check_free(unsafe { &*page }, block, size, align);
@@ -2200,8 +2279,9 @@ unsafe impl GlobalAlloc for PhpHeap {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let heap = heap();
         let block = ptr as usize;
-        if block.wrapping_sub(heap.base.get()) < heap.small_limit.get() {
-            let page = (block & SMALL_PAGE_MASK) as *const PageHeader;
+        let offset = block.wrapping_sub(heap.base.get());
+        if offset < heap.small_limit.get() {
+            let page = small_header(heap.base.get(), offset);
             #[cfg(feature = "php-heap-debug")]
             // SAFETY: a pool pointer has an initialized page header.
             debug_check_free(unsafe { &*page }, block, layout.size(), layout.align());
@@ -2243,7 +2323,7 @@ pub fn pages_in_use() -> usize {
         return 0;
     }
     let small = (SMALL_CURSOR.load(Ordering::Relaxed)
-        - ((base + SMALL_PAGE_SIZE - 1) & SMALL_PAGE_MASK))
+        - (base + RANGE.small_start.load(Ordering::Relaxed)))
         / SMALL_PAGE_SIZE;
     let medium_start =
         (base + RANGE.half.load(Ordering::Relaxed) + MEDIUM_PAGE_SIZE - 1) & MEDIUM_PAGE_MASK;

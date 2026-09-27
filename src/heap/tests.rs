@@ -329,8 +329,14 @@ fn reclaim_drops_whole_os_pages_after_the_header() {
         let body = 2 * LARGE_UNIT;
         std::ptr::write_bytes(entry as *mut u8, 0xA5, body);
         let before = reclaimed_bytes();
-        assert!(reclaim_body(entry, body), "the kernel accepts the range");
         let page = os_page_size();
+        // A large block keeps its first OS page (header and stack link).
+        assert!(
+            reclaim((entry + PAGE_HEADER).next_multiple_of(page), entry + body),
+            "the kernel accepts the aligned range"
+        );
+        // The unaligned start the review found is rejected by the kernel.
+        assert!(!reclaim(entry + PAGE_HEADER, entry + body) || page <= PAGE_HEADER);
         assert!(reclaimed_bytes() - before >= body - page);
         let mut residency = vec![0u8; body / page];
         assert_eq!(
@@ -387,20 +393,27 @@ fn full_pages_retire_relist_and_recycle() {
         return;
     }
     let layout = Layout::from_size_align(1024, 8).unwrap();
-    // 63 blocks per page: 200 blocks fill three pages and start a fourth.
+    // 63 or 64 blocks per page: 200 blocks fill three pages and start a fourth.
     let blocks: Vec<*mut u8> = (0..200)
         // SAFETY: test-owned block with a valid layout; freed exactly once.
         .map(|_| unsafe { PhpHeap.alloc(layout) })
         .collect();
     let first_page = page_header(blocks[0] as usize);
+    let on_first: Vec<*mut u8> = blocks
+        .iter()
+        .copied()
+        .filter(|block| page_header(*block as usize) == first_page)
+        .collect();
+    let capacity = on_first.len() as u32;
+    assert!(capacity == 63 || capacity == 64, "capacity {capacity}");
     // SAFETY: a page this thread owns.
     unsafe {
         assert_eq!((*first_page).listing.get(), LISTING_NONE);
-        assert_eq!((*first_page).used.get(), RETIRED | 63);
-        PhpHeap.dealloc(blocks[0], layout);
+        assert_eq!((*first_page).used.get(), RETIRED | capacity);
+        PhpHeap.dealloc(on_first[0], layout);
         assert_eq!((*first_page).listing.get(), LISTING_AVAIL, "relisted");
-        assert_eq!((*first_page).used.get(), 62);
-        for block in &blocks[1..63] {
+        assert_eq!((*first_page).used.get(), capacity - 1);
+        for block in &on_first[1..] {
             PhpHeap.dealloc(*block, layout);
         }
         assert_ne!(
@@ -408,8 +421,54 @@ fn full_pages_retire_relist_and_recycle() {
             heap().addr(),
             "the emptied page left the thread"
         );
-        for block in &blocks[63..] {
+        for block in blocks
+            .iter()
+            .filter(|block| page_header(**block as usize) != first_page)
+        {
             PhpHeap.dealloc(*block, layout);
         }
+    }
+}
+
+/// Page headers sit in one contiguous array, and first blocks are staggered,
+/// so neither lines up on the same cache sets page after page.
+#[test]
+fn headers_and_first_blocks_spread_over_cache_sets() {
+    if !pool_enabled() {
+        return;
+    }
+    let layout = Layout::from_size_align(768, 8).unwrap();
+    // 85 or fewer blocks per page: 1000 blocks span a dozen pages.
+    let blocks: Vec<*mut u8> = (0..1000)
+        // SAFETY: test-owned block with a valid layout; freed exactly once.
+        .map(|_| unsafe { PhpHeap.alloc(layout) })
+        .collect();
+    let mut headers: Vec<usize> = blocks
+        .iter()
+        .map(|block| page_header(*block as usize) as usize)
+        .collect();
+    headers.dedup();
+    assert!(headers.len() >= 10);
+    let base = RANGE.base.load(Ordering::Relaxed);
+    for header in &headers {
+        assert!(*header - base < RANGE.small_start.load(Ordering::Relaxed));
+        assert_eq!(header % HEADER_SIZE, 0);
+    }
+    // Consecutive pages use consecutive header entries.
+    let span = headers.iter().max().unwrap() - headers.iter().min().unwrap();
+    assert!(span < 64 * HEADER_SIZE, "header entries stay close: {span}");
+    let firsts: std::collections::HashSet<usize> = blocks
+        .iter()
+        .filter(|block| (**block as usize) % SMALL_PAGE_SIZE < COLORS * COLOR_STEP)
+        .map(|block| (*block as usize) % SMALL_PAGE_SIZE)
+        .collect();
+    assert!(
+        firsts.len() >= 8,
+        "first blocks at {} distinct offsets",
+        firsts.len()
+    );
+    for block in blocks {
+        // SAFETY: freed exactly once.
+        unsafe { PhpHeap.dealloc(block, layout) };
     }
 }
