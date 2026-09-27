@@ -635,6 +635,17 @@ struct JsonRuntimeState {
     serializable_objects: Vec<usize>,
 }
 
+/// Sparse request-local state shared by the Libxml API and future XML
+/// consumers. Keeping callbacks, contexts and diagnostics behind one box
+/// leaves requests which never touch XML with a single null sidecar word.
+#[derive(Default)]
+struct LibxmlRuntimeState {
+    internal_errors: bool,
+    errors: Vec<Value>,
+    external_entity_loader: Option<Value>,
+    streams_context: Option<Value>,
+}
+
 /// Cold request-local diagnostics from the most recent Date parser call.
 /// Successful parses without warnings clear the sidecar, matching PHP's
 /// `DateTimeImmutable::getLastErrors()` false sentinel without allocating in
@@ -1273,6 +1284,9 @@ pub struct ExecutorGlobals {
     /// Request-local ext/json error and reentrant JsonSerializable guards.
     /// Successful ordinary requests retain only this null sidecar word.
     json_runtime: Option<Box<JsonRuntimeState>>,
+    /// Libxml error policy, retained callbacks and stream context are used
+    /// only by XML-facing requests and stay allocation-free otherwise.
+    libxml_runtime: Option<Box<LibxmlRuntimeState>>,
     /// Diagnostics are allocated only after a Date parser reports something.
     date_parse_diagnostics: Option<Box<DateParseDiagnostics>>,
 }
@@ -1486,6 +1500,116 @@ impl ExecutorGlobals {
         if empty && self.json_last_error() == 0 {
             self.json_runtime = None;
         }
+    }
+
+    pub(crate) fn libxml_internal_errors(&self) -> bool {
+        self.libxml_runtime
+            .as_deref()
+            .is_some_and(|state| state.internal_errors)
+    }
+
+    pub(crate) fn replace_libxml_internal_errors(&mut self, enabled: bool) -> bool {
+        let previous = self.libxml_internal_errors();
+        if enabled {
+            self.libxml_runtime
+                .get_or_insert_with(|| Box::new(LibxmlRuntimeState::default()))
+                .internal_errors = true;
+        } else if let Some(state) = self.libxml_runtime.as_deref_mut() {
+            state.internal_errors = false;
+        }
+        previous
+    }
+
+    pub(crate) fn libxml_errors(&self) -> Vec<Value> {
+        self.libxml_runtime
+            .as_deref()
+            .map_or_else(Vec::new, |state| state.errors.clone())
+    }
+
+    pub(crate) fn libxml_last_error(&self) -> Option<Value> {
+        self.libxml_runtime
+            .as_deref()
+            .and_then(|state| state.errors.last())
+            .cloned()
+    }
+
+    pub(crate) fn clear_libxml_errors(&mut self) {
+        if let Some(state) = self.libxml_runtime.as_deref_mut() {
+            state.errors.clear();
+        }
+    }
+
+    /// Publish one parser diagnostic for the Libxml observability API. XML
+    /// consumers decide separately whether the same diagnostic is emitted as
+    /// a PHP warning when internal capture is disabled.
+    #[allow(dead_code)]
+    pub(crate) fn push_libxml_error(&mut self, error: Value) {
+        self.shutdown_functions
+            .get_or_insert_with(|| Box::new(std::collections::VecDeque::new()));
+        self.libxml_runtime
+            .get_or_insert_with(|| Box::new(LibxmlRuntimeState::default()))
+            .errors
+            .push(error);
+    }
+
+    pub(crate) fn libxml_external_entity_loader(&self) -> Option<Value> {
+        self.libxml_runtime
+            .as_deref()
+            .and_then(|state| state.external_entity_loader.as_ref())
+            .cloned()
+    }
+
+    pub(crate) fn set_libxml_external_entity_loader(
+        &mut self,
+        loader: Option<Value>,
+    ) -> Option<Value> {
+        if loader.is_none() && self.libxml_runtime.is_none() {
+            return None;
+        }
+        if loader.is_some() {
+            self.shutdown_functions
+                .get_or_insert_with(|| Box::new(std::collections::VecDeque::new()));
+        }
+        std::mem::replace(
+            &mut self
+                .libxml_runtime
+                .get_or_insert_with(|| Box::new(LibxmlRuntimeState::default()))
+                .external_entity_loader,
+            loader,
+        )
+    }
+
+    #[allow(dead_code)]
+    pub(crate) fn libxml_streams_context(&self) -> Option<Value> {
+        self.libxml_runtime
+            .as_deref()
+            .and_then(|state| state.streams_context.as_ref())
+            .cloned()
+    }
+
+    pub(crate) fn set_libxml_streams_context(&mut self, context: Value) {
+        self.shutdown_functions
+            .get_or_insert_with(|| Box::new(std::collections::VecDeque::new()));
+        self.libxml_runtime
+            .get_or_insert_with(|| Box::new(LibxmlRuntimeState::default()))
+            .streams_context = Some(context);
+    }
+
+    /// Move every PHP-visible Libxml root into the request destructor phase.
+    /// Dropping a retained callback/context as plain Rust data would release
+    /// storage but skip userland object destructors.
+    pub(crate) fn take_libxml_release_roots(&mut self) -> Vec<Value> {
+        let Some(state) = self.libxml_runtime.take() else {
+            return Vec::new();
+        };
+        let mut roots = state.errors;
+        if let Some(loader) = state.external_entity_loader {
+            roots.push(loader);
+        }
+        if let Some(context) = state.streams_context {
+            roots.push(context);
+        }
+        roots
     }
 
     /// Reset the request-local execution timer used by `set_time_limit()`.
@@ -2258,6 +2382,7 @@ impl ExecutorGlobals {
             reflection_properties: None,
             reflection_parameters: None,
             json_runtime: None,
+            libxml_runtime: None,
             date_parse_diagnostics: None,
         }
     }
@@ -2402,6 +2527,7 @@ impl ExecutorGlobals {
             reflection_properties: None,
             reflection_parameters: None,
             json_runtime: None,
+            libxml_runtime: None,
             date_parse_diagnostics: None,
         }
     }

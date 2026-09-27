@@ -7,6 +7,51 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: Libxml
+
+The `phpunit-libxml-extension` checkpoint over `c8cbe909` admits the shared
+CLI Libxml foundation without linking to or delegating behavior to libxml2.
+All eight PHP 8.5 globals have exact Reflection-visible names, arity,
+parameter types/defaults, return types and extension ownership. Request-local
+internal-error policy, diagnostics, stream context and external-entity loader
+state are sparse. Retained callback values survive user aliases, release at
+replacement, and run PHP object destructors during request shutdown.
+
+`LibXMLError` is directly instantiable with the six canonical typed,
+uninitialized public properties. The Libxml constants expose the PHP 8.5
+contract. Adjacent standard functionality required by the upstream packet is
+implemented generally: `php://input` is a seekable, read-only request stream;
+SVG image headers recognize XML prologs, comments, namespaces and PHP's
+integer/unit rules; all `IMAGETYPE_*` constants and both image-type mapping
+functions are present with exact signatures.
+
+The complete 32-case upstream `ext/libxml` packet is **6 pass / 0 fail /
+23 skip / 3 unsupported**, without timeout or crash. Every runnable supported
+case passes. The 23 skips require DOM or SimpleXML and remain visible; this
+checkpoint does not claim an XML document parser. The 7,174-case stable ledger
+remains **6,881 pass / 0 fail / 194 skip / 99 unsupported**, exact **+0/-0**,
+with the identical 6,881-path pass set.
+
+Five complete Cargo configurations and the all-features/all-targets gate pass;
+Composer 2.8.12 S0, format, unsafe policy and runner self-tests are green.
+Production remains at the unsafe ceiling of **1,627 blocks / 289 functions**.
+Performance is deferred by user direction and no performance claim is made.
+
+This remains a staged PHPUnit foundation, not a PHPUnit compatibility claim.
+The startup probe now finds Ctype, Filter, JSON, Libxml and Tokenizer. DOM and
+XMLWriter are the next dependency-ordered checkpoint, followed by Mbstring.
+
+SHA-256 evidence: release
+`3556ef621e56fe925abe3548d754178a954f19be95f313b0ef90c1be9be95d4e`;
+Libxml manifest
+`ada6996fe028e4efc890edd89402a3856fe82432f04e5dd220390ef729dcd963`;
+stable manifest
+`f86e4e098cc809485e466255bbe498a41746c51520f0b30cffaf5074f316decb`;
+stable pass set
+`54853df66d0bc05d98a73894d6a13f3a10082b56430f7f9a991b79be08bb079f`;
+builtin audit summary
+`50809f41b86da1091324612baa1dcd4c2776a8062e2758242c61e7699c7aa8bb`.
+
 ### PHPUnit extension foundation: JSON
 
 The `phpunit-json-extension` checkpoint over `bb29963b` honestly admits the

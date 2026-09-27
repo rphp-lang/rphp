@@ -2652,6 +2652,63 @@ pub fn register_builtin_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFun
     })
     .unwrap();
 
+    // LibXMLError is a directly instantiable property-only internal class.
+    // Its typed public slots intentionally have no defaults: a user-created
+    // instance exposes all six as uninitialized, while XML parsers populate
+    // them when publishing a diagnostic.
+    eg.register_class(ClassDef {
+        attributes: Vec::new(),
+        name: "LibXMLError".to_string(),
+        source_file: None,
+        declaration_line: 0,
+        end_line: 0,
+        doc_comment: None,
+        parent: None,
+        implements: vec![],
+        is_interface: false,
+        is_abstract: false,
+        is_final: false,
+        is_trait: false,
+        is_enum: false,
+        is_readonly: false,
+        allow_dynamic_properties: false,
+        uses: vec![],
+        trait_aliases: vec![],
+        trait_precedences: vec![],
+        properties: [
+            ("level", ParamTypeHint::Int),
+            ("code", ParamTypeHint::Int),
+            ("column", ParamTypeHint::Int),
+            ("message", ParamTypeHint::String),
+            ("file", ParamTypeHint::String),
+            ("line", ParamTypeHint::Int),
+        ]
+        .into_iter()
+        .map(|(name, type_hint)| {
+            PropertyDefinition::declared(
+                name.to_string(),
+                None,
+                Visibility::Public,
+                "LibXMLError".to_string(),
+                type_hint,
+                false,
+                false,
+            )
+        })
+        .collect(),
+        static_properties: vec![],
+        constants: vec![],
+        property_layout: std::rc::Rc::new(crate::value::ObjectLayout::empty()),
+        property_defaults: std::rc::Rc::from([]),
+        readonly_props: vec![],
+        methods: vec![],
+        abstract_methods: vec![],
+        enum_backing_error: None,
+        deferred_instance_defaults: None,
+        class_id: 0,
+    })
+    .unwrap();
+
     // Register core Throwable methods for each built-in concrete class.
     // num_args = 4 for __construct (CV 0 = $this, CV 1..3 = explicit args)
     // num_args = 1 for getMessage (CV 0 = $this)

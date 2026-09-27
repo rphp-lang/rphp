@@ -14158,7 +14158,16 @@ fn fn_get_extension_funcs(
             names.push(name.clone());
         }
     }
-    names.sort_unstable();
+    if requested.eq_ignore_ascii_case("libxml") {
+        names.sort_unstable_by_key(|name| {
+            LIBXML_EXTENSION_FUNCTION_NAMES
+                .iter()
+                .position(|candidate| name.eq_ignore_ascii_case(candidate))
+                .unwrap_or(usize::MAX)
+        });
+    } else {
+        names.sort_unstable();
+    }
     ret!(rv, declared_names_value(names));
 }
 
@@ -17138,6 +17147,7 @@ pub fn run_shutdown_functions(
                 release_roots.extend(callback.into_release_roots());
             }
         }
+        release_roots.extend(eg.take_libxml_release_roots());
     };
     loop {
         let next = eg
@@ -17146,6 +17156,7 @@ pub fn run_shutdown_functions(
             .and_then(std::collections::VecDeque::pop_front);
         let Some(next) = next else {
             eg.shutdown_functions = None;
+            release_roots.extend(eg.take_libxml_release_roots());
             crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             streams::user_wrapper::shutdown_open_streams(eg)?;
@@ -31706,9 +31717,21 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     #[cfg(target_os = "linux")]
     "iconv",
     "json",
+    "libxml",
     "Phar",
     "pcre",
     "tokenizer",
+];
+
+const LIBXML_EXTENSION_FUNCTION_NAMES: &[&str] = &[
+    "libxml_set_streams_context",
+    "libxml_use_internal_errors",
+    "libxml_get_last_error",
+    "libxml_get_errors",
+    "libxml_clear_errors",
+    "libxml_disable_entity_loader",
+    "libxml_set_external_entity_loader",
+    "libxml_get_external_entity_loader",
 ];
 
 #[inline(always)]
@@ -31873,6 +31896,138 @@ fn fn_libxml_disable_entity_loader(
     };
     let previous = eg.replace_libxml_entity_loader_disabled(disable);
     ret!(rv, Value::bool(previous));
+}
+
+fn fn_libxml_set_streams_context(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let context = arg!(ed, 0).dereferenced();
+    let Some(resource) = context.as_resource_id() else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "libxml_set_streams_context(): Argument #1 ($context) must be of type resource, {} given",
+                streams::checked_args::given_type_name(context)
+            ),
+        ));
+        return Ok(());
+    };
+    #[cfg(feature = "stream-context")]
+    let valid_context = streams::context::context_snapshot(eg, resource).is_some();
+    #[cfg(not(feature = "stream-context"))]
+    let valid_context = {
+        let _ = resource;
+        false
+    };
+    if !valid_context {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "libxml_set_streams_context(): supplied resource is not a valid Stream-Context resource",
+        ));
+        return Ok(());
+    }
+    eg.set_libxml_streams_context(context.clone());
+    ret!(rv, Value::null());
+}
+
+fn fn_libxml_use_internal_errors(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let previous = eg.libxml_internal_errors();
+    let Some(argument) = arg_opt!(ed, 0).map(Value::dereferenced) else {
+        ret!(rv, Value::bool(previous));
+    };
+    if argument.value_type() == ValueType::Null {
+        ret!(rv, Value::bool(previous));
+    }
+    let Some(enabled) =
+        typed_internal_bool_argument(ed, eg, "libxml_use_internal_errors", 0, "use_errors")?
+    else {
+        return Ok(());
+    };
+    eg.replace_libxml_internal_errors(enabled);
+    ret!(rv, Value::bool(previous));
+}
+
+fn fn_libxml_get_last_error(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        eg.libxml_last_error().unwrap_or_else(|| Value::bool(false))
+    );
+}
+
+fn fn_libxml_get_errors(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let errors = eg.libxml_errors();
+    let mut result = PhpArray::with_packed_capacity(errors.len());
+    for error in errors {
+        result.push(error);
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn fn_libxml_clear_errors(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.clear_libxml_errors();
+    ret!(rv, Value::null());
+}
+
+fn fn_libxml_set_external_entity_loader(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let loader = arg!(ed, 0).dereferenced();
+    let replacement = if loader.value_type() == ValueType::Null {
+        None
+    } else if resolve_callback_at_callsite(loader, eg, ed).is_none() {
+        let detail = ordinary_callback_invalid_reason(loader, eg);
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            &format!(
+                "libxml_set_external_entity_loader(): Argument #1 ($resolver_function) must be a valid callback or null, {detail}"
+            ),
+        ));
+        return Ok(());
+    } else {
+        Some(loader.clone())
+    };
+    let previous = eg.set_libxml_external_entity_loader(replacement);
+    let release = previous
+        .as_ref()
+        .and_then(|value| prepare_replaced_value_release(eg, value));
+    drop(previous);
+    run_prepared_value_destructors_from_internal(eg, ed, [(release, None)])?;
+    if eg.exception.is_some() {
+        return Ok(());
+    }
+    ret!(rv, Value::bool(true));
+}
+
+fn fn_libxml_get_external_entity_loader(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    ret!(
+        rv,
+        eg.libxml_external_entity_loader()
+            .unwrap_or_else(Value::null)
+    );
 }
 
 fn fn_header(

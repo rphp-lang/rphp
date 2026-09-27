@@ -230,6 +230,11 @@ impl PhpStream {
         )
     }
 
+    #[inline]
+    pub(crate) fn is_request_input(&self) -> bool {
+        self.uri == "php://input"
+    }
+
     fn standard(stream: StandardStream) -> Self {
         let (mode, reported_mode, uri) = match stream {
             StandardStream::Input => (
@@ -300,6 +305,21 @@ impl PhpStream {
         let requested_mode = mode;
 
         match path {
+            "php://input" => {
+                return Ok(Self {
+                    backend: StreamBackend::Memory(Cursor::new(Vec::new())),
+                    mode: StreamMode::parse("rb").expect("constant stream mode"),
+                    reported_mode: Cow::Borrowed("rb"),
+                    uri: Cow::Borrowed("php://input"),
+                    eof: false,
+                    read_buffer: None,
+                    plain_file_io: false,
+                    memory_append_after_truncate: false,
+                    eager_eof: false,
+                    #[cfg(feature = "stream-context")]
+                    context: None,
+                });
+            }
             "php://stdin" => return Ok(Self::standard(StandardStream::Input)),
             "php://stdout" => return Ok(Self::standard(StandardStream::Output)),
             "php://stderr" => return Ok(Self::standard(StandardStream::Error)),
@@ -1144,6 +1164,9 @@ impl PhpStream {
                 "plainfile",
                 "STDIO",
             ),
+            StreamBackend::Memory(_) if self.uri == "php://input" => {
+                (Some(false), Some(true), Some(self.eof), "PHP", "Input")
+            }
             StreamBackend::Memory(_) if self.uri.starts_with("data:") => {
                 (None, None, None, "RFC2397", "RFC2397")
             }

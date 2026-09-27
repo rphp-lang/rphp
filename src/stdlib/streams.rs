@@ -1063,7 +1063,14 @@ fn fn_fwrite(
     match result {
         Some(Ok(written)) => return_value(return_pointer, Value::long(written as i64)),
         Some(Err(error)) if error.kind() == std::io::ErrorKind::PermissionDenied => {
-            report_stream_not_writable(eg, execute_data)?;
+            // php://input is always opened as a read-only request body even
+            // when the caller supplies a write mode. PHP rejects that write
+            // silently; ordinary read-only streams retain the notice.
+            let request_input =
+                with_stream_io(eg, resource, |stream| stream.is_request_input()).unwrap_or(false);
+            if !request_input {
+                report_stream_not_writable(eg, execute_data)?;
+            }
             return_value(return_pointer, Value::bool(false))
         }
         None => {

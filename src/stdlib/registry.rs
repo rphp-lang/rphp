@@ -4594,6 +4594,91 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         );
         funcs.push(function);
     }
+    // Register the complete Libxml surface as one coherent metadata group;
+    // get_extension_funcs('libxml') projects PHP's canonical public order.
+    macro_rules! reg_libxml {
+        (
+            $name:expr,
+            $handler:expr,
+            $max_args:expr,
+            $min_args:expr,
+            [$($pname:expr),* $(,)?],
+            [$($hint:expr),* $(,)?],
+            $return_hint:expr,
+            [$($default:expr),* $(,)?]
+        ) => {{
+            let mut function = Box::new(make_internal_function(
+                $handler,
+                $max_args,
+                $min_args,
+                pn![$($pname),*],
+            ));
+            function.common.sig.param_type_hints = vec![$($hint),*];
+            function.common.sig.return_type_hint = $return_hint;
+            function.handler_validates_types = true;
+            let pointer = &function.common as *const FunctionCommon;
+            eg.register_function($name, pointer).unwrap();
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![$($default),*],
+                "libxml",
+            );
+            funcs.push(function);
+        }};
+    }
+    reg_libxml!(
+        "libxml_set_streams_context",
+        fn_libxml_set_streams_context,
+        1,
+        1,
+        ["context"],
+        [ParamTypeHint::None],
+        ParamTypeHint::Void,
+        [None]
+    );
+    reg_libxml!(
+        "libxml_use_internal_errors",
+        fn_libxml_use_internal_errors,
+        1,
+        0,
+        ["use_errors"],
+        [ParamTypeHint::Nullable(Box::new(ParamTypeHint::Bool))],
+        ParamTypeHint::Bool,
+        [Some(Value::null())]
+    );
+    reg_libxml!(
+        "libxml_get_last_error",
+        fn_libxml_get_last_error,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::ClassName("LibXMLError".to_string()),
+            ParamTypeHint::ClassName("false".to_string()),
+        ]),
+        []
+    );
+    reg_libxml!(
+        "libxml_get_errors",
+        fn_libxml_get_errors,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Array,
+        []
+    );
+    reg_libxml!(
+        "libxml_clear_errors",
+        fn_libxml_clear_errors,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Void,
+        []
+    );
     {
         let mut function = Box::new(make_internal_function(
             fn_libxml_disable_entity_loader,
@@ -4615,6 +4700,26 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         );
         funcs.push(function);
     }
+    reg_libxml!(
+        "libxml_set_external_entity_loader",
+        fn_libxml_set_external_entity_loader,
+        1,
+        1,
+        ["resolver_function"],
+        [ParamTypeHint::Nullable(Box::new(ParamTypeHint::Callable))],
+        ParamTypeHint::ClassName("true".to_string()),
+        [None]
+    );
+    reg_libxml!(
+        "libxml_get_external_entity_loader",
+        fn_libxml_get_external_entity_loader,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::Callable)),
+        []
+    );
     reg!(
         "header",
         fn_header,

@@ -36,24 +36,38 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `phpunit-json-extension` checkpoint over `bb29963b` honestly admits the
-CLI JSON extension. All five PHP 8.5 globals have exact Reflection contracts,
-`JsonException` has JSON ownership and the canonical `Throwable` layout, and
-decode fallback preserves PHP object-handle order. Recursive debug projection
-from JSON callbacks is guarded without contaminating later calls. Every
-runnable supported upstream JSON case passes: **85 pass / 0 fail / 2 skip /
-1 unsupported**.
+The `phpunit-libxml-extension` checkpoint over `c8cbe909` honestly admits the
+shared CLI Libxml foundation. All eight PHP 8.5 globals have exact Reflection
+contracts, `LibXMLError` has the canonical typed public layout, and retained
+entity-loader callbacks survive replacement and run user destructors at
+request shutdown. The independently implemented state does not link to or
+expose a native libxml2 handle.
+
+The adjacent standard surface now includes `php://input`, SVG header
+introspection, every `IMAGETYPE_*` constant and both image-type mapping
+functions. The complete 32-case upstream `ext/libxml` packet is **6 pass /
+0 fail / 23 skip / 3 unsupported**: every currently runnable case passes;
+the skips remain visibly dependent on DOM or SimpleXML.
 
 The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip /
 99 unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
 variants, all-targets, Composer S0, unsafe/static and runner gates pass.
 Performance is deferred by user direction. See [exact evidence](compatibility.md).
 
-The staged PHPUnit startup surface now finds Ctype, Filter, JSON and Tokenizer.
-Next: implement the shared Libxml foundation required by DOM and XMLWriter,
-then complete DOM/XMLWriter and finally Mbstring. This remains
-dependency-ordered extension work, not a blanket PHPUnit or HTTP-SAPI
-compatibility claim.
+The staged PHPUnit startup surface now finds Ctype, Filter, JSON, Libxml and
+Tokenizer. Next: build DOM and XMLWriter on the admitted XML state, then
+complete Mbstring. This remains dependency-ordered extension work, not a
+blanket PHPUnit, XML-parser or HTTP-SAPI compatibility claim.
+
+### Preceding PHPUnit JSON foundation checkpoint
+
+The `phpunit-json-extension` checkpoint over `bb29963b` honestly admits the
+CLI JSON extension. All five PHP 8.5 globals have exact Reflection contracts,
+`JsonException` has JSON ownership and the canonical `Throwable` layout, and
+decode fallback preserves PHP object-handle order. Recursive debug projection
+from JSON callbacks is guarded without contaminating later calls. Every
+runnable supported upstream JSON case passes: **85 pass / 0 fail / 2 skip /
+1 unsupported**. See [exact evidence](compatibility.md).
 
 ### Preceding PHPUnit Filter foundation checkpoint
 

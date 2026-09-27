@@ -10814,6 +10814,8 @@ fn class_get_extension_name(
         "date"
     } else if lowered == "jsonexception" {
         "json"
+    } else if lowered == "libxmlerror" {
+        "libxml"
     } else if lowered == "phar" || lowered == "pharexception" {
         "Phar"
     } else if lowered == "phptoken" {

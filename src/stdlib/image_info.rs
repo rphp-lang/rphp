@@ -6,9 +6,12 @@ struct Header {
     width: u32,
     height: u32,
     kind: i64,
-    bits: u8,
+    bits: Option<u8>,
     channels: Option<u8>,
     mime: &'static str,
+    width_unit: String,
+    height_unit: String,
+    dimensions: bool,
 }
 enum Probe {
     More,
@@ -28,6 +31,180 @@ fn le32(b: &[u8]) -> u32 {
     u32::from_le_bytes(b[..4].try_into().unwrap())
 }
 
+fn svg_dimension(value: &[u8]) -> Option<(u32, String)> {
+    let digits = value
+        .iter()
+        .take_while(|byte| byte.is_ascii_digit())
+        .count();
+    if digits == 0 || !value[digits..].iter().all(u8::is_ascii_alphabetic) {
+        return None;
+    }
+    let number = value[..digits].iter().fold(0_u32, |number, byte| {
+        number.wrapping_mul(10).wrapping_add(u32::from(byte - b'0'))
+    });
+    let unit = if digits == value.len() {
+        "px".to_string()
+    } else {
+        String::from_utf8(value[digits..].to_vec()).ok()?
+    };
+    Some((number, unit))
+}
+
+fn xml_name_end(data: &[u8], mut offset: usize) -> usize {
+    while data.get(offset).is_some_and(|byte| {
+        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.' | b':')
+    }) {
+        offset += 1;
+    }
+    offset
+}
+
+fn skip_xml_markup(data: &[u8], mut offset: usize, terminator: &[u8]) -> Result<usize, Probe> {
+    while offset + terminator.len() <= data.len() {
+        if &data[offset..offset + terminator.len()] == terminator {
+            return Ok(offset + terminator.len());
+        }
+        offset += 1;
+    }
+    Err(Probe::More)
+}
+
+/// Recognize the SVG header contract exposed by PHP's image extension without
+/// constructing an XML document. The first root element and its quoted width
+/// and height attributes are sufficient; malformed or incomplete markup never
+/// publishes partial metadata.
+fn probe_svg(data: &[u8]) -> Probe {
+    let mut offset = usize::from(data.starts_with(b"\xef\xbb\xbf")) * 3;
+    loop {
+        while data.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+        let Some(rest) = data.get(offset..) else {
+            return Probe::More;
+        };
+        if rest.starts_with(b"<?") {
+            offset = match skip_xml_markup(data, offset + 2, b"?>") {
+                Ok(offset) => offset,
+                Err(probe) => return probe,
+            };
+            continue;
+        }
+        if rest.starts_with(b"<!--") {
+            offset = match skip_xml_markup(data, offset + 4, b"-->") {
+                Ok(offset) => offset,
+                Err(probe) => return probe,
+            };
+            continue;
+        }
+        break;
+    }
+
+    if data.get(offset) != Some(&b'<') {
+        return Probe::Unknown;
+    }
+    offset += 1;
+    let name_start = offset;
+    let name_end = xml_name_end(data, name_start);
+    if name_end == name_start {
+        return Probe::Unknown;
+    }
+    let name = &data[name_start..name_end];
+    let (prefix, local) = match name.iter().position(|byte| *byte == b':') {
+        Some(colon) if colon != 0 && colon + 1 < name.len() => {
+            (Some(&name[..colon]), &name[colon + 1..])
+        }
+        Some(_) => return Probe::Unknown,
+        None => (None, name),
+    };
+    if !local.eq_ignore_ascii_case(b"svg") {
+        return Probe::Unknown;
+    }
+
+    let mut width = None;
+    let mut height = None;
+    let mut namespace_matches = prefix.is_none();
+    offset = name_end;
+    loop {
+        while data.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+        match data.get(offset) {
+            Some(b'>') => break,
+            Some(b'/') if data.get(offset + 1) == Some(&b'>') => break,
+            None => return Probe::More,
+            _ => {}
+        }
+        let attribute_start = offset;
+        let attribute_end = xml_name_end(data, attribute_start);
+        if attribute_end == attribute_start {
+            return Probe::Unknown;
+        }
+        let attribute = &data[attribute_start..attribute_end];
+        offset = attribute_end;
+        while data.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+        if data.get(offset) != Some(&b'=') {
+            return Probe::Unknown;
+        }
+        offset += 1;
+        while data.get(offset).is_some_and(u8::is_ascii_whitespace) {
+            offset += 1;
+        }
+        let Some(&quote @ (b'\'' | b'"')) = data.get(offset) else {
+            return if offset == data.len() {
+                Probe::More
+            } else {
+                Probe::Unknown
+            };
+        };
+        offset += 1;
+        let value_start = offset;
+        while data.get(offset).is_some_and(|byte| *byte != quote) {
+            offset += 1;
+        }
+        if data.get(offset) != Some(&quote) {
+            return Probe::More;
+        }
+        let value = &data[value_start..offset];
+        offset += 1;
+
+        match attribute {
+            b"width" => width = svg_dimension(value),
+            b"height" => height = svg_dimension(value),
+            _ => {
+                if let Some(prefix) = prefix
+                    && attribute.starts_with(b"xmlns:")
+                    && &attribute[b"xmlns:".len()..] == prefix
+                {
+                    namespace_matches = value == b"http://www.w3.org/2000/svg";
+                }
+            }
+        }
+    }
+    let (Some((width, width_unit)), Some((height, height_unit))) = (width, height) else {
+        return Probe::Unknown;
+    };
+    if !namespace_matches {
+        return Probe::Unknown;
+    }
+    let dimensions = width_unit == "px" && height_unit == "px";
+    Probe::Found(
+        Header {
+            width,
+            height,
+            kind: 21,
+            bits: None,
+            channels: None,
+            mime: "image/svg+xml",
+            width_unit,
+            height_unit,
+            dimensions,
+        },
+        PhpArray::new(),
+    )
+}
+
 fn probe(data: &[u8]) -> Probe {
     if data.len() < 3 {
         return Probe::More;
@@ -38,9 +215,12 @@ fn probe(data: &[u8]) -> Probe {
                 width,
                 height,
                 kind,
-                bits,
+                bits: Some(bits),
                 channels,
                 mime,
+                width_unit: "px".to_string(),
+                height_unit: "px".to_string(),
+                dimensions: true,
             },
             PhpArray::new(),
         )
@@ -159,9 +339,12 @@ fn probe(data: &[u8]) -> Probe {
                         width: be16(&payload[3..]) as u32,
                         height: be16(&payload[1..]) as u32,
                         kind: 2,
-                        bits: payload[0],
+                        bits: Some(payload[0]),
                         channels: Some(payload[5]),
                         mime: "image/jpeg",
+                        width_unit: "px".to_string(),
+                        height_unit: "px".to_string(),
+                        dimensions: true,
                     },
                     info,
                 );
@@ -169,7 +352,7 @@ fn probe(data: &[u8]) -> Probe {
             offset = end;
         }
     }
-    Probe::Unknown
+    probe_svg(data)
 }
 
 fn output(header: Header) -> Value {
@@ -177,17 +360,21 @@ fn output(header: Header) -> Value {
     values.push(Value::long(header.width as i64));
     values.push(Value::long(header.height as i64));
     values.push(Value::long(header.kind));
-    values.push(Value::string(format!(
-        "width=\"{}\" height=\"{}\"",
-        header.width, header.height
-    )));
-    values.set_str("bits", Value::long(header.bits as i64));
+    if header.dimensions {
+        values.push(Value::string(format!(
+            "width=\"{}\" height=\"{}\"",
+            header.width, header.height
+        )));
+    }
+    if let Some(bits) = header.bits {
+        values.set_str("bits", Value::long(bits as i64));
+    }
     if let Some(channels) = header.channels {
         values.set_str("channels", Value::long(channels as i64));
     }
     values.set_str("mime", Value::string(header.mime));
-    values.set_str("width_unit", Value::string("px"));
-    values.set_str("height_unit", Value::string("px"));
+    values.set_str("width_unit", Value::string(header.width_unit));
+    values.set_str("height_unit", Value::string(header.height_unit));
     Value::array(values)
 }
 
@@ -329,6 +516,95 @@ fn from_string(
     inspect(ed, rv, eg, true)
 }
 
+fn image_type_extension(kind: i64) -> Option<&'static str> {
+    match kind {
+        1 => Some("gif"),
+        2 => Some("jpeg"),
+        3 => Some("png"),
+        4 | 13 => Some("swf"),
+        5 => Some("psd"),
+        6 | 15 => Some("bmp"),
+        7 | 8 => Some("tiff"),
+        9 => Some("jpc"),
+        10 => Some("jp2"),
+        11 => Some("jpx"),
+        12 => Some("jb2"),
+        14 => Some("iff"),
+        16 => Some("xbm"),
+        17 => Some("ico"),
+        18 => Some("webp"),
+        19 => Some("avif"),
+        20 => Some("heif"),
+        21 => Some("svg"),
+        _ => None,
+    }
+}
+
+fn image_type_to_extension(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(kind) =
+        typed_internal_int_argument(ed, eg, "image_type_to_extension", 0, "image_type")?
+    else {
+        return Ok(());
+    };
+    let include_dot = if arg_opt!(ed, 1).is_some() {
+        let Some(include_dot) =
+            typed_internal_bool_argument(ed, eg, "image_type_to_extension", 1, "include_dot")?
+        else {
+            return Ok(());
+        };
+        include_dot
+    } else {
+        true
+    };
+    let Some(extension) = image_type_extension(kind) else {
+        ret!(rv, Value::bool(false));
+    };
+    ret!(
+        rv,
+        Value::string(if include_dot {
+            format!(".{extension}")
+        } else {
+            extension.to_string()
+        })
+    );
+}
+
+fn image_type_to_mime_type(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(kind) =
+        typed_internal_int_argument(ed, eg, "image_type_to_mime_type", 0, "image_type")?
+    else {
+        return Ok(());
+    };
+    let mime = match kind {
+        1 => "image/gif",
+        2 => "image/jpeg",
+        3 => "image/png",
+        4 | 13 => "application/x-shockwave-flash",
+        5 => "image/psd",
+        6 => "image/bmp",
+        7 | 8 => "image/tiff",
+        10 => "image/jp2",
+        14 => "image/iff",
+        15 => "image/vnd.wap.wbmp",
+        16 => "image/xbm",
+        17 => "image/vnd.microsoft.icon",
+        18 => "image/webp",
+        19 => "image/avif",
+        20 => "image/heif",
+        21 => "image/svg+xml",
+        _ => "application/octet-stream",
+    };
+    ret!(rv, Value::string(mime));
+}
+
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
     for (name, parameter, handler) in [
         (
@@ -360,4 +636,43 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         );
         functions.push(function);
     }
+
+    let mut extension = Box::new(make_internal_function_ref(
+        image_type_to_extension,
+        2,
+        1,
+        0,
+        vec!["image_type".into(), "include_dot".into()],
+    ));
+    extension.common.sig.param_type_hints = vec![ParamTypeHint::Int, ParamTypeHint::Bool];
+    extension.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+        ParamTypeHint::String,
+        ParamTypeHint::ClassName("false".into()),
+    ]);
+    extension.handler_validates_types = true;
+    let pointer = &extension.common as *const FunctionCommon;
+    eg.register_function("image_type_to_extension", pointer)
+        .unwrap();
+    eg.register_internal_function_reflection_metadata(
+        pointer,
+        vec![None, Some(Value::bool(true))],
+        "standard",
+    );
+    functions.push(extension);
+
+    let mut mime = Box::new(make_internal_function_ref(
+        image_type_to_mime_type,
+        1,
+        1,
+        0,
+        vec!["image_type".into()],
+    ));
+    mime.common.sig.param_type_hints = vec![ParamTypeHint::Int];
+    mime.common.sig.return_type_hint = ParamTypeHint::String;
+    mime.handler_validates_types = true;
+    let pointer = &mime.common as *const FunctionCommon;
+    eg.register_function("image_type_to_mime_type", pointer)
+        .unwrap();
+    eg.register_internal_function_reflection_metadata(pointer, vec![None], "standard");
+    functions.push(mime);
 }
