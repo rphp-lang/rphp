@@ -125,3 +125,64 @@ Error: Cannot access protected property Base::$stack
 "#
     );
 }
+
+/// Non-public property accesses inside closures are cached per bound class
+/// scope: the same closure site rebound to another object or scope, shadowed
+/// privates, trait closures composed into several classes, nested closures
+/// and unbound/static closures all keep PHP's results and errors.
+#[test]
+fn closure_sites_cache_scoped_properties_per_bound_scope() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class A {
+    protected array $items = [];
+    private $secret = 'A-secret';
+    protected $count = 0;
+    public function reader(): Closure { return function () { return $this->secret . '/' . count($this->items) . '/' . $this->count; }; }
+    public function writer(): Closure { return function ($v) { $this->items[] = $v; $this->count++; $this->secret = "A:$v"; return $this->count; }; }
+    public function arrow(): Closure { return fn($x) => $this->count + $x + count($this->items); }
+    public function dump() { return json_encode([$this->items, $this->secret, $this->count]); }
+}
+class B extends A {
+    private $secret = 'B-secret';
+    public function bReader(): Closure { return function () { return $this->secret; }; }
+}
+$a = new A; $b = new B;
+$w = $a->writer(); for ($i = 0; $i < 5; $i++) { $w($i); }
+$r = $a->reader(); echo $r(), ' ', $r(), ' ', $a->dump(), "\n";
+$ar = $a->arrow(); echo $ar(1), $ar(2), "\n";
+// Same closure site rebound to another object and another scope
+$wb = Closure::bind($w, $b, A::class); for ($i = 0; $i < 3; $i++) { $wb("b$i"); }
+echo $b->dump(), ' ', $b->bReader()(), "\n";
+$rb = Closure::bind($r, $b, B::class); echo $rb(), "\n";   // B scope reads B::$secret
+$ra = Closure::bind($r, $b, A::class); echo $ra(), "\n";   // A scope reads A::$secret
+for ($i = 0; $i < 3; $i++) { echo $rb(), '|', $ra(), ' '; } echo "\n";
+try { $rn = Closure::bind($r, $b, null); echo $rn(), "\n"; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+$static = static function (A $obj) { return get_class($obj); }; echo $static($a), "\n";
+trait T { protected $tv = 1; public function tc(): Closure { return function () { $this->tv++; return $this->tv; }; } }
+class C { use T; } class D { use T; }
+$c = (new C)->tc(); $d = (new D)->tc(); echo $c(), $c(), $d(), $c(), "\n";
+class E { private array $log = []; public function run() { $f = function ($m) { $this->log[] = $m; return function () { return count($this->log); }; }; $g = $f('x'); $f('y'); return $g(); } }
+echo (new E)->run(), "\n";
+class F { protected int $n = 0; public function go() { $inc = function () { $this->n++; }; $inc(); $inc(); return $this->n; } }
+echo (new F)->go(), (new F)->go(), "\n";
+class G { public readonly int $ro; public function __construct() { $this->ro = 1; } public function bad() { return function () { $this->ro = 2; }; } }
+try { (new G)->bad()(); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#
+        ),
+        r#"A:4/5/5 A:4/5/5 [[0,1,2,3,4],"A:4",5]
+1112
+[["b0","b1","b2"],"A:b2",3] B-secret
+B-secret/3/3
+A:b2/3/3
+B-secret/3/3|A:b2/3/3 B-secret/3/3|A:b2/3/3 B-secret/3/3|A:b2/3/3 
+Error: Cannot access private property B::$secret
+A
+2324
+2
+22
+Error: Cannot modify readonly property G::$ro
+"#
+    );
+}

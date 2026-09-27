@@ -1873,8 +1873,17 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
             RUNTIME_NAME
                 || !cache.is_scoped_property()
                 || (!frame.is_null()
-                    && (*frame).func == cache.scope_function()
-                    && !(*frame).has_closure_scope()),
+                    && match cache.closure_scope_class() {
+                        Some(class_id) => {
+                            (*frame).has_closure_scope()
+                                && (*frame).tmp((*frame).num_temps - 1).as_long()
+                                    == Some(i64::from(class_id))
+                        }
+                        None => {
+                            (*frame).func == cache.scope_function()
+                                && !(*frame).has_closure_scope()
+                        }
+                    }),
         )
     };
     if cache.property_flags() & 1 == 0
@@ -2330,7 +2339,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
     if let Some(obj) = obj_val.as_object() {
 
         // ── Full resolution (cache miss or private/protected) ──
-        let (caller_class, scope_function) = caller_scope(frame, eg);
+        let (caller_class, scope_function, closure_scope) = caller_scope(frame, eg);
 
         // Private property early binding is only valid when the receiver
         // is in the same inheritance hierarchy as the caller.  When
@@ -2552,7 +2561,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             && !force_dynamic
             && obj.class_id != 0
             && opline.op2_type == OpType::Const
-            && !scope_function.is_null()
+            && (!scope_function.is_null() || closure_scope != 0)
         {
             // A private/protected declared property read from a scope that is
             // fixed by the executing function. The slot and the visibility
@@ -2576,7 +2585,13 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 });
                 let ic_mut = op_array.inline_cache_mut(ip);
                 ic_mut.set_property(obj.class_id, slot, if writable { 3 } else { 1 });
-                ic_mut.set_scope_function(scope_function);
+                if scope_function.is_null() {
+                    // A closure site: the proof holds for this bound class
+                    // scope only, which the hit path re-reads from the frame.
+                    ic_mut.set_closure_scope_class(closure_scope);
+                } else {
+                    ic_mut.set_scope_function(scope_function);
+                }
                 memoize_property_cache(eg, op_array, ip, obj.class_id);
             }
         }
@@ -5210,7 +5225,7 @@ fn op_assign_obj_prop_inner<'a>(
         return Ok(ColdResult::Done);
     }
     if let Some(php_obj) = obj.as_object_mut() {
-        let (caller_class, scope_function) = caller_scope(frame, eg);
+        let (caller_class, scope_function, closure_scope) = caller_scope(frame, eg);
         let object_display_class_name = std::rc::Rc::<str>::from(displayed_class_name(
             eg,
             php_obj.class_name.as_ref(),
@@ -5871,7 +5886,7 @@ fn op_assign_obj_prop_inner<'a>(
             && property_accessible
             && !force_dynamic
             && opline.op2_type == OpType::Const
-            && !scope_function.is_null();
+            && (!scope_function.is_null() || closure_scope != 0);
         if ((prop_is_public && key == name) || scoped_write)
             && prop_is_writable
             && object_class_id != 0
@@ -5892,15 +5907,24 @@ fn op_assign_obj_prop_inner<'a>(
                     ip,
                 )
             };
-            if let Some(slot) = declared_slot {
-                if let Some(definition) = eg.instance_property_definition(object_class_id, slot)
-                    && definition.is_typed()
-                {
+            let closure_site = scoped_write && scope_function.is_null();
+            let typed_definition = declared_slot.and_then(|slot| {
+                eg.instance_property_definition(object_class_id, slot)
+                    .filter(|definition| definition.is_typed())
+            });
+            // A typed entry keeps its declaration in `func`, so a closure site
+            // (which needs `func` for its bound scope) caches untyped writes only.
+            if let Some(slot) = declared_slot
+                && !(closure_site && typed_definition.is_some())
+            {
+                if let Some(definition) = typed_definition {
                     ic_mut.set_typed_instance_property(definition, object_class_id, slot);
                 } else {
                     ic_mut.set_property(object_class_id, slot, 3);
                 }
-                if scoped_write {
+                if closure_site {
+                    ic_mut.set_closure_scope_class(closure_scope);
+                } else if scoped_write {
                     ic_mut.mark_scoped_property();
                 }
                 if opline.op2_type == OpType::Const {

@@ -928,6 +928,27 @@ impl InlineCache {
         self.func = func;
     }
 
+    /// Entries proved for a closure's bound class scope keep that class id in
+    /// `func`, tagged odd so it can never be mistaken for a function, string or
+    /// declaration pointer. Such entries are never typed (`flags != 2`), so
+    /// the typed-declaration tag bits cannot collide with this tag.
+    const CLOSURE_SCOPE_TAG: usize = 1;
+
+    #[inline]
+    pub fn set_closure_scope_class(&mut self, class_id: u32) {
+        debug_assert_ne!(self.property_flags(), 2);
+        self.mark_scoped_property();
+        self.func = (((class_id as usize) << 3) | Self::CLOSURE_SCOPE_TAG) as *const FunctionCommon;
+    }
+
+    /// The bound class scope a closure-proved entry requires, if any.
+    #[inline(always)]
+    pub fn closure_scope_class(&self) -> Option<u32> {
+        let raw = self.func as usize;
+        (self.property_flags() != 2 && raw & 0b111 == Self::CLOSURE_SCOPE_TAG)
+            .then(|| (raw >> 3) as u32)
+    }
+
     #[inline(always)]
     pub fn set_declared_property_name(&mut self, name: *const String) {
         debug_assert_ne!(self.class_id, 0);
