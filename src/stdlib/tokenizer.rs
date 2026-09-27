@@ -1576,18 +1576,30 @@ fn text_value(bytes: &[u8]) -> Value {
 
 /// Token texts of one tokenization. Single-byte spellings (punctuation, one
 /// space, one newline) dominate real sources; they share one string each.
-struct TextValues {
+/// Short repeated spellings (keywords, variable names, indentation runs)
+/// share one string per tokenization as well: PHP strings are values, so
+/// sharing the allocation is unobservable, and building a string value
+/// costs several times a table probe.
+struct TextValues<'a> {
     single: Vec<Option<Value>>,
+    interned: std::collections::HashMap<
+        &'a [u8],
+        Value,
+        std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>,
+    >,
 }
 
-impl TextValues {
+impl<'a> TextValues<'a> {
+    const INTERN_LIMIT: usize = 48;
+
     fn new() -> Self {
         Self {
             single: vec![None; 256],
+            interned: Default::default(),
         }
     }
 
-    fn value(&mut self, bytes: &[u8]) -> Value {
+    fn value(&mut self, bytes: &'a [u8]) -> Value {
         if let [byte] = bytes {
             let slot = &mut self.single[usize::from(*byte)];
             if let Some(value) = slot {
@@ -1596,6 +1608,13 @@ impl TextValues {
             let value = text_value(bytes);
             *slot = Some(value.clone());
             return value;
+        }
+        if bytes.len() <= Self::INTERN_LIMIT {
+            return self
+                .interned
+                .entry(bytes)
+                .or_insert_with(|| text_value(bytes))
+                .clone();
         }
         text_value(bytes)
     }

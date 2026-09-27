@@ -90,14 +90,21 @@ impl CycleGraph {
     }
 
     fn expand_value_edges(&mut self, eg: &ExecutorGlobals) {
+        // One child buffer serves every node; a fresh vector per node was a
+        // million allocations on a request-final graph. Handles are visited
+        // by reference so no snapshot clone is dropped mid-walk, which would
+        // register cycle candidates.
+        let mut children = Vec::new();
         let mut position = 0;
         while position < self.nodes.len() {
             let source = self.nodes[position].identity;
-            let mut children = self.nodes[position].value.cycle_child_handles();
+            self.nodes[position]
+                .value
+                .for_each_cycle_child_handle(|child| children.push(child));
             if self.nodes[position].kind == CycleNodeKind::Object {
                 children.extend(eg.fiber_cycle_children(source));
             }
-            for child in children {
+            for child in children.drain(..) {
                 let Some((target, _)) = child.cycle_node() else {
                     continue;
                 };
@@ -178,11 +185,17 @@ impl CycleGraph {
             }
         }
 
-        self.nodes
-            .iter()
-            .zip(live)
-            .filter_map(|(node, live)| live.then_some(node.identity))
-            .collect()
+        // Size the set once; growing it by rehash on a request-final graph
+        // with a million nodes cost more than the reachability pass itself.
+        let live_count = live.iter().filter(|live| **live).count();
+        let mut identities = IdentitySet::with_capacity_and_hasher(live_count, Default::default());
+        identities.extend(
+            self.nodes
+                .iter()
+                .zip(live)
+                .filter_map(|(node, live)| live.then_some(node.identity)),
+        );
+        identities
     }
 
     /// Identify the cyclic part separately from its acyclic descendants.
