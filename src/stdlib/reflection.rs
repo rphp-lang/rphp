@@ -694,7 +694,7 @@ fn report_deferred_attribute_warning(
     if !handled && eg.error_reporting & 2 != 0 {
         eg.write_output(
             format!("\nWarning: {message} in {source_file} on line {line}\n").as_bytes(),
-        );
+        )?;
     }
     Ok(())
 }
@@ -1738,7 +1738,7 @@ fn emit_deprecated_symbol_diagnostic(
                 use_site.file, use_site.line
             )
             .as_bytes(),
-        );
+        )?;
     }
     Ok(())
 }
@@ -1818,7 +1818,7 @@ pub(crate) fn report_deprecated_global_constant_use(
                         use_site.file, use_site.line
                     )
                     .as_bytes(),
-                );
+                )?;
             }
             Ok(())
         });

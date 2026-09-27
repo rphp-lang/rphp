@@ -1216,7 +1216,7 @@ pub(super) fn write_stream_bytes(
     match native {
         Some(Some(result)) => Ok(Some(result)),
         Some(None) => {
-            eg.write_output(bytes);
+            eg.write_output(bytes)?;
             Ok(Some(Ok(bytes.len())))
         }
         None => {

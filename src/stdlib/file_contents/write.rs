@@ -167,7 +167,7 @@ pub(in crate::stdlib) fn fn_file_put_contents(
         if !converted {
             return return_value(return_pointer, Value::bool(false));
         }
-        eg.write_output(&bytes);
+        eg.write_output(&bytes)?;
         return return_value(
             return_pointer,
             i64::try_from(bytes.len()).map_or_else(|_| Value::bool(false), Value::long),

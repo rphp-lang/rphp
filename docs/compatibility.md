@@ -28242,14 +28242,16 @@ runs in 1.23 ms per file (PHP 0.30 ms, from 2.47 ms at the start of the
 day).
 
 Note on the gate itself: `ff253d2b` (PHPUnit process control) made
-`proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
-does and spawns worker processes over TCP sockets (react/socket). That path
-needs `inet_pton()`, `stream_socket_server()`, `stream_select()` and friends,
-which RPHP does not have yet, and the run ends with "Call to undefined
-function inet_pton()". Until the socket surface exists, the gate is run with
-`-d disable_functions=proc_open` on both PHP and RPHP; PHP's in-process
-output is byte-identical to its parallel output for this fixture, and RPHP
-matches it cold and warm.
+`proc_open()` exist, so PHPStan began selecting its parallel TCP worker path;
+the later process-control surface also made Symfony Console detect
+`pcntl_signal()`. The stable in-process gate is therefore run with
+`-d disable_functions=proc_open,pcntl_signal` on both PHP and RPHP. The signal
+constants remain available, and the PHP reference output is unchanged. PHP's
+in-process output is byte-identical to its parallel output for this fixture,
+and RPHP matches it cold and warm. This gate does not independently admit
+PHPStan's parallel worker lifecycle. A request-output write whose consumer has
+closed stdout now terminates silently with status 255 and still runs shutdown
+callbacks instead of exposing a Rust broken-pipe panic.
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

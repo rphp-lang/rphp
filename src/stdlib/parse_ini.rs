@@ -318,13 +318,13 @@ pub(super) fn fn_parse_ini_string(
     let source = super::owned_argument(execute_data, 0).echo_to_string();
     let process_sections =
         optional_argument(execute_data, 1).is_some_and(|value| value.is_truthy());
-    let Some(mode) = scanner_mode(execute_data, eg) else {
+    let Some(mode) = scanner_mode(execute_data, eg)? else {
         return return_value_with(return_value, Value::bool(false));
     };
     match parse_ini(&source, process_sections, mode) {
         Ok(array) => return_value_with(return_value, Value::array(array)),
         Err(error) => {
-            syntax_warning(eg, execute_data, "Unknown", &error);
+            syntax_warning(eg, execute_data, "Unknown", &error)?;
             return_value_with(return_value, Value::bool(false))
         }
     }
@@ -338,7 +338,7 @@ pub(super) fn fn_parse_ini_file(
     let filename = super::owned_argument(execute_data, 0).echo_to_string();
     let process_sections =
         optional_argument(execute_data, 1).is_some_and(|value| value.is_truthy());
-    let Some(mode) = scanner_mode(execute_data, eg) else {
+    let Some(mode) = scanner_mode(execute_data, eg)? else {
         return return_value_with(return_value, Value::bool(false));
     };
     let bytes = match std::fs::read(&filename) {
@@ -349,13 +349,16 @@ pub(super) fn fn_parse_ini_file(
     match parse_ini(&source, process_sections, mode) {
         Ok(array) => return_value_with(return_value, Value::array(array)),
         Err(error) => {
-            syntax_warning(eg, execute_data, &filename, &error);
+            syntax_warning(eg, execute_data, &filename, &error)?;
             return_value_with(return_value, Value::bool(false))
         }
     }
 }
 
-fn scanner_mode(execute_data: *mut ExecuteData, eg: &mut ExecutorGlobals) -> Option<i64> {
+fn scanner_mode(
+    execute_data: *mut ExecuteData,
+    eg: &mut ExecutorGlobals,
+) -> Result<Option<i64>, VmError> {
     let mode = optional_argument(execute_data, 2)
         .and_then(|value| value.as_long())
         .unwrap_or(INI_SCANNER_NORMAL);
@@ -363,13 +366,13 @@ fn scanner_mode(execute_data: *mut ExecuteData, eg: &mut ExecutorGlobals) -> Opt
         mode,
         INI_SCANNER_NORMAL | INI_SCANNER_RAW | INI_SCANNER_TYPED
     ) {
-        Some(mode)
+        Ok(Some(mode))
     } else {
         let (file, line) = caller_location(execute_data);
         eg.write_output(
             format!("Warning: Invalid scanner mode in {file} on line {line}\n").as_bytes(),
-        );
-        None
+        )?;
+        Ok(None)
     }
 }
 
@@ -806,7 +809,7 @@ fn syntax_warning(
     execute_data: *mut ExecuteData,
     input: &str,
     error: &ParseError,
-) {
+) -> Result<(), VmError> {
     let (caller_file, caller_line) = caller_location(execute_data);
     eg.write_output(
         format!(
@@ -814,7 +817,7 @@ fn syntax_warning(
             error.message, input, error.line, caller_file, caller_line
         )
         .as_bytes(),
-    );
+    )
 }
 
 fn caller_location(execute_data: *mut ExecuteData) -> (String, u32) {

@@ -1490,7 +1490,7 @@ pub(crate) fn fn_date_sub(
         let message = "date_sub(): Only non-special relative time specifications are supported for subtraction";
         let (file, line) = super::internal_call_source(ed);
         if !super::dispatch_php_error(eg, ed, 2, message, &file, line)? {
-            eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes());
+            eg.write_output(format!("\nWarning: {message} in {file} on line {line}\n").as_bytes())?;
         }
         ret!(rv, receiver);
     }

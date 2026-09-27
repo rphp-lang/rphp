@@ -510,7 +510,7 @@ pub(super) fn fn_file_put_contents(
     if let Some(target) = path.strip_prefix("php://") {
         let written = match target {
             "output" => {
-                eg.write_output(&raw_bytes);
+                eg.write_output(&raw_bytes)?;
                 Ok(())
             }
             "stdout" => std::io::stdout().lock().write_all(&raw_bytes),

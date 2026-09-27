@@ -93,7 +93,7 @@ pub(super) fn fn_fpassthru(
                 if eg.exception.is_some() {
                     return Ok(());
                 }
-                eg.write_output(&bytes[..count]);
+                eg.write_output(&bytes[..count])?;
                 total += count;
                 if eg.exception.is_some() {
                     return Ok(());

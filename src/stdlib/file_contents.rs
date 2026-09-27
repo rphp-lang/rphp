@@ -342,7 +342,7 @@ pub(super) fn fn_readfile(
             if read == 0 {
                 break;
             }
-            eg.write_output(&bytes[..read]);
+            eg.write_output(&bytes[..read])?;
             count += read as i64;
         }
         return_value(rv, Value::long(count))

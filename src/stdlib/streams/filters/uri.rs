@@ -261,7 +261,7 @@ fn consume_opened(
         }
         count += chunk.len();
         if output {
-            eg.write_output(&chunk);
+            eg.write_output(&chunk)?;
             if eg.exception.is_some() {
                 return Ok(None);
             }

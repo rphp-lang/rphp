@@ -12243,7 +12243,7 @@ impl ExecutorGlobals {
         }
     }
 
-    pub fn write_output(&self, data: &[u8]) {
+    pub fn write_output(&self, data: &[u8]) -> Result<(), crate::vm::execute::VmError> {
         if let Some(buffer) = self
             .output_buffers
             .borrow_mut()
@@ -12260,7 +12260,7 @@ impl ExecutorGlobals {
                 );
             }
             buffer.data.extend_from_slice(data);
-            return;
+            return Ok(());
         }
         if let Some((output, allocation)) = self.post_fatal_output.borrow_mut().as_mut() {
             let needed = output.len().saturating_add(data.len());
@@ -12268,12 +12268,15 @@ impl ExecutorGlobals {
                 allocation.grow_to(needed.max(output.capacity().saturating_mul(2)).max(8));
             }
             output.extend_from_slice(data);
-            return;
+            return Ok(());
         }
         if !data.is_empty() && !self.headers_sent.get() {
             self.record_first_output();
         }
-        self.output.borrow_mut().write_all(data).unwrap();
+        self.output
+            .borrow_mut()
+            .write_all(data)
+            .map_err(|_| crate::vm::execute::VmError::Exit(255))
     }
 
     pub(crate) fn begin_post_fatal_output(&self) {
@@ -12295,7 +12298,7 @@ impl ExecutorGlobals {
             self.record_first_output();
         }
         let mut sink = self.output.borrow_mut();
-        sink.write_all(&output).unwrap();
+        let _ = sink.write_all(&output);
         let _ = sink.flush();
     }
 

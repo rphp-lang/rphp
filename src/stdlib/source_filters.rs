@@ -1203,9 +1203,9 @@ pub(super) fn fn_highlight_string(
         ret!(rv, Value::string(highlighted));
     }
     if legacy_bytes {
-        eg.write_output(&super::php_string_to_bytes(&highlighted));
+        eg.write_output(&super::php_string_to_bytes(&highlighted))?;
     } else {
-        eg.write_output(highlighted.as_bytes());
+        eg.write_output(highlighted.as_bytes())?;
     }
     ret!(rv, Value::bool(true));
 }
@@ -1265,9 +1265,9 @@ fn highlight_file(
         ret!(rv, Value::string(highlighted));
     }
     if legacy_bytes {
-        eg.write_output(&super::php_string_to_bytes(&highlighted));
+        eg.write_output(&super::php_string_to_bytes(&highlighted))?;
     } else {
-        eg.write_output(highlighted.as_bytes());
+        eg.write_output(highlighted.as_bytes())?;
     }
     ret!(rv, Value::bool(true));
 }

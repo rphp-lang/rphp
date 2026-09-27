@@ -305,7 +305,7 @@ fn globals_nested_19() {
 }
 
 #[test]
-fn list__strlen__20() {
+fn uppercase_disabled_function_name_is_not_removed_20() {
     assert_cli(
         &["disable_functions=STRLEN"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -315,7 +315,7 @@ fn list__strlen__20() {
 }
 
 #[test]
-fn list__strlen__21() {
+fn lowercase_disabled_function_name_is_removed_21() {
     assert_cli(
         &["disable_functions=strlen"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -325,7 +325,7 @@ fn list__strlen__21() {
 }
 
 #[test]
-fn list___strlen___count___22() {
+fn disabled_function_list_preserves_outer_spaces_22() {
     assert_cli(
         &["disable_functions= strlen , COUNT "],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -335,7 +335,7 @@ fn list___strlen___count___22() {
 }
 
 #[test]
-fn list__strlen_count__23() {
+fn disabled_function_list_accepts_space_separator_23() {
     assert_cli(
         &["disable_functions=strlen count"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -345,7 +345,7 @@ fn list__strlen_count__23() {
 }
 
 #[test]
-fn list__strlen_tcount__24() {
+fn disabled_function_list_does_not_accept_tab_separator_24() {
     assert_cli(
         &["disable_functions=strlen\tcount"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -355,7 +355,7 @@ fn list__strlen_tcount__24() {
 }
 
 #[test]
-fn list____strlen__25() {
+fn disabled_function_list_does_not_strip_namespace_separator_25() {
     assert_cli(
         &["disable_functions=\\strlen"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -365,7 +365,7 @@ fn list____strlen__25() {
 }
 
 #[test]
-fn list__strlen__count__26() {
+fn disabled_function_list_ignores_empty_comma_item_26() {
     assert_cli(
         &["disable_functions=strlen,,count"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -375,7 +375,7 @@ fn list__strlen__count__26() {
 }
 
 #[test]
-fn list__exit_die_exit__27() {
+fn disabled_function_list_reports_repeated_exit_aliases_27() {
     assert_cli(
         &["disable_functions=exit,die,exit"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -385,7 +385,7 @@ fn list__exit_die_exit__27() {
 }
 
 #[test]
-fn list__exit_die__28() {
+fn uppercase_exit_aliases_are_not_disabled_28() {
     assert_cli(
         &["disable_functions=EXIT,Die"],
         r###"var_dump(ini_get('disable_functions'),function_exists('strlen'),function_exists('count'));"###,
@@ -395,7 +395,7 @@ fn list__exit_die__28() {
 }
 
 #[test]
-fn assert__1_29() {
+fn disabled_assert_with_negative_zend_assertions_29() {
     assert_cli(
         &["disable_functions=assert", "zend.assertions=-1"],
         r###"try{assert(echo_arg());}catch(Throwable $e){echo get_class($e),':',$e->getMessage(),'|';}function echo_arg(){echo 'arg|';return false;}"###,
@@ -455,7 +455,7 @@ fn case_name_34() {
 }
 
 #[test]
-fn order__g__35() {
+fn variables_order_global_only_35() {
     assert_cli(
         &["variables_order=G"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -465,7 +465,7 @@ fn order__g__35() {
 }
 
 #[test]
-fn order__e__36() {
+fn variables_order_environment_only_36() {
     assert_cli(
         &["variables_order=e"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -475,7 +475,7 @@ fn order__e__36() {
 }
 
 #[test]
-fn order__s__37() {
+fn variables_order_server_only_37() {
     assert_cli(
         &["variables_order=s"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -485,7 +485,7 @@ fn order__s__37() {
 }
 
 #[test]
-fn order__gp__38() {
+fn variables_order_get_and_post_only_38() {
     assert_cli(
         &["variables_order=GP"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -495,7 +495,7 @@ fn order__gp__38() {
 }
 
 #[test]
-fn order_____39() {
+fn variables_order_space_is_empty_selection_39() {
     assert_cli(
         &["variables_order= "],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -505,7 +505,7 @@ fn order_____39() {
 }
 
 #[test]
-fn order__off__40() {
+fn variables_order_off_uses_default_40() {
     assert_cli(
         &["variables_order=off"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -515,7 +515,7 @@ fn order__off__40() {
 }
 
 #[test]
-fn order__false__41() {
+fn variables_order_false_uses_default_41() {
     assert_cli(
         &["variables_order=false"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -525,7 +525,7 @@ fn order__false__41() {
 }
 
 #[test]
-fn order__none__42() {
+fn variables_order_none_uses_default_42() {
     assert_cli(
         &["variables_order=none"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -535,7 +535,7 @@ fn order__none__42() {
 }
 
 #[test]
-fn order__0__43() {
+fn variables_order_zero_is_empty_selection_43() {
     assert_cli(
         &["variables_order=0"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -545,7 +545,7 @@ fn order__0__43() {
 }
 
 #[test]
-fn order__1__44() {
+fn variables_order_one_is_empty_selection_44() {
     assert_cli(
         &["variables_order=1"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,
@@ -555,7 +555,7 @@ fn order__1__44() {
 }
 
 #[test]
-fn order__pse__45() {
+fn variables_order_is_case_insensitive_45() {
     assert_cli(
         &["variables_order=pSe"],
         r###"echo ini_get('variables_order'),'|';echo (int)isset($_ENV['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['RPHP_STARTUP_ORACLE']),'|',(int)isset($_SERVER['PHP_SELF']),'|',count($_SERVER)?'some':'empty';"###,

@@ -1329,7 +1329,7 @@ pub(crate) fn shutdown_open_streams(eg: &mut ExecutorGlobals) -> Result<(), VmEr
                 // PHP continues request resource teardown after a bailout from
                 // one user wrapper's close callback. Preserve each fatal in
                 // order while still giving every remaining wrapper one close.
-                eg.write_output(format!("\nFatal error: {message}\n").as_bytes());
+                eg.write_output(format!("\nFatal error: {message}\n").as_bytes())?;
             }
             Err(error) => return Err(error),
         }

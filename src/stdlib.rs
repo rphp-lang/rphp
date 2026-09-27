@@ -870,7 +870,7 @@ fn fn_assert(
         eg.write_output(
             format!("\nWarning: assert(): {description} failed in {file} on line {line}\n")
                 .as_bytes(),
-        );
+        )?;
     }
 
     if eg.assertion_state.bail {
@@ -883,7 +883,7 @@ fn fn_assert(
             } else {
                 crate::vm::execute::format_uncaught_throwable(eg, &exception)
             };
-            eg.write_output(format!("\nWarning: {rendered}\n").as_bytes());
+            eg.write_output(format!("\nWarning: {rendered}\n").as_bytes())?;
         }
         return Err(VmError::Exit(255));
     }
@@ -11598,8 +11598,8 @@ impl SprintfOutput {
         }
     }
 
-    fn write_to(&self, eg: &ExecutorGlobals) {
-        eg.write_output(self.bytes());
+    fn write_to(&self, eg: &ExecutorGlobals) -> Result<(), VmError> {
+        eg.write_output(self.bytes())
     }
 
     fn bytes(&self) -> &[u8] {
@@ -11741,7 +11741,7 @@ fn fn_printf(
         return Ok(());
     };
     let length = result.len() as i64;
-    result.write_to(eg);
+    result.write_to(eg)?;
     ret!(rv, Value::long(length));
 }
 
@@ -11762,7 +11762,7 @@ fn fn_vprintf(
         return Ok(());
     };
     let length = result.len() as i64;
-    result.write_to(eg);
+    result.write_to(eg)?;
     ret!(rv, Value::long(length));
 }
 
@@ -15886,13 +15886,13 @@ fn fn_var_dump(
         .map(|arguments| arguments.values().cloned().collect::<Vec<_>>())
         .unwrap_or_default();
     let first = var_dump_output_value(&first_value, eg, ed)?;
-    eg.write_output(first.as_bytes());
+    eg.write_output(first.as_bytes())?;
     if eg.exception.is_some() {
         return Ok(());
     }
     for value in remaining {
         let output = var_dump_output_value(&value, eg, ed)?;
-        eg.write_output(output.as_bytes());
+        eg.write_output(output.as_bytes())?;
         if eg.exception.is_some() {
             return Ok(());
         }
@@ -15917,14 +15917,14 @@ fn fn_debug_zval_dump(
     if eg.exception.is_some() {
         return Ok(());
     }
-    eg.write_output(first.as_bytes());
+    eg.write_output(first.as_bytes())?;
     if let Some(remaining) = arg!(ed, 1).as_array() {
         for value in remaining.values() {
             let output = debug_zval_dump_value(value, eg, ed)?;
             if eg.exception.is_some() {
                 return Ok(());
             }
-            eg.write_output(output.as_bytes());
+            eg.write_output(output.as_bytes())?;
         }
     }
     Ok(())
@@ -15944,7 +15944,7 @@ fn fn_print_r(
     if arg_opt!(ed, 1).is_some_and(Value::is_truthy) {
         ret!(rv, php_byte_result(output, false));
     }
-    eg.write_output(&output);
+    eg.write_output(&output)?;
     ret!(rv, Value::bool(true));
 }
 
@@ -15981,7 +15981,7 @@ fn fn_var_export(
     if return_str {
         ret!(rv, php_byte_result(output.into_bytes(), false));
     } else {
-        eg.write_output(output.as_bytes());
+        eg.write_output(output.as_bytes())?;
         ret!(rv, Value::null());
     }
 }
@@ -17678,13 +17678,13 @@ pub(crate) fn flush_ready_output_buffers(
         if eg.exception.is_some() {
             buffer.disabled = true;
             eg.restore_output_buffer(buffer);
-            eg.write_output(&output);
+            eg.write_output(&output)?;
             return Ok(());
         }
 
         // First let a parent threshold consume this transformed chunk, then
         // restore the emptied child at its original nesting level.
-        eg.write_output(&output);
+        eg.write_output(&output)?;
         flush_ready_output_buffers(eg, caller)?;
         eg.restore_output_buffer(buffer);
     }
@@ -17697,7 +17697,7 @@ pub(crate) fn write_php_output(
     data: &[u8],
     caller: Option<*mut ExecuteData>,
 ) -> Result<(), VmError> {
-    eg.write_output(data);
+    eg.write_output(data)?;
     // Callback output cannot synchronously re-enter a running output handler.
     // In particular, a final exception callback may append to the observable
     // failed buffer beyond its original chunk threshold.
@@ -17959,7 +17959,7 @@ fn apply_output_buffer_operation(
     match transformed {
         Ok(output) => {
             if phase & OUTPUT_HANDLER_CLEAN == 0 {
-                eg.write_output(&output);
+                eg.write_output(&output)?;
             }
             if !remove {
                 eg.restore_output_buffer(buffer);
@@ -18056,7 +18056,7 @@ pub(crate) fn flush_all_output_buffers(eg: &mut ExecutorGlobals) -> Result<(), V
                 return Err(error);
             }
         };
-        eg.write_output(&output);
+        eg.write_output(&output)?;
         if let Err(error) = destructor_result {
             eg.flush_output();
             return Err(error);
@@ -19013,7 +19013,7 @@ fn fn_debug_print_backtrace(
         exception_string_param_max_len(eg),
         eg,
     );
-    eg.write_output(output.as_bytes());
+    eg.write_output(output.as_bytes())?;
     ret!(rv, Value::null());
 }
 
@@ -20427,7 +20427,7 @@ fn check_debug_projection_exception(
     if let Some(exception) = eg.exception.take() {
         // Report the thrown exception before the non-catchable engine fatal.
         let rendered = crate::vm::execute::format_uncaught_throwable(eg, &exception);
-        eg.write_output(format!("\nWarning: {rendered}\n").as_bytes());
+        eg.write_output(format!("\nWarning: {rendered}\n").as_bytes())?;
         let (file, line) = internal_call_source(ed);
         return Err(VmError::Fatal(format!(
             "__debuginfo() must return an array in {file} on line {line}"
@@ -27276,7 +27276,7 @@ fn source_unpack_argument(
                 source_file,
             )
             .as_bytes(),
-        );
+        )?;
         value.dereferenced().clone()
     } else if value.is_owned_reference() {
         value.clone_owned_reference_alias()

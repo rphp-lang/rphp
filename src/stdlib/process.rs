@@ -1034,7 +1034,7 @@ pub(super) fn fn_system(
             ret!(rv, Value::bool(false));
         }
     };
-    eg.write_output(&output.stdout);
+    eg.write_output(&output.stdout)?;
     if arg_opt!(ed, 1).is_some() {
         arg_mut!(ed, 1, Value::long(exit_code(output.status)));
     }

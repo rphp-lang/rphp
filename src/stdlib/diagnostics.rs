@@ -350,7 +350,7 @@ pub(crate) fn publish_with_context(
     };
     if caller.is_none() {
         // Startup compilation has no active PHP call or output callback.
-        eg.write_output(&diagnostic);
+        eg.write_output(&diagnostic)?;
         Ok(())
     } else {
         super::write_php_output(eg, &diagnostic, caller)
