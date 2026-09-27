@@ -853,7 +853,7 @@ pub(crate) fn with_ascii_lowercase<R>(name: &str, lookup: impl FnOnce(&str) -> R
 
 /// Named variadic arguments waiting for their call frame, keyed by call
 /// identity. Every full call probes this table, so it uses the symbol hasher.
-pub(crate) type PendingNamedVariadic =
+pub type PendingNamedVariadic =
     HashMap<usize, Vec<(String, crate::value::Value)>, std::hash::BuildHasherDefault<SymbolHasher>>;
 
 /// Multiply-rotate hasher for the symbol tables. SipHash dominated class and

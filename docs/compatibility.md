@@ -27947,6 +27947,38 @@ constant-memo contract (namespaced fallback, `define()` after a failed
 lookup, `defined()`/`constant()`), reference-`foreach` copies and weak
 references alive at shutdown, all verified against reference PHP.
 
+The `cursor-index` checkpoint fixes the reference-`foreach` cursor registry
+itself: array copies and releases iterated every live cursor, and the
+"has a cursor" flag spread to every copy-on-write descendant of an iterated
+array forever, so long-lived configuration arrays paid a registry scan on
+each copy and release. The registry keeps a reverse index from array
+identity to interested cursors, so a flagged array with no cursor costs one
+lookup, and copies nobody iterates drop the flag. `tests/e2e_scoped_property_reads.rs`
+covers copies made while a cursor is live, splices of iterated arrays and
+their remembered copies, and generator cursors across suspensions. Cold
+PHPStan callgrind: 42.4 G to 37.7 G instructions.
+
+The `frontend-v2` checkpoint trims the compile front end, measured on
+`phpstan.phar --version` (8.39 G to 7.80 G instructions): include origins
+are resolved by pointer arithmetic instead of a scan of the op array; the
+quick-loop kill switch is read from the environment once per process instead
+of per compiled function; rejected constant expressions render only a prefix
+of their Debug form (whole subtrees were formatted into messages nobody
+reads); plain ASCII runs of string literals are copied in one step; the
+method-variance dependency pass first checks without allocating whether a
+contract mentions any unknown class; unit constants are shared with child
+compilers copy-on-write; declared method facts are inherited parents-first
+rather than by cloning the fact table per fixed-point round and hash with the
+symbol hasher; the parser strips doc comments in place and no longer clones
+tokens that the unary, postfix, primary-atom and statement parsers only
+inspect by kind; logical line breaks are counted with vectorizable byte
+counts in both directions from the line cache; case-folded class lookups use
+a stack buffer; and `current()`/`next()`/`key()` index the dense entry
+storage directly instead of walking the array from its start on every call
+(`tests/e2e_array_cursor_reads.rs`, verified against reference PHP for every
+storage layout). Full calls also skip the SipHash probes of the empty pending
+named-argument and closure-capture tables.
+
 Note on the gate itself: `ff253d2b` (PHPUnit process control) made
 `proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
 does and spawns worker processes over TCP sockets (react/socket). That path

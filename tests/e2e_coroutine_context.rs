@@ -9,7 +9,6 @@
 //! Milestone three will reconsider promotion together with the first
 //! structured parent/child caller instead of linking unused runtime code.
 
-use std::collections::HashMap;
 use std::marker::PhantomPinned;
 use std::pin::Pin;
 use std::ptr::NonNull;
@@ -92,7 +91,7 @@ struct CoroutineExecutionState {
     stacks: Option<CoroutineStacks>,
     current_execute_data: *mut ExecuteData,
     exception: Option<Value>,
-    pending_named_variadic: HashMap<usize, Vec<(String, Value)>>,
+    pending_named_variadic: rphp::runtime::PendingNamedVariadic,
     active_generator: Option<GeneratorRef>,
     pending_invoke_this: Option<Value>,
 }
@@ -103,7 +102,7 @@ impl CoroutineExecutionState {
             stacks: None,
             current_execute_data: std::ptr::null_mut(),
             exception: None,
-            pending_named_variadic: HashMap::new(),
+            pending_named_variadic: Default::default(),
             active_generator: None,
             pending_invoke_this: None,
         }
@@ -191,7 +190,7 @@ unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
 
 unsafe fn cleanup_pending_calls(
     stacks: &mut CoroutineStacks,
-    pending_named_variadic: &mut HashMap<usize, Vec<(String, Value)>>,
+    pending_named_variadic: &mut rphp::runtime::PendingNamedVariadic,
     frame: *mut ExecuteData,
 ) {
     unsafe {
