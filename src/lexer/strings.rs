@@ -578,6 +578,26 @@ impl<'a> Lexer<'a> {
     }
 
     pub(super) fn count_logical_line_breaks(content: &[u8]) -> usize {
+        // Per-token gaps are a few bytes; one plain pass beats the setup of
+        // the vectorized counts below there.
+        if content.len() <= 32 {
+            let mut breaks = 0;
+            let mut index = 0;
+            while index < content.len() {
+                match content[index] {
+                    b'\n' => breaks += 1,
+                    b'\r' => {
+                        breaks += 1;
+                        if content.get(index + 1) == Some(&b'\n') {
+                            index += 1;
+                        }
+                    }
+                    _ => {}
+                }
+                index += 1;
+            }
+            return breaks;
+        }
         // Byte-equality counts vectorize; the per-byte state machine did not.
         let newlines = content.iter().filter(|&&byte| byte == b'\n').count();
         let carriage_returns = content.iter().filter(|&&byte| byte == b'\r').count();
