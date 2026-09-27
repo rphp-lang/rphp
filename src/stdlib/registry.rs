@@ -5139,6 +5139,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // CLI replaces them with the real script identity and arguments.
     funcs.extend(runtime_info::register(eg));
     #[cfg(target_os = "linux")]
+    funcs.extend(pcntl::register(eg));
+    #[cfg(target_os = "linux")]
     funcs.extend(posix::register(eg));
     reg_typed!(
         "hash_algos",

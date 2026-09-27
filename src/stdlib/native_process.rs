@@ -253,6 +253,18 @@ pub(super) enum NativeCall<'a> {
     },
     #[cfg(target_os = "linux")]
     StrError(c_int),
+    #[cfg(target_os = "linux")]
+    PcntlAlarm {
+        seconds: u32,
+        result: &'a Cell<u32>,
+    },
+    #[cfg(target_os = "linux")]
+    PcntlSignal {
+        signal: c_int,
+        handler: usize,
+        restart_syscalls: bool,
+        result: &'a Cell<bool>,
+    },
 }
 
 /// All process-global native mutations, raw calls, and returned-pointer reads
@@ -371,6 +383,28 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     let message = libc::strerror(error);
                     return (!message.is_null())
                         .then(|| CStr::from_ptr(message).to_bytes().to_vec());
+                }
+                if let NativeCall::PcntlAlarm { seconds, result } = call {
+                    result.set(libc::alarm(seconds));
+                    return Some(Vec::new());
+                }
+                if let NativeCall::PcntlSignal {
+                    signal,
+                    handler,
+                    restart_syscalls,
+                    result,
+                } = call
+                {
+                    let mut action = std::mem::zeroed::<libc::sigaction>();
+                    action.sa_sigaction = handler;
+                    action.sa_flags = if restart_syscalls {
+                        libc::SA_RESTART
+                    } else {
+                        0
+                    };
+                    libc::sigemptyset(&mut action.sa_mask);
+                    result.set(libc::sigaction(signal, &action, std::ptr::null_mut()) == 0);
+                    return Some(Vec::new());
                 }
                 if let NativeCall::GetPasswordByUserId { uid, result } = call {
                     const MAX_PASSWORD_BUFFER: usize = 16 * 1024 * 1024;
@@ -621,6 +655,8 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     NativeCall::GetPasswordByUserId { .. } => unreachable!(),
                     NativeCall::IsTerminal { .. } => unreachable!(),
                     NativeCall::StrError(..) => unreachable!(),
+                    NativeCall::PcntlAlarm { .. } => unreachable!(),
+                    NativeCall::PcntlSignal { .. } => unreachable!(),
                     NativeCall::StrColl { .. } => unreachable!(),
                     NativeCall::SetEnvironment(..) => unreachable!(),
                 };
@@ -673,6 +709,28 @@ pub(super) fn descriptor_is_terminal(descriptor: c_int) -> (bool, c_int) {
 #[cfg(target_os = "linux")]
 pub(super) fn error_message(error: c_int) -> Option<Vec<u8>> {
     invoke_native(NativeCall::StrError(error))
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn pcntl_alarm(seconds: u32) -> u32 {
+    let result = Cell::new(0);
+    let _ = invoke_native(NativeCall::PcntlAlarm {
+        seconds,
+        result: &result,
+    });
+    result.get()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn pcntl_signal(signal: c_int, handler: usize, restart_syscalls: bool) -> bool {
+    let result = Cell::new(false);
+    let _ = invoke_native(NativeCall::PcntlSignal {
+        signal,
+        handler,
+        restart_syscalls,
+        result: &result,
+    });
+    result.get()
 }
 
 #[cfg(target_os = "linux")]

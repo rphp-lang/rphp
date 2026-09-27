@@ -7,6 +7,57 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit complete observed runtime surface
+
+The `phpunit-complete-runtime` checkpoint over `43ede4ab` implements the last
+four library globals observed by PHPUnit 13.2.6 and its remaining core source-
+location blocker. `fsockopen()` has PHP 8.5's parameter names, defaults,
+by-reference error outputs and extension ownership, performs real timed TCP
+connection establishment, and returns an ordinary duplex stream with truthful
+non-seekable metadata. `ReflectionFunctionAbstract::getFileName()` and
+`getStartLine()` derive their result from the reflected callable rather than
+the declaring class, return `false` for internal callables and expose the
+stored declaration line for user functions and methods.
+
+The bounded PCNTL surface contains `pcntl_alarm()`,
+`pcntl_async_signals()` and `pcntl_signal()` with exact PHP 8.5 Reflection,
+constants and extension ownership. Native signal handlers only publish a
+pending signal; PHP callbacks execute at VM safepoints where normal exception
+and stack behavior is available. Handlers and asynchronous mode are request-
+local, while alarm/disposition cleanup is performed only for a request that
+actually initialized PCNTL state. Original regressions cover Reflection,
+loopback TCP success and failure outputs, callback arguments, thrown callback
+exceptions, cancellation and concurrent unrelated request shutdown.
+
+The release audit of 1,727 PHPUnit vendor files observes 273 unique global
+functions and reports **273 present / 0 missing / 0 call-shape mismatches**.
+An unmodified PHPUnit 13.2.6 one-test suite completes with **1 test / 1
+assertion**. Composer S0, the four Symfony S1 gates and FrameworkBundle S2/S3
+pass, as do the complete default/no-default/generics-erased/
+generics-reified/all-features Cargo matrix, all-target checking, formatting and
+the unchanged **1,627 unsafe blocks / 289 unsafe functions** ceiling.
+
+The release Zend/lang packet is **5,396 pass / 2 fail / 115 skip / 86
+unsupported**, with no timeout or crash. Its sorted 5,396-path pass set is
+byte-identical to the preceding accepted checkpoint. The two failures are
+newly attempted Fiber/signal tests that were previously skipped before `pcntl`
+extension admission; both stop at the deliberately unclaimed `SIGUSR1` and
+complete PCNTL/Fiber signal-dispatch surface. They are visible nonclaims, not
+regressions hidden as skips. Performance was intentionally not measured by
+user direction ahead of the planned Rust upgrade.
+
+This checkpoint establishes the audited PHPUnit runtime prerequisites, not a
+complete PCNTL extension or universal PHPUnit/package compatibility.
+
+SHA-256 evidence: release
+`7b9e6d901093a0dc58dae33f95a7cea99b114ae96a749767e2be4524e4a44e8f`;
+Zend/lang manifest
+`fa11fc11e701e70064b49b5687c09ef200e763455d5cc7612b156ea3cea12434`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+vendor audit summary
+`95ce4c6077a86861d5669854298bbc65d8302774217624155b6e24498a423b8a`.
+
 ### PHPUnit POSIX identity and terminal surface
 
 The `phpunit-posix-runtime` checkpoint over `55be20cb` implements a coherent

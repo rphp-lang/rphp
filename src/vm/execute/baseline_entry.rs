@@ -85,6 +85,8 @@ fn finish_request_handler_shutdown(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
 ) -> Result<(), VmError> {
+    #[cfg(target_os = "linux")]
+    crate::stdlib::pcntl::shutdown(eg);
     // Active handlers must remain callable while class/function statics are
     // released and while final output-buffer callbacks run: either phase may
     // still throw. Retire handler-owned generators and objects only after both

@@ -1,6 +1,7 @@
 use std::borrow::Cow;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
+use std::net::TcpStream;
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -124,6 +125,7 @@ enum StreamBackend {
     Temp(TempStream),
     Standard(StandardStream),
     ProcessPipe(ProcessPipe),
+    Tcp(TcpStream),
 }
 
 struct FileBackend {
@@ -261,9 +263,10 @@ impl PhpStream {
                 std::io::stdout().is_terminal()
             }
             StreamBackend::Standard(StandardStream::Error) => std::io::stderr().is_terminal(),
-            StreamBackend::Memory(_) | StreamBackend::Temp(_) | StreamBackend::ProcessPipe(_) => {
-                false
-            }
+            StreamBackend::Memory(_)
+            | StreamBackend::Temp(_)
+            | StreamBackend::ProcessPipe(_)
+            | StreamBackend::Tcp(_) => false,
         }
     }
 
@@ -387,6 +390,30 @@ impl PhpStream {
             },
             "w",
         )
+    }
+
+    /// A blocking TCP client stream returned by `fsockopen()`.
+    pub(crate) fn tcp(stream: TcpStream, uri: String) -> Self {
+        Self {
+            backend: StreamBackend::Tcp(stream),
+            mode: StreamMode {
+                read: true,
+                write: true,
+                append: false,
+                create: false,
+                truncate: false,
+                exclusive: false,
+            },
+            reported_mode: Cow::Borrowed("r+"),
+            uri: Cow::Owned(uri),
+            eof: false,
+            read_buffer: None,
+            plain_file_io: false,
+            memory_append_after_truncate: false,
+            eager_eof: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
+        }
     }
 
     pub(crate) fn process_stdout(stdout: ChildStdout) -> Self {
@@ -643,6 +670,7 @@ impl PhpStream {
                     io::ErrorKind::PermissionDenied,
                     "process stdin is not readable",
                 )),
+                StreamBackend::Tcp(stream) => stream.read(buffer),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -663,6 +691,10 @@ impl PhpStream {
             StreamBackend::ProcessPipe(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "process pipe does not support seeking",
+            )),
+            StreamBackend::Tcp(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "TCP stream does not support seeking",
             )),
         }
     }
@@ -1150,6 +1182,7 @@ impl PhpStream {
                         "process output is not writable",
                     ))
                 }
+                StreamBackend::Tcp(stream) => stream.write(buffer),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -1192,6 +1225,7 @@ impl PhpStream {
             StreamBackend::Standard(StandardStream::Error) => io::stderr().lock().flush(),
             StreamBackend::ProcessPipe(ProcessPipe::Stdin(pipe)) => pipe.flush(),
             StreamBackend::ProcessPipe(ProcessPipe::Stdout(_) | ProcessPipe::Stderr(_)) => Ok(()),
+            StreamBackend::Tcp(stream) => stream.flush(),
         }
     }
 
@@ -1237,7 +1271,8 @@ impl PhpStream {
             StreamBackend::Memory(_)
             | StreamBackend::Temp(_)
             | StreamBackend::Standard(_)
-            | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
+            | StreamBackend::ProcessPipe(_)
+            | StreamBackend::Tcp(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "exclusive locks require a regular file",
             )),
@@ -1258,7 +1293,8 @@ impl PhpStream {
             StreamBackend::Memory(_)
             | StreamBackend::Temp(_)
             | StreamBackend::Standard(_)
-            | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
+            | StreamBackend::ProcessPipe(_)
+            | StreamBackend::Tcp(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "truncate after locking requires a regular file",
             )),
@@ -1276,7 +1312,9 @@ impl PhpStream {
                 true
             }
             StreamBackend::Temp(temp) => temp.seek(SeekFrom::Start(0)).is_ok(),
-            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) => false,
+            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) | StreamBackend::Tcp(_) => {
+                false
+            }
         };
         if succeeded {
             self.discard_prefetched();
@@ -1307,10 +1345,12 @@ impl PhpStream {
             StreamBackend::File(file) => file.stream_position(),
             StreamBackend::Memory(memory) => Ok(memory.position()),
             StreamBackend::Temp(temp) => temp.position(),
-            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "stream does not expose a position",
-            )),
+            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) | StreamBackend::Tcp(_) => {
+                Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "stream does not expose a position",
+                ))
+            }
         }?;
         Ok(position.saturating_sub(self.unread_len() as u64))
     }
@@ -1334,6 +1374,13 @@ impl PhpStream {
             StreamBackend::Temp(_) => (None, None, None, "PHP", "TEMP"),
             StreamBackend::Standard(_) => (Some(false), Some(true), Some(self.eof), "PHP", "STDIO"),
             StreamBackend::ProcessPipe(_) => (Some(false), Some(true), Some(self.eof), "", "STDIO"),
+            StreamBackend::Tcp(_) => (
+                Some(false),
+                Some(true),
+                Some(self.eof),
+                "",
+                "tcp_socket/ssl",
+            ),
         };
         StreamMetadata {
             timed_out,
@@ -1345,7 +1392,7 @@ impl PhpStream {
             unread_bytes: self.unread_len(),
             seekable: !matches!(
                 self.backend,
-                StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_)
+                StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) | StreamBackend::Tcp(_)
             ),
             uri: &self.uri,
         }
@@ -1378,6 +1425,7 @@ impl PhpStream {
                 }
             }
             StreamBackend::ProcessPipe(_) => Ok(None),
+            StreamBackend::Tcp(_) => Ok(None),
         }
     }
 

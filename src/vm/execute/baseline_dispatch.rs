@@ -2369,8 +2369,35 @@ unsafe fn validate_reference_return_after_finally(
 
 
 /// Inner loop for RPHP's authoritative baseline executor.
-fn execute_ex(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
-    catch_memory_exhaustion(eg, |eg| execute_ex_inner(eg, initial_frame))
+fn execute_ex(eg: &mut ExecutorGlobals, mut initial_frame: *mut ExecuteData) -> Result<(), VmError> {
+    loop {
+        match catch_memory_exhaustion(eg, |eg| execute_ex_inner(eg, initial_frame)) {
+            #[cfg(target_os = "linux")]
+            Err(VmError::PendingSignalDispatch) => {
+                let frame = eg.current_execute_data.get();
+                if frame.is_null() {
+                    return Ok(());
+                }
+                let callback_threw = crate::stdlib::pcntl::dispatch_pending_signal(eg)?;
+                if !callback_threw {
+                    initial_frame = frame;
+                    continue;
+                }
+                let Some(exception) = eg.exception.take() else {
+                    initial_frame = frame;
+                    continue;
+                };
+                match throw_in_frame(eg, frame, exception)? {
+                    ThrowResult::Handled(new_frame, _) => initial_frame = new_frame,
+                    ThrowResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
+                    }
+                }
+            }
+            result => return result,
+        }
+    }
 }
 
 fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {

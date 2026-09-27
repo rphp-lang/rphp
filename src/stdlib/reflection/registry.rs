@@ -40,16 +40,16 @@ use super::{
     enum_backed_case_construct, enum_case_get_backing_value, enum_case_get_enum,
     enum_case_get_value, enum_construct, enum_get_backing_type, enum_get_case, enum_get_cases,
     enum_has_case, enum_is_backed_reflection, enum_unit_case_construct, function_construct,
-    function_get_closure, function_get_closure_called_class, function_get_closure_scope_class,
-    function_get_closure_this, function_get_extension_name, function_get_namespace_name,
-    function_get_number_of_parameters, function_get_number_of_required_parameters,
-    function_get_parameters, function_get_return_type, function_get_short_name,
-    function_get_tentative_return_type, function_has_return_type,
+    function_file_name, function_get_closure, function_get_closure_called_class,
+    function_get_closure_scope_class, function_get_closure_this, function_get_extension_name,
+    function_get_namespace_name, function_get_number_of_parameters,
+    function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
+    function_get_short_name, function_get_tentative_return_type, function_has_return_type,
     function_has_tentative_return_type, function_in_namespace, function_invoke,
     function_invoke_args, function_is_anonymous, function_is_closure, function_is_deprecated,
     function_is_generator, function_is_internal, function_is_user_defined, function_is_variadic,
-    function_returns_reference, function_to_string, generic_arguments, generic_runtime_modes,
-    method_construct, method_create_from_method_name, method_file_name, method_get_closure,
+    function_returns_reference, function_start_line, function_to_string, generic_arguments,
+    generic_runtime_modes, method_construct, method_create_from_method_name, method_get_closure,
     method_get_modifiers, method_get_prototype, method_has_prototype, method_invoke,
     method_invoke_args, method_invoke_raw, method_is_abstract, method_is_constructor,
     method_is_destructor, method_is_final, method_is_private, method_is_protected,
@@ -1071,6 +1071,22 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         "ReflectionFunctionAbstract",
         "getdoccomment",
         reflection_get_doc_comment,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "getfilename",
+        function_file_name,
+        1,
+        0,
+        []
+    );
+    register_method!(
+        "ReflectionFunctionAbstract",
+        "getstartline",
+        function_start_line,
         1,
         0,
         []
@@ -2469,14 +2485,6 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         2,
         0,
         ["object"]
-    );
-    register_method!(
-        "ReflectionMethod",
-        "getfilename",
-        method_file_name,
-        1,
-        0,
-        []
     );
     register_method!(
         "ReflectionClassConstant",

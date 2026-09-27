@@ -2333,6 +2333,9 @@ pub enum VmError {
     UnimplementedOpcode(OpCode),
     /// `exit($code)` / `die($msg)` — clean script termination.
     Exit(i32),
+    /// Internal unwind token: an asynchronously invoked PHP signal handler
+    /// threw and the interrupted frame must enter the ordinary catch search.
+    PendingSignalDispatch,
 }
 
 impl std::fmt::Display for VmError {
@@ -2345,6 +2348,7 @@ impl std::fmt::Display for VmError {
                 write!(formatter, "Unimplemented opcode {opcode:?}")
             }
             Self::Exit(code) => write!(formatter, "Script exited with status {code}"),
+            Self::PendingSignalDispatch => formatter.write_str("pending signal dispatch"),
         }
     }
 }
@@ -6097,6 +6101,14 @@ pub(super) fn handle_interrupt(eg: &ExecutorGlobals) -> Result<(), VmError> {
     if eg.timed_out.load(Ordering::Relaxed) {
         eg.timed_out.store(false, Ordering::Relaxed);
         return Err(VmError::Fatal("Maximum execution time exceeded".into()));
+    }
+
+    #[cfg(target_os = "linux")]
+    if crate::stdlib::pcntl::async_signal_polling_enabled(eg) {
+        eg.vm_interrupt.store(true, Ordering::Relaxed);
+        if crate::stdlib::pcntl::has_pending_async_signal(eg) {
+            return Err(VmError::PendingSignalDispatch);
+        }
     }
 
     Ok(())

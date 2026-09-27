@@ -1,5 +1,7 @@
 use std::borrow::Cow;
 use std::io::SeekFrom;
+use std::net::{TcpStream, ToSocketAddrs};
+use std::time::Duration;
 
 use crate::compiler::{make_internal_function, make_internal_function_ref};
 use crate::runtime::ExecutorGlobals;
@@ -50,6 +52,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             4,
             2,
             &["filename", "mode", "use_include_path", "context"][..],
+        ),
+        (
+            "fsockopen",
+            fn_fsockopen,
+            5,
+            1,
+            &["hostname", "port", "error_code", "error_message", "timeout"][..],
         ),
         ("tmpfile", fn_tmpfile, 0, 0, &[]),
         ("fstat", fn_fstat, 1, 1, &["stream"]),
@@ -244,10 +253,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             .iter()
             .map(|name| (*name).to_string())
             .collect();
-        let mut function = Box::new(if name == "flock" {
-            make_internal_function_ref(handler, maximum, required, 0b100, parameter_names)
-        } else {
-            make_internal_function(handler, maximum, required, parameter_names)
+        let mut function = Box::new(match name {
+            "flock" => {
+                make_internal_function_ref(handler, maximum, required, 0b100, parameter_names)
+            }
+            "fsockopen" => {
+                make_internal_function_ref(handler, maximum, required, 0b1100, parameter_names)
+            }
+            _ => make_internal_function(handler, maximum, required, parameter_names),
         });
         if name == "flock" {
             function.common.sig.param_type_hints =
@@ -257,6 +270,15 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             // SendRef/SendVal enforce the optional output slot, so ordinary
             // two-argument calls retain the compact fixed-arity ABI.
             function.common.plan.call = crate::vm::function::CallStrategy::Fast;
+        } else if name == "fsockopen" {
+            function.common.sig.param_type_hints = vec![
+                ParamTypeHint::String,
+                ParamTypeHint::Int,
+                ParamTypeHint::None,
+                ParamTypeHint::None,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+            ];
+            function.handler_validates_types = true;
         } else if name == "fstat" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::None];
             function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
@@ -275,6 +297,18 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             eg.register_internal_function_reflection_metadata(
                 pointer,
                 vec![None, None, Some(Value::null())],
+                "standard",
+            );
+        } else if name == "fsockopen" {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![
+                    None,
+                    Some(Value::long(-1)),
+                    Some(Value::null()),
+                    Some(Value::null()),
+                    Some(Value::null()),
+                ],
                 "standard",
             );
         } else if name == "fstat" {
@@ -695,6 +729,153 @@ fn read_stream_csv(
 #[inline]
 fn retain_open_argument(value: &Value) -> Value {
     value.clone()
+}
+
+#[cold]
+fn fsockopen_failure(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    endpoint: &str,
+    error: std::io::Error,
+) -> Result<(), VmError> {
+    let code = error.raw_os_error().unwrap_or(0);
+    let message = error.to_string();
+    if optional_argument(execute_data, 2).is_some() {
+        set_argument(execute_data, 2, Value::long(i64::from(code)));
+    }
+    if optional_argument(execute_data, 3).is_some() {
+        set_argument(execute_data, 3, Value::string(message.clone()));
+    }
+    super::report_internal_diagnostic(
+        eg,
+        execute_data,
+        2,
+        "Warning",
+        &format!("fsockopen(): Unable to connect to {endpoint} ({message})"),
+    )?;
+    return_value(return_pointer, Value::bool(false))
+}
+
+#[cold]
+fn fn_fsockopen(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(hostname) =
+        super::typed_internal_string_argument(execute_data, eg, "fsockopen", 0, "hostname")?
+    else {
+        return Ok(());
+    };
+    let mut port = if optional_argument(execute_data, 1).is_some() {
+        let Some(port) =
+            super::typed_internal_int_argument(execute_data, eg, "fsockopen", 1, "port")?
+        else {
+            return Ok(());
+        };
+        port
+    } else {
+        -1
+    };
+    let timeout = match optional_argument(execute_data, 4) {
+        Some(value) if value.value_type() != ValueType::Null => {
+            let Some(timeout) = super::typed_internal_float_argument_expected(
+                execute_data,
+                eg,
+                "fsockopen",
+                4,
+                "timeout",
+                "?float",
+            )?
+            else {
+                return Ok(());
+            };
+            timeout
+        }
+        _ => -1.0,
+    };
+    if (!timeout.is_finite() || timeout < 0.0) && timeout != -1.0 {
+        eg.exception = Some(crate::value::make_error_value(
+            "ValueError",
+            "fsockopen(): Argument #5 ($timeout) must be -1 or between 0 and 18446744073709",
+        ));
+        return Ok(());
+    }
+
+    let mut host: &str = hostname.as_ref();
+    if let Some(stripped) = host.strip_prefix("tcp://") {
+        host = stripped;
+    }
+    let owned_host: String;
+    if port == -1
+        && let Some((parsed_host, parsed_port)) = host.rsplit_once(':')
+        && let Ok(parsed_port) = parsed_port.parse::<i64>()
+    {
+        owned_host = parsed_host.trim_matches(['[', ']']).to_string();
+        host = &owned_host;
+        port = parsed_port;
+    }
+    let endpoint = format!("{host}:{port}");
+    let Ok(port) = u16::try_from(port) else {
+        return fsockopen_failure(
+            execute_data,
+            return_pointer,
+            eg,
+            &endpoint,
+            std::io::Error::from_raw_os_error(libc::EINVAL),
+        );
+    };
+    let addresses = match (host, port).to_socket_addrs() {
+        Ok(addresses) => addresses.collect::<Vec<_>>(),
+        Err(error) => {
+            return fsockopen_failure(execute_data, return_pointer, eg, &endpoint, error);
+        }
+    };
+    let timeout = if timeout == -1.0 {
+        Duration::from_secs(60)
+    } else {
+        Duration::try_from_secs_f64(timeout)
+            .unwrap_or_else(|_| Duration::from_nanos(1))
+            .max(Duration::from_nanos(1))
+    };
+    let mut last_error = None;
+    let mut connected = None;
+    for address in addresses {
+        match TcpStream::connect_timeout(&address, timeout) {
+            Ok(stream) => {
+                connected = Some(stream);
+                break;
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    let Some(stream) = connected else {
+        return fsockopen_failure(
+            execute_data,
+            return_pointer,
+            eg,
+            &endpoint,
+            last_error.unwrap_or_else(|| {
+                std::io::Error::new(
+                    std::io::ErrorKind::AddrNotAvailable,
+                    "Name or service not known",
+                )
+            }),
+        );
+    };
+    if optional_argument(execute_data, 2).is_some() {
+        set_argument(execute_data, 2, Value::long(0));
+    }
+    if optional_argument(execute_data, 3).is_some() {
+        set_argument(execute_data, 3, Value::string(""));
+    }
+    let stream = PhpStream::tcp(stream, endpoint);
+    #[cfg(feature = "resource-lifetime")]
+    let value = insert_stream(eg, stream);
+    #[cfg(not(feature = "resource-lifetime"))]
+    let value = Value::resource(insert_stream(eg, stream));
+    return_value(return_pointer, value)
 }
 
 #[cold]
@@ -1540,7 +1721,9 @@ fn fn_stream_get_meta_data(
             if let Some(eof) = metadata.eof {
                 result.set_str("eof", Value::bool(eof));
             }
-            result.set_str("wrapper_type", Value::string(metadata.wrapper_type));
+            if !metadata.wrapper_type.is_empty() {
+                result.set_str("wrapper_type", Value::string(metadata.wrapper_type));
+            }
             result.set_str("stream_type", Value::string(metadata.stream_type));
             result.set_str("mode", Value::string(metadata.mode));
             let unread = metadata.unread_bytes;

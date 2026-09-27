@@ -220,6 +220,14 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "E_DEPRECATED",
     "E_USER_DEPRECATED",
     "E_ALL",
+    #[cfg(target_os = "linux")]
+    "SIG_DFL",
+    #[cfg(target_os = "linux")]
+    "SIG_IGN",
+    #[cfg(target_os = "linux")]
+    "SIGINT",
+    #[cfg(target_os = "linux")]
+    "SIGALRM",
     "DEBUG_BACKTRACE_PROVIDE_OBJECT",
     "DEBUG_BACKTRACE_IGNORE_ARGS",
     "PATHINFO_DIRNAME",
@@ -747,6 +755,14 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "E_DEPRECATED" => Some(value::Value::long(8192)),
         "E_USER_DEPRECATED" => Some(value::Value::long(16_384)),
         "E_ALL" => Some(value::Value::long(PHP_E_ALL)),
+        #[cfg(target_os = "linux")]
+        "SIG_DFL" => Some(value::Value::long(libc::SIG_DFL as i64)),
+        #[cfg(target_os = "linux")]
+        "SIG_IGN" => Some(value::Value::long(libc::SIG_IGN as i64)),
+        #[cfg(target_os = "linux")]
+        "SIGINT" => Some(value::Value::long(i64::from(libc::SIGINT))),
+        #[cfg(target_os = "linux")]
+        "SIGALRM" => Some(value::Value::long(i64::from(libc::SIGALRM))),
         "DEBUG_BACKTRACE_PROVIDE_OBJECT" => Some(value::Value::long(1)),
         "DEBUG_BACKTRACE_IGNORE_ARGS" => Some(value::Value::long(2)),
         "PATHINFO_DIRNAME" => Some(value::Value::long(1)),

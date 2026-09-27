@@ -10140,18 +10140,26 @@ fn class_end_line(
     class_declaration_line(ed, rv, eg, true)
 }
 
-fn method_file_name(
+fn function_file_name(
     ed: *mut ExecuteData,
     rv: *mut Value,
-    eg: &mut ExecutorGlobals,
+    _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let class_name =
-        reflected_property(ed, "class").and_then(|value| value.as_str().map(str::to_owned));
-    let value = class_name
-        .as_deref()
-        .and_then(|class_name| eg.find_class(class_name))
-        .and_then(|class| class.source_file.as_ref())
-        .map_or_else(|| Value::bool(false), |file| Value::string(file.clone()));
+    let value = reflected_user_function(ed).map_or_else(
+        || Value::bool(false),
+        |function| Value::string(function.op_array.source_file.as_ref().clone()),
+    );
+    return_value(rv, value)
+}
+
+fn function_start_line(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = reflected_user_function(ed)
+        .and_then(|function| function.op_array.declaration_line())
+        .map_or_else(|| Value::bool(false), |line| Value::long(line as i64));
     return_value(rv, value)
 }
 

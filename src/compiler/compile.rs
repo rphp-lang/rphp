@@ -3726,6 +3726,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "proc_open" => 0b100,                     // arg 2 (&$pipes)
         "parse_str" | "mb_parse_str" => 0b10,     // arg 1 (&$result)
         "headers_sent" => 0b11,                   // args 0 and 1 (&$filename, &$line)
+        "fsockopen" => 0b1100,                    // args 2 and 3 (&$errno, &$errstr)
         "getimagesize" | "getimagesizefromstring" => 0b10,
         "flock" => 0b100,                     // arg 2 (&$would_block)
         "sscanf" | "fscanf" => u64::MAX << 2, // variadic arg 2+ (&...$vars)

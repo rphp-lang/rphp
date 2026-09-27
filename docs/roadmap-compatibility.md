@@ -36,6 +36,33 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-complete-runtime` checkpoint over `43ede4ab` closes the remaining
+PHPUnit 13.2.6 runtime prerequisites. `fsockopen()` now provides its exact
+Reflection and by-reference error outputs over a real TCP stream;
+`pcntl_alarm()`, `pcntl_async_signals()` and `pcntl_signal()` provide the
+request-scoped asynchronous signal boundary observed by PHPUnit; and
+`ReflectionFunctionAbstract::getFileName()` plus `getStartLine()` expose the
+callable's real source metadata for reflected methods and functions. Signal
+callbacks run only at VM safepoints, and request shutdown cannot cancel an
+unrelated request's active alarm.
+
+The PHPUnit vendor audit now finds **273 present / 0 missing / 0 call-shape
+mismatches**. An unmodified PHPUnit 13.2.6 one-test suite completes with **1
+test / 1 assertion**. The complete default/no-default/erased/reified/
+all-features Cargo matrix, all-target check, focused runtime suites,
+Composer/Symfony S0--S3 and unsafe policy are green. The release Zend/lang
+pass set remains byte-identical at **5,396 pass**; admitting `pcntl` makes two
+previously skipped Fiber/signal PHPTs run and stop on the separately unclaimed
+`SIGUSR1`/full-PCNTL surface, with no timeout or crash. Performance remains
+deferred by user direction. See [exact evidence](compatibility.md).
+
+This checkpoint proves the PHP surface exercised by the audited PHPUnit
+release; it does not claim the complete PCNTL extension, every TCP wrapper
+mode, all Reflection source semantics or blanket PHPUnit ecosystem
+compatibility.
+
+### Preceding PHPUnit POSIX runtime checkpoint
+
 The `phpunit-posix-runtime` checkpoint over `55be20cb` adds a coherent
 seven-function POSIX slice containing all three globals actually observed by
 PHPUnit: UID/effective-UID lookup, re-entrant NSS password projection,
