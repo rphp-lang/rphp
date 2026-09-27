@@ -36,6 +36,27 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-posix-runtime` checkpoint over `55be20cb` adds a coherent
+seven-function POSIX slice containing all three globals actually observed by
+PHPUnit: UID/effective-UID lookup, re-entrant NSS password projection,
+descriptor/stream terminal detection, request-local errno access and native
+error messages. Reflection, extension ownership, ordered record shape, manual
+weak/strict validation, diagnostics and descriptor bounds match PHP 8.5. Six
+original E2E boundaries and six directly applicable POSIX PHPTs pass; two
+dependency-gated PHPTs remain explicit GMP/PCNTL skips.
+
+The full default/no-default/erased/reified/all-features Cargo matrix and
+all-target check are green, unsafe remains **1,627/289**, and the complete
+release Zend/lang ledger and pass set remain byte-identical at **5,396 pass /
+0 fail / 117 skip / 86 unsupported**. Performance remains deferred by user
+direction. Across 273 vendor-observed builtins, the inventory improves to
+**269 present / 4 missing / 0 call-shape mismatches**. The remaining library
+work is the three observed PCNTL signal functions and `fsockopen()`; the
+separately owned core blocker remains `ReflectionMethod::getStartLine()`. See
+[exact evidence](compatibility.md).
+
+### Preceding PHPUnit deterministic-random checkpoint
+
 The `phpunit-mt-srand` checkpoint over `581ade59` adds the exact PHP 8.5
 legacy random-function contract used by PHPUnit. An independent request-local
 MT19937 engine implements the standard recurrence and deprecated

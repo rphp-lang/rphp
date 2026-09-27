@@ -5138,6 +5138,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // Embedders receive PHP's request globals for standard-input code; the
     // CLI replaces them with the real script identity and arguments.
     funcs.extend(runtime_info::register(eg));
+    #[cfg(target_os = "linux")]
+    funcs.extend(posix::register(eg));
     reg_typed!(
         "hash_algos",
         fn_hash_algos,

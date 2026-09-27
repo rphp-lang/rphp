@@ -7,6 +7,56 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit POSIX identity and terminal surface
+
+The `phpunit-posix-runtime` checkpoint over `55be20cb` implements a coherent
+seven-function POSIX slice, including all three globals observed by PHPUnit:
+`posix_getuid()`, `posix_geteuid()`,
+`posix_getpwuid()`, `posix_isatty()`, `posix_get_last_error()`,
+`posix_errno()` and `posix_strerror()`. Their PHP 8.5 Reflection contracts,
+extension ownership, parameter names and return types are exact. UID and NSS
+password-record projection use the platform's re-entrant POSIX interfaces;
+native pointers never escape the existing bounded native-process boundary.
+The password record has PHP's ordered seven-field shape and copies all strings
+before releasing the bounded lookup buffer.
+
+`posix_isatty()` accepts integer descriptors and stream resources, preserves
+PHP's deliberately manual weak/strict argument validation and diagnostics,
+rejects descriptors outside the native integer range and publishes request-
+local errno state for the two error accessors. `posix_strerror()` projects the
+corresponding native message. Six original E2E cases cover extension admission,
+exact Reflection, NSS projection, weak and strict coercion, stream handling,
+descriptor bounds, errno retention and error messages. Six directly applicable
+upstream POSIX PHPTs pass byte-exactly; two further tests remain visible skips
+because they independently require GMP and `pcntl_fork()`.
+
+The complete default/no-default/generics-erased/generics-reified/all-features
+Cargo matrix and all-feature/all-target checking are green. The unsafe
+inventory remains **1,627 blocks / 289 functions**. The complete release
+Zend/lang ledger and its 5,396-path pass set remain byte-identical at **5,396
+pass / 0 fail / 117 skip / 86 unsupported**, with no timeout or crash.
+Performance was intentionally not measured by user direction.
+
+Across 273 PHPUnit-observed builtins, the inventory improves to **269 present /
+4 missing / 0 call-shape mismatches**. The remaining library functions are
+`pcntl_alarm()`, `pcntl_async_signals()`, `pcntl_signal()` and `fsockopen()`;
+the real one-test suite still reaches the separate core boundary
+`ReflectionMethod::getStartLine()`.
+
+This checkpoint does not claim all 41 PHP POSIX globals, general signal
+control, arbitrary stream-to-descriptor casting or complete PHPUnit execution.
+
+SHA-256 evidence: release
+`fabaab152e7c22fa00669dd89f831afc1f4c9459146e7af648a668768b6e5672`;
+focused PHPT manifest
+`df9958c5e47b37d846b76e3f0e88e194f7426d6951bfefafdcec7e27a5790c25`;
+Zend/lang manifest
+`88014aaba780012f699b340b21438bda22b4a36efdb10d3cc34f97876e723377`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+vendor audit summary
+`3f9ff6b7cbcf502d08a7c9003b770ff20a852117e6ada661cd9f73b61bb3a160`.
+
 ### PHPUnit deterministic random seeding
 
 The `phpunit-mt-srand` checkpoint over `581ade59` implements PHP 8.5's legacy

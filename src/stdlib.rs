@@ -67,6 +67,8 @@ mod meta_tags;
 pub(crate) mod native_process;
 mod pack;
 mod parse_ini;
+#[cfg(target_os = "linux")]
+mod posix;
 mod random;
 pub(crate) use random::Mt19937State;
 pub(crate) mod reflection;
@@ -31882,6 +31884,8 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "mbstring",
     "Phar",
     "pcre",
+    #[cfg(target_os = "linux")]
+    "posix",
     "tokenizer",
     "xmlwriter",
 ];

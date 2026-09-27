@@ -6,7 +6,7 @@
 //! spreading through otherwise safe standard-library handlers.
 
 #[cfg(target_os = "linux")]
-use std::cell::Cell;
+use std::cell::{Cell, RefCell};
 use std::ffi::OsStr;
 
 #[cfg(target_os = "linux")]
@@ -129,6 +129,20 @@ pub(super) struct NativeResourceUsage {
     pub(super) system_seconds: i64,
 }
 
+/// Owned projection of the POSIX password record. Native pointers never leave
+/// `invoke_native`; every field is copied while the re-entrant lookup buffer is
+/// alive.
+#[cfg(target_os = "linux")]
+pub(super) struct NativePasswd {
+    pub(super) name: Vec<u8>,
+    pub(super) password: Vec<u8>,
+    pub(super) uid: u32,
+    pub(super) gid: u32,
+    pub(super) gecos: Vec<u8>,
+    pub(super) directory: Vec<u8>,
+    pub(super) shell: Vec<u8>,
+}
+
 #[cfg(target_os = "linux")]
 pub(super) struct NativeInput<'a> {
     original: &'a [u8],
@@ -221,6 +235,24 @@ pub(super) enum NativeCall<'a> {
         children: bool,
         result: &'a Cell<Option<NativeResourceUsage>>,
     },
+    #[cfg(target_os = "linux")]
+    GetUserId {
+        effective: bool,
+        result: &'a Cell<u32>,
+    },
+    #[cfg(target_os = "linux")]
+    GetPasswordByUserId {
+        uid: u32,
+        result: &'a RefCell<Option<NativePasswd>>,
+    },
+    #[cfg(target_os = "linux")]
+    IsTerminal {
+        descriptor: c_int,
+        result: &'a Cell<bool>,
+        error: &'a Cell<c_int>,
+    },
+    #[cfg(target_os = "linux")]
+    StrError(c_int),
 }
 
 /// All process-global native mutations, raw calls, and returned-pointer reads
@@ -236,9 +268,9 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
     // before another native state change can invalidate them. iconv receives
     // the exact input length, advances only its local pointer and writes into
     // a live Vec spare region; every resize rebuilds that output pointer.
-    // getrusage receives an initialized-size out pointer and writes it
-    // synchronously; the value is copied into fixed-width Rust fields before
-    // returning. RPHP executes process-global locale/catalog/environment
+    // getrusage and getpwuid_r receive initialized-size out pointers and write
+    // synchronously; password strings are copied before their scratch buffer
+    // is dropped. RPHP executes process-global locale/catalog/environment
     // mutations on its single VM thread, so no concurrent Rust environment
     // access is possible.
     unsafe {
@@ -309,6 +341,100 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                         system_seconds: usage.ru_stime.tv_sec as i64,
                     }));
                     return Some(Vec::new());
+                }
+                if let NativeCall::GetUserId { effective, result } = call {
+                    result.set(if effective {
+                        libc::geteuid()
+                    } else {
+                        libc::getuid()
+                    });
+                    return Some(Vec::new());
+                }
+                if let NativeCall::IsTerminal {
+                    descriptor,
+                    result,
+                    error,
+                } = call
+                {
+                    let terminal = libc::isatty(descriptor) == 1;
+                    result.set(terminal);
+                    if !terminal {
+                        error.set(
+                            std::io::Error::last_os_error()
+                                .raw_os_error()
+                                .unwrap_or(libc::EBADF),
+                        );
+                    }
+                    return Some(Vec::new());
+                }
+                if let NativeCall::StrError(error) = call {
+                    let message = libc::strerror(error);
+                    return (!message.is_null())
+                        .then(|| CStr::from_ptr(message).to_bytes().to_vec());
+                }
+                if let NativeCall::GetPasswordByUserId { uid, result } = call {
+                    const MAX_PASSWORD_BUFFER: usize = 16 * 1024 * 1024;
+                    let suggested = libc::sysconf(libc::_SC_GETPW_R_SIZE_MAX);
+                    let initial = usize::try_from(suggested)
+                        .ok()
+                        .filter(|size| *size > 0)
+                        .unwrap_or(16 * 1024)
+                        .clamp(1024, MAX_PASSWORD_BUFFER);
+                    let mut buffer = Vec::new();
+                    if buffer.try_reserve_exact(initial).is_err() {
+                        result.replace(None);
+                        return None;
+                    }
+                    buffer.resize(initial, 0);
+                    loop {
+                        let mut record = std::mem::MaybeUninit::<libc::passwd>::uninit();
+                        let mut found = std::ptr::null_mut::<libc::passwd>();
+                        let status = libc::getpwuid_r(
+                            uid,
+                            record.as_mut_ptr(),
+                            buffer.as_mut_ptr().cast(),
+                            buffer.len(),
+                            &mut found,
+                        );
+                        if status == libc::ERANGE {
+                            let Some(next) = buffer
+                                .len()
+                                .checked_mul(2)
+                                .filter(|next| *next <= MAX_PASSWORD_BUFFER)
+                            else {
+                                result.replace(None);
+                                return None;
+                            };
+                            if buffer.try_reserve_exact(next - buffer.len()).is_err() {
+                                result.replace(None);
+                                return None;
+                            }
+                            buffer.resize(next, 0);
+                            continue;
+                        }
+                        if status != 0 || found.is_null() {
+                            result.replace(None);
+                            return None;
+                        }
+                        let record = record.assume_init();
+                        let copy = |pointer: *const c_char| {
+                            if pointer.is_null() {
+                                Vec::new()
+                            } else {
+                                CStr::from_ptr(pointer).to_bytes().to_vec()
+                            }
+                        };
+                        result.replace(Some(NativePasswd {
+                            name: copy(record.pw_name),
+                            password: copy(record.pw_passwd),
+                            uid: record.pw_uid,
+                            gid: record.pw_gid,
+                            gecos: copy(record.pw_gecos),
+                            directory: copy(record.pw_dir),
+                            shell: copy(record.pw_shell),
+                        }));
+                        return Some(Vec::new());
+                    }
                 }
                 if let NativeCall::IconvVersion = &call {
                     #[cfg(target_env = "gnu")]
@@ -491,6 +617,10 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     NativeCall::Ctype { .. } => unreachable!(),
                     NativeCall::CtypeLowercase { .. } => unreachable!(),
                     NativeCall::GetResourceUsage { .. } => unreachable!(),
+                    NativeCall::GetUserId { .. } => unreachable!(),
+                    NativeCall::GetPasswordByUserId { .. } => unreachable!(),
+                    NativeCall::IsTerminal { .. } => unreachable!(),
+                    NativeCall::StrError(..) => unreachable!(),
                     NativeCall::StrColl { .. } => unreachable!(),
                     NativeCall::SetEnvironment(..) => unreachable!(),
                 };
@@ -506,6 +636,43 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
             }
         }
     }
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn user_id(effective: bool) -> u32 {
+    let result = Cell::new(0);
+    let _ = invoke_native(NativeCall::GetUserId {
+        effective,
+        result: &result,
+    });
+    result.get()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn password_by_user_id(uid: u32) -> Option<NativePasswd> {
+    let result = RefCell::new(None);
+    let _ = invoke_native(NativeCall::GetPasswordByUserId {
+        uid,
+        result: &result,
+    });
+    result.into_inner()
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn descriptor_is_terminal(descriptor: c_int) -> (bool, c_int) {
+    let result = Cell::new(false);
+    let error = Cell::new(0);
+    let _ = invoke_native(NativeCall::IsTerminal {
+        descriptor,
+        result: &result,
+        error: &error,
+    });
+    (result.get(), error.get())
+}
+
+#[cfg(target_os = "linux")]
+pub(super) fn error_message(error: c_int) -> Option<Vec<u8>> {
+    invoke_native(NativeCall::StrError(error))
 }
 
 #[cfg(target_os = "linux")]
