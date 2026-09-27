@@ -28100,6 +28100,21 @@ call (`tests/e2e_tokenizer_interning.rs`; strings are values, so sharing
 is unobservable). Cold callgrind: 35.5 G to 33.6 G; `token_get_all` on a
 25 KB file 3.8 ms to 2.6 ms.
 
+The `scoped-write-cache` checkpoint finishes the property-cache work for
+non-public storage: a scoped read entry is also write-safe unless the
+property is readonly, an enum case or narrows its set visibility, so
+`$this->stack[$k] = $v` and `$this->pos++` on protected/private properties
+stay on the cache (php-parser's token stacks were 100k cold misses); closure
+sites, which could never warm a non-public entry because their scope is the
+bound class rather than the executing function, record that class id in the
+cache word and re-read the frame's scope on every hit (typed writes at
+closure sites stay cold). The constant table and object property layouts
+hash with the symbol hasher, and the display name of a plain internal
+function is remembered after its first reverse scan of the function table.
+`tests/e2e_property_write_cache.rs` pins scoped modifications, rebound and
+shadowed closure scopes, trait closures and readonly/asymmetric errors
+against reference PHP. Cold callgrind: 33.6 G to 31.8 G.
+
 Note on the gate itself: `ff253d2b` (PHPUnit process control) made
 `proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
 does and spawns worker processes over TCP sockets (react/socket). That path
