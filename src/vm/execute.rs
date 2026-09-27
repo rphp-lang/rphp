@@ -4249,8 +4249,18 @@ fn execute_full_call<'a>(
 
     // Extract named variadic args eagerly so no error path can leak them.
     let call_key = call as usize;
-    let mut pending_named = eg.pending_named_variadic.remove(&call_key);
-    let pending_closure_captures = eg.pending_closure_captures.remove(&call_key);
+    // Both tables are empty for ordinary calls; `remove` hashes before it
+    // checks emptiness.
+    let mut pending_named = if eg.pending_named_variadic.is_empty() {
+        None
+    } else {
+        eg.pending_named_variadic.remove(&call_key)
+    };
+    let pending_closure_captures = if eg.pending_closure_captures.is_empty() {
+        None
+    } else {
+        eg.pending_closure_captures.remove(&call_key)
+    };
 
     // SendVal filled CV 0..N-1 for a dynamically resolved invokable object.
     // Make room for the hidden method receiver before validating arguments.

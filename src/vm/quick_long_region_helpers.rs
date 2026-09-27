@@ -174,6 +174,9 @@ fn fixed_invariant_path_element(
 /// producer. Keeping path ownership, reachability and derived String metadata
 /// together prevents standalone and deferred-argument consumers from drifting.
 struct InvariantJsonProjectionState {
+    /// Slot tables are allocated on first use: most candidate regions never
+    /// start a projection, and the detector runs once per loop candidate.
+    total_slots: usize,
     paths: Vec<Option<Vec<QuickInvariantPathElement>>>,
     fetch_mask: u64,
     deferred_argument_mask: u64,
@@ -185,16 +188,20 @@ struct InvariantJsonProjectionState {
 impl InvariantJsonProjectionState {
     fn new(total_slots: u32) -> Self {
         Self {
-            paths: vec![None; total_slots as usize],
+            total_slots: total_slots as usize,
+            paths: Vec::new(),
             fetch_mask: 0,
             deferred_argument_mask: 0,
             parent_mask: 0,
             string_source_mask: 0,
-            string_length_paths: vec![None; total_slots as usize],
+            string_length_paths: Vec::new(),
         }
     }
 
     fn start(&mut self, destination: u16) -> Option<()> {
+        if self.paths.is_empty() {
+            self.paths = vec![None; self.total_slots];
+        }
         self.paths
             .get_mut(destination as usize)?
             .replace(Vec::new());
@@ -259,10 +266,11 @@ impl InvariantJsonProjectionState {
             .and_then(|path| path.as_ref())?
             .clone();
         if path.is_empty()
+            || instruction.result as usize >= self.total_slots
             || self
                 .string_length_paths
-                .get(instruction.result as usize)?
-                .is_some()
+                .get(instruction.result as usize)
+                .is_some_and(|slot| slot.is_some())
         {
             return None;
         }
@@ -271,6 +279,9 @@ impl InvariantJsonProjectionState {
             instruction.op1,
             total_slots,
         )?;
+        if self.string_length_paths.is_empty() {
+            self.string_length_paths = vec![None; self.total_slots];
+        }
         self.string_length_paths
             .get_mut(instruction.result as usize)?
             .replace(path);

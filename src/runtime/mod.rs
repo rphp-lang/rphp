@@ -833,6 +833,29 @@ struct ClassNameIndex {
     names: SymbolTable<String>,
 }
 
+/// Run `lookup` with the ASCII-lowercased form of `name`, using a stack
+/// buffer for the ordinary short identifiers so case-folded table probes do
+/// not allocate.
+pub(crate) fn with_ascii_lowercase<R>(name: &str, lookup: impl FnOnce(&str) -> R) -> R {
+    let bytes = name.as_bytes();
+    if bytes.len() <= 128 {
+        let mut buffer = [0u8; 128];
+        for (target, byte) in buffer.iter_mut().zip(bytes) {
+            *target = byte.to_ascii_lowercase();
+        }
+        // ASCII case folding keeps every UTF-8 sequence intact.
+        let folded = std::str::from_utf8(&buffer[..bytes.len()]).unwrap_or(name);
+        lookup(folded)
+    } else {
+        lookup(&name.to_ascii_lowercase())
+    }
+}
+
+/// Named variadic arguments waiting for their call frame, keyed by call
+/// identity. Every full call probes this table, so it uses the symbol hasher.
+pub(crate) type PendingNamedVariadic =
+    HashMap<usize, Vec<(String, crate::value::Value)>, std::hash::BuildHasherDefault<SymbolHasher>>;
+
 /// Multiply-rotate hasher for the symbol tables. SipHash dominated class and
 /// function lookups on every slow property or call path; symbol names are
 /// request-local trusted data, so a non-keyed hash is acceptable.
@@ -1070,10 +1093,11 @@ pub struct ExecutorGlobals {
     /// Key = call frame pointer as usize, value = vec of (name, value) pairs.
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
-    pub pending_named_variadic: HashMap<usize, Vec<(String, crate::value::Value)>>,
+    pub pending_named_variadic: PendingNamedVariadic,
     /// Closure captures and bound receivers cannot enter overlapping CVs
     /// until DoFcall has snapshotted/packed extra or variadic arguments.
-    pub(crate) pending_closure_captures: HashMap<usize, PendingClosureBindings>,
+    pub(crate) pending_closure_captures:
+        HashMap<usize, PendingClosureBindings, std::hash::BuildHasherDefault<SymbolHasher>>,
     /// Exact Closure values for active closure frames. This sparse table is
     /// allocated only after Closure invocation so ordinary calls do not pay
     /// for Closure::getCurrent() support.
@@ -2350,8 +2374,8 @@ impl ExecutorGlobals {
             header_output_origin: std::cell::RefCell::new(None),
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
-            pending_named_variadic: HashMap::new(),
-            pending_closure_captures: HashMap::new(),
+            pending_named_variadic: Default::default(),
+            pending_closure_captures: Default::default(),
             active_closure_owners: None,
             function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
@@ -2496,8 +2520,8 @@ impl ExecutorGlobals {
             header_output_origin: std::cell::RefCell::new(None),
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
-            pending_named_variadic: HashMap::new(),
-            pending_closure_captures: HashMap::new(),
+            pending_named_variadic: Default::default(),
+            pending_closure_captures: Default::default(),
             active_closure_owners: None,
             function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
@@ -6288,8 +6312,9 @@ impl ExecutorGlobals {
     }
 
     pub(crate) fn runtime_class_link_is_active(&self, class_name: &str) -> bool {
-        self.active_runtime_class_relations
-            .contains_key(&class_name.to_ascii_lowercase())
+        with_ascii_lowercase(class_name, |key| {
+            self.active_runtime_class_relations.contains_key(key)
+        })
     }
 
     pub(crate) fn active_runtime_class_has_variance_dependents(&self, class_name: &str) -> bool {
@@ -9939,7 +9964,7 @@ impl ExecutorGlobals {
             }
             index.indexed = self.class_table.len();
         }
-        index.names.get(&name.to_ascii_lowercase()).cloned()
+        with_ascii_lowercase(name, |key| index.names.get(key).cloned())
     }
 
     /// Userland lookup must not observe a class whose inheritance transaction
@@ -10796,7 +10821,11 @@ impl ExecutorGlobals {
         key: String,
         function: *const FunctionCommon,
     ) -> Option<*const FunctionCommon> {
-        let owner_end = key.find("::").map(|index| index + 2);
+        let owner_end = key
+            .as_bytes()
+            .windows(2)
+            .position(|pair| pair == b"::")
+            .map(|index| index + 2);
         let previous = self.function_table.insert(key.clone(), function);
         if previous.is_none()
             && let Some(owner_end) = owner_end

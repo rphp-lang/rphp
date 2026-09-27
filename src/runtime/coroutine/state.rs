@@ -80,7 +80,7 @@ pub(super) struct CoroutineExecutionState {
     pub(super) current_execute_data: *mut ExecuteData,
     pub(super) exception: Option<Value>,
     finally_exceptions: HashMap<usize, Vec<Value>>,
-    pending_named_variadic: HashMap<usize, Vec<(String, Value)>>,
+    pending_named_variadic: crate::runtime::PendingNamedVariadic,
     function_argument_state: FunctionArgumentState,
     active_generator: Option<crate::vm::generator::GeneratorRef>,
     pending_invoke_this: Option<Value>,
@@ -95,7 +95,7 @@ impl CoroutineExecutionState {
             current_execute_data: std::ptr::null_mut(),
             exception: None,
             finally_exceptions: HashMap::new(),
-            pending_named_variadic: HashMap::new(),
+            pending_named_variadic: Default::default(),
             function_argument_state: FunctionArgumentState::new(),
             active_generator: None,
             pending_invoke_this: None,
@@ -251,7 +251,7 @@ impl CoroutineExecutionState {
 unsafe fn cleanup_pending_calls(
     vm_stack: &mut VmStack,
     pending_call_stack: &mut VmStack,
-    pending_named_variadic: &mut HashMap<usize, Vec<(String, Value)>>,
+    pending_named_variadic: &mut crate::runtime::PendingNamedVariadic,
     frame: *mut ExecuteData,
 ) {
     unsafe {
@@ -274,7 +274,7 @@ unsafe fn cleanup_pending_calls(
 pub(super) fn cleanup_frame_chain(
     vm_stack: &mut VmStack,
     pending_call_stack: &mut VmStack,
-    pending_named_variadic: &mut HashMap<usize, Vec<(String, Value)>>,
+    pending_named_variadic: &mut crate::runtime::PendingNamedVariadic,
     pending_invoke_this: &mut Option<Value>,
     mut frame: *mut ExecuteData,
 ) {

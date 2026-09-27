@@ -4418,16 +4418,40 @@ impl PhpArray {
 
     #[inline]
     pub(crate) fn cursor_current(&self) -> Option<&Value> {
-        self.iter()
-            .nth(self.cursor.get() & !ARRAY_CURSOR_METADATA)
-            .map(|(_, value)| value)
+        // Every storage keeps entries dense in iteration order, so the
+        // internal pointer indexes directly instead of walking from the start.
+        let position = self.cursor.get() & !ARRAY_CURSOR_METADATA;
+        match &self.storage {
+            ArrayStorage::Packed(values) => values.get(position),
+            ArrayStorage::SmallHash(small) => small.entries[..small.len()]
+                .get(position)
+                .and_then(|entry| entry.as_ref())
+                .map(|(_, value)| value),
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get(position).map(|(_, value)| value)
+            }
+            ArrayStorage::Hash { entries, .. } => entries.get(position).map(|(_, value)| value),
+        }
     }
 
     #[inline]
     pub(crate) fn cursor_key(&self) -> Option<ArrayKey> {
-        self.iter()
-            .nth(self.cursor.get() & !ARRAY_CURSOR_METADATA)
-            .map(|(key, _)| key)
+        let position = self.cursor.get() & !ARRAY_CURSOR_METADATA;
+        match &self.storage {
+            ArrayStorage::Packed(values) => {
+                (position < values.len()).then(|| ArrayKey::Int(position as i64))
+            }
+            ArrayStorage::SmallHash(small) => small.entries[..small.len()]
+                .get(position)
+                .and_then(|entry| entry.as_ref())
+                .map(|(key, _)| key.to_public()),
+            ArrayStorage::LinearHash(linear) => {
+                linear.entries.get(position).map(|(key, _)| key.to_public())
+            }
+            ArrayStorage::Hash { entries, .. } => {
+                entries.get(position).map(|(key, _)| key.to_public())
+            }
+        }
     }
 
     #[inline]

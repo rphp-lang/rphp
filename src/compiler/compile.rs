@@ -697,10 +697,16 @@ struct DeclaredMethodFacts {
 /// Declaration contracts indexed by receiver class + method. Direct methods,
 /// including untyped overrides, win. Missing methods inherit to a fixed point
 /// because source class definitions are not guaranteed to be parent-first.
-fn declared_method_facts(
-    class_defs: &[ClassDef],
-) -> HashMap<(String, String), DeclaredMethodFacts> {
-    let mut result = HashMap::new();
+/// Facts keyed by (lowercase class, lowercase method); the symbol hasher
+/// replaces SipHash for these short identifier pairs.
+type DeclaredMethodFactsMap = HashMap<
+    (String, String),
+    DeclaredMethodFacts,
+    std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>,
+>;
+
+fn declared_method_facts(class_defs: &[ClassDef]) -> DeclaredMethodFactsMap {
+    let mut result = DeclaredMethodFactsMap::default();
     let mut owner_methods: HashMap<String, Vec<String>> = HashMap::new();
     let mut class_index: HashMap<String, usize> = HashMap::new();
     for (index, class) in class_defs.iter().enumerate() {
@@ -737,7 +743,7 @@ fn declared_method_facts(
         class_defs: &[ClassDef],
         class_index: &HashMap<String, usize>,
         owner_methods: &mut HashMap<String, Vec<String>>,
-        result: &mut HashMap<(String, String), DeclaredMethodFacts>,
+        result: &mut DeclaredMethodFactsMap,
         state: &mut [Visit],
     ) {
         if state[index] != Visit::Pending {
@@ -1155,7 +1161,7 @@ fn propagate_declared_scalar_types(
     function_ref_args: &HashMap<String, u64>,
     current_class: Option<&str>,
     parent_class: Option<&str>,
-    method_facts: &HashMap<(String, String), DeclaredMethodFacts>,
+    method_facts: &DeclaredMethodFactsMap,
 ) {
     let slot_count = (op_array.num_cvs + op_array.num_temps) as usize;
     let mut slots = vec![KnownScalarType::Unknown; slot_count];
