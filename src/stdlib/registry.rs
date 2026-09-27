@@ -4768,6 +4768,29 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ini_result()
     );
     reg_typed!(
+        "ini_get_all",
+        fn_ini_get_all,
+        2,
+        0,
+        ["extension", "details"],
+        [
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            ParamTypeHint::Bool
+        ],
+        ParamTypeHint::Union(vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::ClassName("false".to_string()),
+        ])
+    );
+    let ini_get_all = eg
+        .find_function("ini_get_all")
+        .expect("ini_get_all was just registered");
+    eg.register_internal_function_reflection_metadata(
+        ini_get_all,
+        vec![Some(Value::null()), Some(Value::bool(true))],
+        "standard",
+    );
+    reg_typed!(
         "ini_set",
         fn_ini_set,
         2,

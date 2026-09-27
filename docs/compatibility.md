@@ -7,6 +7,53 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit INI registry projection
+
+The `phpunit-ini-get-all` checkpoint over `45550b71` implements
+`ini_get_all(?string $extension = null, bool $details = true): array|false`
+with PHP 8.5's exact reflected parameter names, nullable/default metadata,
+return union and `standard` extension ownership. It exposes the 44 directives
+whose runtime behavior RPHP has actually admitted; it does not synthesize the
+rest of a host PHP build's INI registry.
+
+The null-extension projection is alphabetically ordered. With details enabled,
+each directive contains `global_value`, `local_value` and the exact integer
+`access` mask. Startup overrides remain global after `ini_set()` changes the
+local value, compiled-null directives remain null until configured, and the
+scalar form returns local values directly. Exact, case-sensitive module names
+filter the registry; `standard`, `date`, no-JIT `pcre` and Linux `iconv` expose
+their admitted directives, modules without directives return an empty array,
+and unknown, empty or mis-cased names warn and return false.
+
+Three original E2E tests cover Reflection, order and shapes, access masks,
+startup/runtime separation, extension groups, warnings, nullable arguments and
+strict/weak coercion. The adjacent INI/PCRE/call-shape packet is **64 pass / 0
+fail**; default, no-default, erased, reified and all-features focused builds
+pass, as do all-feature/all-target checking and **865 pass / 0 fail / 1
+ignored** library tests. PHPUnit's unmodified
+`GlobalState::getIniSettingsAsString()` reaches a nonempty string. The next
+`sebastian/environment` path reaches the independently missing `proc_open()`
+rather than an INI failure.
+
+The complete release Zend/lang result is byte-identical to the parent at
+**5,396 pass / 0 fail / 117 skip / 86 unsupported**, with no timeout or crash.
+The upstream `ini_get_all.phpt` is retained as an explicit skip because it
+requires PCRE JIT, which RPHP intentionally does not claim. The PHPUnit 13.2.6
+vendor audit reports **262 present / 11 missing / 0 call-shape mismatches** and
+marks `ini_get_all()` Reflection-exact. Performance was intentionally not
+measured.
+
+SHA-256 evidence: release
+`3b45b11082c5ff920d1f1f6006b55478ef3a3b0a5010d3965618bab4457f4989`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+upstream skip manifest
+`e4563956022ccc37f5926ffb3299dfc99b2b113e0ce564de7c6a85147c543b73`;
+vendor audit summary
+`5fda94b3f0c56764a5ac410ab5f092505d6016e7645aebe93b1ce97830d51c30`.
+
 ### PHPUnit child-process hash equality
 
 The `phpunit-hash-equals` checkpoint over `4499a1fd` implements

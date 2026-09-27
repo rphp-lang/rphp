@@ -36,6 +36,34 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-ini-get-all` checkpoint over `45550b71` adds the complete
+PHPUnit-observed `ini_get_all(?string $extension = null, bool $details =
+true): array|false` contract. RPHP now projects its 44 honestly admitted INI
+directives in PHP's alphabetical order, including distinct startup/global and
+request-local values, nullable compiled defaults, exact access masks and
+case-sensitive module filtering. Unknown modules produce PHP's warning and
+false result; admitted modules with no directives return an empty array.
+
+Three original E2E tests cover Reflection, detailed and scalar projections,
+startup/runtime mutation, extension ownership, warning and strict/weak type
+boundaries. The adjacent 64-case INI/PCRE/call-shape packet, five focused Cargo
+configurations, all-feature/all-target compile check and the 865-test library
+suite pass. The complete Zend/lang release ledger remains byte-identical at
+**5,396 pass / 0 fail / 117 skip / 86 unsupported**. The sole upstream
+`ini_get_all` PHPT remains an explicit no-JIT skip because its fixture requires
+`PCRE_JIT_SUPPORT`; RPHP's original test exercises the corresponding two-entry
+PCRE registry instead.
+
+PHPUnit 13.2.6's real `GlobalState::getIniSettingsAsString()` path now runs on
+RPHP. Its static vendor inventory improves to **262 present / 11 missing / 0
+call-shape mismatches** across 273 observed builtins, and `ini_get_all()` is
+Reflection-exact. The next independent library boundary exposed by
+`sebastian/environment` is the paired `proc_open()` / `proc_close()` lifecycle;
+smaller independent follow-ups remain `tmpfile()` and `mt_srand()`. Performance
+remains deferred by user direction. See [exact evidence](compatibility.md).
+
+### Preceding PHPUnit hash equality checkpoint
+
 The `phpunit-hash-equals` checkpoint over `4499a1fd` adds PHPUnit's
 security-sensitive child-process nonce comparison without relying on host PHP
 or native crypto libraries. `hash_equals(string $known_string, string

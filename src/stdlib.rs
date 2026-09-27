@@ -32472,6 +32472,198 @@ fn fn_ini_get(
     );
 }
 
+#[derive(Clone, Copy)]
+struct IniEntryMetadata {
+    name: &'static str,
+    extension: Option<&'static str>,
+    access: i64,
+    null_without_override: bool,
+}
+
+const fn ini_entry(
+    name: &'static str,
+    extension: Option<&'static str>,
+    access: i64,
+) -> IniEntryMetadata {
+    IniEntryMetadata {
+        name,
+        extension,
+        access,
+        null_without_override: false,
+    }
+}
+
+const fn nullable_ini_entry(
+    name: &'static str,
+    extension: Option<&'static str>,
+    access: i64,
+) -> IniEntryMetadata {
+    IniEntryMetadata {
+        name,
+        extension,
+        access,
+        null_without_override: true,
+    }
+}
+
+/// The admitted INI registry, kept in PHP's public alphabetical projection
+/// order.  Core directives have no queryable extension owner; passing an
+/// extension to ini_get_all() selects only module-owned entries.
+const INI_ENTRY_METADATA: &[IniEntryMetadata] = &[
+    ini_entry("allow_url_fopen", None, 4),
+    ini_entry("arg_separator.output", None, 7),
+    ini_entry("assert.exception", Some("standard"), 7),
+    nullable_ini_entry("auto_append_file", None, 6),
+    nullable_ini_entry("auto_prepend_file", None, 6),
+    ini_entry("date.timezone", Some("date"), 7),
+    ini_entry("default_charset", None, 7),
+    ini_entry("disable_functions", None, 4),
+    ini_entry("display_errors", None, 7),
+    ini_entry("display_startup_errors", None, 7),
+    ini_entry("docref_ext", None, 7),
+    ini_entry("docref_root", None, 7),
+    nullable_ini_entry("error_log", None, 7),
+    ini_entry("error_reporting", None, 7),
+    ini_entry("fatal_error_backtraces", None, 7),
+    ini_entry("fiber.stack_size", None, 7),
+    ini_entry("highlight.comment", None, 7),
+    ini_entry("highlight.default", None, 7),
+    ini_entry("highlight.html", None, 7),
+    ini_entry("highlight.keyword", None, 7),
+    ini_entry("highlight.string", None, 7),
+    ini_entry("html_errors", None, 7),
+    ini_entry("iconv.input_encoding", Some("iconv"), 7),
+    ini_entry("iconv.internal_encoding", Some("iconv"), 7),
+    ini_entry("iconv.output_encoding", Some("iconv"), 7),
+    ini_entry("ignore_repeated_errors", None, 7),
+    ini_entry("ignore_repeated_source", None, 7),
+    ini_entry("include_path", None, 7),
+    nullable_ini_entry("input_encoding", None, 7),
+    nullable_ini_entry("internal_encoding", None, 7),
+    ini_entry("log_errors", None, 7),
+    ini_entry("memory_limit", None, 7),
+    nullable_ini_entry("output_encoding", None, 7),
+    nullable_ini_entry("output_handler", None, 6),
+    ini_entry("pcre.backtrack_limit", Some("pcre"), 7),
+    ini_entry("pcre.recursion_limit", Some("pcre"), 7),
+    ini_entry("precision", None, 7),
+    ini_entry("report_memleaks", None, 7),
+    ini_entry("serialize_precision", None, 7),
+    ini_entry("variables_order", None, 6),
+    ini_entry("zend.assertions", None, 7),
+    ini_entry("zend.enable_gc", None, 7),
+    ini_entry("zend.exception_ignore_args", None, 7),
+    ini_entry("zend.exception_string_param_max_len", None, 7),
+];
+
+fn ini_extension_exists(extension: &str) -> bool {
+    extension == "standard" || LOADED_EXTENSION_NAMES.contains(&extension)
+}
+
+fn ini_registered_value(eg: &ExecutorGlobals, entry: IniEntryMetadata, original: bool) -> Value {
+    let override_value = if original {
+        eg.static_vars
+            .get(INI_STARTUP_VALUES)
+            .and_then(|values| values.get(entry.name))
+            .and_then(Value::as_str)
+            .map(str::to_string)
+    } else {
+        eg.ini_overrides
+            .as_deref()
+            .and_then(|values| values.get(entry.name))
+            .cloned()
+    };
+    if let Some(value) = override_value {
+        return Value::string(value);
+    }
+    if entry.null_without_override {
+        return Value::null();
+    }
+    let value = if original {
+        match entry.name {
+            "precision" => "14".to_string(),
+            "serialize_precision" => "-1".to_string(),
+            "error_reporting" => crate::PHP_E_ALL.to_string(),
+            "zend.enable_gc" | "assert.exception" | "zend.assertions" => "1".to_string(),
+            _ => ini_base_default(eg, entry.name)
+                .expect("admitted INI metadata must have a compiled default"),
+        }
+    } else {
+        ini_base_default(eg, entry.name).expect("admitted INI metadata must have a current value")
+    };
+    Value::string(value)
+}
+
+#[cold]
+fn fn_ini_get_all(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let extension = match arg_opt!(ed, 0).map(Value::dereferenced) {
+        None => None,
+        Some(value) if value.value_type() == ValueType::Null => None,
+        Some(_) => {
+            let Some(extension) = typed_internal_string_argument_expected(
+                ed,
+                eg,
+                "ini_get_all",
+                0,
+                "extension",
+                "?string",
+            )?
+            else {
+                return Ok(());
+            };
+            Some(extension)
+        }
+    };
+    let details = if arg_opt!(ed, 1).is_some() {
+        let Some(details) = typed_internal_bool_argument(ed, eg, "ini_get_all", 1, "details")?
+        else {
+            return Ok(());
+        };
+        details
+    } else {
+        true
+    };
+
+    if let Some(extension) = extension.as_deref()
+        && !ini_extension_exists(extension)
+    {
+        report_internal_diagnostic(
+            eg,
+            ed,
+            2,
+            "Warning",
+            &format!("ini_get_all(): Extension \"{extension}\" cannot be found"),
+        )?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+        ret!(rv, Value::bool(false));
+    }
+
+    let mut result = PhpArray::new();
+    for entry in INI_ENTRY_METADATA.iter().copied().filter(|entry| {
+        extension
+            .as_deref()
+            .is_none_or(|extension| entry.extension == Some(extension))
+    }) {
+        let local = ini_registered_value(eg, entry, false);
+        if !details {
+            result.set_str(entry.name, local);
+            continue;
+        }
+        let mut values = PhpArray::new();
+        values.set_str("global_value", ini_registered_value(eg, entry, true));
+        values.set_str("local_value", local);
+        values.set_str("access", Value::long(entry.access));
+        result.set_str(entry.name, Value::array(values));
+    }
+    ret!(rv, Value::array(result));
+}
+
 pub(crate) fn ini_default(eg: &ExecutorGlobals, option: &str) -> Option<String> {
     if let Some(value) = eg
         .ini_overrides
