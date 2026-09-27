@@ -13,6 +13,7 @@ publish = false
 
 [features]
 default = [
+    "php-heap",
     "quick-loops",
     "jit-prototype",
     "stream-context",
@@ -26,6 +27,8 @@ default = [
     "formatted-io",
 ]
 quick-loops = []
+php-heap = []
+php-heap-asm = ["php-heap"]
 vm-stats = []
 jit-prototype = []
 coroutines = []
