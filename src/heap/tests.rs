@@ -237,3 +237,179 @@ fn stress_random_sizes_keep_contents_intact() {
         unsafe { heap.dealloc(ptr, layout) };
     }
 }
+
+#[test]
+fn sentinel_page_never_hands_out_a_block() {
+    // SAFETY: the sentinel is readable, and a pop and a bump both miss it
+    // without writing.
+    assert!(unsafe { page_alloc(sentinel()) }.is_none());
+    let fresh = ThreadHeap::new();
+    assert!(fresh.current.iter().all(|page| page.get() == sentinel()));
+}
+
+/// The review's interleaving: a pop reads the head A and A's link B, then
+/// stalls; another thread pops A and B, keeps B live and pushes A back. The
+/// stalled pop must not install its stale link, or B would be handed out
+/// twice.
+#[test]
+fn page_stack_rejects_a_stale_pop_after_the_entry_came_back() {
+    if !pool_enabled() {
+        return;
+    }
+    // Two entries of the reservation that nobody else references.
+    let a_block = alloc_large(LARGE_UNIT, false);
+    let b_block = alloc_large(LARGE_UNIT, false);
+    assert!(!a_block.is_null() && !b_block.is_null() && a_block != b_block);
+    let a = a_block as usize - PAGE_HEADER;
+    let b = b_block as usize - PAGE_HEADER;
+    let stack = PageStack::new();
+    // SAFETY: both entries are exclusively ours and in no other stack.
+    unsafe {
+        stack.push(b);
+        stack.push(a);
+    }
+    let stale_head = stack.head.load(Ordering::Acquire);
+    // SAFETY: `a` is an entry of the reservation.
+    let stale_next = unsafe { stack_link(a) }.load(Ordering::Relaxed);
+    assert_eq!(stack.pop(), a);
+    assert_eq!(stack.pop(), b);
+    // SAFETY: `a` is ours again and out of the stack.
+    unsafe { stack.push(a) };
+    assert_eq!(
+        stack.head.load(Ordering::Relaxed) & STACK_INDEX_MASK,
+        stale_head & STACK_INDEX_MASK
+    );
+    let stale_swap = stack.head.compare_exchange(
+        stale_head,
+        PageStack::successor(stale_head, stale_next),
+        Ordering::AcqRel,
+        Ordering::Acquire,
+    );
+    assert!(stale_swap.is_err(), "the version tag rejects the stale pop");
+    assert_eq!(stack.pop(), a);
+    assert_eq!(stack.pop(), 0, "the live entry B is never handed out");
+    assert_eq!(stack.count.load(Ordering::Relaxed), 0);
+    // SAFETY: both blocks came from `alloc_large` and are freed once.
+    unsafe {
+        free_large(a_block);
+        free_large(b_block);
+    }
+}
+
+#[test]
+fn page_stack_versions_survive_wraparound() {
+    let head = STACK_INDEX_MASK & 5 | (usize::MAX & !STACK_INDEX_MASK);
+    let next = PageStack::successor(head, 9);
+    assert_eq!(next & STACK_INDEX_MASK, 9);
+    assert_eq!(
+        next & !STACK_INDEX_MASK,
+        0,
+        "the version wraps inside its bits"
+    );
+}
+
+/// `MADV_DONTNEED` needs an OS-page-aligned start: the reclaim keeps the OS
+/// page with the header and drops the rest of the entry.
+#[test]
+fn reclaim_drops_whole_os_pages_after_the_header() {
+    let len = 4 * LARGE_UNIT;
+    // SAFETY: a fresh private anonymous mapping, unmapped at the end; every
+    // access stays inside it.
+    unsafe {
+        let map = libc::mmap(
+            std::ptr::null_mut(),
+            len,
+            libc::PROT_READ | libc::PROT_WRITE,
+            libc::MAP_PRIVATE | libc::MAP_ANONYMOUS,
+            -1,
+            0,
+        );
+        assert_ne!(map, libc::MAP_FAILED);
+        let entry = (map as usize).next_multiple_of(LARGE_UNIT);
+        let body = 2 * LARGE_UNIT;
+        std::ptr::write_bytes(entry as *mut u8, 0xA5, body);
+        let before = reclaimed_bytes();
+        assert!(reclaim_body(entry, body), "the kernel accepts the range");
+        let page = os_page_size();
+        assert!(reclaimed_bytes() - before >= body - page);
+        let mut residency = vec![0u8; body / page];
+        assert_eq!(
+            libc::mincore(entry as *mut libc::c_void, body, residency.as_mut_ptr()),
+            0
+        );
+        assert_eq!(residency[0] & 1, 1, "the header page stays resident");
+        assert!(
+            residency[1..].iter().all(|state| state & 1 == 0),
+            "the body went back to the OS"
+        );
+        assert_eq!(
+            *(entry as *const u8),
+            0xA5,
+            "the header page keeps its bytes"
+        );
+        assert_eq!(
+            *((entry + page) as *const u8),
+            0,
+            "the body reads back as zeros"
+        );
+        libc::munmap(map, len);
+    }
+}
+
+/// Concurrent claims at the region limit never overlap: a failed claim must
+/// not move the cursor under a successful one.
+#[test]
+fn carve_never_hands_out_overlapping_ranges() {
+    let start = 1usize << 30;
+    let unit = 4096;
+    let cursor = AtomicUsize::new(start);
+    let limit = start + 10 * unit;
+    let claims: Vec<usize> = std::thread::scope(|scope| {
+        let workers: Vec<_> = (0..8)
+            .map(|_| scope.spawn(|| carve(&cursor, 3 * unit, limit)))
+            .collect();
+        workers
+            .into_iter()
+            .map(|worker| worker.join().unwrap())
+            .collect()
+    });
+    let mut granted: Vec<usize> = claims.into_iter().filter(|&claim| claim != 0).collect();
+    granted.sort_unstable();
+    assert_eq!(granted, vec![start, start + 3 * unit, start + 6 * unit]);
+    assert_eq!(cursor.load(Ordering::Relaxed), start + 9 * unit);
+}
+
+/// A page that filled up retires; its first free relists it, and once all
+/// of its blocks are back it leaves the thread.
+#[test]
+fn full_pages_retire_relist_and_recycle() {
+    if !pool_enabled() {
+        return;
+    }
+    let layout = Layout::from_size_align(1024, 8).unwrap();
+    // 63 blocks per page: 200 blocks fill three pages and start a fourth.
+    let blocks: Vec<*mut u8> = (0..200)
+        // SAFETY: test-owned block with a valid layout; freed exactly once.
+        .map(|_| unsafe { PhpHeap.alloc(layout) })
+        .collect();
+    let first_page = page_header(blocks[0] as usize);
+    // SAFETY: a page this thread owns.
+    unsafe {
+        assert_eq!((*first_page).listing.get(), LISTING_NONE);
+        assert_eq!((*first_page).used.get(), RETIRED | 63);
+        PhpHeap.dealloc(blocks[0], layout);
+        assert_eq!((*first_page).listing.get(), LISTING_AVAIL, "relisted");
+        assert_eq!((*first_page).used.get(), 62);
+        for block in &blocks[1..63] {
+            PhpHeap.dealloc(*block, layout);
+        }
+        assert_ne!(
+            (*first_page).owner.load(Ordering::Relaxed),
+            heap().addr(),
+            "the emptied page left the thread"
+        );
+        for block in &blocks[63..] {
+            PhpHeap.dealloc(*block, layout);
+        }
+    }
+}
