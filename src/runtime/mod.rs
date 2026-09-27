@@ -1117,6 +1117,16 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: PendingNamedVariadic,
+    /// Own-method lookup index per registered class (`class_id` ->
+    /// lowercase method name -> position in `ClassDef::methods`), built on
+    /// first use; method sets are fixed once a class is registered.
+    method_index_cache: std::cell::RefCell<
+        HashMap<
+            u32,
+            Rc<HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>>,
+            std::hash::BuildHasherDefault<SymbolHasher>,
+        >,
+    >,
     /// Fingerprints of sources the front end parsed without a syntax error.
     /// `token_get_all(..., TOKEN_PARSE)` on such a source cannot fail either,
     /// so it skips the parser (Nette's use-statement scan tokenizes every
@@ -2409,6 +2419,7 @@ impl ExecutorGlobals {
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: Default::default(),
+            method_index_cache: Default::default(),
             parsed_sources: Default::default(),
             internal_function_names: Default::default(),
             pending_closure_captures: Default::default(),
@@ -2557,6 +2568,7 @@ impl ExecutorGlobals {
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: Default::default(),
+            method_index_cache: Default::default(),
             parsed_sources: Default::default(),
             internal_function_names: Default::default(),
             pending_closure_captures: Default::default(),
@@ -10493,6 +10505,27 @@ impl ExecutorGlobals {
 
     /// Look up method visibility AND staticness in a class hierarchy.
     /// Returns (visibility, is_static, declaring_class_name).
+    /// The own-method index of a registered class (see `method_index_cache`).
+    fn method_index(
+        &self,
+        class_def: &ClassDef,
+    ) -> Rc<HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>> {
+        if let Some(index) = self.method_index_cache.borrow().get(&class_def.class_id) {
+            return Rc::clone(index);
+        }
+        let mut index =
+            HashMap::with_capacity_and_hasher(class_def.methods.len(), Default::default());
+        for (position, (name, _, _, _, _)) in class_def.methods.iter().enumerate() {
+            // The scan returned the first declaration; keep that verdict.
+            index.entry(name.to_ascii_lowercase()).or_insert(position);
+        }
+        let index = Rc::new(index);
+        self.method_index_cache
+            .borrow_mut()
+            .insert(class_def.class_id, Rc::clone(&index));
+        index
+    }
+
     pub fn find_method_info(
         &self,
         class_name: &str,
@@ -10506,10 +10539,24 @@ impl ExecutorGlobals {
             // instead of lowercasing every declared name per lookup.
             let method_matches = |name: &str| method_names_equal(name, method_name);
             let class_name = class_def.name.as_str();
-            // Check own methods
-            for (name, vis, is_static, _is_final, _func) in &class_def.methods {
-                if method_matches(name) && !class_def.method_is_abstract(name) {
+            // Check own methods: registered classes answer from an index of
+            // lowercase names (non-ASCII spellings keep the scan, whose
+            // Unicode folding the index does not model).
+            if class_def.class_id != 0 && method_name.is_ascii() {
+                let index = self.method_index(class_def);
+                let found = with_ascii_lowercase(method_name, |key| index.get(key).copied());
+                if let Some(position) = found
+                    && let Some((name, vis, is_static, _is_final, _func)) =
+                        class_def.methods.get(position)
+                    && !class_def.method_is_abstract(name)
+                {
                     return Some((*vis, *is_static, class_name.to_string()));
+                }
+            } else {
+                for (name, vis, is_static, _is_final, _func) in &class_def.methods {
+                    if method_matches(name) && !class_def.method_is_abstract(name) {
+                        return Some((*vis, *is_static, class_name.to_string()));
+                    }
                 }
             }
             // Check used traits (trait methods are copied to function_table but not to methods vec)

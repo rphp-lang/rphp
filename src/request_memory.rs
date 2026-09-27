@@ -299,31 +299,39 @@ pub(crate) fn is_limited() -> bool {
 /// and call caches). Weak records do not keep the payload alive; bounded
 /// sweeps reclaim charges before the limit is tested, including cached owners.
 pub(crate) fn reserve_string(owner: &Rc<String>, capacity: usize) {
-    let Some(budget) = ACTIVE.with(|active| active.borrow().clone()) else {
-        return;
-    };
-    let identity = Rc::as_ptr(owner) as usize;
-    let bytes = capacity.saturating_add(std::mem::size_of::<String>() + 16);
-    let previous = budget
-        .0
-        .strings
-        .borrow()
-        .get(&identity)
-        .map_or(0, |(_, bytes)| *bytes);
-    if bytes > previous {
-        if previous == 0
-            && budget.0.strings.borrow().len()
-                >= budget.0.string_sweep_at.get().max(STRING_SWEEP_FLOOR)
-        {
+    // Every string value passes through here; work inside the thread-local
+    // borrow instead of cloning the budget handle, and touch the charge table
+    // once per call. A sweep may run before a new record is admitted.
+    ACTIVE.with(|active| {
+        let active = active.borrow();
+        let Some(budget) = active.as_ref() else {
+            return;
+        };
+        let identity = Rc::as_ptr(owner) as usize;
+        let bytes = capacity.saturating_add(std::mem::size_of::<String>() + 16);
+        let (previous, sweep) = {
+            let strings = budget.0.strings.borrow();
+            let previous = strings.get(&identity).map_or(0, |(_, bytes)| *bytes);
+            if bytes <= previous {
+                return;
+            }
+            (
+                previous,
+                previous == 0
+                    && strings.len() >= budget.0.string_sweep_at.get().max(STRING_SWEEP_FLOOR),
+            )
+        };
+        if sweep {
             budget.collect_strings();
         }
+        // The limit check may sweep the table itself; no borrow is held here.
         budget.charge(bytes - previous);
         budget
             .0
             .strings
             .borrow_mut()
             .insert(identity, (Rc::downgrade(owner), bytes));
-    }
+    });
 }
 
 #[cfg(test)]
