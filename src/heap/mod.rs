@@ -47,13 +47,26 @@ const MEDIUM_PAGE_MASK: usize = !(MEDIUM_PAGE_SIZE - 1);
 const PAGE_HEADER: usize = 128;
 /// Largest size served by the table-driven small classes.
 const MAX_SMALL: usize = 1024;
-/// Largest size served from the pool at all.
+/// Largest size served by the size-class pages.
 const MAX_POOL: usize = 32 * 1024;
+/// Large blocks (above `MAX_POOL`) are carved from the large region in
+/// multiples of `LARGE_UNIT`, each preceded by a `PAGE_HEADER`-sized
+/// header, and recycled through one global free stack per unit count.
+const LARGE_UNIT: usize = 64 * 1024;
+const LARGE_BUCKETS: usize = 64;
+/// Largest block served from the large region (64 units); bigger or
+/// over-aligned requests go to the system allocator.
+const LARGE_MAX: usize = LARGE_BUCKETS * LARGE_UNIT - PAGE_HEADER;
+/// Free large-block bytes kept resident before further ones are returned to
+/// the OS with `madvise`.
+const LARGE_POOL_RESIDENT_BYTES: usize = 256 << 20;
 const MAX_ALIGN: usize = 16;
 /// Fully free pages kept resident per region before `madvise` returns the
-/// memory of further ones to the OS (16 MiB each).
-const SMALL_POOL_RESIDENT: usize = 256;
-const MEDIUM_POOL_RESIDENT: usize = 16;
+/// memory of further ones to the OS (64 MiB each). PHPStan frees and
+/// reallocates hundreds of MB between phases; a 16 MiB budget re-faulted a
+/// quarter of all pages (and splits transparent huge pages).
+const SMALL_POOL_RESIDENT: usize = 1024;
+const MEDIUM_POOL_RESIDENT: usize = 64;
 
 /// Block sizes. Small classes follow RPHP value layouts (`RcBox<String>` 40,
 /// `Vec<Value>` of three 48, `RcBox<PhpArray>` 152, ...); medium classes
@@ -372,14 +385,23 @@ fn heap() -> &'static ThreadHeap {
 #[repr(C, align(64))]
 struct Range {
     base: AtomicUsize,
+    /// Offset where the medium region starts (small pages below it).
     half: AtomicUsize,
     reserve: AtomicUsize,
+    /// Offset where the large region starts (medium pages below it).
+    large_start: AtomicUsize,
 }
 static RANGE: Range = Range {
     base: AtomicUsize::new(0),
     half: AtomicUsize::new(0),
     reserve: AtomicUsize::new(0),
+    large_start: AtomicUsize::new(0),
 };
+/// Next never-used byte of the large region.
+static LARGE_CURSOR: AtomicUsize = AtomicUsize::new(0);
+/// Lock-free stacks of free large blocks, by unit count minus one.
+static LARGE_FREE: [AtomicUsize; LARGE_BUCKETS] = [const { AtomicUsize::new(0) }; LARGE_BUCKETS];
+static LARGE_FREE_BYTES: AtomicUsize = AtomicUsize::new(0);
 /// Next never-used page per region.
 static SMALL_CURSOR: AtomicUsize = AtomicUsize::new(0);
 static MEDIUM_CURSOR: AtomicUsize = AtomicUsize::new(0);
@@ -430,14 +452,33 @@ fn reserve_range() -> bool {
             )
         };
         if base != libc::MAP_FAILED {
+            // Transparent huge pages for the whole reservation (best effort;
+            // the kernel honours it only in THP "always"/"madvise" modes):
+            // pages are carved contiguously, so first touches fault in 2 MiB
+            // extents instead of 4 KiB ones and the TLB covers 512 times
+            // more heap per entry. `RPHP_HEAP_THP=0` disables it for A/B.
+            // SAFETY: getenv reads process environment without allocating;
+            // madvise on our own fresh mapping.
+            unsafe {
+                let setting = libc::getenv(c"RPHP_HEAP_THP".as_ptr());
+                if setting.is_null() || *setting != b'0' as libc::c_char {
+                    libc::madvise(base, size, libc::MADV_HUGEPAGE);
+                }
+            }
             let base = base as usize;
             let half = size / 2;
+            let large_start = half + size / 4;
             match RANGE
                 .base
                 .compare_exchange(0, base, Ordering::AcqRel, Ordering::Acquire)
             {
                 Ok(_) => {
                     RANGE.half.store(half, Ordering::Release);
+                    RANGE.large_start.store(large_start, Ordering::Release);
+                    LARGE_CURSOR.store(
+                        (base + large_start + LARGE_UNIT - 1) & !(LARGE_UNIT - 1),
+                        Ordering::Release,
+                    );
                     SMALL_CURSOR.store(
                         (base + SMALL_PAGE_SIZE - 1) & SMALL_PAGE_MASK,
                         Ordering::Release,
@@ -504,6 +545,116 @@ pub fn page_of(ptr: usize) -> usize {
 #[inline(always)]
 fn is_small_page(page: usize) -> bool {
     pool_offset(page) < RANGE.half.load(Ordering::Relaxed)
+}
+
+/// Whether a pool offset lies in the large region.
+#[inline(always)]
+fn is_large_offset(offset: usize) -> bool {
+    offset >= RANGE.large_start.load(Ordering::Relaxed)
+}
+
+/// Header in front of every large block.
+#[repr(C)]
+struct LargeHeader {
+    /// Block length in `LARGE_UNIT`s, header included.
+    units: u32,
+    _reserved: u32,
+    /// Free-stack link.
+    next: AtomicUsize,
+}
+const _: () = assert!(std::mem::size_of::<LargeHeader>() <= PAGE_HEADER);
+
+/// A block of at least `size` bytes from the large region, or null when the
+/// region is exhausted. `zeroed` blocks are cleared unless freshly carved.
+#[cold]
+#[inline(never)]
+fn alloc_large(size: usize, zeroed: bool) -> *mut u8 {
+    if RANGE.reserve.load(Ordering::Acquire) == 0 && !reserve_range() {
+        return std::ptr::null_mut();
+    }
+    let units = (size + PAGE_HEADER).div_ceil(LARGE_UNIT);
+    debug_assert!(units >= 1 && units <= LARGE_BUCKETS);
+    let stack = &LARGE_FREE[units - 1];
+    let mut head = stack.load(Ordering::Acquire);
+    while head != 0 {
+        // SAFETY: stack entries are headers of free large blocks.
+        let next = unsafe { (*(head as *const LargeHeader)).next.load(Ordering::Relaxed) };
+        match stack.compare_exchange_weak(head, next, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                LARGE_FREE_BYTES.fetch_sub(units * LARGE_UNIT, Ordering::Relaxed);
+                let block = (head + PAGE_HEADER) as *mut u8;
+                if zeroed {
+                    // SAFETY: the block spans `units * LARGE_UNIT - PAGE_HEADER`
+                    // bytes, at least `size`.
+                    unsafe { std::ptr::write_bytes(block, 0, size) };
+                }
+                return block;
+            }
+            Err(current) => head = current,
+        }
+    }
+    let bytes = units * LARGE_UNIT;
+    let header = LARGE_CURSOR.fetch_add(bytes, Ordering::AcqRel);
+    let end = RANGE.base.load(Ordering::Acquire) + RANGE.reserve.load(Ordering::Acquire);
+    if header + bytes > end {
+        LARGE_CURSOR.fetch_sub(bytes, Ordering::AcqRel);
+        return std::ptr::null_mut();
+    }
+    // SAFETY: untouched (zero) memory of the reservation, claimed by us.
+    unsafe {
+        (header as *mut LargeHeader).write(LargeHeader {
+            units: units as u32,
+            _reserved: 0,
+            next: AtomicUsize::new(0),
+        });
+    }
+    (header + PAGE_HEADER) as *mut u8
+}
+
+/// Return a large block to its unit bucket; beyond the resident budget its
+/// body goes back to the OS first.
+///
+/// # Safety
+/// `ptr` was returned by `alloc_large` and is freed once.
+#[cold]
+#[inline(never)]
+unsafe fn free_large(ptr: *mut u8) {
+    let header = (ptr as usize - PAGE_HEADER) as *mut LargeHeader;
+    // SAFETY: per the contract, the header precedes the block.
+    unsafe {
+        let units = (*header).units as usize;
+        let bytes = units * LARGE_UNIT;
+        if LARGE_FREE_BYTES.load(Ordering::Relaxed) >= LARGE_POOL_RESIDENT_BYTES {
+            // SAFETY: our own block body; the header stays mapped.
+            libc::madvise(ptr.cast(), bytes - PAGE_HEADER, libc::MADV_DONTNEED);
+        }
+        let stack = &LARGE_FREE[units - 1];
+        let mut head = stack.load(Ordering::Acquire);
+        loop {
+            (*header).next.store(head, Ordering::Relaxed);
+            match stack.compare_exchange_weak(
+                head,
+                header as usize,
+                Ordering::AcqRel,
+                Ordering::Acquire,
+            ) {
+                Ok(_) => break,
+                Err(current) => head = current,
+            }
+        }
+        LARGE_FREE_BYTES.fetch_add(bytes, Ordering::Relaxed);
+    }
+}
+
+/// Usable size of a large block.
+///
+/// # Safety
+/// `ptr` was returned by `alloc_large`.
+#[inline]
+unsafe fn large_capacity(ptr: *mut u8) -> usize {
+    // SAFETY: per the contract.
+    let units = unsafe { (*((ptr as usize - PAGE_HEADER) as *const LargeHeader)).units } as usize;
+    units * LARGE_UNIT - PAGE_HEADER
 }
 
 /// Push `block` onto the page's lock-free remote free list and, unless the
@@ -783,7 +934,7 @@ fn new_page(class: usize) -> *mut PageHeader {
         (
             &MEDIUM_CURSOR,
             MEDIUM_PAGE_SIZE,
-            base + RANGE.reserve.load(Ordering::Acquire),
+            base + RANGE.large_start.load(Ordering::Acquire),
         )
     };
     let page = cursor.fetch_add(page_size, Ordering::AcqRel);
@@ -1350,6 +1501,12 @@ unsafe fn pool_free(ptr: *mut u8, offset: usize) {
 #[cold]
 #[inline(never)]
 unsafe fn system_alloc(size: usize, align: usize) -> *mut u8 {
+    if align <= MAX_ALIGN && size <= LARGE_MAX && MODE.load(Ordering::Relaxed) != 2 {
+        let ptr = alloc_large(size, false);
+        if !ptr.is_null() {
+            return ptr;
+        }
+    }
     // SAFETY: forwarded verbatim.
     unsafe { System.alloc(Layout::from_size_align_unchecked(size, align)) }
 }
@@ -1359,6 +1516,12 @@ unsafe fn system_alloc(size: usize, align: usize) -> *mut u8 {
 #[cold]
 #[inline(never)]
 unsafe fn system_alloc_zeroed(size: usize, align: usize) -> *mut u8 {
+    if align <= MAX_ALIGN && size <= LARGE_MAX && MODE.load(Ordering::Relaxed) != 2 {
+        let ptr = alloc_large(size, true);
+        if !ptr.is_null() {
+            return ptr;
+        }
+    }
     // SAFETY: forwarded verbatim.
     unsafe { System.alloc_zeroed(Layout::from_size_align_unchecked(size, align)) }
 }
@@ -1453,6 +1616,10 @@ unsafe impl GlobalAlloc for PhpHeap {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let offset = pool_offset(ptr as usize);
         if offset < RANGE.reserve.load(Ordering::Relaxed) {
+            if is_large_offset(offset) {
+                // SAFETY: large-region pointers come from `alloc_large`.
+                return unsafe { free_large(ptr) };
+            }
             #[cfg(feature = "php-heap-debug")]
             // SAFETY: a pool pointer has an initialized page header.
             debug_check_free(
@@ -1475,6 +1642,21 @@ unsafe impl GlobalAlloc for PhpHeap {
     unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
         let offset = pool_offset(ptr as usize);
         if offset < RANGE.reserve.load(Ordering::Relaxed) {
+            if is_large_offset(offset) {
+                // SAFETY: large-region pointer from `alloc_large`.
+                unsafe {
+                    if new_size <= large_capacity(ptr) && new_size > MAX_POOL {
+                        return ptr;
+                    }
+                    let new_layout = Layout::from_size_align_unchecked(new_size, layout.align());
+                    let new_ptr = self.alloc(new_layout);
+                    if !new_ptr.is_null() {
+                        std::ptr::copy_nonoverlapping(ptr, new_ptr, layout.size().min(new_size));
+                        free_large(ptr);
+                    }
+                    return new_ptr;
+                }
+            }
             // SAFETY: pool pointer; its page header records the class.
             let class = unsafe { (*page_header_at(ptr as usize, offset)).class } as usize;
             #[cfg(feature = "php-heap-debug")]

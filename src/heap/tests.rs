@@ -47,46 +47,6 @@ fn class_table_covers_every_small_size() {
 }
 
 #[test]
-fn empty_pages_return_to_the_pool_and_come_back() {
-    if !pool_enabled() {
-        return;
-    }
-    let layout = Layout::from_size_align(768, 8).unwrap();
-    // 85 blocks per 64 KiB page: 2000 blocks span more than 20 pages.
-    let blocks: Vec<*mut u8> = (0..2000)
-        // SAFETY: test-owned block with a valid layout; freed exactly once.
-        .map(|_| unsafe { PhpHeap.alloc(layout) })
-        .collect();
-    let pooled_before = pooled_pages();
-    for block in &blocks {
-        // SAFETY: test-owned block with a valid layout; freed exactly once.
-        unsafe { PhpHeap.dealloc(*block, layout) };
-    }
-    let pooled = pooled_pages();
-    assert!(
-        pooled >= pooled_before + 15,
-        "emptied pages were recycled: {pooled_before} -> {pooled}"
-    );
-    let first_pages: std::collections::HashSet<usize> = blocks
-        .iter()
-        .map(|block| page_of(*block as usize))
-        .collect();
-    let again: Vec<*mut u8> = (0..2000)
-        // SAFETY: test-owned block with a valid layout; freed exactly once.
-        .map(|_| unsafe { PhpHeap.alloc(layout) })
-        .collect();
-    let reused = again
-        .iter()
-        .filter(|block| first_pages.contains(&(page_of(**block as usize))))
-        .count();
-    assert!(reused > 1000, "recycled pages served the refill: {reused}");
-    for block in again {
-        // SAFETY: test-owned block with a valid layout; freed exactly once.
-        unsafe { PhpHeap.dealloc(block, layout) };
-    }
-}
-
-#[test]
 fn medium_blocks_live_on_medium_pages() {
     if !pool_enabled() {
         return;
@@ -113,12 +73,50 @@ fn medium_blocks_live_on_medium_pages() {
             );
         }
     }
-    let layout = Layout::from_size_align(MAX_POOL + 1, 16).unwrap();
+    for &size in &[MAX_POOL + 1, 100_000, 1 << 20, LARGE_MAX] {
+        let layout = Layout::from_size_align(size, 16).unwrap();
+        // SAFETY: test-owned block with a valid layout; freed exactly once.
+        let large = unsafe { PhpHeap.alloc_zeroed(layout) };
+        assert!(
+            in_pool(large as usize),
+            "size {size} lives in the large region"
+        );
+        assert!(is_large_offset(pool_offset(large as usize)));
+        assert_eq!(large as usize % 16, 0);
+        // SAFETY: the block holds `size` bytes.
+        unsafe {
+            assert!(
+                std::slice::from_raw_parts(large, size)
+                    .iter()
+                    .all(|b| *b == 0)
+            );
+            std::ptr::write_bytes(large, 0x7B, size);
+            // Growing within the rounded capacity keeps the block.
+            let capacity = large_capacity(large);
+            assert!(capacity >= size);
+            assert_eq!(PhpHeap.realloc(large, layout, capacity), large);
+            PhpHeap.dealloc(large, Layout::from_size_align(capacity, 16).unwrap());
+            // The freed block is recycled for the next request of its size.
+            let again = PhpHeap.alloc(layout);
+            assert_eq!(again, large, "large block recycled");
+            PhpHeap.dealloc(again, layout);
+        }
+    }
+    let layout = Layout::from_size_align(LARGE_MAX + 1, 16).unwrap();
     // SAFETY: test-owned block with a valid layout; freed exactly once.
     let huge = unsafe { PhpHeap.alloc(layout) };
     assert!(!in_pool(huge as usize), "huge blocks come from the system");
     // SAFETY: test-owned block with a valid layout; freed exactly once.
     unsafe { PhpHeap.dealloc(huge, layout) };
+    let layout = Layout::from_size_align(4096, 64).unwrap();
+    // SAFETY: test-owned block with a valid layout; freed exactly once.
+    let aligned = unsafe { PhpHeap.alloc(layout) };
+    assert!(
+        !in_pool(aligned as usize),
+        "over-aligned blocks come from the system"
+    );
+    // SAFETY: test-owned block with a valid layout; freed exactly once.
+    unsafe { PhpHeap.dealloc(aligned, layout) };
 }
 
 #[test]

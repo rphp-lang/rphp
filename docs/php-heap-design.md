@@ -18,18 +18,27 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
 ## Architektura v7 (aktuální stav větve)
 
 - **Rezervace adresního prostoru**: jeden `mmap(MAP_NORESERVE)` 64 GiB
-  (fallback poloviční až 256 MiB). Dolní polovina = region malých stránek
-  (64 KiB), horní polovina = region středních stránek (1 MiB). Vlastnictví
-  bloku = jedno odečtení a porovnání s rozsahem (`pool_offset`), hlavička
-  stránky = maska podle regionu; žádné hlavičky bloků. Tři rozsahové
-  hodnoty leží v jedné 64 B statice (`RANGE`), takže rychlá cesta bez LTO
-  dělá jediný GOT load.
+  (fallback poloviční až 256 MiB) s `madvise(MADV_HUGEPAGE)` na celý rozsah
+  (`RPHP_HEAP_THP=0` vypne). Stránky se odřezávají souvisle, takže první
+  dotyk faultuje po 2 MiB místo 4 KiB a TLB pokryje 512× více heapu na
+  záznam; THP je v systému v režimu `madvise`, glibc ani mimalloc ho tedy
+  nedostanou. Dolní polovina = region malých stránek (64 KiB), třetí
+  čtvrtina = region středních stránek (1 MiB), poslední čtvrtina = region
+  velkých bloků. Vlastnictví bloku = jedno odečtení a porovnání s rozsahem
+  (`pool_offset`), hlavička stránky = maska podle regionu; žádné hlavičky
+  bloků u malých a středních tříd. Rozsahové hodnoty leží v jedné 64 B
+  statice (`RANGE`), takže rychlá cesta bez LTO dělá jediný GOT load.
 - **Velikostní třídy** (40): malé 8, 16, 24, 32, 40, 48, 56, 64, 80, 96,
   112, 128, 152, 168, 192, 256, 384, 512, 768, 1024 (dvě konstantní tabulky
   `(size+7)/8 → třída`, pro align ≤ 8 a pro align 16); střední 1280 … 32768
   ve čtyřech krocích na oktávu (1,25×, 1,5×, 1,75×, 2×), třída spočtená
-  z `bsr`. Nad 32 KiB nebo align > 16 → systémový alokátor (bloky leží mimo
-  rezervaci).
+  z `bsr`. **Velké bloky** 32 KiB–4 MiB: násobky 64 KiB s 128 B hlavičkou
+  (počet jednotek), globální lock-free zásobník volných bloků na každý
+  počet jednotek (64 kbelíků), nad 256 MiB volných bajtů `MADV_DONTNEED`
+  těla bloku; realloc v rámci zaokrouhlené kapacity vrací tentýž blok. Nad
+  4 MiB nebo align > 16 → systémový alokátor (bloky leží mimo rezervaci).
+  Důvod: glibc obsluhovalo bloky > 32 KiB přes `brk` heap s trimem, což
+  stálo ~70 k opakovaných 4 KiB faultů na cold běh PHPStanu.
 - **Stránka** = jedna třída; hlavička 128 B, horké owner-only položky
   v prvním řádku cache: `local_free` (LIFO uvolněných bloků vlastníka),
   `bump`, `end`, `used` (počet vydaných bloků), `class`; dále
@@ -63,8 +72,10 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
   nezůstal záznam na stránku, kterou už nevlastní.
 - **Recyklace stránek**: plně volná neaktuální stránka → per-region
   lock-free pool volných stránek (znovu použitelný libovolnou třídou,
-  hlavička se přepíše). Nad rozpočet 16 MiB rezidentních stránek na region
-  se blokový prostor stránky vrací OS přes `madvise(MADV_DONTNEED)`.
+  hlavička se přepíše). Nad rozpočet 64 MiB rezidentních stránek na region
+  se blokový prostor stránky vrací OS přes `madvise(MADV_DONTNEED)`
+  (částečný DONTNEED rozbije THP stránku; rozpočet 16 MiB měřitelně nic
+  nezlepšil ani nezhoršil, 64 MiB je rezerva pro fázové workloady).
 - **Zánik vlákna**: `EXIT_GUARD` (TLS s destruktorem, registrovaný při
   první stránce) přesune plně volné stránky do poolu a ostatní do orphan
   seznamu (mutex, přeskočen při `ORPHAN_COUNT == 0`), přepne vlákno do
@@ -72,8 +83,15 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
 - **realloc**: ve stejné třídě vrací tentýž blok; jinak alloc+copy+free.
   Systémový blok zůstává u systému.
 - **Debug režim** (`--features php-heap-debug`): uvolněný blok otráven
-  0xDE, druhé slovo nese značku; opakované uvolnění téhož bloku → abort
-  s hlášením.
+  0xDE, druhé slovo nese 64-bit značku; opakované uvolnění téhož bloku →
+  abort s popisem bloku a stavu stránky (třída, `used`, listing, zda je
+  v lokálním/remote listu). Dále: blok vydaný z free listu musí značku
+  nést (jinak zápis po uvolnění), `dealloc`/`realloc` musí dostat layout
+  odpovídající třídě stránky a ukazatel na začátek slotu, a každá
+  inicializovaná stránka se vynuluje (poučení: `Vec<Option<Value>>`
+  in-place collect přesouvá i neinicializované bajty, takže stará značka z
+  předchozího života stránky vyplavala v živém bloku jako falešný double
+  free).
 - **`RPHP_HEAP=system`** přepne vše na systémový alokátor (A/B bez rebuildu).
 - **`--features php-heap-asm`**: ruční x86-64 sekvence rychlé cesty alloc
   (offsety hlavičky jsou přišpendlené `const` asserty).
@@ -85,36 +103,62 @@ ve frontě remote vlastníka jen s nastaveným QUEUED a jen dokud je jeho;
 osiřelá/poolovaná stránka má stav 0 a její remote list přebírá adoptující;
 alokátor nikdy neunwinduje a nealokuje přes sebe.
 
-## Měření (stejný stroj, sekvenčně; zátěž ostatních agentů kolísá)
+## Měření (stejný stroj, střídavé běhy, všechny varianty ze stejného commitu)
 
-| | glibc | mimalloc | heap v2 | heap v3 | heap v5 (Rust) | heap v5 (asm) |
-|---|---|---|---|---|---|---|
-| boot | 1,29 s | 1,10 / 0,91 s | 1,13 s | 1,16 s | 0,94 s | 0,94 s |
-| cold | 5,14 s | 4,41 / 3,21 s | 4,31 s | 3,69 s | 3,28–3,32 s | 3,25–3,27 s |
-| warm | 1,70 s | 1,38 / 1,14 s | 1,49 s | 1,26–1,36 s | 1,21–1,23 s | 1,22 s |
-| RSS cold | 684 MB | 723–734 MB | 649 MB | 650 MB | 649 MB | 649 MB |
+Zátěž ostatních agentů na stroji kolísá, proto se porovnává jen uvnitř
+jednoho běhu skriptu (`measure.sh`, 3–5 kol, každé kolo všechny varianty za
+sebou). PHPStan 2.2.14 phar, `analyse` nad `scratchpad/proj`, výstup
+byte-identický s PHP ve všech bězích. Wall = `/usr/bin/time %e`, RSS =
+`%M`, faulty = `%R` (minor).
 
-(dvě hodnoty mimalloc = dvě různé zátěže stroje; porovnávat vždy jen
-sousední sloupce téhož běhu; v5 a asm byly měřeny prokládaně se stejným
-mimalloc během: 3,21 / 1,14 s). Instrukce alokátoru v benchmarku smyčky
-`usestmt.php`: glibc 10 % → heap v3+ < 0,3 % (rychlá cesta inlinovaná do
-volajících; callgrind celkem 5,49 G glibc → 5,11 G heap → 5,12 G heap-asm).
+**Běh A (commit 7ea29d83, v7, bez THP a velkých bloků), medián z 5 kol:**
 
-Rychlá cesta v5 (`__rust_alloc`, hit ve free listu): 22 instrukcí včetně
-3 push/pop kvůli tail-callům do studených cest; mimalloc srovnatelně.
-**ASM varianta (`php-heap-asm`, x86-64 inline asm pro pop/bump nad stejnou
-strukturou) dává shodný čas i počet instrukcí** — kompilátor generuje tutéž
-sekvenci; jediné, co asm změnilo, je pořadí načtení vstupů. Závěr měření:
-další zisk je v politice (per-page free listy pro lokalitu, typované pooly
-s třídou známou při překladu, méně alokací), ne v instrukčním výběru.
+| | glibc (`RPHP_HEAP=system`) | mimalloc | heap v7 (Rust) | heap v7 (asm) |
+|---|---|---|---|---|
+| boot `--version` | 1,20 s / 252 MB | 0,97 s / 286 MB | 1,03 s / 245 MB | 1,03 s / 245 MB |
+| cold analyse | 4,25 s / 685 MB | 3,49 s / 735 MB | 3,59 s / 654 MB | 3,60 s / 654 MB |
+| warm analyse | 1,51 s / 284 MB | 1,25 s / 312 MB | 1,30 s / 276 MB | 1,30 s / 276 MB |
+| allocbench.php | 1,29 s | 1,02 s | 0,98 s | 0,99 s |
 
-Zbývající rozdíl proti mimalloc (~2–6 % času při −12 % RSS) je
-pravděpodobně lokalita: náš free list třídy míchá bloky ze všech stránek
-vlákna, mimalloc alokuje ze seznamu jedné stránky, dokud ji nevyčerpá
-(lepší TLB/cache pro po sobě jdoucí alokace). To je další měřený krok.
+**Běh B (stroj méně zatížený; commit s THP + regionem velkých bloků), 3 kola:**
 
-v1 (refill při každém bumpu, průchod všech stránek) byl 8× pomalejší než
-glibc — připomínka, že politika, ne instrukce, rozhoduje.
+| | mimalloc | heap v7 | heap THP (16 MiB pool) | heap THP + velké bloky | heap, THP vypnuto |
+|---|---|---|---|---|---|
+| boot | 0,91–1,01 s / 286 MB | 0,95–0,96 s / 246 MB | 0,90–0,92 s / 274 MB | 0,90–0,93 s / 308 MB | 0,95–1,02 s / 267 MB |
+| cold | 3,11–3,43 s / 709–737 MB | 3,21–3,22 s / 655 MB | 3,04–3,13 s / 680 MB | **3,01–3,03 s** / 733 MB | 3,21–3,23 s / 690 MB |
+| warm | 1,13–1,15 s / 309–314 MB | 1,19–1,22 s / 276 MB | 1,13–1,16 s / 303 MB | **1,11–1,13 s** / 347 MB | 1,20–1,24 s / 304 MB |
+| minor faulty cold | 29–39 k | 221 k | 122 k | 110 k | 227 k |
+| allocbench | 0,95–1,00 s | 0,94–0,97 s | 0,97–0,99 s | 0,97–1,01 s | 0,96–1,01 s |
+
+**Callgrind (deterministické, instrukce celkem):**
+
+| | glibc | mimalloc | heap (Rust) | heap (asm) |
+|---|---|---|---|---|
+| allocbench.php | 21,57 G | 18,08 G | **17,81 G** | 18,16 G |
+| usestmt.php | 5,517 G | 5,203 G | **5,085 G** | 5,094 G |
+
+Závěry:
+
+- Vlastní heap vykonává méně instrukcí než mimalloc i glibc a na PHPStanu
+  je s THP a vlastním regionem velkých bloků nejrychlejší ve všech třech
+  metrikách (cold ≈ −4 % až −12 % proti mimallocu podle zátěže, warm a boot
+  o 1–3 %). Cena: RSS srovnatelné s mimallocem (733 vs 709–737 MB), o 80 MB
+  více než v7 bez THP (2 MiB granularita + držení volných velkých bloků).
+- **ASM varianta rychlé cesty není rychlejší**: stejný nebo horší počet
+  instrukcí (LLVM z Rust kódu vygeneruje identickou sekvenci; ruční blok
+  navíc načítá velikost třídy i na pop cestě a přidává jeden test/jmp) a
+  wall time v šumu. Ověřeno disassemblerem `__rust_alloc` obou binárek a
+  střídavým měřením. Zůstává za feature `php-heap-asm` jako referenční
+  experiment.
+- Zbývající rozdíl počtu faultů proti mimallocu (110 k vs 30–39 k) není
+  v heapu: ~7 000 `mmap`/`munmap` na cold běh u obou variant jsou zásobníky
+  parser vláken (jedno vlákno na soubor), tj. téma pro runtime, ne pro
+  alokátor.
+- Prolog `__rust_alloc` má 3 push/pop kvůli rozhodnutí LLVM register
+  alokátoru při tail-callech do studených cest; přeuspořádání argumentů ani
+  skalární argumenty to nezměnily. Release profil není LTO, statiky z lib
+  crate jdou přes GOT (sloučeno do jedné statiky `RANGE`); `max-perf`
+  profil (fat LTO) tuto nepřímost odstraní.
 
 ## Co je ještě otevřené
 
@@ -124,8 +168,7 @@ glibc — připomínka, že politika, ne instrukce, rozhoduje.
    alokací (2,55 M/běh); vyžaduje vlastní owner místo `Rc<String>` a
    společný kontrakt s klíči polí, cache a účtováním (`as_string_mut`
    vrací `&mut String` na stovkách míst).
-3. **Bloky > 32 KiB**: systémový alokátor (0,1 % alokací); vlastní správa
-   by dávala smysl až pro FPM-styl workloady.
+3. **Bloky > 4 MiB a align > 16**: systémový alokátor (vzácné).
 4. **Remote free na stránce, jejíž vlastník už nerefilluje**: bloky čekají
    v `remote_free`, dokud vlastník nepotřebuje paměť (nebo nezanikne).
 5. **Prolog `__rust_alloc`**: LLVM ukládá argumenty do callee-saved
@@ -137,10 +180,12 @@ glibc — připomínka, že politika, ne instrukce, rozhoduje.
 ## Testy
 
 `src/heap/tests.rs`: tabulka tříd (malé i střední), LIFO reuse, zeroed/align
-kontrakty, realloc, recyklace prázdných stránek přes pool, střední třídy na
-středních stránkách, stress 200 k operací s náhodnými velikostmi a kontrolou
+kontrakty, realloc, střední třídy na středních stránkách, velké bloky, stress 200 k operací s náhodnými velikostmi a kontrolou
 obsahu. `tests/heap_adoption.rs` (vlastní proces): adopce stránek zaniklého
 vlákna. `tests/heap_remote_free.rs` (vlastní proces): ping-pong producent /
-4 uvolňující vlákna, návrat remote bloků vlastníkovi. Vše běží i s
+4 uvolňující vlákna, návrat remote bloků vlastníkovi.
+`tests/heap_recycling.rs` (vlastní proces): prázdné stránky jdou do poolu
+a obslouží další refill. Velké bloky (region, zaokrouhlená kapacita,
+recyklace, hranice k systému) v `src/heap/tests.rs`. Vše běží i s
 `php-heap-asm` a `php-heap-debug`.
 Celá default e2e sada běží pod heapem (globální alokátor je v lib).
