@@ -1617,8 +1617,11 @@ fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
                 && strlen.op1_type == opline.result_type
                 && strlen.op1 == opline.result
                 && matches!(strlen.result_type, OpType::Tmp | OpType::Var);
-            if consumes_fetch {
-                let length = unsafe { property.as_str().unwrap_unchecked().len() as i64 };
+            // PHP strings are byte strings: a stored `\xff` byte is wider in
+            // the internal representation, so measure PHP bytes exactly like
+            // the Strlen opcode does and leave other encodings to it.
+            if consumes_fetch && let Some(length) = property.php_string_len() {
+                let length = length as i64;
                 let result_ptr = unsafe {
                     (*frame).slot_ptr(strlen.result as u32)
                 };
@@ -1821,14 +1824,35 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
         return finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr);
     }
 
-    let object_class_id = unsafe { obj_val.object_class_id_unchecked() };
+    // SAFETY: the tag check above proves an Object value; the frame is the
+    // live executing frame whose function pointer and call-kind flags stay
+    // valid for this read-only probe.
+    let (object_class_id, scope_matches) = unsafe {
+        let scope = cache.scope_function();
+        (
+            obj_val.object_class_id_unchecked(),
+            RUNTIME_NAME
+                || scope.is_null()
+                || (!frame.is_null()
+                    && (*frame).func == scope
+                    && !(*frame).has_closure_scope()),
+        )
+    };
     if cache.property_flags() & 1 == 0
         || cache.class_id != object_class_id
         || object_class_id == 0
+        || !scope_matches
     {
         return CachedFetchObjResult::Miss;
     }
     if !declared_name_matches {
+        return CachedFetchObjResult::Miss;
+    }
+    // Scoped entries are read-only proofs; writes re-check set visibility.
+    if !RUNTIME_NAME
+        && !cache.scope_function().is_null()
+        && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC) != 0
+    {
         return CachedFetchObjResult::Miss;
     }
 
@@ -2275,7 +2299,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
     if let Some(obj) = obj_val.as_object() {
 
         // ── Full resolution (cache miss or private/protected) ──
-        let caller_class = get_caller_class(frame, eg);
+        let (caller_class, scope_function) = caller_scope(frame, eg);
 
         // Private property early binding is only valid when the receiver
         // is in the same inheritance hierarchy as the caller.  When
@@ -2494,6 +2518,27 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                         );
                     }
                 }
+            }
+        } else if !is_public
+            && property_accessible
+            && !force_dynamic
+            && obj.class_id != 0
+            && opline.op2_type == OpType::Const
+            && !scope_function.is_null()
+        {
+            // A private/protected declared property read from a scope that is
+            // fixed by the executing function. The slot and the visibility
+            // verdict only depend on (function, object class), so the entry
+            // is keyed on both; it stays read-only and is not memoized for
+            // other object classes.
+            if let Some(slot) = obj.property_slot(&key)
+                && !eg
+                    .instance_property_definition(obj.class_id, slot)
+                    .is_some_and(|definition| definition.has_get_hook)
+            {
+                let ic_mut = op_array.inline_cache_mut(ip);
+                ic_mut.set_property(obj.class_id, slot, 1);
+                ic_mut.set_scope_function(scope_function);
             }
         }
 

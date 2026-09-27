@@ -310,12 +310,12 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
 fn value_tree_requires_vm_release(
     eg: &ExecutorGlobals,
     value: &Value,
-    seen_objects: &mut std::collections::HashSet<usize>,
-    seen_arrays: &mut std::collections::HashSet<usize>,
-    seen_references: &mut std::collections::HashSet<usize>,
-    seen_closures: &mut std::collections::HashSet<usize>,
+    seen_objects: &mut IdentitySet,
+    seen_arrays: &mut IdentitySet,
+    seen_references: &mut IdentitySet,
+    seen_closures: &mut IdentitySet,
 ) -> bool {
-    type Counts = HashMap<usize, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
+    type Counts = IdentityMap;
 
     #[inline]
     fn node_identity(value: &Value) -> Option<usize> {
@@ -380,7 +380,7 @@ fn value_tree_requires_vm_release(
     // tree. That keeps a replaced cache array from walking the whole object
     // graph it shares with the rest of the program.
     let mut encounters: Counts = Counts::default();
-    let mut descended: std::collections::HashSet<usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>> =
+    let mut descended: IdentitySet =
         Default::default();
     let mut current: Option<(Value, u32)> = None;
     let mut maximum_depth = 0u32;
@@ -548,10 +548,10 @@ fn frame_requires_vm_release(
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
         let pending_identity = pending.object_identity();
-        let mut seen_objects = std::collections::HashSet::new();
-        let mut seen_arrays = std::collections::HashSet::new();
-        let mut seen_references = std::collections::HashSet::new();
-        let mut seen_closures = std::collections::HashSet::new();
+        let mut seen_objects = IdentitySet::default();
+        let mut seen_arrays = IdentitySet::default();
+        let mut seen_references = IdentitySet::default();
+        let mut seen_closures = IdentitySet::default();
         let mut inspect_release = |value: &Value| {
             !pending_identity.is_some_and(|identity| {
                 value.dereferenced().object_identity() == Some(identity)
@@ -620,7 +620,7 @@ fn plain_generator_children(
 /// A root the caller releases may still be held by the slot or prepared
 /// handle that names it; only nested arrays are subject to the shared-owner
 /// rule in `collect_destructor_children_inner`.
-fn exempt_root_array(root: &Value, array_encounters: &mut HashMap<usize, usize>) {
+fn exempt_root_array(root: &Value, array_encounters: &mut IdentityMap) {
     if let Some(identity) = root.dereferenced().array_identity() {
         array_encounters.insert(identity, usize::MAX >> 1);
     }
@@ -630,12 +630,12 @@ fn collect_destructor_children(
     eg: &ExecutorGlobals,
     value: &Value,
     children: &mut Vec<(usize, usize, Value)>,
-    seen_arrays: &mut std::collections::HashSet<usize>,
-    seen_references: &mut std::collections::HashSet<usize>,
-    seen_closures: &mut std::collections::HashSet<usize>,
-    seen_generators: &mut std::collections::HashSet<usize>,
-    child_index: &mut HashMap<usize, usize>,
-    array_encounters: &mut HashMap<usize, usize>,
+    seen_arrays: &mut IdentitySet,
+    seen_references: &mut IdentitySet,
+    seen_closures: &mut IdentitySet,
+    seen_generators: &mut IdentitySet,
+    child_index: &mut IdentityMap,
+    array_encounters: &mut IdentityMap,
 ) {
     stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
         collect_destructor_children_inner(
@@ -656,12 +656,12 @@ fn collect_destructor_children_inner(
     eg: &ExecutorGlobals,
     value: &Value,
     children: &mut Vec<(usize, usize, Value)>,
-    seen_arrays: &mut std::collections::HashSet<usize>,
-    seen_references: &mut std::collections::HashSet<usize>,
-    seen_closures: &mut std::collections::HashSet<usize>,
-    seen_generators: &mut std::collections::HashSet<usize>,
-    child_index: &mut HashMap<usize, usize>,
-    array_encounters: &mut HashMap<usize, usize>,
+    seen_arrays: &mut IdentitySet,
+    seen_references: &mut IdentitySet,
+    seen_closures: &mut IdentitySet,
+    seen_generators: &mut IdentitySet,
+    child_index: &mut IdentityMap,
+    array_encounters: &mut IdentityMap,
 ) {
     if let Some(identity) = value.reference_identity()
         && !seen_references.insert(identity)
@@ -813,7 +813,7 @@ fn run_final_object_destructor_tree(
     eg: &mut ExecutorGlobals,
     owner: Value,
     expected_references: usize,
-    release_references: Option<&HashMap<usize, usize>>,
+    release_references: Option<&IdentityMap>,
     detach_lazy_state: bool,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
@@ -839,7 +839,7 @@ fn run_final_object_destructor_tree_inner(
     eg: &mut ExecutorGlobals,
     owner: Value,
     mut expected_references: usize,
-    release_references: Option<&HashMap<usize, usize>>,
+    release_references: Option<&IdentityMap>,
     detach_lazy_state: bool,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
@@ -1081,9 +1081,9 @@ fn collect_final_destructor_children(eg: &ExecutorGlobals, owner: &Value) -> Vec
                 }
             }
         });
-    let mut seen_generators = std::collections::HashSet::new();
-    let mut child_index = HashMap::<usize, usize>::new();
-    let mut array_encounters = HashMap::<usize, usize>::new();
+    let mut seen_generators = IdentitySet::default();
+    let mut child_index = IdentityMap::default();
+    let mut array_encounters = IdentityMap::default();
     if let Some(object) = owner.as_object() {
         object.for_each_owned_value(|property| {
             collect_destructor_children(
@@ -1304,7 +1304,7 @@ fn run_request_surviving_global_destructors(
             let _snapshot = crate::value::suppress_cycle_snapshot_roots();
             let mut pending: Vec<_> = eg.globals.values()
                 .filter_map(Value::clone_cycle_handle).collect();
-            let mut seen = std::collections::HashSet::new();
+            let mut seen = IdentitySet::default();
             while let Some(value) = pending.pop() {
                 let Some((identity, _)) = value.cycle_node() else { continue; };
                 if !seen.insert(identity) { continue; }
@@ -1375,9 +1375,9 @@ fn collect_retiring_root_destructors(
                 if canonical_direct_roots_retained { visit(root); }
             });
         });
-    let mut seen_generators = std::collections::HashSet::new();
-    let mut child_index = HashMap::<usize, usize>::new();
-    let mut array_encounters = HashMap::<usize, usize>::new();
+    let mut seen_generators = IdentitySet::default();
+    let mut child_index = IdentityMap::default();
+    let mut array_encounters = IdentityMap::default();
     visit_roots(&mut |root| {
         exempt_root_array(root, &mut array_encounters);
         collect_destructor_children(
@@ -1424,7 +1424,7 @@ fn run_collected_value_destructors(
     let release_references = candidates
         .iter()
         .map(|(identity, references, _)| (*identity, *references))
-        .collect::<HashMap<_, _>>();
+        .collect::<IdentityMap>();
     let mut pending = candidates;
     let mut any_progress = false;
     loop {
@@ -1552,7 +1552,7 @@ pub(crate) fn run_request_cycle_destructors(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    let mut visited = std::collections::HashSet::new();
+    let mut visited = IdentitySet::default();
     let mut pending = eg.exception.take();
     loop {
         let roots = eg.request_cycle_object_roots();
@@ -1728,9 +1728,9 @@ fn run_frame_destructors_filtered(
             let (mut seen_arrays, mut seen_references, mut seen_closures) =
                 retained_temp_containers(visit_roots);
             let mut candidates = Vec::new();
-            let mut seen_generators = std::collections::HashSet::new();
-            let mut child_index = HashMap::new();
-            let mut array_encounters = HashMap::new();
+            let mut seen_generators = IdentitySet::default();
+            let mut child_index = IdentityMap::default();
+            let mut array_encounters = IdentityMap::default();
             visit_roots(&mut |value| {
                 collect_destructor_children(
                     eg, value, &mut candidates, &mut seen_arrays,
@@ -1757,7 +1757,7 @@ fn run_frame_destructors_filtered(
         // native resources often make a frame heap-bearing without requiring
         // any PHP destructor work. This uses the same identity predicate as
         // the release planner; no user callback runs during classification.
-        let mut counts = HashMap::<usize, usize>::new();
+        let mut counts = IdentityMap::default();
         if total <= 64 {
             for index in HeapSlotIter::new((*frame).owned_heap_bitmap()) {
                 if let Some(identity) = destructor_identity(eg, &*base.add(index as usize)) {
@@ -2223,10 +2223,10 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     let requires_vm_release = value_tree_requires_vm_release(
         eg,
         value,
-        &mut std::collections::HashSet::new(),
-        &mut std::collections::HashSet::new(),
-        &mut std::collections::HashSet::new(),
-        &mut std::collections::HashSet::new(),
+        &mut IdentitySet::default(),
+        &mut IdentitySet::default(),
+        &mut IdentitySet::default(),
+        &mut IdentitySet::default(),
     );
     requires_vm_release.then(|| PreparedValueDestructor::Direct {
         owner: value.clone(),
@@ -2264,10 +2264,10 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
         || !value_tree_requires_vm_release(
             eg,
             value,
-            &mut std::collections::HashSet::new(),
-            &mut std::collections::HashSet::new(),
-            &mut std::collections::HashSet::new(),
-            &mut std::collections::HashSet::new(),
+            &mut IdentitySet::default(),
+            &mut IdentitySet::default(),
+            &mut IdentitySet::default(),
+            &mut IdentitySet::default(),
         )
     {
         return None;
@@ -2587,14 +2587,14 @@ const STATEMENT_TEMPS_OPERANDS: u8 = 3;
 #[cold]
 fn retained_temp_containers(
     roots: impl FnOnce(&mut dyn FnMut(&Value)),
-) -> (std::collections::HashSet<usize>, std::collections::HashSet<usize>, std::collections::HashSet<usize>) {
+) -> (IdentitySet, IdentitySet, IdentitySet) {
     use crate::value::CycleNodeKind;
     struct Container {
         value: Value,
         incoming: usize,
         expanded: bool,
     }
-    fn add(value: &Value, nodes: &mut Vec<Container>, indices: &mut HashMap<usize, usize>, pending: &mut Vec<usize>) {
+    fn add(value: &Value, nodes: &mut Vec<Container>, indices: &mut IdentityMap, pending: &mut Vec<usize>) {
         let Some((identity, kind)) = value.cycle_node() else { return; };
         if kind == CycleNodeKind::Object { return; }
         let index = *indices.entry(identity).or_insert_with(|| {
@@ -2607,7 +2607,7 @@ fn retained_temp_containers(
     }
     let _snapshot_guard = crate::value::suppress_cycle_snapshot_roots();
     let mut nodes = Vec::new();
-    let mut indices = HashMap::new();
+    let mut indices = IdentityMap::default();
     let mut pending = Vec::new();
     roots(&mut |root| add(root, &mut nodes, &mut indices, &mut pending));
     while let Some(index) = pending.pop() {
@@ -2617,9 +2617,9 @@ fn retained_temp_containers(
         let children = node.value.cycle_child_handles();
         for child in children { add(&child, &mut nodes, &mut indices, &mut pending); }
     }
-    let mut arrays = std::collections::HashSet::new();
-    let mut references = std::collections::HashSet::new();
-    let mut closures = std::collections::HashSet::new();
+    let mut arrays = IdentitySet::default();
+    let mut references = IdentitySet::default();
+    let mut closures = IdentitySet::default();
     for node in &nodes {
         if node.expanded { continue; }
         let (identity, kind) = node.value.cycle_node().unwrap();
@@ -2974,9 +2974,9 @@ fn release_statement_temps(
                         if is_owned(index) { visit(&*base.add(index)); }
                     }
                 });
-            let mut seen_generators = std::collections::HashSet::new();
-    let mut child_index = HashMap::<usize, usize>::new();
-    let mut array_encounters = HashMap::<usize, usize>::new();
+            let mut seen_generators = IdentitySet::default();
+    let mut child_index = IdentityMap::default();
+    let mut array_encounters = IdentityMap::default();
             for index in first..end {
                 if !is_owned(index) {
                     continue;
@@ -3042,7 +3042,7 @@ fn release_statement_temps(
             return Ok(());
         }
 
-        let mut object_counts = HashMap::<usize, usize>::new();
+        let mut object_counts = IdentityMap::default();
         let mut identities = Vec::new();
         for index in first..end {
             if !is_owned(index) {
@@ -4333,7 +4333,7 @@ pub(crate) fn append_replaced_exception(
     // Do not create a cycle when the displaced exception already names the
     // newly escaping Throwable somewhere in its explicit previous chain.
     let mut probe = displaced.clone();
-    let mut displaced_chain = std::collections::HashSet::new();
+    let mut displaced_chain = IdentitySet::default();
     loop {
         let Some(identity) = probe.object_identity() else {
             break;
@@ -4364,7 +4364,7 @@ pub(crate) fn append_replaced_exception(
         probe = previous;
     }
     let mut current = thrown.clone();
-    let mut seen = std::collections::HashSet::new();
+    let mut seen = IdentitySet::default();
     loop {
         let Some(identity) = current.object_identity() else {
             return;

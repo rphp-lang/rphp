@@ -2033,10 +2033,10 @@ pub(crate) fn unadmitted_cycle_root_snapshot() -> Vec<Value> {
     })
 }
 
-pub(crate) fn unadmitted_cycle_root_identities() -> std::collections::HashSet<usize> {
+pub(crate) fn unadmitted_cycle_root_identities() -> crate::vm::execute::IdentitySet {
     CYCLE_ROOTS.with_borrow_mut(|state| {
         let Some(unadmitted) = state.unadmitted.as_deref_mut() else {
-            return std::collections::HashSet::new();
+            return crate::vm::execute::IdentitySet::default();
         };
         unadmitted.retain(|_, candidate| candidate.strong_count() != 0);
         unadmitted.keys().copied().collect()

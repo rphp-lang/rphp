@@ -878,6 +878,22 @@ impl InlineCache {
         self.func.cast()
     }
 
+    /// For a Const-name property cache: the function whose lexical scope
+    /// proved a non-public declared property accessible, or null for a
+    /// public property. The hit path requires the same executing function
+    /// without a rebound closure scope before trusting such an entry.
+    #[inline(always)]
+    pub fn scope_function(&self) -> *const FunctionCommon {
+        self.func
+    }
+
+    #[inline]
+    pub fn set_scope_function(&mut self, func: *const FunctionCommon) {
+        debug_assert_ne!(self.class_id, 0);
+        debug_assert_ne!(self.property_flags(), 0);
+        self.func = func;
+    }
+
     #[inline(always)]
     pub fn set_declared_property_name(&mut self, name: *const String) {
         debug_assert_ne!(self.class_id, 0);

@@ -307,8 +307,21 @@ fn caller_class_id(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> u32 {
 
 #[inline]
 fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<String> {
+    caller_scope(frame, eg).0
+}
+
+/// The caller's lexical class plus, when that class follows from the
+/// executing function alone (an ordinary non-closure, non-trait function or
+/// method), the function pointer that fixes it. Property inline caches key
+/// non-public accesses on that pointer; a null pointer means the scope
+/// depends on frame state (rebound closure, trait composition, late static
+/// scope) and must not be cached.
+fn caller_scope(
+    frame: *mut ExecuteData,
+    eg: &ExecutorGlobals,
+) -> (Option<String>, *const FunctionCommon) {
     if frame.is_null() {
-        return None;
+        return (None, std::ptr::null());
     }
     // SAFETY: callers pass the live executing frame; its function pointer,
     // compiler-sized CV range and scope TMP remain valid for this
@@ -318,11 +331,14 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
     let declaring_trait = unsafe {
         let func = (*frame).func;
         if func.is_null() {
-            return None;
+            return (None, std::ptr::null());
         }
         if (*frame).has_closure_scope() {
             let id = (*frame).tmp((*frame).num_temps - 1).as_long().unwrap_or(0) as u32;
-            return eg.class_by_id(id).map(|class| class.name.clone());
+            return (
+                eg.class_by_id(id).map(|class| class.name.clone()),
+                std::ptr::null(),
+            );
         }
         let mut declaring_trait = None;
         if let Some(class) = eg.declaring_class_of(func) {
@@ -331,7 +347,7 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
                 .get(class)
                 .is_some_and(|definition| definition.is_trait);
             if !is_trait {
-                return Some(class.to_string());
+                return (Some(class.to_string()), func);
             }
             declaring_trait = Some(class);
 
@@ -340,7 +356,7 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
                 if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp {
                     let scope = &*(*frame).slot_ptr(scope_tmp as u32);
                     if let Some(scope) = scope.as_str() {
-                        return Some(scope.to_string());
+                        return (Some(scope.to_string()), std::ptr::null());
                     }
                 }
             }
@@ -355,7 +371,7 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
             if let Some(receiver_class) = receiver_class
                 && let Some(scope) = eg.trait_composition_scope(&receiver_class, class)
             {
-                return Some(scope.to_string());
+                return (Some(scope.to_string()), std::ptr::null());
             }
         }
         declaring_trait
@@ -374,13 +390,21 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
         if class_id == 0 {
             class_id = called_class_id_for_frame(eg, frame, 0);
         }
-        let called = eg.class_by_id(class_id)?;
-        return Some(
-            eg.trait_composition_scope(&called.name, trait_name)
-                .map_or_else(|| called.name.clone(), str::to_string),
+        let Some(called) = eg.class_by_id(class_id) else {
+            return (None, std::ptr::null());
+        };
+        return (
+            Some(
+                eg.trait_composition_scope(&called.name, trait_name)
+                    .map_or_else(|| called.name.clone(), str::to_string),
+            ),
+            std::ptr::null(),
         );
     }
-    eg.class_by_id(class_id).map(|class| class.name.clone())
+    (
+        eg.class_by_id(class_id).map(|class| class.name.clone()),
+        std::ptr::null(),
+    )
 }
 
 /// Recover the lexical or explicitly bound class scope carried by one live
@@ -3184,6 +3208,14 @@ mod quick_dispatch;
 
 #[cfg(all(feature = "quick-loops", target_vendor = "apple"))]
 use quick_dispatch::run_quick_long_ops_loop_entry as run_quick_long_ops_loop;
+
+/// Object/array/reference identities are already well-distributed pointers;
+/// SipHash on them was a measurable share of every release plan and cycle
+/// collection.
+pub(crate) type IdentitySet =
+    std::collections::HashSet<usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
+pub(crate) type IdentityMap =
+    HashMap<usize, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
 
 #[cfg(all(feature = "quick-loops", not(target_vendor = "apple")))]
 include!("execute/quick_dispatch.rs");

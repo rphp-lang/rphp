@@ -27709,9 +27709,39 @@ takes about 1.35 s, the warm analysis about 1.8 s and the cold one about
 7 s. What remains is spread thin: allocation and freeing (about 20 %, mostly
 owned `String` payloads in tokens and the AST), the SHA-512 core (11 %),
 `memcpy` of the 272-byte `Expr` moving through the precedence cascade
-(9 %), the byte lexer (7 %) and class linking. Shrinking `Expr`/`Stmt`
-(272/856 bytes) and moving tokens out of the parser instead of cloning them
-are the next structural steps and stay open.
+(9 %), the byte lexer (7 %) and class linking. The `Expr` shrink followed:
+`Closure` and `AnonymousNew` payloads moved behind a `Box` (their source
+line stays inline for the shared line-extraction patterns), taking `Expr`
+from 272 to 104 bytes and `Stmt` from 856 to 352, and parser sites that only
+step over an already checked token stop cloning it. Bootstrap instructions
+are at 8.4 billion.
+
+The `runtime-scoped-cache` checkpoint then profiled the whole cold run
+(59 billion instructions, of which bootstrap was 8.4) and found the largest
+item in the interpreter: `$this->prop` reads of private and protected
+declared properties never entered the property inline cache, because it
+admitted public properties only, so PHPStan's 1.2 million such reads each
+re-resolved caller scope, mangled key, visibility and slot (about 6,800
+instructions apiece, 14 % of the run). A non-public declared property is
+now cached together with the executing function whose lexical scope proved
+the access (only ordinary, non-closure, non-trait functions qualify); the hit
+path requires the same function without a rebound closure scope, treats the
+entry as read-only, and never memoizes it for other object classes. The
+same profile showed SipHash on object identities in the release planner,
+the cycle collector's shutdown pass and the closure/dynamic-scope owner
+maps (6 %); those use the multiply-rotate hasher now. Fixing the cached
+read also exposed a latent fault in the fused `strlen($this->prop)` path,
+which measured the internal string representation rather than PHP bytes and
+returned 14 for a 13-byte string containing `\xff`; it now measures bytes
+like the `Strlen` opcode (`tests/e2e_scoped_property_reads.rs` covers both,
+verified against reference PHP with shadowed parent privates, rebound
+closures sharing one op array, trait methods composed into different
+classes, `__get` fallbacks and readonly modification through a private
+property). The cold run takes about 5.3 s and the warm one about 1.5 s on a
+loaded host. What remains in the interpreter: property writes to non-public
+properties still take the slow path (12 %, half of it the release pre-walk
+over a replaced sole-owned array), `preg_replace`/`preg_match` in the native
+PCRE engine (8 %), and allocation. Those stay open.
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

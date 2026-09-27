@@ -7,6 +7,8 @@
 //! strong edges.
 
 use std::collections::{HashMap, HashSet, VecDeque};
+
+use crate::vm::execute::{IdentityMap, IdentitySet};
 use std::time::{Duration, Instant};
 
 use crate::value::{
@@ -33,8 +35,8 @@ struct EphemeronEdge {
 struct CycleGraph {
     nodes: Vec<CycleNode>,
     root_count: usize,
-    indices: HashMap<usize, usize>,
-    unadmitted: HashSet<usize>,
+    indices: IdentityMap,
+    unadmitted: IdentitySet,
     ordinary_edges: Vec<(usize, usize)>,
     ephemerons: Vec<EphemeronEdge>,
     stale_weak_identities: Vec<usize>,
@@ -51,7 +53,7 @@ struct CyclePass {
 impl CycleGraph {
     /// A destructor discovered during the one allowed rerun retires now, but
     /// its still-owned component stays intact until a subsequent collection.
-    fn retained_by(&self, roots: &HashSet<usize>) -> HashSet<usize> {
+    fn retained_by(&self, roots: &IdentitySet) -> IdentitySet {
         let mut adjacency = HashMap::<usize, Vec<usize>>::new();
         for &(source, target) in &self.ordinary_edges {
             adjacency.entry(source).or_default().push(target);
@@ -106,7 +108,7 @@ impl CycleGraph {
         }
     }
 
-    fn live_identities(&self) -> HashSet<usize> {
+    fn live_identities(&self) -> IdentitySet {
         let mut incoming = vec![0usize; self.nodes.len()];
         for &(_, target) in &self.ordinary_edges {
             if let Some(&target) = self.indices.get(&target) {
@@ -186,7 +188,7 @@ impl CycleGraph {
     /// Identify the cyclic part separately from its acyclic descendants.
     /// Destructors on a cyclic node require a second pass; acyclic children
     /// with destructors retire with their owners and are not counted twice.
-    fn cyclic_identities(&self, garbage: &HashSet<usize>) -> HashSet<usize> {
+    fn cyclic_identities(&self, garbage: &IdentitySet) -> IdentitySet {
         let mut adjacency = vec![Vec::new(); self.nodes.len()];
         let mut reverse = vec![Vec::new(); self.nodes.len()];
         let mut add = |source: usize, target: usize| {
@@ -256,7 +258,7 @@ impl CycleGraph {
             components.push(members);
         }
 
-        let mut cyclic = HashSet::new();
+        let mut cyclic = IdentitySet::default();
         for members in components {
             let has_cycle = members.len() > 1
                 || members
@@ -274,7 +276,7 @@ impl CycleGraph {
     /// entered in the possible-root buffer earlier by Rust-side temporary
     /// clones, but Zend owns them through the activation and releases pending
     /// call operands before local CVs.
-    fn destructor_order(&self, garbage: &HashSet<usize>) -> Vec<usize> {
+    fn destructor_order(&self, garbage: &IdentitySet) -> Vec<usize> {
         let mut adjacency = vec![Vec::new(); self.nodes.len()];
         for &(source, target) in &self.ordinary_edges {
             if let (Some(&source), Some(&target)) =
@@ -450,7 +452,7 @@ impl ExecutorGlobals {
             .nodes
             .iter()
             .filter_map(|node| (!live.contains(&node.identity)).then_some(node.identity))
-            .collect::<HashSet<_>>();
+            .collect::<IdentitySet>();
         let mut roots: Vec<_> = graph
             .nodes
             .into_iter()
@@ -538,12 +540,12 @@ impl ExecutorGlobals {
             .filter(|node| !initially_live.contains(&node.identity))
             .map(|node| (node.identity, node.kind))
             .collect();
-        let garbage_identities: HashSet<usize> =
+        let garbage_identities: IdentitySet =
             garbage.iter().map(|(identity, _)| *identity).collect();
         let cyclic = initial.cyclic_identities(&garbage_identities);
 
         let destructor_order = initial.destructor_order(&garbage_identities);
-        let destructor_nodes: HashSet<_> = destructor_order
+        let destructor_nodes: IdentitySet = destructor_order
             .iter()
             .filter_map(|&index| {
                 let node = &initial.nodes[index];
@@ -561,7 +563,7 @@ impl ExecutorGlobals {
                 has_destructor.then_some(node.identity)
             })
             .collect();
-        let pending_destructors: HashSet<_> = initial
+        let pending_destructors: IdentitySet = initial
             .nodes
             .iter()
             .filter_map(|node| {
@@ -577,7 +579,7 @@ impl ExecutorGlobals {
         let deferred = if rerun {
             initial.retained_by(&pending_destructors)
         } else {
-            HashSet::new()
+            IdentitySet::default()
         };
         let has_destructors = !pending_destructors.is_empty();
         let mut stale = std::mem::take(&mut initial.stale_weak_identities);
@@ -585,7 +587,7 @@ impl ExecutorGlobals {
         // collection. Keep that graph instead of allocating weak handles and
         // tracing a large ordinary object cycle for a second time.
         let mut unchanged = Some(initial);
-        let mut directly_retired = HashSet::new();
+        let mut directly_retired = IdentitySet::default();
         let mut collector_time = Duration::ZERO;
         let mut destructor_time = Duration::ZERO;
         let mut pending_exception = None;
@@ -667,7 +669,7 @@ impl ExecutorGlobals {
             }
         }
         stale.extend(current.stale_weak_identities.iter().copied());
-        let collected: HashSet<usize> = garbage
+        let collected: IdentitySet = garbage
             .iter()
             .filter_map(|(identity, _)| {
                 (!currently_live.contains(identity) && !deferred.contains(identity))

@@ -1077,7 +1077,8 @@ pub struct ExecutorGlobals {
     /// Exact Closure values for active closure frames. This sparse table is
     /// allocated only after Closure invocation so ordinary calls do not pay
     /// for Closure::getCurrent() support.
-    active_closure_owners: Option<HashMap<usize, Value>>,
+    active_closure_owners:
+        Option<HashMap<usize, Value, std::hash::BuildHasherDefault<SymbolHasher>>>,
     /// Original public arguments of active user calls. Extra arguments occupy
     /// slots that compiled TMP operands may reuse, so argument-introspection
     /// functions need stable storage for the lifetime of the call frame.
@@ -1106,7 +1107,7 @@ pub struct ExecutorGlobals {
     /// Included code executes in its caller's variable scope. This sparse map
     /// aliases an include frame to the owning caller frame without changing
     /// the ordinary ExecuteData layout.
-    pub(crate) dynamic_scope_owners: HashMap<usize, usize>,
+    pub(crate) dynamic_scope_owners: crate::vm::execute::IdentityMap,
     /// Logical callers of synchronous engine-created callback frames. Their
     /// physical predecessor stays null so `Return` exits the detached
     /// executor, while live backtraces can still cross the callback boundary.
@@ -2349,7 +2350,7 @@ impl ExecutorGlobals {
             jit_auto_globals: HashMap::new(),
             phar_runtime: Default::default(),
             dynamic_variables: HashMap::new(),
-            dynamic_scope_owners: HashMap::new(),
+            dynamic_scope_owners: Default::default(),
             detached_trace_callers: None,
             debug_only_trace_frames: None,
             detached_trace_origins: None,
@@ -2494,7 +2495,7 @@ impl ExecutorGlobals {
             jit_auto_globals: HashMap::new(),
             phar_runtime: Default::default(),
             dynamic_variables: HashMap::new(),
-            dynamic_scope_owners: HashMap::new(),
+            dynamic_scope_owners: Default::default(),
             detached_trace_callers: None,
             debug_only_trace_frames: None,
             detached_trace_origins: None,
@@ -3472,7 +3473,7 @@ impl ExecutorGlobals {
     #[cold]
     pub(crate) fn publish_active_closure_owner(&mut self, frame: usize, owner: Value) {
         self.active_closure_owners
-            .get_or_insert_with(HashMap::new)
+            .get_or_insert_with(Default::default)
             .insert(frame, owner);
     }
 
