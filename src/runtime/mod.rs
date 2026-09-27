@@ -2194,13 +2194,16 @@ impl ExecutorGlobals {
             .get_or_insert_with(|| Box::new(InternalCallableMetadata::default()));
         metadata
             .functions
-            // Callback/recursive filters cross the previous 448-entry
-            // envelope. Reserve the final table once, before publication.
-            .reserve(449usize.saturating_sub(metadata.functions.len()));
+            // DOM publishes its procedural functions and native method
+            // descriptors through the same cold metadata table. Reserve the
+            // next envelope once so installing that fixed extension cannot
+            // rehash descriptors after their owners have been published.
+            .reserve(1024usize.saturating_sub(metadata.functions.len()));
         metadata
             .methods
-            // FilterIterator/RegexIterator cross the 28-owner envelope.
-            .reserve(32usize.saturating_sub(metadata.methods.len()));
+            // The legacy DOM hierarchy adds one owner entry per reflected
+            // class/interface and crosses the former 56-owner envelope.
+            .reserve(80usize.saturating_sub(metadata.methods.len()));
         let display_names = self
             .internal_function_display_names
             .get_or_insert_with(|| Box::new(InternalFunctionMap::default()));
@@ -2231,7 +2234,10 @@ impl ExecutorGlobals {
         // cross the former 130-class envelope. Reserve modest declaration
         // headroom once instead of doubling both indexed class vectors while
         // the fixed native set is being published.
-        let class_capacity = 160 + 2 * usize::from(cfg!(feature = "stream-registry"));
+        // The PHPUnit DOM foundation adds the legacy document/node family to
+        // the indexed native class inventory. Keep it inside the same
+        // one-shot startup allocation with room for ordinary declarations.
+        let class_capacity = 192 + 2 * usize::from(cfg!(feature = "stream-registry"));
         self.class_by_id.reserve(class_capacity);
         self.static_property_slots_by_class.reserve(class_capacity);
         // RoundingMode contributes eight request-local case singleton slots;

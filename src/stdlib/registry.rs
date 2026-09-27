@@ -4959,6 +4959,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     funcs.extend(gettext::register(eg));
     #[cfg(target_os = "linux")]
     funcs.extend(iconv::register(eg));
+    funcs.extend(dom::register_functions(eg));
     funcs.extend(xml_writer::register_functions(eg));
 
     eg.seal_internal_class_ids();

@@ -36,21 +36,40 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
-The `phpunit-xmlwriter-extension` checkpoint over `08703b60` admits the PHP
-8.5 CLI XMLWriter surface through an independently implemented serializer.
-All 42 procedures and 45 class methods expose exact Reflection contracts;
-memory, URI and stream targets cover namespace, DTD, encoding, flush,
-invalidation and subclass-constructor lifetimes. The complete upstream packet
-is **50 pass / 0 fail / 1 XMLReader-dependent skip**.
+The `phpunit-dom-extension` checkpoint over `1a27815b` adds an independently
+implemented, bounded legacy DOM foundation for PHPUnit. Both global functions
+have exact PHP 8.5 contracts; 18/22 legacy types and 66 exact legacy methods
+cover document parsing/serialization, one shared mutable tree, namespaces,
+live collections, clone/import/adopt, canonical output and PHPUnit's relative
+configuration XPath paths. A real PHPUnit 13.2.6 utility loader and full XML
+configuration loader pass.
+
+The selected upstream packet is **17 pass / 3 fail** and the additional
+`schemaValidateSource()` packet is **3 pass / 1 fail**. Libxml INI inventory,
+DTD/entity materialization, one ProcessingInstruction property-state edge and
+detailed invalid-XSD warning projection remain explicit holdouts. The 73 absent
+legacy methods, four absent legacy types and 29 absent modern `Dom\*` types
+remain visible non-claims; this is not a complete DOM/XPath/schema-validation
+claim.
 
 The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip / 99
 unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
 variants, all-targets, Composer S0, unsafe/static and runner gates pass.
 Performance is deferred by user direction. The staged PHPUnit startup surface
-now finds Ctype, Filter, JSON, Libxml, Tokenizer and XMLWriter. Next: implement
-DOM in bounded document/tree slices, then complete Mbstring. This is not a
-blanket PHPUnit or XML-parser compatibility claim. See
+now finds Ctype, DOM, Filter, JSON, Libxml, Tokenizer and XMLWriter and reports
+only Mbstring as missing. Next: implement Mbstring, then run the first bounded
+PHPUnit suite packet. This is not a blanket PHPUnit claim. See
 [exact evidence](compatibility.md).
+
+### Preceding PHPUnit XMLWriter foundation checkpoint
+
+The `phpunit-xmlwriter-extension` checkpoint over `08703b60` admits the PHP
+8.5 CLI XMLWriter surface through an independently implemented serializer.
+All 42 procedures and 45 class methods expose exact Reflection contracts;
+memory, URI and stream targets cover namespace, DTD, encoding, flush,
+invalidation and subclass-constructor lifetimes. The complete upstream packet
+is **50 pass / 0 fail / 1 XMLReader-dependent skip**. Performance was deferred
+by user direction. See [exact evidence](compatibility.md).
 
 ### Preceding PHPUnit Libxml foundation checkpoint
 

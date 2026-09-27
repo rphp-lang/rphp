@@ -368,6 +368,51 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "LIBXML_SCHEMA_CREATE",
     "LIBXML_HTML_NOIMPLIED",
     "LIBXML_HTML_NODEFDTD",
+    "XML_ELEMENT_NODE",
+    "XML_ATTRIBUTE_NODE",
+    "XML_TEXT_NODE",
+    "XML_CDATA_SECTION_NODE",
+    "XML_ENTITY_REF_NODE",
+    "XML_ENTITY_NODE",
+    "XML_PI_NODE",
+    "XML_COMMENT_NODE",
+    "XML_DOCUMENT_NODE",
+    "XML_DOCUMENT_TYPE_NODE",
+    "XML_DOCUMENT_FRAG_NODE",
+    "XML_NOTATION_NODE",
+    "XML_HTML_DOCUMENT_NODE",
+    "XML_DTD_NODE",
+    "XML_ELEMENT_DECL_NODE",
+    "XML_ATTRIBUTE_DECL_NODE",
+    "XML_ENTITY_DECL_NODE",
+    "XML_NAMESPACE_DECL_NODE",
+    "XML_LOCAL_NAMESPACE",
+    "XML_ATTRIBUTE_CDATA",
+    "XML_ATTRIBUTE_ID",
+    "XML_ATTRIBUTE_IDREF",
+    "XML_ATTRIBUTE_IDREFS",
+    "XML_ATTRIBUTE_ENTITY",
+    "XML_ATTRIBUTE_NMTOKEN",
+    "XML_ATTRIBUTE_NMTOKENS",
+    "XML_ATTRIBUTE_ENUMERATION",
+    "XML_ATTRIBUTE_NOTATION",
+    "DOM_PHP_ERR",
+    "DOM_INDEX_SIZE_ERR",
+    "DOMSTRING_SIZE_ERR",
+    "DOM_HIERARCHY_REQUEST_ERR",
+    "DOM_WRONG_DOCUMENT_ERR",
+    "DOM_INVALID_CHARACTER_ERR",
+    "DOM_NO_DATA_ALLOWED_ERR",
+    "DOM_NO_MODIFICATION_ALLOWED_ERR",
+    "DOM_NOT_FOUND_ERR",
+    "DOM_NOT_SUPPORTED_ERR",
+    "DOM_INUSE_ATTRIBUTE_ERR",
+    "DOM_INVALID_STATE_ERR",
+    "DOM_SYNTAX_ERR",
+    "DOM_INVALID_MODIFICATION_ERR",
+    "DOM_NAMESPACE_ERR",
+    "DOM_INVALID_ACCESS_ERR",
+    "DOM_VALIDATION_ERR",
     "LIBXML_ERR_NONE",
     "LIBXML_ERR_WARNING",
     "LIBXML_ERR_ERROR",
@@ -847,6 +892,43 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "LIBXML_ERR_WARNING" => Some(value::Value::long(1)),
         "LIBXML_ERR_ERROR" => Some(value::Value::long(2)),
         "LIBXML_ERR_FATAL" => Some(value::Value::long(3)),
+        "XML_ELEMENT_NODE" | "XML_ATTRIBUTE_CDATA" | "DOM_INDEX_SIZE_ERR" => {
+            Some(value::Value::long(1))
+        }
+        "XML_ATTRIBUTE_NODE" | "XML_ATTRIBUTE_ID" | "DOMSTRING_SIZE_ERR" => {
+            Some(value::Value::long(2))
+        }
+        "XML_TEXT_NODE" | "XML_ATTRIBUTE_IDREF" | "DOM_HIERARCHY_REQUEST_ERR" => {
+            Some(value::Value::long(3))
+        }
+        "XML_CDATA_SECTION_NODE" | "XML_ATTRIBUTE_IDREFS" | "DOM_WRONG_DOCUMENT_ERR" => {
+            Some(value::Value::long(4))
+        }
+        "XML_ENTITY_REF_NODE" | "DOM_INVALID_CHARACTER_ERR" => Some(value::Value::long(5)),
+        "XML_ENTITY_NODE" | "XML_ATTRIBUTE_ENTITY" | "DOM_NO_DATA_ALLOWED_ERR" => {
+            Some(value::Value::long(6))
+        }
+        "XML_PI_NODE" | "XML_ATTRIBUTE_NMTOKEN" | "DOM_NO_MODIFICATION_ALLOWED_ERR" => {
+            Some(value::Value::long(7))
+        }
+        "XML_COMMENT_NODE" | "XML_ATTRIBUTE_NMTOKENS" | "DOM_NOT_FOUND_ERR" => {
+            Some(value::Value::long(8))
+        }
+        "XML_DOCUMENT_NODE" | "XML_ATTRIBUTE_ENUMERATION" | "DOM_NOT_SUPPORTED_ERR" => {
+            Some(value::Value::long(9))
+        }
+        "XML_DOCUMENT_TYPE_NODE" | "XML_ATTRIBUTE_NOTATION" | "DOM_INUSE_ATTRIBUTE_ERR" => {
+            Some(value::Value::long(10))
+        }
+        "XML_DOCUMENT_FRAG_NODE" | "DOM_INVALID_STATE_ERR" => Some(value::Value::long(11)),
+        "XML_NOTATION_NODE" | "DOM_SYNTAX_ERR" => Some(value::Value::long(12)),
+        "XML_HTML_DOCUMENT_NODE" | "DOM_INVALID_MODIFICATION_ERR" => Some(value::Value::long(13)),
+        "XML_DTD_NODE" | "DOM_NAMESPACE_ERR" => Some(value::Value::long(14)),
+        "XML_ELEMENT_DECL_NODE" | "DOM_INVALID_ACCESS_ERR" => Some(value::Value::long(15)),
+        "XML_ATTRIBUTE_DECL_NODE" | "DOM_VALIDATION_ERR" => Some(value::Value::long(16)),
+        "XML_ENTITY_DECL_NODE" => Some(value::Value::long(17)),
+        "XML_NAMESPACE_DECL_NODE" | "XML_LOCAL_NAMESPACE" => Some(value::Value::long(18)),
+        "DOM_PHP_ERR" => Some(value::Value::long(0)),
         "FILTER_VALIDATE_INT" => Some(value::Value::long(257)),
         "FILTER_VALIDATE_BOOL" => Some(value::Value::long(258)),
         "FILTER_VALIDATE_BOOLEAN" => Some(value::Value::long(258)),

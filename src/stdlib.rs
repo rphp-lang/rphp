@@ -219,6 +219,7 @@ mod array_traversal;
 mod builtin_classes;
 mod date;
 mod directory;
+mod dom;
 mod fiber;
 mod filesystem;
 #[cfg(feature = "formatted-io")]
@@ -14169,8 +14170,13 @@ fn fn_get_extension_funcs(
             names.push(name.clone());
         }
     }
-    if requested.eq_ignore_ascii_case("libxml") || requested.eq_ignore_ascii_case("xmlwriter") {
-        let order = if requested.eq_ignore_ascii_case("libxml") {
+    if requested.eq_ignore_ascii_case("dom")
+        || requested.eq_ignore_ascii_case("libxml")
+        || requested.eq_ignore_ascii_case("xmlwriter")
+    {
+        let order = if requested.eq_ignore_ascii_case("dom") {
+            DOM_EXTENSION_FUNCTION_NAMES
+        } else if requested.eq_ignore_ascii_case("libxml") {
             LIBXML_EXTENSION_FUNCTION_NAMES
         } else {
             XMLWRITER_EXTENSION_FUNCTION_NAMES
@@ -14181,6 +14187,13 @@ fn fn_get_extension_funcs(
                 .position(|candidate| name.eq_ignore_ascii_case(candidate))
                 .unwrap_or(usize::MAX)
         });
+        if requested.eq_ignore_ascii_case("dom") {
+            for name in &mut names {
+                if name.eq_ignore_ascii_case("dom\\import_simplexml") {
+                    *name = "Dom\\import_simplexml".to_string();
+                }
+            }
+        }
     } else {
         names.sort_unstable();
     }
@@ -31727,6 +31740,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     #[cfg(target_os = "linux")]
     "ctype",
     "date",
+    "dom",
     "filter",
     #[cfg(target_os = "linux")]
     "gettext",
@@ -31750,6 +31764,8 @@ const LIBXML_EXTENSION_FUNCTION_NAMES: &[&str] = &[
     "libxml_set_external_entity_loader",
     "libxml_get_external_entity_loader",
 ];
+
+const DOM_EXTENSION_FUNCTION_NAMES: &[&str] = &["dom_import_simplexml", "dom\\import_simplexml"];
 
 const XMLWRITER_EXTENSION_FUNCTION_NAMES: &[&str] = &[
     "xmlwriter_open_uri",
@@ -31802,7 +31818,7 @@ fn admitted_extension_name(bytes: &[u8]) -> bool {
     // admitted extensions. Actual name comparisons are explicit pay-use work
     // and stay out of the hot caller's instruction footprint.
     let admitted_length = match bytes.len() {
-        4 | 6 | 8 | 9 => true,
+        3 | 4 | 6 | 8 | 9 => true,
         #[cfg(target_os = "linux")]
         7 => true,
         #[cfg(target_os = "linux")]

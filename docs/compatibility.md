@@ -7,6 +7,63 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: DOM
+
+The `phpunit-dom-extension` checkpoint over `1a27815b` adds an independently
+implemented legacy DOM document/tree foundation for PHPUnit. It does not link
+to libxml2 or delegate parsing, serialization, tree mutation or XPath to the
+host PHP runtime. Both `dom_import_simplexml()` entry points have exact PHP 8.5
+Reflection contracts. Eighteen of the 22 legacy `DOM*` types are registered;
+66 reflected legacy methods are exact, while 73 unimplemented methods remain
+visible as missing rather than being advertised with placeholder behavior.
+
+The admitted tree covers `DOMDocument`, nodes, elements, attributes, text,
+comments, CDATA, fragments, processing instructions, live node lists and
+attribute maps. XML load/save, namespace serialization, mutation, clone,
+normalize, import/adopt, canonical output and the relative XPath expressions
+used by PHPUnit configuration loading share one request-owned tree. Libxml
+error policy is retained across parse failures. A real PHPUnit 13.2.6
+`PHPUnit\Util\Xml\Loader` document load and full
+`PHPUnit\TextUI\XmlConfiguration\Loader` configuration load both pass; the
+configuration is reported as loaded from file without validation errors.
+
+The bounded 20-case upstream legacy DOM packet is **17 pass / 3 fail**. The
+three explicit non-claims are Libxml INI inventory projection, DTD/entity
+materialization and the final uninitialized-property edge of
+`DOMProcessingInstruction`. A separate four-case `schemaValidateSource()`
+packet is **3 pass / 1 fail**: well-formed XSD parsing, global document-root
+validation and the empty-input `ValueError` are real behavior; detailed
+multi-line parser warning projection remains out of scope. Complete
+DTD/XSD/RelaxNG support, the full XPath language, the four remaining legacy
+types, and all 29 modern `Dom\*` types are not claimed. This is a
+PHPUnit-enabling slice, not a complete `ext/dom` claim.
+
+The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip / 99
+unsupported**, exact **+0/-0**, with the identical 6,881-path pass set. Five
+complete Cargo configurations pass: default **6,975**, no-default **6,629**,
+erased **7,046**, reified **7,068** and all-features **7,119**; ignored
+15/15/15/15/18. All-targets, Composer 2.8.12 S0, format, PHPT runner and unsafe
+policy gates pass. Production remains at **1,627 unsafe blocks / 289 unsafe
+functions**. Performance is deferred by user direction and no performance
+claim is made.
+
+PHPUnit now accepts DOM and stops at the sole remaining startup extension
+blocker, `mbstring`. Implementing Mbstring is the next dependency-ordered
+checkpoint; this does not yet claim that PHPUnit's own test suite runs.
+
+SHA-256 evidence: release
+`c4c479e9bf8bd1312ca76c9e61492fc09ea2494d8c19a91fba97b1d4e7be545c`;
+focused DOM manifest
+`93456d31fe21864745a776798c68743dfbcf546bf0388f5cb9fd46236d78f057`;
+focused XSD manifest
+`f4373d819e39c1f0690aac9dce867daf969eac76a1db6c9afd3812019658d661`;
+stable manifest
+`f86e4e098cc809485e466255bbe498a41746c51520f0b30cffaf5074f316decb`;
+Cargo matrix
+`074bf225fd0ae79e94425a50f05d9ed753923ec66a25c72dc60129b2dc11aa9d`;
+builtin audit summary
+`99dbbca2804ffb9a1ff1bf0269aa362630aa7291d90c2e62a70fc3ae77ea1f33`.
+
 ### PHPUnit extension foundation: XMLWriter
 
 The `phpunit-xmlwriter-extension` checkpoint over `08703b60` admits the PHP

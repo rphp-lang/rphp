@@ -10817,6 +10817,8 @@ fn class_get_extension_name(
         "json"
     } else if lowered == "libxmlerror" {
         "libxml"
+    } else if lowered.starts_with("dom") {
+        "dom"
     } else if lowered == "xmlwriter" {
         "xmlwriter"
     } else if lowered == "phar" || lowered == "pharexception" {
