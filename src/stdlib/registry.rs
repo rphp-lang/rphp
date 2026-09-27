@@ -807,6 +807,20 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "hash",
     );
     reg_typed!(
+        "hash_equals",
+        fn_hash_equals,
+        2,
+        2,
+        ["known_string", "user_string"],
+        [ParamTypeHint::String, ParamTypeHint::String],
+        ParamTypeHint::Bool
+    );
+    let hash_equals = eg
+        .find_function("hash_equals")
+        .expect("hash_equals was just registered");
+    eg.register_internal_function_reflection_metadata(hash_equals, vec![None, None], "hash");
+    eg.register_internal_sensitive_parameters(hash_equals, &[0, 1]);
+    reg_typed!(
         "hash_init",
         fn_hash_init,
         4,

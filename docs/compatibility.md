@@ -7,6 +7,40 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit child-process hash equality
+
+The `phpunit-hash-equals` checkpoint over `4499a1fd` implements
+`hash_equals(string $known_string, string $user_string): bool` for PHPUnit's
+child-process result nonce validation. Its two required parameters, names,
+types, Boolean return and `hash` extension ownership exactly match PHP 8.5.
+Both parameters carry the internal `SensitiveParameter` metadata and are
+replaced by `SensitiveParameterValue` objects in Throwable traces.
+
+The comparison accepts ordinary, embedded-NUL and non-UTF-8 PHP strings. A
+length mismatch returns false; equal-length values always traverse every byte
+and reduce all differences before deciding equality. Unlike general PHP string
+functions, `hash_equals()` deliberately rejects integer, float, Boolean and
+null coercion in weak as well as strict callers.
+
+The complete upstream `ext/hash/tests/hash_equals.phpt` passes, as do the two
+original E2E tests for byte/type/Reflection and trace-redaction behavior.
+Focused default, no-default and all-features configurations pass. The complete
+Zend/lang release result remains byte-identical to the parent at **5,396 pass /
+0 fail / 117 skip / 86 unsupported**. The static PHPUnit 13.2.6 vendor audit now
+reports **261 present / 12 missing / 0 call-shape mismatches** among 273 unique
+builtins. Performance was intentionally not measured.
+
+SHA-256 evidence: release
+`73b1c825845070d1557658b1cc86441a4157546b39a626184b34998146521e00`;
+focused PHPT manifest
+`b4e2911402154ac9a9f0af4d3618023f4347b2450634c649d74ffe894ed416e8`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+vendor audit summary
+`1e47c9bc25a6e2df5c09525983ce01ea898869c0eb6a812c92f5288bb7e05692`.
+
 ### PHPUnit runtime startup builtins
 
 The `phpunit-runtime-builtins` checkpoint over `95efd6ef` adds the first

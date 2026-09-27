@@ -36,6 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-hash-equals` checkpoint over `4499a1fd` adds PHPUnit's
+security-sensitive child-process nonce comparison without relying on host PHP
+or native crypto libraries. `hash_equals(string $known_string, string
+$user_string): bool` has exact PHP 8.5 Reflection and `hash` extension
+ownership, preserves arbitrary PHP bytes, rejects scalar coercion and redacts
+both arguments as `#[SensitiveParameter]` values in traces. Equal-length input
+is compared across every byte without a data-dependent early exit.
+
+The upstream `hash_equals` PHPT and both original E2E boundaries pass. Focused
+default, no-default and all-features configurations are green. The complete
+Zend/lang release ledger and pass set remain byte-identical at **5,396 pass / 0
+fail / 117 skip / 86 unsupported**. The PHPUnit vendor inventory improves to
+**261 present / 12 missing / 0 call-shape mismatches** over its 273 observed
+builtins. Performance remains deferred by user direction.
+
+The real one-test PHPUnit suite is still stopped earlier by the independently
+missing core method `ReflectionMethod::getStartLine()`; this library checkpoint
+does not hide it. The next independent standard-library priority is
+`ini_get_all()`, followed by random seeding and temporary streams. See
+[exact evidence](compatibility.md).
+
+### Preceding PHPUnit runtime startup checkpoint
+
 The `phpunit-runtime-builtins` checkpoint over `95efd6ef` removes PHPUnit's
 first post-extension startup blockers without broadening into process-control
 or POSIX APIs. `getrusage(int $mode = 0): array|false` now exposes PHP's exact
@@ -51,11 +74,9 @@ skip / 86 unsupported**. Five focused feature configurations, the 865-test
 library suite, all-feature/all-target compile check, unsafe/static and real
 PHPUnit startup gates pass. Performance remains deferred by user direction.
 
-The static PHPUnit vendor audit now has 13 missing global functions after
-`getrusage`; the highest-value independent library follow-ups are
-`ini_get_all()`, `hash_equals()`, `mt_srand()` and `tmpfile()`. They may proceed
-without weakening the visible Reflection blocker or claiming a runnable suite.
-See [exact evidence](compatibility.md).
+The static PHPUnit vendor audit has 13 missing global functions after
+`getrusage`. They may proceed without weakening the visible Reflection blocker
+or claiming a runnable suite. See [exact evidence](compatibility.md).
 
 ### Preceding PHPUnit Mbstring foundation checkpoint
 

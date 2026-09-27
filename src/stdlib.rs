@@ -6124,6 +6124,38 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
     ret!(rv, Value::string(format_hex_digest(&digest)));
 }
 
+#[inline(never)]
+fn constant_time_bytes_equal(known: &[u8], user: &[u8]) -> bool {
+    if known.len() != user.len() {
+        return false;
+    }
+    let mut difference = 0_u8;
+    for (&left, &right) in known.iter().zip(user) {
+        difference |= left ^ right;
+    }
+    std::hint::black_box(difference) == 0
+}
+
+fn fn_hash_equals(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let known = arg!(ed, 0).dereferenced();
+    if known.value_type() != ValueType::String {
+        typed_internal_argument_error(eg, "hash_equals", known, 1, "known_string", "string");
+        return Ok(());
+    }
+    let user = arg!(ed, 1).dereferenced();
+    if user.value_type() != ValueType::String {
+        typed_internal_argument_error(eg, "hash_equals", user, 2, "user_string", "string");
+        return Ok(());
+    }
+    let known = known.php_string_bytes().unwrap_or_default();
+    let user = user.php_string_bytes().unwrap_or_default();
+    ret!(rv, Value::bool(constant_time_bytes_equal(&known, &user)));
+}
+
 /// Registered `hash()` algorithms, in `hash_algos()` order.
 const HASH_ALGORITHMS: &[&str] = &[
     "md5", "sha1", "sha256", "sha512", "crc32", "crc32b", "xxh128",
