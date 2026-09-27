@@ -4961,6 +4961,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     funcs.extend(iconv::register(eg));
     funcs.extend(dom::register_functions(eg));
     funcs.extend(xml_writer::register_functions(eg));
+    funcs.extend(mbstring::register(eg));
 
     eg.seal_internal_class_ids();
     // Embedders receive PHP's request globals for standard-input code; the

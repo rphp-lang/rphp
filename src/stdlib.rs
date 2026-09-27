@@ -228,6 +228,7 @@ mod hebrew;
 mod html_entities;
 mod image_info;
 mod iterator;
+mod mbstring;
 mod pcre;
 pub(crate) mod phar;
 mod process;
@@ -14172,12 +14173,15 @@ fn fn_get_extension_funcs(
     }
     if requested.eq_ignore_ascii_case("dom")
         || requested.eq_ignore_ascii_case("libxml")
+        || requested.eq_ignore_ascii_case("mbstring")
         || requested.eq_ignore_ascii_case("xmlwriter")
     {
         let order = if requested.eq_ignore_ascii_case("dom") {
             DOM_EXTENSION_FUNCTION_NAMES
         } else if requested.eq_ignore_ascii_case("libxml") {
             LIBXML_EXTENSION_FUNCTION_NAMES
+        } else if requested.eq_ignore_ascii_case("mbstring") {
+            MBSTRING_EXTENSION_FUNCTION_NAMES
         } else {
             XMLWRITER_EXTENSION_FUNCTION_NAMES
         };
@@ -31748,6 +31752,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "iconv",
     "json",
     "libxml",
+    "mbstring",
     "Phar",
     "pcre",
     "tokenizer",
@@ -31766,6 +31771,18 @@ const LIBXML_EXTENSION_FUNCTION_NAMES: &[&str] = &[
 ];
 
 const DOM_EXTENSION_FUNCTION_NAMES: &[&str] = &["dom_import_simplexml", "dom\\import_simplexml"];
+
+const MBSTRING_EXTENSION_FUNCTION_NAMES: &[&str] = &[
+    "mb_parse_str",
+    "mb_strlen",
+    "mb_stripos",
+    "mb_substr",
+    "mb_convert_encoding",
+    "mb_strtolower",
+    "mb_detect_encoding",
+    "mb_check_encoding",
+    "mb_ord",
+];
 
 const XMLWRITER_EXTENSION_FUNCTION_NAMES: &[&str] = &[
     "xmlwriter_open_uri",
@@ -33979,6 +33996,48 @@ fn parse_str_set_nested(arr: &mut PhpArray, segments: &[Option<ArrayKey>], val: 
     }
 }
 
+/// Parse PHP query-string bytes into the array projection shared by parse_str()
+/// and mb_parse_str(). The mbstring entry point applies its input-encoding
+/// policy before this boundary; both functions otherwise use the same PHP
+/// key normalization, percent decoding and nested-array semantics.
+pub(super) fn parse_query_string_array(input: &[u8]) -> PhpArray {
+    let mut arr = PhpArray::new();
+    if input.is_empty() {
+        return arr;
+    }
+
+    for pair in input.split(|byte| *byte == b'&') {
+        if pair.is_empty() {
+            continue;
+        }
+        let (raw_key, value) = if let Some(index) = pair.iter().position(|byte| *byte == b'=') {
+            (
+                percent_decode_php_bytes(&pair[..index], true),
+                percent_decode_php_bytes(&pair[index + 1..], true),
+            )
+        } else {
+            (percent_decode_php_bytes(pair, true), Vec::new())
+        };
+
+        let Some((base, segments)) = parse_str_brackets(&raw_key) else {
+            continue;
+        };
+        let value = php_byte_result(value, false);
+        if segments.is_empty() {
+            parse_str_array_set(&mut arr, &base, value);
+        } else {
+            let mut sub = if let Some(existing) = parse_str_array_get(&arr, &base) {
+                existing.as_array().cloned().unwrap_or_else(PhpArray::new)
+            } else {
+                PhpArray::new()
+            };
+            parse_str_set_nested(&mut sub, &segments, value);
+            parse_str_array_set(&mut arr, &base, Value::array(sub));
+        }
+    }
+    arr
+}
+
 /// parse_str($string, &$result): void
 /// Parses a URL-encoded query string into variables.
 /// Supports recursive nesting (a[b][c]=1) and PHP key normalization (dots/spaces → _).
@@ -33995,38 +34054,7 @@ fn fn_parse_str(
     let input = input.php_string_bytes().unwrap_or_default();
     let out_ptr = arg_mut!(ed, 1);
 
-    let mut arr = PhpArray::new();
-    if !input.is_empty() {
-        for pair in input.as_ref().split(|byte| *byte == b'&') {
-            if pair.is_empty() {
-                continue;
-            }
-            let (raw_key, value) = if let Some(index) = pair.iter().position(|byte| *byte == b'=') {
-                (
-                    percent_decode_php_bytes(&pair[..index], true),
-                    percent_decode_php_bytes(&pair[index + 1..], true),
-                )
-            } else {
-                (percent_decode_php_bytes(pair, true), Vec::new())
-            };
-
-            let Some((base, segments)) = parse_str_brackets(&raw_key) else {
-                continue;
-            };
-            let value = php_byte_result(value, false);
-            if segments.is_empty() {
-                parse_str_array_set(&mut arr, &base, value);
-            } else {
-                let mut sub = if let Some(existing) = parse_str_array_get(&arr, &base) {
-                    existing.as_array().cloned().unwrap_or_else(PhpArray::new)
-                } else {
-                    PhpArray::new()
-                };
-                parse_str_set_nested(&mut sub, &segments, value);
-                parse_str_array_set(&mut arr, &base, Value::array(sub));
-            }
-        }
-    }
+    let arr = parse_query_string_array(input.as_ref());
 
     unsafe {
         std::ptr::drop_in_place(out_ptr);

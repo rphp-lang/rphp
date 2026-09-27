@@ -36,30 +36,43 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-mbstring-extension` checkpoint over `f9d673a9` completes the
+dependency-ordered PHPUnit extension foundation. Nine independently
+implemented Mbstring globals have exact PHP 8.5 Reflection contracts and cover
+the complete observed PHPUnit 13.2.6 Mbstring call surface plus the stable
+`mb_parse_str()` admission boundary. The selected upstream packet is **16 pass
+/ 0 fail**. The inventory remains explicit: **49 reference / 9 present / 40
+missing**, with all nine present signatures exact and no host-PHP or FFI
+delegation.
+
+PHPUnit now finds every required extension and reaches its event/telemetry
+initialization. Its next failure is the standard function `getrusage()`, not an
+extension blocker. This does not claim a runnable PHPUnit suite or complete
+Mbstring; mbregex, 40 globals, the full encoding catalogue and request-local
+configuration remain visible follow-up work.
+
+The Zend/lang ledger is **5,396 pass / 0 fail / 117 skip / 86 unsupported**,
+exact **+1/-0**. The adjacent strings/array corpus retains an identical
+1,486-path pass set and loses no pass; six formerly skipped cases become
+visible failures because complete `mb_internal_encoding()` and empty-charset
+`htmlentities()` integration are not claimed. Five Cargo variants,
+all-targets, Composer S0, unsafe/static and runner gates pass. Performance is
+deferred by user direction. Next library work may complete Mbstring's remaining
+surface; the immediate PHPUnit runtime blocker belongs to the standard/core
+function track. See [exact evidence](compatibility.md).
+
+### Preceding PHPUnit DOM foundation checkpoint
+
 The `phpunit-dom-extension` checkpoint over `1a27815b` adds an independently
 implemented, bounded legacy DOM foundation for PHPUnit. Both global functions
 have exact PHP 8.5 contracts; 18/22 legacy types and 66 exact legacy methods
 cover document parsing/serialization, one shared mutable tree, namespaces,
 live collections, clone/import/adopt, canonical output and PHPUnit's relative
 configuration XPath paths. A real PHPUnit 13.2.6 utility loader and full XML
-configuration loader pass.
-
-The selected upstream packet is **17 pass / 3 fail** and the additional
-`schemaValidateSource()` packet is **3 pass / 1 fail**. Libxml INI inventory,
-DTD/entity materialization, one ProcessingInstruction property-state edge and
-detailed invalid-XSD warning projection remain explicit holdouts. The 73 absent
-legacy methods, four absent legacy types and 29 absent modern `Dom\*` types
-remain visible non-claims; this is not a complete DOM/XPath/schema-validation
-claim.
-
-The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip / 99
-unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
-variants, all-targets, Composer S0, unsafe/static and runner gates pass.
-Performance is deferred by user direction. The staged PHPUnit startup surface
-now finds Ctype, DOM, Filter, JSON, Libxml, Tokenizer and XMLWriter and reports
-only Mbstring as missing. Next: implement Mbstring, then run the first bounded
-PHPUnit suite packet. This is not a blanket PHPUnit claim. See
-[exact evidence](compatibility.md).
+configuration loader pass. The selected upstream packet is **17 pass / 3
+fail** and the additional `schemaValidateSource()` packet is **3 pass / 1
+fail**; detailed DTD/schema and modern DOM gaps remain explicit non-claims.
+Performance was deferred by user direction. See [exact evidence](compatibility.md).
 
 ### Preceding PHPUnit XMLWriter foundation checkpoint
 

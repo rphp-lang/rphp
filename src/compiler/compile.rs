@@ -3625,7 +3625,7 @@ fn builtin_ref_args(name: &str) -> u64 {
         "similar_text" => 0b100,                  // arg 2 (&$percent)
         "is_callable" => 0b100,                   // arg 2 (&$callable_name)
         "exec" => 0b110,                          // args 1 and 2 (&$output, &$result_code)
-        "parse_str" => 0b10,                      // arg 1 (&$result)
+        "parse_str" | "mb_parse_str" => 0b10,     // arg 1 (&$result)
         "headers_sent" => 0b11,                   // args 0 and 1 (&$filename, &$line)
         "getimagesize" | "getimagesizefromstring" => 0b10,
         "flock" => 0b100,                     // arg 2 (&$would_block)

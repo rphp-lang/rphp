@@ -7,6 +7,65 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: Mbstring
+
+The `phpunit-mbstring-extension` checkpoint over `f9d673a9` removes PHPUnit's
+last startup-extension blocker with an in-process Mbstring foundation. It does
+not call the host PHP runtime or use FFI. The admitted functions are
+`mb_parse_str()`, `mb_strlen()`, `mb_stripos()`, `mb_substr()`,
+`mb_convert_encoding()`, `mb_strtolower()`, `mb_detect_encoding()`,
+`mb_check_encoding()` and `mb_ord()`. All nine expose exact PHP 8.5 names,
+extension ownership, argument names, arity, by-reference mode, types, defaults
+and return types. The builtin audit records **49 reference / 9 present / 40
+missing / 0 call-shape mismatches / 0 metadata mismatches / 9 exact**.
+
+The implementation owns its UTF-8, ASCII, Windows-1252, ISO-8859-1 and
+UTF-16LE/BE codecs. It covers invalid UTF-8 substitution, recursive array
+validation/conversion, Unicode character lengths and slices, code points,
+lowercasing (including contextual final sigma), character-indexed caseless
+search and PHP query parsing with nested keys and real output-reference
+replacement. Standard `parse_str()` and `mb_parse_str()` share one query
+projection rather than maintaining divergent parsers. The selected upstream
+packet is **16 pass / 0 fail**, including the GC/destructor regression that
+became reachable when Mbstring was admitted.
+
+PHPUnit 13.2.6 now accepts every required extension: Ctype, DOM, Filter, JSON,
+Libxml, Mbstring, Tokenizer and XMLWriter. Its first remaining runtime failure
+is the standard function `getrusage()` in the telemetry clock, not an extension
+check. This is therefore the completed PHPUnit extension foundation, not a
+claim that PHPUnit suites run or that Mbstring is complete. The remaining 40
+globals, mbregex, the full PHP charset catalogue, request-local Mbstring
+configuration and mail/MIME facilities remain absent rather than being
+advertised as placeholders.
+
+The 5,599-case Zend/lang ledger is **5,396 pass / 0 fail / 117 skip / 86
+unsupported**, exact **+1/-0** with no lost pass. The adjacent 1,575-case
+strings/array ledger retains the parent's identical 1,486-path pass set:
+**1,486 pass / 6 fail / 70 skip / 13 unsupported**. Its six visible failures
+were previously skipped and are activated by extension identity; they require
+the explicitly unclaimed `mb_internal_encoding()` and empty-charset
+`htmlentities()` integration. No prior strings/array pass is lost.
+
+Five complete Cargo configurations pass: default **6,983**, no-default
+**6,637**, erased **7,054**, reified **7,076** and all-features **7,127**;
+ignored 15/15/15/15/18. All-targets, Composer 2.8.12 S0, format, PHPT runner,
+builtin inventory and unsafe policy gates pass. Production remains at the
+unsafe ceiling of **1,627 blocks / 289 functions**. Performance is deferred by
+user direction and no performance claim is made.
+
+SHA-256 evidence: release
+`46dddf094112738170ece9c4cb8f0cc2ee186ca0083501f60cfbe06321cf5d23`;
+focused Mbstring manifest
+`431ea1ce798e9fa7eb23f48583a8765a71e903713e697723673d2c17c3b98cb4`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+strings/array manifest
+`b8991f43d0c64f3c1dd55d909a674d7b5bd6bf31150f69a9002c8ca898d91da8`;
+Cargo matrix
+`5ce2e554585f23b500577eae2443ef8339d7c72058f58220fea9ce0799f00d33`;
+builtin audit summary
+`fd96362b491e4968765eebfee87eca740ce77e692e530a108e82cc0bb520f79b`.
+
 ### PHPUnit extension foundation: DOM
 
 The `phpunit-dom-extension` checkpoint over `1a27815b` adds an independently

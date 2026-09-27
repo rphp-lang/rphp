@@ -58,7 +58,7 @@ echo "\n", ICONV_IMPL, '|', ICONV_VERSION, '|', ICONV_MIME_DECODE_STRICT,
         [
             "12",
             "11",
-            "calendar,ctype,date,dom,filter,gettext,iconv,json,libxml,Phar,pcre,tokenizer,xmlwriter"
+            "calendar,ctype,date,dom,filter,gettext,iconv,json,libxml,mbstring,Phar,pcre,tokenizer,xmlwriter"
         ]
     );
 }
