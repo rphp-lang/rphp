@@ -31,3 +31,37 @@ edbca4ac5af20524213af15444f7cfbf
 "#
     );
 }
+
+/// `token_get_all(..., TOKEN_PARSE)` skips its syntax check for a source the
+/// request already parsed cleanly (an included file or an earlier call) and
+/// still raises ParseError for sources it has not, repeatedly.
+#[test]
+fn token_parse_reuses_the_request_parse_verdict() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+$dir = sys_get_temp_dir() . '/rphp-tokparse-' . getmypid(); @mkdir($dir);
+file_put_contents("$dir/good.php", "<?php\nnamespace Demo;\nuse Foo\\Bar as Baz;\nclass Good { public function f(int \$x): int { return \$x + 1; } }\n");
+file_put_contents("$dir/bad.php", "<?php\nnamespace Demo;\nclass Bad { public function f( { } }\n");
+require "$dir/good.php";
+$t = token_get_all(file_get_contents("$dir/good.php"), TOKEN_PARSE);
+echo count($t), ' ', token_name($t[2][0]), ' ', $t[8][1], "\n";
+try { token_get_all(file_get_contents("$dir/bad.php"), TOKEN_PARSE); echo "no error\n"; } catch (ParseError $e) { echo 'ParseError: ', (str_starts_with($e->getMessage(), 'syntax error, unexpected token "{"') ? 'syntax error at {' : $e->getMessage()), "\n"; }
+try { token_get_all(file_get_contents("$dir/bad.php"), TOKEN_PARSE); echo "no error\n"; } catch (ParseError $e) { echo 'again: ', (str_starts_with($e->getMessage(), 'syntax error, unexpected token "{"') ? 'syntax error at {' : $e->getMessage()), "\n"; }
+echo count(token_get_all(file_get_contents("$dir/bad.php"))), "\n";
+$t2 = token_get_all(file_get_contents("$dir/good.php"), TOKEN_PARSE); echo $t2 === $t ? "same\n" : "differ\n";
+try { token_get_all("<?php class { }", TOKEN_PARSE); echo "no error\n"; } catch (ParseError $e) { echo 'inline: ', get_class($e), "\n"; }
+echo token_name(token_get_all("<?php echo Demo\\Good::class;", TOKEN_PARSE)[3][0]), "\n";
+unlink("$dir/good.php"); unlink("$dir/bad.php"); rmdir($dir);
+"#
+        ),
+        r#"50 T_WHITESPACE Foo\Bar
+ParseError: syntax error at {
+again: syntax error at {
+25
+same
+inline: ParseError
+T_NAME_QUALIFIED
+"#
+    );
+}

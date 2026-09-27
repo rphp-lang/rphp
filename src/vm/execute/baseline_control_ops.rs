@@ -774,7 +774,15 @@ fn execute_source_unit_inner(
         .with_class_scope_active(class_scope_active)
         .parse()
     {
-        Ok(statements) => statements,
+        Ok(statements) => {
+            // A cleanly parsed include lets a later TOKEN_PARSE tokenization
+            // of the same text skip its syntax check. Only the default parser
+            // configuration is recorded.
+            if synthetic_trace_origin.is_none() && !class_scope_active {
+                eg.record_parsed_source(source.as_bytes());
+            }
+            statements
+        }
         Err(error) => {
             if request_unit {
                 return Err(startup_source_parse_error(eg, error, &canonical));

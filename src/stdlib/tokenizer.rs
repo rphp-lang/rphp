@@ -1732,9 +1732,14 @@ fn tokenize_arguments(
 fn scan_with_flags(eg: &mut ExecutorGlobals, source: &[u8], flags: i64) -> Option<Vec<RawToken>> {
     let mut tokens = scan(source);
     if flags & TOKEN_PARSE != 0 {
-        if let Some(message) = parse_failure(source) {
-            eg.exception = Some(make_error_value("ParseError", &message));
-            return None;
+        // A source the request already parsed cleanly (an included file, or
+        // an earlier TOKEN_PARSE tokenization) cannot raise a ParseError.
+        if !eg.source_parsed_cleanly(source) {
+            if let Some(message) = parse_failure(source) {
+                eg.exception = Some(make_error_value("ParseError", &message));
+                return None;
+            }
+            eg.record_parsed_source(source);
         }
         apply_parse_context(&mut tokens);
     }

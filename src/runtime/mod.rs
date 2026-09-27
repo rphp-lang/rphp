@@ -851,6 +851,25 @@ pub(crate) fn with_ascii_lowercase<R>(name: &str, lookup: impl FnOnce(&str) -> R
     }
 }
 
+/// 64-bit fingerprint of a source text (length-seeded multiply-xor over
+/// 8-byte words). Only equality of whole sources is decided by it.
+pub(crate) fn source_fingerprint(source: &[u8]) -> u64 {
+    let mut hash =
+        (source.len() as u64).wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ 0xD6E8_FEB8_6659_FD93;
+    let mut chunks = source.chunks_exact(8);
+    for chunk in &mut chunks {
+        let word = u64::from_le_bytes(chunk.try_into().expect("8-byte chunk"));
+        hash = (hash ^ word)
+            .wrapping_mul(0x0000_0100_0000_01B3)
+            .rotate_left(29);
+    }
+    let mut tail = [0u8; 8];
+    let rest = chunks.remainder();
+    tail[..rest.len()].copy_from_slice(rest);
+    hash = (hash ^ u64::from_le_bytes(tail)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    hash ^ (hash >> 32)
+}
+
 /// Named variadic arguments waiting for their call frame, keyed by call
 /// identity. Every full call probes this table, so it uses the symbol hasher.
 pub type PendingNamedVariadic =
@@ -1098,6 +1117,13 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: PendingNamedVariadic,
+    /// Fingerprints of sources the front end parsed without a syntax error.
+    /// `token_get_all(..., TOKEN_PARSE)` on such a source cannot fail either,
+    /// so it skips the parser (Nette's use-statement scan tokenizes every
+    /// class file the request already compiled).
+    parsed_sources: std::cell::RefCell<
+        std::collections::HashSet<u64, std::hash::BuildHasherDefault<SymbolHasher>>,
+    >,
     /// Function-table keys of plain internal functions by descriptor pointer,
     /// remembered after the first reverse scan (see `registered_function_name`).
     pub(crate) internal_function_names:
@@ -2383,6 +2409,7 @@ impl ExecutorGlobals {
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: Default::default(),
+            parsed_sources: Default::default(),
             internal_function_names: Default::default(),
             pending_closure_captures: Default::default(),
             active_closure_owners: None,
@@ -2530,6 +2557,7 @@ impl ExecutorGlobals {
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: Default::default(),
+            parsed_sources: Default::default(),
             internal_function_names: Default::default(),
             pending_closure_captures: Default::default(),
             active_closure_owners: None,
@@ -10826,6 +10854,19 @@ impl ExecutorGlobals {
     /// Register a function by name. Returns error if already declared.
     /// Publish one function-table entry and, for `Owner::method` keys, index
     /// it under its owner so inheritance can enumerate an owner's methods.
+    /// Remember that `source` parsed cleanly (see `parsed_sources`).
+    pub(crate) fn record_parsed_source(&self, source: &[u8]) {
+        self.parsed_sources
+            .borrow_mut()
+            .insert(source_fingerprint(source));
+    }
+
+    /// Whether an identical source already parsed cleanly in this request.
+    pub(crate) fn source_parsed_cleanly(&self, source: &[u8]) -> bool {
+        let parsed = self.parsed_sources.borrow();
+        !parsed.is_empty() && parsed.contains(&source_fingerprint(source))
+    }
+
     pub(crate) fn insert_function_entry(
         &mut self,
         key: String,
