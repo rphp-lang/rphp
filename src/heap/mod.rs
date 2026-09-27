@@ -701,6 +701,15 @@ unsafe fn init_page(page: usize, class: usize) -> *mut PageHeader {
     } else {
         MEDIUM_PAGE_SIZE
     };
+    // Debug mode: a page reused for another class must not carry freed
+    // markers from its previous layout. Callers copy uninitialized bytes
+    // around (`Vec` in-place collects move whole elements including padding),
+    // so a stale marker could otherwise surface inside a live block.
+    #[cfg(feature = "php-heap-debug")]
+    // SAFETY: the page's block area is exclusively ours.
+    unsafe {
+        std::ptr::write_bytes((page + PAGE_HEADER) as *mut u8, 0, page_size - PAGE_HEADER);
+    }
     // SAFETY: per the contract; every field is written before the page
     // becomes reachable.
     unsafe {
@@ -895,6 +904,10 @@ fn refill(heap: &ThreadHeap, class: usize) -> *mut u8 {
                 if head != 0 {
                     (*current).local_free.set(*(head as *const usize));
                     (*current).used.set((*current).used.get() + 1);
+                    #[cfg(feature = "php-heap-debug")]
+                    if size >= 16 && *(head as *const u64).add(1) != FREED_MARK {
+                        debug_fail(b"rphp heap: free block lost its marker (refill)\n");
+                    }
                     return head as *mut u8;
                 }
                 let bump = (*current).bump.get();
@@ -1017,6 +1030,11 @@ fn fast_alloc(heap: &ThreadHeap, class: usize) -> Option<NonNull<u8>> {
         if head != 0 {
             (*page).local_free.set(*(head as *const usize));
             (*page).used.set((*page).used.get() + 1);
+            #[cfg(feature = "php-heap-debug")]
+            if *CLASS_SIZES.get_unchecked(class) >= 16 && *(head as *const u64).add(1) != FREED_MARK
+            {
+                debug_fail(b"rphp heap: free block lost its marker (write after free)\n");
+            }
             return Some(NonNull::new_unchecked(head as *mut u8));
         }
         let bump = (*page).bump.get();
@@ -1115,6 +1133,57 @@ fn debug_unpoison(ptr: *mut u8, class: usize) {
     }
 }
 
+/// Debug mode: a block being freed must start a slot of its page and the
+/// caller's layout must map to the page's class.
+#[cfg(feature = "php-heap-debug")]
+fn debug_check_free(page: &PageHeader, block: usize, size: usize, align: usize) {
+    let class = page.class as usize;
+    let slot = CLASS_SIZES[class] as usize;
+    let page_base = block
+        & if is_small_page(block) {
+            SMALL_PAGE_MASK
+        } else {
+            MEDIUM_PAGE_MASK
+        };
+    let misaligned = (block - page_base - PAGE_HEADER) % slot != 0;
+    let wrong_class = class_for(size, align) != Some(class);
+    if misaligned || wrong_class {
+        let mut buffer = [0u8; 256];
+        let mut len = 0;
+        let mut put = |text: &[u8]| {
+            let n = text.len().min(buffer.len() - len);
+            buffer[len..len + n].copy_from_slice(&text[..n]);
+            len += n;
+        };
+        put(if misaligned {
+            b"rphp heap: free of a non-slot pointer"
+        } else {
+            b"rphp heap: free with a layout of another class"
+        });
+        put(b" class=");
+        put(&[b'0' + (class / 10) as u8, b'0' + (class % 10) as u8]);
+        put(b" size=");
+        let mut digits = [0u8; 20];
+        let mut n = size;
+        let mut i = 20;
+        loop {
+            i -= 1;
+            digits[i] = b'0' + (n % 10) as u8;
+            n /= 10;
+            if n == 0 {
+                break;
+            }
+        }
+        put(&digits[i..]);
+        put(b"\n");
+        // SAFETY: writing a stack buffer to stderr.
+        unsafe {
+            libc::write(2, buffer.as_ptr().cast(), len);
+            libc::abort()
+        }
+    }
+}
+
 #[cfg(not(feature = "php-heap-debug"))]
 #[inline(always)]
 fn debug_unpoison(_ptr: *mut u8, _class: usize) {}
@@ -1135,11 +1204,103 @@ unsafe fn debug_poison(page: &PageHeader, block: usize) {
     unsafe {
         let words = block as *mut u64;
         if *words.add(1) == FREED_MARK {
-            libc::write(2, b"rphp heap: double free detected\n".as_ptr().cast(), 32);
-            libc::abort();
+            debug_report_double_free(page, block);
         }
         std::ptr::write_bytes((block + 8) as *mut u8, POISON, size - 8);
         *words.add(1) = FREED_MARK;
+    }
+}
+
+/// Debug mode: print a fixed message and abort.
+#[cfg(feature = "php-heap-debug")]
+#[cold]
+fn debug_fail(message: &[u8]) -> ! {
+    // SAFETY: writing a static buffer to stderr.
+    unsafe {
+        libc::write(2, message.as_ptr().cast(), message.len());
+        libc::abort()
+    }
+}
+
+/// Debug mode: describe the offending block without allocating, then abort.
+///
+/// # Safety
+/// `block` is a slot of `page`, whose free lists hold only slots of `page`.
+#[cfg(feature = "php-heap-debug")]
+#[cold]
+unsafe fn debug_report_double_free(page: &PageHeader, block: usize) -> ! {
+    let mut buffer = [0u8; 256];
+    let mut len = 0;
+    let mut put = |text: &[u8]| {
+        let n = text.len().min(buffer.len() - len);
+        buffer[len..len + n].copy_from_slice(&text[..n]);
+        len += n;
+    };
+    let mut hex = |mut value: usize, put: &mut dyn FnMut(&[u8])| {
+        let mut digits = [0u8; 16];
+        for digit in digits.iter_mut().rev() {
+            *digit = b"0123456789abcdef"[value & 15];
+            value >>= 4;
+        }
+        put(&digits);
+    };
+    // Whether the block already sits in the page's local free list.
+    let mut listed = false;
+    let mut cursor = page.local_free.get();
+    let mut steps = 0;
+    while cursor != 0 && steps < 100_000 {
+        if cursor == block {
+            listed = true;
+            break;
+        }
+        // SAFETY: free-list links are blocks of this page.
+        cursor = unsafe { *(cursor as *const usize) };
+        steps += 1;
+    }
+    put(b"rphp heap: double free detected block=0x");
+    hex(block, &mut put);
+    put(b" class=");
+    hex(page.class as usize, &mut put);
+    put(b" used=");
+    hex(page.used.get() as usize, &mut put);
+    put(b" bump=0x");
+    hex(page.bump.get(), &mut put);
+    put(b" listing=");
+    hex(page.listing.get() as usize, &mut put);
+    put(if listed {
+        b" in-local-list"
+    } else {
+        b" not-in-local-list"
+    });
+    let mut remote = false;
+    let mut cursor = page.remote_free.load(Ordering::Acquire);
+    let mut steps = 0;
+    while cursor != 0 && steps < 100_000 {
+        if cursor == block {
+            remote = true;
+            break;
+        }
+        // SAFETY: remote-list links are blocks of this page.
+        cursor = unsafe { *(cursor as *const usize) };
+        steps += 1;
+    }
+    put(if remote {
+        b" in-remote-list"
+    } else {
+        b" not-in-remote-list"
+    });
+    put(b" owner_state=0x");
+    hex(page.owner_state.load(Ordering::Relaxed), &mut put);
+    put(b" heap=0x");
+    hex(heap().addr(), &mut put);
+    put(b" word0=0x");
+    // SAFETY: the block is at least 16 bytes long.
+    hex(unsafe { *(block as *const usize) }, &mut put);
+    put(b"\n");
+    // SAFETY: writing a stack buffer to stderr.
+    unsafe {
+        libc::write(2, buffer.as_ptr().cast(), len);
+        libc::abort()
     }
 }
 
@@ -1224,6 +1385,10 @@ unsafe fn realloc_copy(ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8
         let new_ptr = PhpHeap.alloc(new_layout);
         if !new_ptr.is_null() {
             std::ptr::copy_nonoverlapping(ptr, new_ptr, layout.size().min(new_size));
+            #[cfg(feature = "php-heap-debug")]
+            if layout.size().min(new_size) >= 16 && *(new_ptr as *const u64).add(1) == FREED_MARK {
+                debug_fail(b"rphp heap: realloc copied a freed marker\n");
+            }
             pool_free(ptr, pool_offset(ptr as usize));
         }
         new_ptr
@@ -1288,6 +1453,14 @@ unsafe impl GlobalAlloc for PhpHeap {
     unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
         let offset = pool_offset(ptr as usize);
         if offset < RANGE.reserve.load(Ordering::Relaxed) {
+            #[cfg(feature = "php-heap-debug")]
+            // SAFETY: a pool pointer has an initialized page header.
+            debug_check_free(
+                unsafe { &*page_header_at(ptr as usize, offset) },
+                ptr as usize,
+                layout.size(),
+                layout.align(),
+            );
             // SAFETY: pool pointers come from the pool paths of `alloc`.
             unsafe { pool_free(ptr, offset) };
         } else {
@@ -1304,6 +1477,14 @@ unsafe impl GlobalAlloc for PhpHeap {
         if offset < RANGE.reserve.load(Ordering::Relaxed) {
             // SAFETY: pool pointer; its page header records the class.
             let class = unsafe { (*page_header_at(ptr as usize, offset)).class } as usize;
+            #[cfg(feature = "php-heap-debug")]
+            // SAFETY: as above.
+            debug_check_free(
+                unsafe { &*page_header_at(ptr as usize, offset) },
+                ptr as usize,
+                layout.size(),
+                layout.align(),
+            );
             if let Some(new_class) = class_for(new_size, layout.align())
                 && new_class == class
             {
