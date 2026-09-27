@@ -796,6 +796,33 @@ fn xxh128_hash_binary_output_round_trips_through_base64() {
 }
 
 #[test]
+fn xxh3_hash_matches_php_vectors_binary_seed_and_incremental_contracts() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+foreach (['', '1', '1,2,3', 'Symfony'] as $value) {
+    echo hash('xxh3', $value), ':', bin2hex(hash('xxh3', $value, true)), "\n";
+}
+echo hash('xxh3', 'Symfony', false, ['seed' => 1]), "\n";
+$context = hash_init('xxh3');
+hash_update($context, 'Sym'); hash_update($context, 'fony');
+echo hash_final($context), "\n";
+echo (int) in_array('xxh3', hash_algos(), true), "\n";
+"#,
+        ),
+        concat!(
+            "2d06800538d394c2:2d06800538d394c2\n",
+            "65cd25028f98f158:65cd25028f98f158\n",
+            "0fb82eb193363fb4:0fb82eb193363fb4\n",
+            "9a049be8a7cd9670:9a049be8a7cd9670\n",
+            "55f9d61afb4364a0\n",
+            "9a049be8a7cd9670\n",
+            "1\n",
+        )
+    );
+}
+
+#[test]
 fn crc32_hash_matches_php_byte_order_and_binary_output() {
     assert_eq!(
         run_php(

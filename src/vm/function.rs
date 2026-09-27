@@ -1024,6 +1024,7 @@ impl ParamTypeHint {
     pub fn allows_null(&self) -> bool {
         match self {
             Self::Mixed | Self::Nullable(_) => true,
+            Self::ClassName(name) if name.eq_ignore_ascii_case("null") => true,
             Self::Union(parts) => parts.iter().any(Self::allows_null),
             _ => false,
         }

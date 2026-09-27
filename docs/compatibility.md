@@ -7,6 +7,68 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### Composer 2.8.12 self-hosted install path
+
+The `composer-self-hosted-install` checkpoint over `9439a84a` runs the pinned
+Composer 2.8.12 PHAR itself on RPHP. `--version` and `validate` complete, and a
+clean locked install downloads, verifies and extracts
+`psr/event-dispatcher:1.0.0`, `symfony/event-dispatcher-contracts:v3.7.1` and
+`symfony/event-dispatcher:v7.4.15`, generates the vendor autoloader and loads
+the installed EventDispatcher in a fresh RPHP process. Both extraction paths
+are exercised: the ordinary external `unzip` path and Composer's in-process
+`ZipArchive` fallback with `proc_open` disabled.
+
+The supporting surface is implemented inside RPHP rather than delegated to a
+host PHP process. A libcurl-backed request-owned `curl` slice provides the
+easy, multi and share operations, TLS verification, redirects, proxies,
+content decoding and stream destinations observed by Composer. A Rust ZIP
+reader provides the admitted `ZipArchive` inspection and safe extraction
+methods, including deflate archives and traversal-safe entry paths. The
+OpenSSL slice exposes linked-library version data, digest enumeration, public
+key and X.509 inspection, and signature verification used by Composer's
+security checks. `ReflectionExtension`, PHP 8.4+ last-response-header state,
+`xxh3` hashing and `ZEND_THREAD_SAFE` complete the observed selection and
+process boundaries. The compiler/runtime fixes in the same checkpoint are
+general contracts for nullable generic unions, relocated control flow and
+reference assignment involving `$this`.
+
+The frozen complete Cargo matrix is green: default **7,056/0**, no-default
+**6,705/0**, generics-erased **7,127/0**, generics-reified **7,149/0** and
+all-features **7,200/0**, plus all-feature/all-target checking. Composer S0,
+all four Symfony S1 fixtures and FrameworkBundle S2/S3 pass. The unsafe
+inventory remains **1,627 blocks / 289 functions**. Performance was
+intentionally not measured by user direction ahead of the planned Rust
+upgrade.
+
+The release Zend/lang packet is **5,397 pass / 2 fail / 114 skip / 86
+unsupported**, exact **+1/-0** against the parent, with no timeout or crash.
+Admitting `curl` makes `Zend/tests/bug71930.phpt` runnable; its callback
+lifetime/GC contract now passes. The strings/array packet is **1,485 pass / 7
+fail / 70 skip / 13 unsupported**. Its one parent status movement is the
+historical `bug72434.phpt`, whose payload intentionally assumes the
+`ZipArchive` class is absent; with the truthful extension admission it reaches
+the real typed readonly internal property instead. This environment-dependent
+case is disclosed rather than hiding `zip` availability.
+
+This checkpoint proves the exact locked install above, not the complete cURL,
+OpenSSL or ZIP extensions and not every Composer command or package transport.
+The static Composer source audit observes **344 present / 12 missing / 0
+call-shape mismatches** across 356 global functions. The remaining observations
+are `cli_set_process_title`, `get_current_user`, `gethostbyname`,
+`pcntl_signal_get_handler`, `phpinfo`, `posix_getpid`, `posix_kill` and the
+five `gz*`/zlib decoding-compression globals; none is reached by the proven
+locked ZIP install, and they remain the next library expansion rather than
+placeholder registrations.
+
+SHA-256 evidence: release candidate
+`604883b67f31df90b45187bc7a94966608351f26904d463b250850ab7eaeea05`;
+Cargo matrix
+`fa34c72bf9de5b9f3c2c4c6ce55b1c074ad871f1a6af5c8838cf33f1f4064086`;
+Zend/lang manifest
+`3eab2afd7bdd5236de119241d432417a397b832258363b4adac5c5809fcfae21`;
+Composer builtin-audit summary is retained outside the repository with the
+checkpoint evidence.
+
 ### Rector 2.5.9 bootstrap
 
 The `rector-bootstrap` checkpoint over `3e1f2580` establishes the first
@@ -28539,7 +28601,7 @@ during pre-alpha development.
   coverage;
 - Composer packages and framework applications, including Symfony;
 - HTTP/FPM or another production web SAPI, WebSockets, and server lifecycle;
-- databases, Redis, cURL, and most external integrations;
+- databases, Redis, complete cURL/ZIP/OpenSSL surfaces, and most external integrations;
 - production cycle collection, resource limits, sandboxing, and security
   hardening;
 - BigInt/BigDecimal and broad specialist extension compatibility;

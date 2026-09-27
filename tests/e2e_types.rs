@@ -387,11 +387,14 @@ class AliasThis {
     function inspect() {
         $alias =& $this;
         var_dump($alias === $this);
+        $other =& $alias;
+        $alias = null;
+        var_dump($this instanceof self, $other);
     }
 }
 (new AliasThis)->inspect();"#
         ),
-        "int(9)\nint(9)\nbool(true)\n"
+        "int(9)\nint(9)\nbool(true)\nbool(true)\nNULL\n"
     );
 }
 

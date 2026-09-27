@@ -146,6 +146,7 @@ foreach ([
 ] as [$value,$encodings,$strict]) {
     var_dump(mb_detect_encoding($value, $encodings, $strict));
 }
+var_dump((static fn (array|string|null $encodings) => mb_detect_encoding('ascii', $encodings, true))(null));
 foreach ([
     ["\x80A",'UTF-8','Windows-1252'], ["\x80A",'UTF-8','ISO-8859-1'],
     ['é','Windows-1252','UTF-8'], ["\xff",'UTF-8','UTF-8'],
@@ -169,6 +170,7 @@ var_dump(
             "bool(false)\n",
             "string(12) \"Windows-1252\"\n",
             "string(12) \"Windows-1252\"\n",
+            "string(5) \"ASCII\"\n",
             "e282ac41\n",
             "c28041\n",
             "e9\n",

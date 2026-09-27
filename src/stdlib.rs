@@ -222,6 +222,7 @@ macro_rules! ret {
 mod array_assoc_sets;
 mod array_traversal;
 mod builtin_classes;
+pub(crate) mod curl;
 mod date;
 mod directory;
 mod dom;
@@ -234,6 +235,7 @@ mod html_entities;
 mod image_info;
 mod iterator;
 mod mbstring;
+pub(crate) mod openssl;
 mod pcre;
 pub(crate) mod phar;
 mod process;
@@ -248,6 +250,7 @@ mod superglobals;
 pub(crate) mod ticks;
 mod weak;
 mod xml_writer;
+mod zip;
 
 pub use runtime_info::set_startup_config;
 pub use superglobals::{JIT_AUTO_GLOBALS, REQUEST_AUTO_GLOBAL_ORDER, register_request_globals};
@@ -6084,7 +6087,8 @@ fn fn_hash(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
         None
     };
     let data = data.php_string_bytes().unwrap_or_default();
-    let seed = if algorithm.eq_ignore_ascii_case("xxh128") {
+    let seed = if algorithm.eq_ignore_ascii_case("xxh3") || algorithm.eq_ignore_ascii_case("xxh128")
+    {
         match options.and_then(|options| options.get_str("seed")) {
             None => 0,
             Some(seed) if seed.dereferenced().value_type() == ValueType::Long => {
@@ -6152,7 +6156,7 @@ fn fn_hash_equals(
 
 /// Registered `hash()` algorithms, in `hash_algos()` order.
 const HASH_ALGORITHMS: &[&str] = &[
-    "md5", "sha1", "sha256", "sha512", "crc32", "crc32b", "xxh128",
+    "md5", "sha1", "sha256", "sha512", "crc32", "crc32b", "xxh3", "xxh128",
 ];
 
 /// Digest bytes of one registered algorithm; `None` for an unknown name.
@@ -6169,6 +6173,13 @@ fn hash_algorithm_digest(algorithm: &str, data: &[u8], seed: u64) -> Option<Vec<
         php_crc32(data).to_le_bytes().to_vec()
     } else if algorithm.eq_ignore_ascii_case("crc32b") {
         php_crc32_ieee(data).to_be_bytes().to_vec()
+    } else if algorithm.eq_ignore_ascii_case("xxh3") {
+        let digest = if seed == 0 {
+            xxhash_rust::xxh3::xxh3_64(data)
+        } else {
+            xxhash_rust::xxh3::xxh3_64_with_seed(data, seed)
+        };
+        digest.to_be_bytes().to_vec()
     } else if algorithm.eq_ignore_ascii_case("xxh128") {
         let digest = if seed == 0 {
             xxhash_rust::xxh3::xxh3_128(data)
@@ -6232,26 +6243,45 @@ fn fn_hash_file(
     } else {
         false
     };
-    if let Some(options) = arg_opt!(ed, 3)
-        && options.dereferenced().value_type() != ValueType::Array
-    {
-        typed_internal_argument_error(
-            eg,
-            "hash_file",
-            options.dereferenced(),
-            4,
-            "options",
-            "array",
-        );
-        return Ok(());
-    }
+    let options = if let Some(options) = arg_opt!(ed, 3) {
+        let options = options.dereferenced();
+        let Some(options) = options.as_array() else {
+            typed_internal_argument_error(eg, "hash_file", options, 4, "options", "array");
+            return Ok(());
+        };
+        Some(options)
+    } else {
+        None
+    };
     let Some(bytes) = digest_file_bytes(ed, eg, "hash_file", &filename)? else {
         if eg.exception.is_some() {
             return Ok(());
         }
         ret!(rv, Value::bool(false));
     };
-    let digest = hash_algorithm_digest(&algorithm, &bytes, 0).expect("validated algorithm");
+    let seed = if algorithm.eq_ignore_ascii_case("xxh3") || algorithm.eq_ignore_ascii_case("xxh128")
+    {
+        match options.and_then(|options| options.get_str("seed")) {
+            None => 0,
+            Some(seed) if seed.dereferenced().value_type() == ValueType::Long => {
+                seed.dereferenced().as_long().unwrap_or_default() as u64
+            }
+            Some(_) => {
+                report_internal_deprecation(
+                    eg,
+                    ed,
+                    "hash_file(): Passing a seed of a type other than int is deprecated because it is ignored",
+                )?;
+                if eg.exception.is_some() {
+                    return Ok(());
+                }
+                0
+            }
+        }
+    } else {
+        0
+    };
+    let digest = hash_algorithm_digest(&algorithm, &bytes, seed).expect("validated algorithm");
     if binary {
         ret!(rv, php_byte_result(digest, true));
     }
@@ -6298,6 +6328,7 @@ fn hmac_md5_digest(key: &[u8], data: &[u8]) -> [u8; 16] {
 
 enum HashContextDigest {
     Md5([u8; 16]),
+    Xxh3(u64),
     Xxh128(u128),
     Crc32([u8; 4]),
 }
@@ -6306,6 +6337,7 @@ impl HashContextDigest {
     fn into_bytes(self) -> Vec<u8> {
         match self {
             Self::Md5(digest) => digest.to_vec(),
+            Self::Xxh3(digest) => digest.to_be_bytes().to_vec(),
             Self::Xxh128(digest) => digest.to_be_bytes().to_vec(),
             Self::Crc32(digest) => digest.to_vec(),
         }
@@ -6314,6 +6346,7 @@ impl HashContextDigest {
     fn into_hex(self) -> String {
         match self {
             Self::Md5(digest) => format_hex_digest(&digest),
+            Self::Xxh3(digest) => format!("{digest:016x}"),
             Self::Xxh128(digest) => format!("{digest:032x}"),
             Self::Crc32(digest) => format_hex_digest(&digest),
         }
@@ -6344,6 +6377,14 @@ fn hash_context_digest(value: &Value) -> Option<HashContextDigest> {
     }
     Some(match algorithm {
         "md5" => HashContextDigest::Md5(md5_digest(&buffer)),
+        "xxh3" => {
+            let digest = if seed == 0 {
+                xxhash_rust::xxh3::xxh3_64(&buffer)
+            } else {
+                xxhash_rust::xxh3::xxh3_64_with_seed(&buffer, seed)
+            };
+            HashContextDigest::Xxh3(digest)
+        }
         "xxh128" => {
             let digest = if seed == 0 {
                 xxhash_rust::xxh3::xxh3_128(&buffer)
@@ -6402,6 +6443,8 @@ fn fn_hash_init(
     };
     let algorithm = if algorithm.eq_ignore_ascii_case("md5") {
         "md5"
+    } else if algorithm.eq_ignore_ascii_case("xxh3") {
+        "xxh3"
     } else if algorithm.eq_ignore_ascii_case("xxh128") {
         "xxh128"
     } else if algorithm.eq_ignore_ascii_case("crc32") {
@@ -6428,7 +6471,7 @@ fn fn_hash_init(
         ));
         return Ok(());
     }
-    let seed = if algorithm == "xxh128" {
+    let seed = if matches!(algorithm, "xxh3" | "xxh128") {
         match options.and_then(|options| options.get_str("seed")) {
             None => 0,
             Some(seed) if seed.dereferenced().value_type() == ValueType::Long => {
@@ -14152,19 +14195,22 @@ fn fn_get_extension_funcs(
     else {
         return Ok(());
     };
+    let Some(names) = extension_function_names(eg, &extension) else {
+        ret!(rv, Value::bool(false));
+    };
+
+    ret!(rv, declared_names_value(names));
+}
+
+/// Project the functions RPHP actually registered for an admitted extension.
+/// ReflectionExtension and get_extension_funcs() share this cold inventory so
+/// neither API can claim functions which the other one cannot call.
+fn extension_function_names(eg: &ExecutorGlobals, extension: &str) -> Option<Vec<String>> {
     let requested = if extension.eq_ignore_ascii_case("zend") {
         "Core"
     } else {
-        extension.as_str()
+        extension_canonical_name(extension)?
     };
-    let known = requested.eq_ignore_ascii_case("Core")
-        || requested.eq_ignore_ascii_case("standard")
-        || LOADED_EXTENSION_NAMES
-            .iter()
-            .any(|name| requested.eq_ignore_ascii_case(name));
-    if !known {
-        ret!(rv, Value::bool(false));
-    }
 
     let mut names = Vec::new();
     for (name, &function) in &eg.function_table {
@@ -14230,7 +14276,7 @@ fn fn_get_extension_funcs(
     } else {
         names.sort_unstable();
     }
-    ret!(rv, declared_names_value(names));
+    Some(names)
 }
 
 fn fn_method_exists(
@@ -16881,6 +16927,30 @@ fn fn_error_clear_last(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     eg.last_error = None;
+    ret!(rv, Value::null());
+}
+
+fn fn_http_get_last_response_headers(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(headers) = eg.http_last_response_headers.as_deref() else {
+        ret!(rv, Value::null());
+    };
+    let mut result = PhpArray::new();
+    for header in headers {
+        result.push(Value::string(header.clone()));
+    }
+    ret!(rv, Value::array(result));
+}
+
+fn fn_http_clear_last_response_headers(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.http_last_response_headers = None;
     ret!(rv, Value::null());
 }
 
@@ -31441,8 +31511,13 @@ fn fn_phpversion(
     rv: *mut Value,
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    if arg_opt!(ed, 0).is_some() {
-        ret!(rv, Value::bool(false));
+    if let Some(extension) = arg_opt!(ed, 0) {
+        let Some(extension) = extension.as_str() else {
+            ret!(rv, Value::bool(false));
+        };
+        if extension_canonical_name(extension).is_none() {
+            ret!(rv, Value::bool(false));
+        }
     }
     ret!(rv, Value::string(crate::PHP_COMPAT_VERSION));
 }
@@ -31874,6 +31949,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "calendar",
     #[cfg(target_os = "linux")]
     "ctype",
+    "curl",
     "date",
     "dom",
     "filter",
@@ -31884,6 +31960,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "json",
     "libxml",
     "mbstring",
+    "openssl",
     "Phar",
     "pcre",
     #[cfg(target_os = "linux")]
@@ -31892,7 +31969,21 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "posix",
     "tokenizer",
     "xmlwriter",
+    "zip",
 ];
+
+#[cold]
+fn extension_canonical_name(name: &str) -> Option<&'static str> {
+    for builtin in ["Core", "Reflection", "SPL", "standard"] {
+        if name.eq_ignore_ascii_case(builtin) {
+            return Some(builtin);
+        }
+    }
+    LOADED_EXTENSION_NAMES
+        .iter()
+        .copied()
+        .find(|extension| name.eq_ignore_ascii_case(extension))
+}
 
 const LIBXML_EXTENSION_FUNCTION_NAMES: &[&str] = &[
     "libxml_set_streams_context",

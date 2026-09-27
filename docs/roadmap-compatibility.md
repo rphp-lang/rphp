@@ -36,6 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `composer-self-hosted-install` checkpoint over `9439a84a` establishes a
+real Composer 2.8.12 package-install path driven by RPHP itself. The pinned PHAR
+validates a lock, downloads three PSR/Symfony distributions over verified TLS,
+extracts them through both external unzip and the in-process `ZipArchive`
+fallback, writes the vendor autoloader and loads the installed EventDispatcher
+in a fresh process. The implementation admits only exercised, independently
+implemented slices of cURL, OpenSSL and ZIP, together with real extension
+Reflection, response-header state and the required general compiler/runtime
+contracts; it does not advertise complete extension compatibility.
+
+The complete default/no-default/erased/reified/all-features Cargo matrix and
+all-target check are green at **7,056 / 6,705 / 7,127 / 7,149 / 7,200** passes
+with zero failures. Composer/Symfony S0--S3 and unsafe/static gates pass. The
+Zend/lang ledger is **5,397 pass / 2 fail / 114 skip / 86 unsupported**, exact
+**+1/-0**, without timeout or crash. Performance remains deferred by user
+direction. See [exact evidence](compatibility.md).
+
+The next Composer library expansion is data-selected from the 12 remaining
+static observations: zlib/gzip transport first, then the small process,
+POSIX/DNS and diagnostic functions. Those names must receive real contracts;
+they must not be placeholder-registered merely to make the audit green.
+
+### Preceding Rector bootstrap checkpoint
+
 The `rector-bootstrap` checkpoint over `3e1f2580` runs unmodified Rector 2.5.9
 through its real parallel loopback worker protocol. A `PowToExpRector` fixture
 is discovered and written correctly, and the second run is idempotent with

@@ -33,20 +33,21 @@ use super::instruction::{
     ASSIGN_DIM_ERROR_SUPPRESS, ASSIGN_DIM_INCDEC_DECREMENT, ASSIGN_DIM_INCDEC_INCREMENT,
     ASSIGN_DIM_INDIRECT_REBUILD, ASSIGN_DIM_KEY_ALREADY_NORMALIZED, ASSIGN_DIM_UNSET_REBUILD,
     ASSIGN_OBJ_CLONE_WITH, ASSIGN_OBJ_ERROR_SUPPRESS, ASSIGN_OBJ_MODIFY, ASSIGN_PROP_MOVE_SOURCE,
-    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, CALL_FLAG_BRACED_METHOD_NAME,
-    CALL_FLAG_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST,
-    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA,
-    CALL_FLAG_DEFERRED_SCALAR_CANDIDATE, CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS,
-    CALL_FLAG_EXACT_SCALAR_ARGS, CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE,
-    CALL_FLAG_OBJECT_ARRAY_CONSUMERS, CALL_FLAG_RETURN_EXPLICITLY_IGNORED,
-    CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE, CALL_USER_FUNC_ARRAY_SOURCE_UNPACK,
-    CLASS_CONST_COMPILE_TIME_NAME, CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER,
-    CLASS_CONST_DYNAMIC_NAME, CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER,
-    CLONE_OBJ_WITH_PROPERTIES, FETCH_DIM_COMPOUND, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY,
-    FETCH_DIM_EMPTY_TERMINAL, FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG,
-    FETCH_DIM_FUNC_ARG_NAMED, FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC, FETCH_DIM_ISSET,
-    FETCH_DIM_MUTABLE, FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT,
-    FETCH_DIM_UNSET, FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
+    ASSIGN_PROP_RESULT_VALUE, BIND_ARRAY_APPEND_COMPOUND, BIND_CV_REF_THIS_SOURCE,
+    CALL_FLAG_BRACED_METHOD_NAME, CALL_FLAG_CALLBACK_ARRAY_PIPELINE,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_FILTER_FIRST, CALL_FLAG_CALLBACK_ARRAY_PIPELINE_JSON_SINK,
+    CALL_FLAG_CALLBACK_ARRAY_PIPELINE_STAGED_METADATA, CALL_FLAG_DEFERRED_SCALAR_CANDIDATE,
+    CALL_FLAG_DYNAMIC_STATIC_SCOPE, CALL_FLAG_ERROR_SUPPRESS, CALL_FLAG_EXACT_SCALAR_ARGS,
+    CALL_FLAG_FILTER_MAP_CALLBACK_ARRAY_PIPELINE, CALL_FLAG_OBJECT_ARRAY_CONSUMERS,
+    CALL_FLAG_RETURN_EXPLICITLY_IGNORED, CALL_FLAG_STAGED_CALLBACK_ARRAY_PIPELINE,
+    CALL_USER_FUNC_ARRAY_SOURCE_UNPACK, CLASS_CONST_COMPILE_TIME_NAME,
+    CLASS_CONST_CONSTANT_EXPRESSION, CLASS_CONST_DYNAMIC_CALL_OWNER, CLASS_CONST_DYNAMIC_NAME,
+    CLASS_CONST_DYNAMIC_OWNER, CLASS_CONST_VALIDATE_DYNAMIC_OWNER, CLONE_OBJ_WITH_PROPERTIES,
+    FETCH_DIM_COMPOUND, FETCH_DIM_DESTRUCTURE, FETCH_DIM_EMPTY, FETCH_DIM_EMPTY_TERMINAL,
+    FETCH_DIM_ERROR_SUPPRESS, FETCH_DIM_FUNC_ARG, FETCH_DIM_FUNC_ARG_NAMED,
+    FETCH_DIM_FUNC_ARG_ROOT_CV, FETCH_DIM_INCDEC, FETCH_DIM_ISSET, FETCH_DIM_MUTABLE,
+    FETCH_DIM_OBJECT, FETCH_DIM_REFERENCE_SOURCE, FETCH_DIM_SILENT, FETCH_DIM_UNSET,
+    FETCH_DYNAMIC_ERROR_SUPPRESS, FETCH_DYNAMIC_RETAIN_NAME, FETCH_DYNAMIC_SILENT,
     FETCH_GLOBAL_WARN_UNDEFINED, FETCH_OBJ_COMPOUND, FETCH_OBJ_COMPOUND_RECEIVER,
     FETCH_OBJ_CONSTANT_EXPRESSION, FETCH_OBJ_ERROR_SUPPRESS, FETCH_OBJ_INCDEC, FETCH_OBJ_MODIFY,
     FETCH_OBJ_REFERENCE_SOURCE, FETCH_OBJ_SILENT, FETCH_OBJ_UNSET, INSTANCEOF_DYNAMIC_STATIC_SCOPE,
@@ -1038,6 +1039,9 @@ fn check_type_hint_in_scopes(
             })
         }
         ParamTypeHint::ClassName(class_name) => {
+            if class_name.eq_ignore_ascii_case("null") {
+                return val.value_type() == ValueType::Null;
+            }
             if class_name.eq_ignore_ascii_case("false") {
                 return val.value_type() == ValueType::False;
             }
@@ -1680,6 +1684,15 @@ fn explicit_nontrivial_long_conversion(value: &Value) -> i64 {
             integer_operator_operand(value).map_or(0, |operand| operand.value)
         }
         ValueType::Array => i64::from(!value.as_array().unwrap().is_empty()),
+        ValueType::Object
+            if value.as_object().is_some_and(|object| {
+                object
+                    .class_name
+                    .eq_ignore_ascii_case(crate::stdlib::curl::EASY_CLASS)
+            }) =>
+        {
+            i64::from(value.object_handle().unwrap_or(1))
+        }
         ValueType::Object | ValueType::Closure => 1,
         _ => value.to_long_val(),
     }
@@ -1746,6 +1759,15 @@ fn explicit_numeric_cast_diagnostic(
         ));
     }
     if matches!(value.value_type(), ValueType::Object | ValueType::Closure) {
+        if matches!(target, ExplicitNumericCastTarget::Int)
+            && value.as_object().is_some_and(|object| {
+                object
+                    .class_name
+                    .eq_ignore_ascii_case(crate::stdlib::curl::EASY_CLASS)
+            })
+        {
+            return None;
+        }
         let target = match target {
             ExplicitNumericCastTarget::Int => "int",
             ExplicitNumericCastTarget::Float => "float",
@@ -2152,6 +2174,9 @@ pub(crate) fn check_fast_scalar_type_hint(value: &Value, hint: &ParamTypeHint) -
             matches!(value.value_type(), ValueType::True | ValueType::False)
         }
         ParamTypeHint::Array => value.value_type() == ValueType::Array,
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("null") => {
+            value.value_type() == ValueType::Null
+        }
         _ => return None,
     })
 }
@@ -2174,6 +2199,9 @@ pub(crate) fn check_fast_scalar_return_type_hint(
             matches!(value.value_type(), ValueType::True | ValueType::False)
         }
         ParamTypeHint::Array => value.value_type() == ValueType::Array,
+        ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("null") => {
+            value.value_type() == ValueType::Null
+        }
         ParamTypeHint::Nullable(inner) => {
             value.value_type() == ValueType::Null
                 || check_fast_scalar_return_type_hint(value, inner) == Some(true)

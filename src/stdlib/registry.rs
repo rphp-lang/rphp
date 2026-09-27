@@ -154,6 +154,9 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     // Register built-in exception classes first (Throwable, Error, TypeError, Exception)
     let class_funcs = register_builtin_classes(eg);
     funcs.extend(class_funcs);
+    curl::register(eg, &mut funcs);
+    openssl::register(eg, &mut funcs);
+    zip::register(eg, &mut funcs);
 
     /// Helper to turn a list of &str into Vec<String> for param_names.
     macro_rules! pn {
@@ -790,7 +793,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Int
     );
-    // S3 exposes md5, xxh128 and crc32, including binary output. The wider
+    // S3 exposes md5, xxh3, xxh128 and crc32, including binary output. The wider
     // algorithm catalogue stays explicit compatibility work rather than
     // returning invented digests.
     reg_typed!(
@@ -2276,6 +2279,31 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("get_error_handler", fn_get_error_handler, 0, 0);
     reg!("error_get_last", fn_error_get_last, 0, 0);
     reg!("error_clear_last", fn_error_clear_last, 0, 0);
+    reg_typed!(
+        "http_get_last_response_headers",
+        fn_http_get_last_response_headers,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array))
+    );
+    reg_typed!(
+        "http_clear_last_response_headers",
+        fn_http_clear_last_response_headers,
+        0,
+        0,
+        [],
+        [],
+        ParamTypeHint::Void
+    );
+    for name in [
+        "http_get_last_response_headers",
+        "http_clear_last_response_headers",
+    ] {
+        let pointer = eg.find_function(name).expect("HTTP header API registered");
+        eg.register_internal_function_extension(pointer, "standard");
+    }
     reg!(
         "trigger_error",
         fn_trigger_error,

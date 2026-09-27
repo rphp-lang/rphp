@@ -11,6 +11,29 @@ include!("e2e_arrays/mutation_and_hot_paths.rs");
 include!("e2e_arrays/unpack_semantics.rs");
 
 #[test]
+fn deferred_nested_append_keeps_namespaced_call_fallback_metadata() {
+    let source = r#"<?php
+namespace Composer\Util;
+$options = ['http' => ['header' => []]];
+$options['http']['header'][] = sprintf(
+    'User-Agent: %s/%s (%s; %s; %s%s%s)',
+    'Composer',
+    '2.8.12',
+    'Linux',
+    'PHP 8.5.0',
+    'streams',
+    '; Platform-PHP 8.5.0',
+    '; CI'
+);
+echo $options['http']['header'][0];
+"#;
+    assert_eq!(
+        run_php(source),
+        "User-Agent: Composer/2.8.12 (Linux; PHP 8.5.0; streams; Platform-PHP 8.5.0; CI)"
+    );
+}
+
+#[test]
 fn overloaded_dimension_reference_arguments_do_not_write_back_detached_values() {
     let source = r#"<?php
 function same_ref(&$left, &$right) { return $left === $right; }
