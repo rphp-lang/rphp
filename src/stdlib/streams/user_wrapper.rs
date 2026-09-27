@@ -261,11 +261,11 @@ fn instantiate_wrapper(
     let property_layout = class.property_layout.clone();
     let property_defaults = class.property_defaults.clone();
     let object = if class.class_id == 0 {
-        Value::object(PhpObject::dynamic(
-            class_name.clone(),
-            0,
-            std::collections::HashMap::new(),
-        ))
+        // No declared layout carries the destructor verdict: count it.
+        let mut object =
+            PhpObject::dynamic(class_name.clone(), 0, std::collections::HashMap::new());
+        object.track_vm_release();
+        Value::object(object)
     } else {
         Value::object(PhpObject::with_layout_from_defaults(
             class_id,

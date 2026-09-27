@@ -96,23 +96,34 @@ impl ResourceHandle {
     #[inline]
     pub(crate) fn retire(&self) {
         self.scope.set(0);
-        self.vm_release.set(None);
+        if self.vm_release.take().is_some() {
+            crate::value::untrack_vm_release();
+        }
     }
 
     #[cold]
     pub(crate) fn set_vm_release(&self, callback: VmResourceRelease) {
-        self.vm_release.set(Some(callback));
+        if self.vm_release.replace(Some(callback)).is_none() {
+            crate::value::track_vm_release();
+        }
     }
 
     #[cold]
     pub(crate) fn take_vm_release(&self) -> Option<VmResourceRelease> {
-        self.vm_release.take()
+        let callback = self.vm_release.take();
+        if callback.is_some() {
+            crate::value::untrack_vm_release();
+        }
+        callback
     }
 }
 
 impl Drop for ResourceHandle {
     #[cold]
     fn drop(&mut self) {
+        if self.vm_release.get().is_some() {
+            crate::value::untrack_vm_release();
+        }
         // Rust unwinding cannot enter PHP. An unconsumed callback therefore
         // stays request-owned for the canonical shutdown phase. Normal VM
         // release (including suppressed exception release) consumes it first.

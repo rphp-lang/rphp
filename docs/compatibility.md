@@ -27738,10 +27738,42 @@ verified against reference PHP with shadowed parent privates, rebound
 closures sharing one op array, trait methods composed into different
 classes, `__get` fallbacks and readonly modification through a private
 property). The cold run takes about 5.3 s and the warm one about 1.5 s on a
-loaded host. What remains in the interpreter: property writes to non-public
-properties still take the slow path (12 %, half of it the release pre-walk
-over a replaced sole-owned array), `preg_replace`/`preg_match` in the native
-PCRE engine (8 %), and allocation. Those stay open.
+loaded host.
+
+The `release-gate` checkpoint takes the same treatment to property writes and
+to release planning. Non-public declared property writes are cached with a
+scope-proved marker (`PROP_SCOPED`, the top slot bit of the inline cache, so
+typed writes that keep their declaration pointer in `func` can carry it too);
+the dispatch hit additionally requires a frame without a rebound closure
+scope. The marker also keeps such entries out of the generic-property
+declaration decoding, which otherwise treats any non-null `func` on a
+read-only entry as a declaration index. Release planning itself is gated:
+every value whose drop can run PHP code is counted while it lives (objects of
+classes with a destructor, marked on the class layout once registration has
+published every inherited method; Generators; instances of user classes
+constructed without a class id; resources carrying a PHP release callback),
+and the weak, lazy and fiber runtimes report whether they hold any release
+work. While that count is zero, replacing a sole-owned array does not walk it
+and request shutdown skips the cycle-graph destructor pass, because nothing
+in either could run. The weak runtime indexes reference owners and map keys
+so its per-identity release check is constant time instead of a scan over
+every WeakReference and WeakMap entry (PHP-Parser's connecting visitors keep
+thousands alive). `execute_full_call` resolved the caller's lexical class on
+every call although only `callable` parameter hints consult it; it is now
+resolved on first need. `find_method_info` compared method names by
+lowercasing every declared name per lookup and now compares in place.
+`tests/e2e_release_gate.rs` checks destructor timing against reference PHP
+for replaced property arrays, clones, Reflection-constructed instances,
+inherited destructors, Generators, nested arrays, shutdown cycles, and
+WeakReference/WeakMap interaction. Found on the way and left open: an object
+displaced from a static property (`S::$keep = []`) runs its destructor only
+at shutdown, where PHP runs it immediately; this predates the checkpoint.
+The cold run measures 43.9 billion instructions after this checkpoint (59
+before the scoped read cache); the largest remaining interpreter items are
+the native PCRE engine under `preg_replace`/`preg_match` (9 %), property
+writes whose replaced arrays still need the pre-walk while WeakReference
+release work exists (8 %), statement temporary release (7 %) and PHPStan's
+own `token_get_all` calls (6 %).
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

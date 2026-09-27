@@ -8767,6 +8767,13 @@ impl ExecutorGlobals {
             self.method_declaring_class
                 .insert(func_ptr, class_name.clone().into());
         }
+        // Instances must be counted as release-planner candidates from their
+        // first construction, so settle the destructor verdict now that every
+        // own and inherited method is published.
+        if let Some(class) = self.class_table.get(&class_name) {
+            let has_destructor = self.class_has_destructor(class.class_id, &class.name);
+            class.property_layout.set_vm_release_tracked(has_destructor);
+        }
         let constant_expression_lexical_functions = self
             .class_table
             .get(&class_name)
@@ -10352,15 +10359,13 @@ impl ExecutorGlobals {
             // Only own/trait method tuples consume the normalized spelling.
             // Empty classes and native contracts use the original name below;
             // avoid allocating an unused lookup key for those common misses.
-            let method_lower = if class_def.methods.is_empty() && class_def.uses.is_empty() {
-                String::new()
-            } else {
-                method_name.to_lowercase()
-            };
+            // Method names compare case-insensitively; compare in place
+            // instead of lowercasing every declared name per lookup.
+            let method_matches = |name: &str| method_names_equal(name, method_name);
             let class_name = class_def.name.as_str();
             // Check own methods
             for (name, vis, is_static, _is_final, _func) in &class_def.methods {
-                if name.to_lowercase() == method_lower && !class_def.method_is_abstract(name) {
+                if method_matches(name) && !class_def.method_is_abstract(name) {
                     return Some((*vis, *is_static, class_name.to_string()));
                 }
             }
@@ -10368,9 +10373,7 @@ impl ExecutorGlobals {
             for trait_name in &class_def.uses {
                 if let Some(trait_def) = self.class_table.get(trait_name.as_str()) {
                     for (name, vis, is_static, _is_final, _func) in &trait_def.methods {
-                        if name.to_lowercase() == method_lower
-                            && !trait_def.method_is_abstract(name)
-                        {
+                        if method_matches(name) && !trait_def.method_is_abstract(name) {
                             if class_def.trait_aliases.iter().any(|adaptation| {
                                 adaptation.alias.is_none()
                                     && adaptation.method.eq_ignore_ascii_case(method_name)
@@ -11078,6 +11081,25 @@ impl ExecutorGlobals {
             known.insert(name.to_string(), compiled_value);
         });
         Ok(())
+    }
+
+    /// Whether dropping any value could run PHP code right now: a live object
+    /// of a destructor class or unknown dynamic class, a Generator, a resource
+    /// with a PHP release callback, or a weak/lazy/fiber runtime that attaches
+    /// release work to objects. When false, replacement and shutdown release
+    /// planning can be skipped: no walk could find anything to run.
+    #[inline]
+    pub(crate) fn vm_release_possible(&self) -> bool {
+        crate::value::vm_release_tracked_live()
+            || self
+                .weak_objects
+                .as_deref()
+                .is_some_and(weak::WeakObjectRuntime::has_any_release_work)
+            || self
+                .lazy_objects
+                .as_ref()
+                .is_some_and(|lazy| !lazy.is_empty())
+            || self.fiber_runtime.is_some()
     }
 
     /// Identity of the compile-time constant table: constants and classes are
@@ -12110,6 +12132,17 @@ impl ExecutorGlobals {
 
     pub(crate) fn is_output_handler_active(&self) -> bool {
         self.output_handler_depth.get() != 0
+    }
+}
+
+/// PHP method names are case-insensitive. ASCII spellings compare in place;
+/// other spellings keep the Unicode lowercase comparison.
+#[inline]
+fn method_names_equal(declared: &str, requested: &str) -> bool {
+    if declared.is_ascii() && requested.is_ascii() {
+        declared.eq_ignore_ascii_case(requested)
+    } else {
+        declared.to_lowercase() == requested.to_lowercase()
     }
 }
 

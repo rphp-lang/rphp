@@ -1828,13 +1828,12 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
     // live executing frame whose function pointer and call-kind flags stay
     // valid for this read-only probe.
     let (object_class_id, scope_matches) = unsafe {
-        let scope = cache.scope_function();
         (
             obj_val.object_class_id_unchecked(),
             RUNTIME_NAME
-                || scope.is_null()
+                || !cache.is_scoped_property()
                 || (!frame.is_null()
-                    && (*frame).func == scope
+                    && (*frame).func == cache.scope_function()
                     && !(*frame).has_closure_scope()),
         )
     };
@@ -1850,7 +1849,7 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
     }
     // Scoped entries are read-only proofs; writes re-check set visibility.
     if !RUNTIME_NAME
-        && !cache.scope_function().is_null()
+        && cache.is_scoped_property()
         && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC) != 0
     {
         return CachedFetchObjResult::Miss;
@@ -5171,7 +5170,7 @@ fn op_assign_obj_prop_inner<'a>(
         return Ok(ColdResult::Done);
     }
     if let Some(php_obj) = obj.as_object_mut() {
-        let caller_class = get_caller_class(frame, eg);
+        let (caller_class, scope_function) = caller_scope(frame, eg);
         let object_display_class_name = std::rc::Rc::<str>::from(displayed_class_name(
             eg,
             php_obj.class_name.as_ref(),
@@ -5823,7 +5822,18 @@ fn op_assign_obj_prop_inner<'a>(
         // Native array wrappers can redirect an unset property after setFlags.
         // Keep that receiver class on canonical writes even when its current
         // flags are zero; ordinary warmed dispatch needs no extra policy test.
-        if prop_is_public && prop_is_writable && key == name && object_class_id != 0
+        // A non-public declared property written from a scope fixed by the
+        // executing function is cached like the public case, marked scoped:
+        // the dispatch hit additionally requires a frame without a rebound
+        // closure scope.
+        let scoped_write = !prop_is_public
+            && property_accessible
+            && !force_dynamic
+            && opline.op2_type == OpType::Const
+            && !scope_function.is_null();
+        if ((prop_is_public && key == name) || scoped_write)
+            && prop_is_writable
+            && object_class_id != 0
             && !eg.class_is_a(&object_class_name, "ArrayObject")
             && !eg.class_is_a(&object_class_name, "ArrayIterator") {
             // SAFETY: `opline` belongs to `op_array.instructions`, and the
@@ -5841,6 +5851,9 @@ fn op_assign_obj_prop_inner<'a>(
                     ic_mut.set_typed_instance_property(definition, object_class_id, slot);
                 } else {
                     ic_mut.set_property(object_class_id, slot, 3);
+                }
+                if scoped_write {
+                    ic_mut.mark_scoped_property();
                 }
             }
         }

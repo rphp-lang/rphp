@@ -2034,6 +2034,7 @@ where
             let generator_ref = new_generator_ref(generator);
             let mut object = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
             object.generator = Some(generator_ref);
+            object.track_vm_release();
             let generator_value = Value::object(object);
             let return_hint = &(*func_ptr).sig.return_type_hint;
             let callee_class = eg.declaring_class_of(func_ptr);

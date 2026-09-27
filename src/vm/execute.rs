@@ -933,6 +933,19 @@ pub(crate) fn check_type_hint(
 /// matching: callable visibility is evaluated from the caller, while
 /// `self`/`parent`/`static` remain relative to the callee declaration.
 #[inline]
+/// Whether checking `hint` can need the caller's lexical class (callable
+/// resolution), directly or inside a nullable/union/intersection member.
+fn param_hint_mentions_callable(hint: &ParamTypeHint) -> bool {
+    match hint {
+        ParamTypeHint::Callable => true,
+        ParamTypeHint::Nullable(inner) => param_hint_mentions_callable(inner),
+        ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+            parts.iter().any(param_hint_mentions_callable)
+        }
+        _ => false,
+    }
+}
+
 fn exact_call_argument_matches_in_scopes(
     value: &Value,
     hint: &crate::vm::function::ParamTypeHint,
@@ -4430,8 +4443,9 @@ fn execute_full_call<'a>(
             }
         };
     let callee_class_ref = callee_class.as_deref();
-    let callable_caller_class = get_caller_class(frame, eg);
-    let callable_caller_class_ref = callable_caller_class.as_deref();
+    // Only `callable` hints consult the caller's lexical scope; resolving it
+    // allocates a class name, so do it on first need rather than per call.
+    let mut callable_caller_class: Option<Option<String>> = None;
 
     if !handler_validates_types && !func_common.sig.param_type_hints.is_empty() {
         let mut type_error = None;
@@ -4497,6 +4511,13 @@ fn execute_full_call<'a>(
                         }
                     }
                 }
+                let callable_caller_class_ref = if param_hint_mentions_callable(hint) {
+                    callable_caller_class
+                        .get_or_insert_with(|| get_caller_class(frame, eg))
+                        .as_deref()
+                } else {
+                    None
+                };
                 if exact_call_argument_matches_in_scopes(
                     value,
                     hint,
@@ -4822,6 +4843,13 @@ fn execute_full_call<'a>(
                 if let Some(hint) = variadic_hint {
                     if !matches!(hint, ParamTypeHint::None) {
                         let original = val.dereferenced().clone();
+                        let callable_caller_class_ref = if param_hint_mentions_callable(hint) {
+                            callable_caller_class
+                                .get_or_insert_with(|| get_caller_class(frame, eg))
+                                .as_deref()
+                        } else {
+                            None
+                        };
                         match prepare_call_argument_in_scopes(
                             &original,
                             hint,
@@ -4980,6 +5008,7 @@ fn execute_full_call<'a>(
                 let gen_ref = new_generator_ref(generator);
                 let mut gen_obj = PhpObject::dynamic("Generator".to_string(), 0, HashMap::new());
                 gen_obj.generator = Some(gen_ref.clone());
+                gen_obj.track_vm_release();
                 let generator_value = Value::object(gen_obj);
                 if let Some(owner) = generator_value.as_object_rc() {
                     gen_ref.borrow_mut().owner_object = Some(std::rc::Rc::downgrade(&owner));

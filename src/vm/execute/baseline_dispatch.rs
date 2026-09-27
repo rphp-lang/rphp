@@ -9663,6 +9663,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 })
                             })
                         };
+                        // Scope-proved entries are only valid for frames whose
+                        // lexical scope is fixed by the function itself.
+                        let dynamic_name_matches = dynamic_name_matches
+                            && (!ic.is_scoped_property() || !(*frame).has_closure_scope());
                         let cache_candidate = property_flags != 0
                             && ic.class_id == obj_class_id
                             && obj_class_id != 0

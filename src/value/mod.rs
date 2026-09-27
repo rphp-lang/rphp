@@ -290,6 +290,10 @@ pub struct ObjectLayout {
     keys: Vec<String>,
     slots: HashMap<String, usize>,
     iteration_slots: Vec<usize>,
+    /// Instances of this class may need the PHP release planner (the class
+    /// declares or inherits `__destruct`). Set once by class registration
+    /// before any instance exists; see `vm_release_tracked_live`.
+    vm_release_tracked: Cell<bool>,
 }
 
 impl ObjectLayout {
@@ -303,6 +307,7 @@ impl ObjectLayout {
             iteration_slots: (0..keys.len()).collect(),
             keys,
             slots,
+            vm_release_tracked: Cell::new(false),
         }
     }
 
@@ -323,12 +328,23 @@ impl ObjectLayout {
             keys: Vec::new(),
             slots: HashMap::new(),
             iteration_slots: Vec::new(),
+            vm_release_tracked: Cell::new(false),
         }
     }
 
     /// Rebuild uniquely owned declaration storage without replacing its
     /// existing slot table. Already published/shared layouts use a new owner.
     #[cold]
+    #[inline(always)]
+    pub(crate) fn vm_release_tracked(&self) -> bool {
+        self.vm_release_tracked.get()
+    }
+
+    /// Mark instances of this layout as release-planner candidates.
+    pub(crate) fn set_vm_release_tracked(&self, tracked: bool) {
+        self.vm_release_tracked.set(tracked);
+    }
+
     pub(crate) fn rebuild(&mut self, class_name: impl Into<Rc<str>>, keys: Vec<String>) {
         self.slots.clear();
         self.slots.reserve(keys.len());
@@ -2203,7 +2219,49 @@ mod object_handle_state_tests {
 
 const OBJECT_DESTRUCTOR_RAN: u32 = 1 << 31;
 const OBJECT_DEEP_DROP_STACK_CHECKPOINT: u32 = 1 << 30;
-const OBJECT_STATE_MASK: u32 = OBJECT_DESTRUCTOR_RAN | OBJECT_DEEP_DROP_STACK_CHECKPOINT;
+/// This object was counted in `VM_RELEASE_TRACKED` at construction and must be
+/// uncounted exactly once when it drops.
+const OBJECT_VM_RELEASE_TRACKED: u32 = 1 << 29;
+const OBJECT_STATE_MASK: u32 =
+    OBJECT_DESTRUCTOR_RAN | OBJECT_DEEP_DROP_STACK_CHECKPOINT | OBJECT_VM_RELEASE_TRACKED;
+
+thread_local! {
+    /// Live values that can need the PHP release planner when they die:
+    /// objects of classes with a destructor (or of unknown dynamic classes),
+    /// Generator objects and resources carrying a PHP release callback. While
+    /// this is zero and no weak/lazy/fiber runtime exists, no dropped value
+    /// can run PHP code, so replacement and shutdown release planning can be
+    /// skipped wholesale. Increments and decrements are paired per value, so
+    /// the count is exact across every ExecutorGlobals on the thread.
+    static VM_RELEASE_TRACKED: Cell<usize> = const { Cell::new(0) };
+}
+
+#[inline(always)]
+pub(crate) fn track_vm_release() {
+    VM_RELEASE_TRACKED.with(|count| count.set(count.get() + 1));
+}
+
+#[inline(always)]
+pub(crate) fn untrack_vm_release() {
+    let _ = VM_RELEASE_TRACKED.try_with(|count| count.set(count.get().saturating_sub(1)));
+}
+
+/// Lifecycle bits for a new object: counts it when `tracked`.
+#[inline(always)]
+fn tracked_lifecycle(tracked: bool) -> u32 {
+    if tracked {
+        track_vm_release();
+        OBJECT_VM_RELEASE_TRACKED
+    } else {
+        0
+    }
+}
+
+/// Whether any live value on this thread may need the PHP release planner.
+#[inline(always)]
+pub(crate) fn vm_release_tracked_live() -> bool {
+    VM_RELEASE_TRACKED.with(|count| count.get() != 0)
+}
 const OBJECT_HANDLE_MASK: u32 = !OBJECT_STATE_MASK;
 
 #[inline(always)]
@@ -2402,7 +2460,7 @@ impl PhpObject {
             ),
             class_name,
             class_id,
-            lifecycle: 0,
+            lifecycle: tracked_lifecycle(property_layout.vm_release_tracked()),
             property_layout,
             property_values,
             dynamic_properties: None,
@@ -2429,7 +2487,7 @@ impl PhpObject {
             allocation: crate::request_memory::Allocation::new(
                 std::mem::size_of::<Self>() + 24 + class_name.len(),
             ),
-            class_name: Rc::from(class_name),
+            class_name: Rc::from(class_name.as_str()),
             class_id,
             lifecycle: 0,
             property_layout: Rc::new(ObjectLayout::empty()),
@@ -2958,6 +3016,16 @@ impl PhpObject {
             .set_object_cursor(position);
     }
 
+    /// Count this object as a release-planner candidate (see
+    /// `vm_release_tracked_live`). Used for objects built outside a declared
+    /// layout whose drop can run PHP code: Generators and instances of user
+    /// classes constructed without a class id.
+    pub(crate) fn track_vm_release(&mut self) {
+        if self.lifecycle & OBJECT_VM_RELEASE_TRACKED == 0 {
+            self.lifecycle |= tracked_lifecycle(true);
+        }
+    }
+
     pub(crate) fn clone_for_php(&self) -> Self {
         Self {
             allocation: self.allocation.clone(),
@@ -2967,7 +3035,8 @@ impl PhpObject {
             // clone can reach a pathologically deep payload. The clone gets a
             // fresh handle/destructor lifecycle but retains the stack-safety
             // state needed when its shared properties are eventually final.
-            lifecycle: self.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT,
+            lifecycle: (self.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT)
+                | tracked_lifecycle(self.lifecycle & OBJECT_VM_RELEASE_TRACKED != 0),
             property_layout: self.property_layout.clone(),
             property_values: self
                 .property_values
@@ -2996,6 +3065,9 @@ impl PhpObject {
 
 impl Drop for PhpObject {
     fn drop(&mut self) {
+        if self.lifecycle & OBJECT_VM_RELEASE_TRACKED != 0 {
+            untrack_vm_release();
+        }
         let handle = self.lifecycle & OBJECT_HANDLE_MASK;
         if handle != 0 {
             for (slot, value) in self.property_values.iter().enumerate() {

@@ -775,7 +775,11 @@ unsafe impl Sync for InlineCache {}
 
 impl InlineCache {
     const PROP_FLAG_MASK: u32 = 0b11;
-    const DYNAMIC_PROPERTY_READ_SLOT: usize = (u32::MAX >> 2) as usize;
+    /// The property entry was proved by the executing function's lexical
+    /// scope (non-public declared property); valid only for frames without
+    /// a rebound closure scope. Occupies the top slot bit.
+    const PROP_SCOPED: u32 = 1 << 31;
+    const DYNAMIC_PROPERTY_READ_SLOT: usize = (u32::MAX >> 3) as usize;
     pub const TYPED_PROPERTY_COMPLEX: usize = 0;
     pub const TYPED_PROPERTY_INT: usize = 1;
     pub const TYPED_PROPERTY_FLOAT: usize = 2;
@@ -839,7 +843,11 @@ impl InlineCache {
     /// through the substituted type guard.
     #[inline(always)]
     pub fn generic_property_declaration(&self) -> Option<u32> {
-        if self.class_id == 0 || self.property_flags() != 1 || self.func.is_null() {
+        if self.class_id == 0
+            || self.property_flags() != 1
+            || self.func.is_null()
+            || self.prop_info & Self::PROP_SCOPED != 0
+        {
             return None;
         }
         u32::try_from((self.func as usize).checked_sub(1)?).ok()
@@ -858,13 +866,26 @@ impl InlineCache {
 
     #[inline(always)]
     pub fn property_slot(&self) -> usize {
-        (self.prop_info >> 2) as usize
+        ((self.prop_info & !Self::PROP_SCOPED) >> 2) as usize
+    }
+
+    #[inline(always)]
+    pub fn is_scoped_property(&self) -> bool {
+        self.class_id != 0 && self.prop_info & Self::PROP_SCOPED != 0
+    }
+
+    /// Mark the current property entry as scope-proved (see `PROP_SCOPED`).
+    #[inline]
+    pub fn mark_scoped_property(&mut self) {
+        debug_assert_ne!(self.class_id, 0);
+        debug_assert_ne!(self.property_flags(), 0);
+        self.prop_info |= Self::PROP_SCOPED;
     }
 
     #[inline]
     pub fn set_property(&mut self, class_id: u32, slot: usize, flags: u32) {
         debug_assert!(flags <= Self::PROP_FLAG_MASK);
-        debug_assert!(slot <= (u32::MAX >> 2) as usize);
+        debug_assert!(slot <= (u32::MAX >> 3) as usize);
         self.func = std::ptr::null();
         self.class_id = class_id;
         self.prop_info = ((slot as u32) << 2) | flags;
@@ -889,8 +910,7 @@ impl InlineCache {
 
     #[inline]
     pub fn set_scope_function(&mut self, func: *const FunctionCommon) {
-        debug_assert_ne!(self.class_id, 0);
-        debug_assert_ne!(self.property_flags(), 0);
+        self.mark_scoped_property();
         self.func = func;
     }
 

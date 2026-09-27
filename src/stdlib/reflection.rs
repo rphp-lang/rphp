@@ -3288,7 +3288,10 @@ fn instantiate_attribute_definition_at_use(
     }
     let class_id = class.class_id;
     let object = Value::object(if class_id == 0 {
-        PhpObject::dynamic(class.name.clone(), 0, HashMap::new())
+        // No declared layout carries the destructor verdict: count it.
+        let mut object = PhpObject::dynamic(class.name.clone(), 0, HashMap::new());
+        object.track_vm_release();
+        object
     } else {
         PhpObject::with_layout_from_defaults(
             class_id,
@@ -9215,7 +9218,10 @@ fn reflected_class_instance(
         return Ok(None);
     }
     let object = if class_id == 0 {
-        PhpObject::dynamic(class_name, 0, HashMap::new())
+        // No declared layout carries the destructor verdict: count it.
+        let mut object = PhpObject::dynamic(class_name, 0, HashMap::new());
+        object.track_vm_release();
+        object
     } else {
         PhpObject::with_layout(
             class_id,

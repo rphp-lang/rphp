@@ -1552,6 +1552,12 @@ pub(crate) fn run_request_cycle_destructors(
     eg: &mut ExecutorGlobals,
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
+    // Cyclic garbage without destructors, generators, release-carrying
+    // resources or weak/lazy/fiber state has no PHP code left to run; the
+    // process (or the request teardown) frees it structurally.
+    if !eg.vm_release_possible() {
+        return Ok(());
+    }
     let mut visited = IdentitySet::default();
     let mut pending = eg.exception.take();
     loop {
@@ -2253,6 +2259,7 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
     }
     let value = value.dereferenced();
     if value.value_type() != ValueType::Array
+        || !eg.vm_release_possible()
         || value.cycle_strong_count() != Some(replaced_references)
         || value
             .as_array()

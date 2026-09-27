@@ -4,7 +4,7 @@
 //! InternalIterator allocate this state only after their first observable use.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::rc::Weak;
 
 use crate::value::{PhpObject, Value, WeakPhpObject};
@@ -66,6 +66,12 @@ pub(crate) struct WeakCycleSnapshot {
 #[derive(Default)]
 pub(super) struct WeakObjectRuntime {
     references: HashMap<usize, WeakReferenceState>,
+    /// Identities of live WeakReference objects (the `owner` of a reference
+    /// state), so a dying owner is recognized without scanning every state.
+    reference_owners: HashSet<usize>,
+    /// How many map entries key on each object identity, so a dying key is
+    /// recognized without scanning every map's entries.
+    map_keys: HashMap<usize, usize>,
     maps: HashMap<usize, WeakMapState>,
     iterators: HashMap<usize, WeakIteratorState>,
 }
@@ -142,7 +148,9 @@ impl WeakObjectRuntime {
     fn reference_for_target(&mut self, target_identity: usize) -> Option<Value> {
         let state = self.references.get(&target_identity)?;
         if state.cleared || state.target.strong_count() == 0 {
+            let owner_identity = state.owner_identity;
             self.references.remove(&target_identity);
+            self.reference_owners.remove(&owner_identity);
             return None;
         }
         let owner = state.owner.upgrade()?;
@@ -158,7 +166,7 @@ impl WeakObjectRuntime {
         ) else {
             return false;
         };
-        self.references.insert(
+        if let Some(previous) = self.references.insert(
             target_identity,
             WeakReferenceState {
                 owner_identity,
@@ -166,7 +174,10 @@ impl WeakObjectRuntime {
                 target,
                 cleared: false,
             },
-        );
+        ) {
+            self.reference_owners.remove(&previous.owner_identity);
+        }
+        self.reference_owners.insert(owner_identity);
         true
     }
 
@@ -240,6 +251,7 @@ impl WeakObjectRuntime {
             value,
             exposed_reference: false,
         });
+        self.note_map_key(key_identity, 1);
         true
     }
 
@@ -248,7 +260,9 @@ impl WeakObjectRuntime {
         let position = entries
             .iter()
             .position(|entry| entry.key_identity == key_identity)?;
-        Some(entries.remove(position).value)
+        let value = entries.remove(position).value;
+        self.note_map_key(key_identity, -1);
+        Some(value)
     }
 
     fn map_entries(&self, map_identity: usize) -> Vec<(Value, Value)> {
@@ -299,8 +313,18 @@ impl WeakObjectRuntime {
                     .collect()
             })
             .unwrap_or_default();
-        self.maps
-            .insert(target_identity, WeakMapState { owner, entries });
+        let entries: Vec<WeakMapEntry> = entries;
+        for entry in &entries {
+            self.note_map_key(entry.key_identity, 1);
+        }
+        if let Some(previous) = self
+            .maps
+            .insert(target_identity, WeakMapState { owner, entries })
+        {
+            for entry in &previous.entries {
+                self.note_map_key(entry.key_identity, -1);
+            }
+        }
     }
 
     fn register_iterator(&mut self, iterator: &Value, map: &Value) -> bool {
@@ -396,50 +420,79 @@ impl WeakObjectRuntime {
         }
     }
 
+    fn note_map_key(&mut self, key_identity: usize, delta: isize) {
+        match self.map_keys.get_mut(&key_identity) {
+            Some(count) => {
+                *count = (*count as isize + delta).max(0) as usize;
+                if *count == 0 {
+                    self.map_keys.remove(&key_identity);
+                }
+            }
+            None if delta > 0 => {
+                self.map_keys.insert(key_identity, delta as usize);
+            }
+            None => {}
+        }
+    }
+
     fn has_release_work(&self, identity: usize) -> bool {
-        self.references
-            .iter()
-            .any(|(target, state)| *target == identity || state.owner_identity == identity)
+        self.references.contains_key(&identity)
+            || self.reference_owners.contains(&identity)
             || self
                 .maps
                 .get(&identity)
                 .is_some_and(|state| state.owner.strong_count() != 0)
-            || self.maps.values().any(|state| {
-                state
-                    .entries
-                    .iter()
-                    .any(|entry| entry.key_identity == identity)
-            })
+            || self.map_keys.contains_key(&identity)
             || self
                 .iterators
                 .get(&identity)
                 .is_some_and(|state| state.owner.strong_count() != 0)
     }
 
+    /// Whether any object at all currently carries weak release work.
+    pub(super) fn has_any_release_work(&self) -> bool {
+        !self.references.is_empty()
+            || !self.map_keys.is_empty()
+            || self
+                .maps
+                .values()
+                .any(|state| state.owner.strong_count() != 0)
+            || self
+                .iterators
+                .values()
+                .any(|state| state.owner.strong_count() != 0)
+    }
+
     fn release_identity(&mut self, identity: usize) -> Vec<Value> {
-        for (target, state) in &mut self.references {
-            if *target == identity {
-                state.cleared = true;
-            }
+        if let Some(state) = self.references.get_mut(&identity) {
+            state.cleared = true;
         }
 
         let mut released = Vec::new();
-        for state in self.maps.values_mut() {
-            let entries = std::mem::take(&mut state.entries);
-            let mut retained = Vec::with_capacity(entries.len());
-            for entry in entries {
-                if entry.key_identity == identity {
-                    released.push(entry.value);
-                } else {
-                    retained.push(entry);
+        if self.map_keys.contains_key(&identity) {
+            for state in self.maps.values_mut() {
+                let entries = std::mem::take(&mut state.entries);
+                let mut retained = Vec::with_capacity(entries.len());
+                for entry in entries {
+                    if entry.key_identity == identity {
+                        released.push(entry.value);
+                    } else {
+                        retained.push(entry);
+                    }
                 }
+                state.entries = retained;
             }
-            state.entries = retained;
+            self.map_keys.remove(&identity);
         }
 
-        self.references
-            .retain(|_, state| state.owner_identity != identity);
+        if self.reference_owners.remove(&identity) {
+            self.references
+                .retain(|_, state| state.owner_identity != identity);
+        }
         if let Some(state) = self.maps.remove(&identity) {
+            for entry in &state.entries {
+                self.note_map_key(entry.key_identity, -1);
+            }
             released.extend(state.entries.into_iter().map(|entry| entry.value));
         }
         if let Some(iterator) = self.iterators.remove(&identity) {
