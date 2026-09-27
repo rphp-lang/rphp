@@ -7,6 +7,41 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit runtime startup builtins
+
+The `phpunit-runtime-builtins` checkpoint over `95efd6ef` adds the first
+standard-library runtime contract required after PHPUnit's extension checks.
+`getrusage(int $mode = 0): array|false` has the exact PHP 8.5 argument name,
+arity, type, default, return union and `standard` extension ownership. On Linux
+it reports the same ordered 17 integer keys as PHP; only mode `1` selects
+children, while every other accepted integer selects the current process.
+The native call is contained by the existing audited process boundary, so the
+production unsafe ceiling remains **1,627 blocks / 289 functions**.
+
+`PHP_EXTRA_VERSION` is now the canonical empty string and participates in the
+same builtin-constant inventory as the existing public PHP 8.5.0 identity.
+With these two additions, the real PHPUnit 13.2.6 CLI prints its version and
+finishes normally. A real one-test suite proceeds through startup and suite
+construction until the independently missing core method
+`ReflectionMethod::getStartLine()`; this checkpoint does not substitute a fake
+source location or claim that PHPUnit tests can already execute.
+
+Both upstream PHP 8.5 `getrusage` PHPTs pass. The complete Zend/lang release
+ledger is exactly unchanged from the immutable parent: **5,396 pass / 0 fail /
+117 skip / 86 unsupported**, with identical manifest and pass-set hashes. The
+focused E2E passes in default, no-default, erased, reified and all-features
+configurations; the 865-test library suite and the all-feature/all-target
+compile check pass. Performance was intentionally not measured.
+
+SHA-256 evidence: release
+`30b0a1cd96597239d58a3811396426367e6e2928c6b86d9959a8ff2cfad56e84`;
+focused PHPT manifest
+`d12eaf7b40a21e95061b522d3af8da0620a938d8581c05dfff9dfd53f4c9b0fd`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`.
+
 ### PHPUnit extension foundation: Mbstring
 
 The `phpunit-mbstring-extension` checkpoint over `f9d673a9` removes PHPUnit's

@@ -1,6 +1,6 @@
 //! Process, configuration and terminal introspection of the CLI request:
 //! `get_cfg_var()`, `php_ini_loaded_file()`, memory and load reports,
-//! `getmypid()`, `gethostname()`, `uniqid()`, `stream_isatty()`,
+//! `getmypid()`, `getrusage()`, `gethostname()`, `uniqid()`, `stream_isatty()`,
 //! `is_countable()` and `fnmatch()`.
 
 use std::cell::RefCell;
@@ -137,6 +137,57 @@ fn fn_getmypid(
     _eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     return_value(rv, Value::long(i64::from(std::process::id())))
+}
+
+fn fn_getrusage(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let mode = if optional_argument(ed, 0).is_some() {
+        let Some(mode) = super::typed_internal_int_argument(ed, eg, "getrusage", 0, "mode")? else {
+            return Ok(());
+        };
+        mode
+    } else {
+        0
+    };
+
+    #[cfg(target_os = "linux")]
+    {
+        let Some(usage) = super::native_process::resource_usage(mode == 1) else {
+            return return_value(rv, Value::bool(false));
+        };
+        let fields = [
+            ("ru_oublock", usage.output_blocks),
+            ("ru_inblock", usage.input_blocks),
+            ("ru_msgsnd", usage.messages_sent),
+            ("ru_msgrcv", usage.messages_received),
+            ("ru_maxrss", usage.maximum_resident_set),
+            ("ru_ixrss", usage.shared_memory),
+            ("ru_idrss", usage.unshared_data),
+            ("ru_minflt", usage.minor_page_faults),
+            ("ru_majflt", usage.major_page_faults),
+            ("ru_nsignals", usage.signals),
+            ("ru_nvcsw", usage.voluntary_context_switches),
+            ("ru_nivcsw", usage.involuntary_context_switches),
+            ("ru_nswap", usage.swaps),
+            ("ru_utime.tv_usec", usage.user_microseconds),
+            ("ru_utime.tv_sec", usage.user_seconds),
+            ("ru_stime.tv_usec", usage.system_microseconds),
+            ("ru_stime.tv_sec", usage.system_seconds),
+        ];
+        let mut result = PhpArray::with_hash_capacity(fields.len());
+        for (name, value) in fields {
+            result.set_str(name, Value::long(value));
+        }
+        return return_value(rv, Value::array(result));
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        let _ = mode;
+        return_value(rv, Value::bool(false))
+    }
 }
 
 fn fn_sys_getloadavg(
@@ -616,6 +667,21 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 ])
             },
             defaults: Vec::new,
+            deprecation: None,
+        },
+        Declaration {
+            name: "getrusage",
+            handler: fn_getrusage,
+            parameters: &["mode"],
+            required: 0,
+            hints: || vec![ParamTypeHint::Int],
+            result: || {
+                ParamTypeHint::Union(vec![
+                    ParamTypeHint::Array,
+                    ParamTypeHint::ClassName("false".to_string()),
+                ])
+            },
+            defaults: || vec![Some(Value::long(0))],
             deprecation: None,
         },
         Declaration {

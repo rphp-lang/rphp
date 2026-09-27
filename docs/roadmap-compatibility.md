@@ -36,6 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-runtime-builtins` checkpoint over `95efd6ef` removes PHPUnit's
+first post-extension startup blockers without broadening into process-control
+or POSIX APIs. `getrusage(int $mode = 0): array|false` now exposes PHP's exact
+Reflection contract, mode selection and ordered 17-integer Linux projection;
+`PHP_EXTRA_VERSION` completes the existing public PHP version tuple.
+
+PHPUnit 13.2.6 now runs `--version` successfully. A real one-test suite reaches
+test discovery and stops at the separate core Reflection gap
+`ReflectionMethod::getStartLine()`. That boundary is intentionally not faked by
+this library checkpoint. The two upstream `getrusage` PHPTs pass, and the full
+Zend/lang ledger is byte-identical to its parent at **5,396 pass / 0 fail / 117
+skip / 86 unsupported**. Five focused feature configurations, the 865-test
+library suite, all-feature/all-target compile check, unsafe/static and real
+PHPUnit startup gates pass. Performance remains deferred by user direction.
+
+The static PHPUnit vendor audit now has 13 missing global functions after
+`getrusage`; the highest-value independent library follow-ups are
+`ini_get_all()`, `hash_equals()`, `mt_srand()` and `tmpfile()`. They may proceed
+without weakening the visible Reflection blocker or claiming a runnable suite.
+See [exact evidence](compatibility.md).
+
+### Preceding PHPUnit Mbstring foundation checkpoint
+
 The `phpunit-mbstring-extension` checkpoint over `f9d673a9` completes the
 dependency-ordered PHPUnit extension foundation. Nine independently
 implemented Mbstring globals have exact PHP 8.5 Reflection contracts and cover

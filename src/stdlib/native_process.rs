@@ -106,6 +106,29 @@ pub(crate) enum NativeCtypeClass {
     HexDigit,
 }
 
+/// Safe, fixed-width projection of the POSIX `rusage` fields exposed by PHP.
+#[cfg(target_os = "linux")]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct NativeResourceUsage {
+    pub(super) output_blocks: i64,
+    pub(super) input_blocks: i64,
+    pub(super) messages_sent: i64,
+    pub(super) messages_received: i64,
+    pub(super) maximum_resident_set: i64,
+    pub(super) shared_memory: i64,
+    pub(super) unshared_data: i64,
+    pub(super) minor_page_faults: i64,
+    pub(super) major_page_faults: i64,
+    pub(super) signals: i64,
+    pub(super) voluntary_context_switches: i64,
+    pub(super) involuntary_context_switches: i64,
+    pub(super) swaps: i64,
+    pub(super) user_microseconds: i64,
+    pub(super) user_seconds: i64,
+    pub(super) system_microseconds: i64,
+    pub(super) system_seconds: i64,
+}
+
 #[cfg(target_os = "linux")]
 pub(super) struct NativeInput<'a> {
     original: &'a [u8],
@@ -193,6 +216,11 @@ pub(super) enum NativeCall<'a> {
         byte: u8,
         result: &'a Cell<u8>,
     },
+    #[cfg(target_os = "linux")]
+    GetResourceUsage {
+        children: bool,
+        result: &'a Cell<Option<NativeResourceUsage>>,
+    },
 }
 
 /// All process-global native mutations, raw calls, and returned-pointer reads
@@ -208,8 +236,11 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
     // before another native state change can invalidate them. iconv receives
     // the exact input length, advances only its local pointer and writes into
     // a live Vec spare region; every resize rebuilds that output pointer.
-    // RPHP executes process-global locale/catalog/environment mutations on its
-    // single VM thread, so no concurrent Rust environment access is possible.
+    // getrusage receives an initialized-size out pointer and writes it
+    // synchronously; the value is copied into fixed-width Rust fields before
+    // returning. RPHP executes process-global locale/catalog/environment
+    // mutations on its single VM thread, so no concurrent Rust environment
+    // access is possible.
     unsafe {
         match call {
             NativeCall::SetEnvironment(key, value) => {
@@ -244,6 +275,39 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                 }
                 if let NativeCall::CtypeLowercase { byte, result } = call {
                     result.set(libc::tolower(c_int::from(byte)) as u8);
+                    return Some(Vec::new());
+                }
+                if let NativeCall::GetResourceUsage { children, result } = call {
+                    let mut usage = std::mem::MaybeUninit::<libc::rusage>::uninit();
+                    let who = if children {
+                        libc::RUSAGE_CHILDREN
+                    } else {
+                        libc::RUSAGE_SELF
+                    };
+                    if libc::getrusage(who, usage.as_mut_ptr()) != 0 {
+                        result.set(None);
+                        return None;
+                    }
+                    let usage = usage.assume_init();
+                    result.set(Some(NativeResourceUsage {
+                        output_blocks: usage.ru_oublock as i64,
+                        input_blocks: usage.ru_inblock as i64,
+                        messages_sent: usage.ru_msgsnd as i64,
+                        messages_received: usage.ru_msgrcv as i64,
+                        maximum_resident_set: usage.ru_maxrss as i64,
+                        shared_memory: usage.ru_ixrss as i64,
+                        unshared_data: usage.ru_idrss as i64,
+                        minor_page_faults: usage.ru_minflt as i64,
+                        major_page_faults: usage.ru_majflt as i64,
+                        signals: usage.ru_nsignals as i64,
+                        voluntary_context_switches: usage.ru_nvcsw as i64,
+                        involuntary_context_switches: usage.ru_nivcsw as i64,
+                        swaps: usage.ru_nswap as i64,
+                        user_microseconds: usage.ru_utime.tv_usec as i64,
+                        user_seconds: usage.ru_utime.tv_sec as i64,
+                        system_microseconds: usage.ru_stime.tv_usec as i64,
+                        system_seconds: usage.ru_stime.tv_sec as i64,
+                    }));
                     return Some(Vec::new());
                 }
                 if let NativeCall::IconvVersion = &call {
@@ -426,6 +490,7 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     NativeCall::IconvVersion => unreachable!(),
                     NativeCall::Ctype { .. } => unreachable!(),
                     NativeCall::CtypeLowercase { .. } => unreachable!(),
+                    NativeCall::GetResourceUsage { .. } => unreachable!(),
                     NativeCall::StrColl { .. } => unreachable!(),
                     NativeCall::SetEnvironment(..) => unreachable!(),
                 };
@@ -469,6 +534,17 @@ pub(super) fn convert_encoding(
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 pub(super) fn iconv_version() -> Option<Vec<u8>> {
     invoke_native(NativeCall::IconvVersion)
+}
+
+#[cfg(target_os = "linux")]
+#[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
+pub(super) fn resource_usage(children: bool) -> Option<NativeResourceUsage> {
+    let result = Cell::new(None);
+    let _ = invoke_native(NativeCall::GetResourceUsage {
+        children,
+        result: &result,
+    });
+    result.get()
 }
 
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
