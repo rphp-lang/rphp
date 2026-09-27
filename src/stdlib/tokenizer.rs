@@ -1734,20 +1734,20 @@ pub(super) fn token_get_all(
         return Ok(());
     };
     let mut texts = TextValues::new();
-    let mut output = PhpArray::with_packed_capacity(tokens.len());
+    let mut output = Vec::with_capacity(tokens.len());
     for token in &tokens {
         let text = texts.value(&source[token.start..token.end]);
         if token.id < T_LNUMBER {
             output.push(text);
         } else {
-            let mut fields = PhpArray::with_packed_capacity(3);
-            fields.push(Value::long(token.id));
-            fields.push(text);
-            fields.push(Value::long(token.line as i64));
-            output.push(Value::array(fields));
+            output.push(Value::array(PhpArray::packed_from_values(vec![
+                Value::long(token.id),
+                text,
+                Value::long(token.line as i64),
+            ])));
         }
     }
-    crate::stdlib::write_return_value(rv, Value::array(output));
+    crate::stdlib::write_return_value(rv, Value::array(PhpArray::packed_from_values(output)));
     Ok(())
 }
 

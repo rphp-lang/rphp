@@ -4488,6 +4488,29 @@ impl PhpArray {
         result
     }
 
+    /// Create a packed list from already materialized values in one step:
+    /// one storage accounting, one nested-release scan, no per-push
+    /// bookkeeping. Native producers of large lists (the tokenizer) use it.
+    pub(crate) fn packed_from_values(values: Vec<Value>) -> Self {
+        let array = Self {
+            allocation: Self::storage_allocation(values.len(), false),
+            storage: ArrayStorage::Packed(Vec::new()),
+            next_int_key: values.len() as i64,
+            cursor: Cell::new(if values.is_empty() {
+                ARRAY_CURSOR_PRISTINE
+            } else {
+                ARRAY_INT_KEY_INITIALIZED
+            }),
+        };
+        for value in &values {
+            array.track_nested_release_value(value);
+        }
+        Self {
+            storage: ArrayStorage::Packed(values),
+            ..array
+        }
+    }
+
     /// Create packed storage with capacity known from an array literal.
     pub fn with_packed_capacity(capacity: usize) -> Self {
         Self {
