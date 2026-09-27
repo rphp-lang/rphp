@@ -21964,7 +21964,7 @@ struct PhpJsonEncodeState {
     deepest_depth: i64,
     aborted: bool,
     deep_active: Option<std::rc::Rc<std::cell::RefCell<(std::collections::HashSet<usize>, bool)>>>,
-    deep_release_seen: std::collections::HashSet<(usize, CycleNodeKind)>,
+    deep_release_seen: crate::value::CycleNodeSet,
 }
 
 struct PhpJsonContainer<'a> {
@@ -22005,7 +22005,7 @@ impl PhpJsonEncodeState {
             deepest_depth: 0,
             aborted: false,
             deep_active: None,
-            deep_release_seen: std::collections::HashSet::new(),
+            deep_release_seen: Default::default(),
         }
     }
 

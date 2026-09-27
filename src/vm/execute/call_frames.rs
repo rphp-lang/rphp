@@ -859,7 +859,7 @@ fn run_final_object_destructor_tree_inner(
     // drop can expose a deep alias as a new root. Keeping this work behind the
     // reference-count proof avoids rescanning non-final cyclic objects on each
     // statement-temp release.
-    owner.mark_final_drop_tree_checkpoints(&mut std::collections::HashSet::new());
+    owner.mark_final_drop_tree_checkpoints(&mut crate::value::CycleNodeSet::default());
 
     // An initialized lazy proxy owns its real instance through the sparse
     // sidecar. Retain a temporary view of that edge while deciding whether the
@@ -2105,7 +2105,7 @@ impl NativeRelease {
                         if eg.exception.is_some() { return Ok(None); }
                         continue;
                     }
-                    node.owner.mark_final_drop_tree_checkpoints(&mut std::collections::HashSet::new());
+                    node.owner.mark_final_drop_tree_checkpoints(&mut crate::value::CycleNodeSet::default());
                     node.phase = NativeReleasePhase::WeakValues;
                     if let Some(callback) = crate::stdlib::resolve_object_public_method(eg, &node.owner, "__destruct")
                         && callback.common().fn_type == FunctionType::User

@@ -281,6 +281,18 @@ pub(crate) fn canonical_decimal_array_key(value: &str) -> Option<i64> {
 /// Names are resolved only on cold/cache-miss paths. Hot property access stores
 /// the numeric slot in the instruction inline cache and indexes `property_values`
 /// directly.
+/// String-key index of PHP arrays and dynamic property maps. Keys are PHP
+/// program strings; the multiply-rotate hasher replaces SipHash, which was
+/// the single largest hashing cost of a PHPStan run (14 million lookups).
+type StrIndex =
+    HashMap<SharedStringKey, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
+/// Identity plus node kind of cycle-graph nodes visited by the deep release
+/// walks; pointer-derived keys need no SipHash.
+pub(crate) type CycleNodeSet = std::collections::HashSet<
+    (usize, CycleNodeKind),
+    std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>,
+>;
+
 #[derive(Debug)]
 pub struct ObjectLayout {
     /// Canonical class name shared by the class definition and every instance.
@@ -505,7 +517,7 @@ impl LinearDynamicProperties {
 #[derive(Clone)]
 struct IndexedDynamicProperties {
     entries: Vec<(SharedStringKey, Value)>,
-    index: HashMap<SharedStringKey, usize>,
+    index: StrIndex,
 }
 
 impl IndexedDynamicProperties {
@@ -513,7 +525,7 @@ impl IndexedDynamicProperties {
     fn with_capacity(capacity: usize) -> Self {
         Self {
             entries: Vec::with_capacity(capacity),
-            index: HashMap::with_capacity(capacity),
+            index: StrIndex::with_capacity_and_hasher(capacity, Default::default()),
         }
     }
 
@@ -3627,7 +3639,7 @@ enum ArrayStorage {
     /// General ordered map — explicit keys + split hash indexes.
     Hash {
         entries: Vec<(ArrayEntryKey, Value)>,
-        str_index: HashMap<SharedStringKey, usize>,
+        str_index: StrIndex,
         int_index: IntIndex,
         /// Exact arithmetic integer prefix represented without `int_index`.
         verified_int_prefix: usize,
@@ -3837,7 +3849,7 @@ struct SmallHashStorage {
 struct LinearHashStorage {
     entries: Vec<(ArrayEntryKey, Value)>,
     string_lookups: Cell<u8>,
-    str_index: OnceCell<HashMap<SharedStringKey, usize>>,
+    str_index: OnceCell<StrIndex>,
 }
 
 impl LinearHashStorage {
@@ -3885,7 +3897,7 @@ impl LinearHashStorage {
                 .iter()
                 .filter(|entry| matches!(&entry.0, ArrayEntryKey::String(_)))
                 .count();
-            let mut index = HashMap::with_capacity(string_keys);
+            let mut index = StrIndex::with_capacity_and_hasher(string_keys, Default::default());
             for (position, (key, _)) in self.entries.iter().enumerate() {
                 if let ArrayEntryKey::String(key) = key {
                     index.insert(key.clone(), position);
@@ -4501,7 +4513,7 @@ impl PhpArray {
             allocation: Self::storage_allocation(capacity, true),
             storage: ArrayStorage::Hash {
                 entries: Vec::with_capacity(capacity),
-                str_index: HashMap::with_capacity(capacity),
+                str_index: StrIndex::with_capacity_and_hasher(capacity, Default::default()),
                 int_index: int_index_with_capacity(0),
                 verified_int_prefix: 0,
             },
@@ -4553,7 +4565,7 @@ impl PhpArray {
             }
             *&mut self.storage = ArrayStorage::Hash {
                 entries,
-                str_index: HashMap::new(),
+                str_index: StrIndex::default(),
                 int_index,
                 verified_int_prefix: len,
             };
@@ -4584,8 +4596,10 @@ impl PhpArray {
             .iter()
             .filter(|entry| matches!(&entry.0, ArrayEntryKey::String(_)))
             .count();
-        let mut str_index =
-            HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity));
+        let mut str_index = StrIndex::with_capacity_and_hasher(
+            string_keys.saturating_add(additional_string_capacity),
+            Default::default(),
+        );
         let mut int_index = int_index_with_capacity(0);
         for (position, (key, _)) in entries.iter().enumerate() {
             match key {
@@ -4653,7 +4667,10 @@ impl PhpArray {
             .filter(|entry| matches!(&entry.0, ArrayEntryKey::String(_)))
             .count();
         let mut str_index = str_index.into_inner().unwrap_or_else(|| {
-            HashMap::with_capacity(string_keys.saturating_add(additional_string_capacity))
+            StrIndex::with_capacity_and_hasher(
+                string_keys.saturating_add(additional_string_capacity),
+                Default::default(),
+            )
         });
         str_index.reserve(additional_string_capacity);
         let mut int_index = int_index_with_capacity(0);
@@ -6128,7 +6145,7 @@ impl PhpArray {
     /// Rebuild String positions affected by an ordered-entry removal.
     fn reindex_string_entries(
         entries: &[(ArrayEntryKey, Value)],
-        str_index: &mut HashMap<SharedStringKey, usize>,
+        str_index: &mut StrIndex,
         from: usize,
     ) {
         for (i, (k, _)) in entries.iter().enumerate() {
@@ -6856,7 +6873,7 @@ impl Drop for PhpClosure {
         if !self.final_drop_may_release_cycle_child() {
             return;
         }
-        let mut seen = std::collections::HashSet::new();
+        let mut seen = CycleNodeSet::default();
         if let Some(bound_this) = &self.bound_this {
             bound_this.mark_final_drop_tree_checkpoints(&mut seen);
         }
@@ -7170,10 +7187,7 @@ impl Value {
     /// release path. One traversal-scoped identity set keeps cyclic graphs
     /// linear, and temporary handles are suppressed from GC root statistics.
     #[cold]
-    pub(crate) fn mark_deep_drop_tree_checkpoints(
-        &self,
-        seen: &mut std::collections::HashSet<(usize, CycleNodeKind)>,
-    ) {
+    pub(crate) fn mark_deep_drop_tree_checkpoints(&self, seen: &mut CycleNodeSet) {
         self.mark_deep_drop_tree_checkpoints_with_root_policy(seen, true);
     }
 
@@ -7181,16 +7195,13 @@ impl Value {
     /// deep. Unlike an exceptional JSON root, it cannot later be cloned and
     /// mutated after this proof, so shallow objects keep their ordinary Drop.
     #[cold]
-    pub(crate) fn mark_final_drop_tree_checkpoints(
-        &self,
-        seen: &mut std::collections::HashSet<(usize, CycleNodeKind)>,
-    ) {
+    pub(crate) fn mark_final_drop_tree_checkpoints(&self, seen: &mut CycleNodeSet) {
         self.mark_deep_drop_tree_checkpoints_with_root_policy(seen, false);
     }
 
     fn mark_deep_drop_tree_checkpoints_with_root_policy(
         &self,
-        seen: &mut std::collections::HashSet<(usize, CycleNodeKind)>,
+        seen: &mut CycleNodeSet,
         mark_root_unconditionally: bool,
     ) {
         let root_value = self.dereferenced();
