@@ -751,7 +751,7 @@ pub(crate) struct StrtokState {
 #[derive(Default)]
 pub(crate) struct StringUtilityState {
     pub(crate) strtok: Option<StrtokState>,
-    pub(crate) shuffle_random: u64,
+    pub(crate) mt_random: Option<Box<crate::stdlib::Mt19937State>>,
 }
 
 enum ExecutionTimerCommand {

@@ -68,6 +68,7 @@ pub(crate) mod native_process;
 mod pack;
 mod parse_ini;
 mod random;
+pub(crate) use random::Mt19937State;
 pub(crate) mod reflection;
 mod regex_callback;
 mod registry;
@@ -4850,76 +4851,65 @@ fn fn_array_rand(
         ret!(rv, array_key_into_value(key, external_byte_keys));
     }
 
-    // Sequential sampling selects every k-subset uniformly without a second
-    // key buffer or a post-selection sort. Selected keys therefore retain the
-    // insertion order required by PHP.
-    let mut result = PhpArray::with_packed_capacity(num);
-    let mut needed = num;
-    let mut remaining = array.len();
-    for (key, _) in array.iter() {
-        if needed == remaining || shuffle_index(eg, remaining) < needed {
-            result.push(array_key_into_value(key, external_byte_keys));
-            needed -= 1;
+    // PHP marks the smaller of the selected set and its complement with
+    // repeated full-array draws, then emits keys in insertion order. Besides
+    // avoiding a large complement for near-complete selections, this draw
+    // order is observable after mt_srand() through the next mt_rand() call.
+    let marked_target = num.min(array.len() - num);
+    let emit_marked = num <= array.len() - num;
+    let mut marked = vec![false; array.len()];
+    let mut marked_count = 0;
+    while marked_count < marked_target {
+        let index = shuffle_index(eg, array.len());
+        if !marked[index] {
+            marked[index] = true;
+            marked_count += 1;
         }
-        remaining -= 1;
-        if needed == 0 {
-            break;
+    }
+    let mut result = PhpArray::with_packed_capacity(num);
+    for (index, (key, _)) in array.iter().enumerate() {
+        if marked[index] == emit_marked {
+            result.push(array_key_into_value(key, external_byte_keys));
         }
     }
     ret!(rv, Value::array(result));
 }
 
-fn initial_shuffle_random_state() -> u64 {
-    let mut bytes = [0u8; 8];
+fn initial_mt_seed() -> u32 {
+    let mut bytes = [0u8; 4];
     let system_seed = std::fs::File::open("/dev/urandom")
         .and_then(|mut source| source.read_exact(&mut bytes))
         .ok()
-        .map(|()| u64::from_ne_bytes(bytes));
+        .map(|()| u32::from_ne_bytes(bytes));
     let fallback = || {
         let nanos = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
-            .as_nanos() as u64;
-        nanos ^ (u64::from(std::process::id()) << 32)
+            .as_nanos() as u32;
+        nanos ^ std::process::id()
     };
-    let seed = system_seed.unwrap_or_else(fallback);
-    if seed == 0 {
-        0x9e37_79b9_7f4a_7c15
-    } else {
-        seed
-    }
+    system_seed.unwrap_or_else(fallback)
 }
 
 #[inline]
-fn next_shuffle_random(eg: &mut ExecutorGlobals) -> u64 {
-    let state = &mut eg
-        .string_utility_state
+fn mt_random_state(eg: &mut ExecutorGlobals) -> &mut Mt19937State {
+    eg.string_utility_state
         .get_or_insert_with(|| Box::new(crate::runtime::StringUtilityState::default()))
-        .shuffle_random;
-    if *state == 0 {
-        *state = initial_shuffle_random_state();
-    }
-    // xorshift64* retains compact request-local state and a 2^64-1 period.
-    // Range reduction below rejects the modulo-biased numerical prefix.
-    let mut value = *state;
-    value ^= value >> 12;
-    value ^= value << 25;
-    value ^= value >> 27;
-    *state = value;
-    value.wrapping_mul(0x2545_f491_4f6c_dd1d)
+        .mt_random
+        .get_or_insert_with(|| Box::new(Mt19937State::seeded(initial_mt_seed(), false)))
+        .as_mut()
+}
+
+fn seed_mt_random(eg: &mut ExecutorGlobals, seed: u32, legacy: bool) {
+    eg.string_utility_state
+        .get_or_insert_with(|| Box::new(crate::runtime::StringUtilityState::default()))
+        .mt_random = Some(Box::new(Mt19937State::seeded(seed, legacy)));
 }
 
 #[inline]
 fn shuffle_index(eg: &mut ExecutorGlobals, upper_exclusive: usize) -> usize {
     debug_assert!(upper_exclusive > 0);
-    let upper = upper_exclusive as u64;
-    let rejection_threshold = upper.wrapping_neg() % upper;
-    loop {
-        let sample = next_shuffle_random(eg);
-        if sample >= rejection_threshold {
-            return (sample % upper) as usize;
-        }
-    }
+    mt_random_state(eg).index(upper_exclusive)
 }
 
 fn shuffle_slice<T>(eg: &mut ExecutorGlobals, values: &mut [T]) {
@@ -10473,6 +10463,7 @@ mod strtok_shuffle_tests {
 
     use super::{StrtokStep, shuffle_slice, strtok_step};
     use crate::runtime::{ExecutorGlobals, StringUtilityState, StrtokState};
+    use crate::stdlib::Mt19937State;
 
     fn token(step: StrtokStep) -> Option<Vec<u8>> {
         match step {
@@ -10544,7 +10535,7 @@ mod strtok_shuffle_tests {
         let mut eg = ExecutorGlobals::new();
         eg.string_utility_state = Some(Box::new(StringUtilityState {
             strtok: None,
-            shuffle_random: 1,
+            mt_random: Some(Box::new(Mt19937State::seeded(1, false))),
         }));
         let mut permutations = HashSet::new();
         for _ in 0..1_000 {
@@ -11400,7 +11391,9 @@ fn fn_random_bytes(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let length = arg_long!(ed, 0);
+    let Some(length) = typed_internal_int_argument(ed, eg, "random_bytes", 0, "length")? else {
+        return Ok(());
+    };
     if length <= 0 {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",
@@ -15690,25 +15683,123 @@ fn fn_is_infinite(
     ret!(rv, Value::bool(number.is_infinite()));
 }
 
-fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
-    // Simple pseudo-random
-    let seed = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .subsec_nanos();
-    let (lo, hi) = match arg_opt!(ed, 0) {
-        Some(v) => (
-            v.to_long_val(),
-            match arg_opt!(ed, 1) {
-                Some(v2) => v2.to_long_val(),
-                None => i32::MAX as i64,
-            },
-        ),
-        None => (0, i32::MAX as i64),
+fn seed_legacy_random(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+) -> Result<(), VmError> {
+    let seed = match arg_opt!(ed, 0).map(Value::dereferenced) {
+        None => initial_mt_seed(),
+        Some(value) if value.value_type() == ValueType::Null => initial_mt_seed(),
+        Some(_) => {
+            let Some(seed) =
+                typed_internal_int_argument_expected(ed, eg, function, 0, "seed", "?int")?
+            else {
+                return Ok(());
+            };
+            seed as u32
+        }
     };
-    let range = (hi - lo + 1).max(1);
-    let val = lo + (seed as i64 % range);
-    ret!(rv, Value::long(val));
+    let mode = if arg_opt!(ed, 1).is_some() {
+        let Some(mode) = typed_internal_int_argument(ed, eg, function, 1, "mode")? else {
+            return Ok(());
+        };
+        mode
+    } else {
+        0
+    };
+    let legacy = mode == 1;
+    if legacy {
+        report_internal_deprecation(eg, ed, "The MT_RAND_PHP variant of Mt19937 is deprecated")?;
+        if eg.exception.is_some() {
+            return Ok(());
+        }
+    }
+    seed_mt_random(eg, seed, legacy);
+    ret!(rv, Value::null());
+}
+
+fn fn_mt_srand(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    seed_legacy_random(ed, rv, eg, "mt_srand")
+}
+
+fn fn_srand(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    seed_legacy_random(ed, rv, eg, "srand")
+}
+
+fn legacy_random_integer(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    accepts_inverted_range: bool,
+) -> Result<(), VmError> {
+    let minimum_supplied = arg_opt!(ed, 0).is_some();
+    let maximum_supplied = arg_opt!(ed, 1).is_some();
+    if !minimum_supplied && maximum_supplied {
+        eg.exception = Some(crate::value::make_error_value(
+            "ArgumentCountError",
+            &format!(
+                "{function}(): Argument #1 ($min) must be passed explicitly, because the default value is not known"
+            ),
+        ));
+        return Ok(());
+    }
+    if minimum_supplied && !maximum_supplied {
+        eg.exception = Some(crate::value::make_error_value(
+            "ArgumentCountError",
+            &format!("{function}() expects exactly 2 arguments, 1 given"),
+        ));
+        return Ok(());
+    }
+    if !minimum_supplied {
+        ret!(rv, Value::long(mt_random_state(eg).next_i31()));
+    }
+
+    let Some(mut minimum) = typed_internal_int_argument(ed, eg, function, 0, "min")? else {
+        return Ok(());
+    };
+    let Some(mut maximum) = typed_internal_int_argument(ed, eg, function, 1, "max")? else {
+        return Ok(());
+    };
+    if minimum > maximum {
+        if accepts_inverted_range {
+            std::mem::swap(&mut minimum, &mut maximum);
+        } else {
+            eg.exception = Some(crate::value::make_error_value(
+                "ValueError",
+                &format!(
+                    "{function}(): Argument #2 ($max) must be greater than or equal to argument #1 ($min)"
+                ),
+            ));
+            return Ok(());
+        }
+    }
+    let width = (maximum as i128 - minimum as i128 + 1) as u128;
+    let state = mt_random_state(eg);
+    let offset = if state.uses_legacy_twist() {
+        state.legacy_offset(width)
+    } else {
+        state.offset(width)
+    } as i128;
+    ret!(rv, Value::long((minimum as i128 + offset) as i64));
+}
+
+fn fn_mt_rand(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    legacy_random_integer(ed, rv, eg, "mt_rand", false)
+}
+
+fn fn_rand(ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Result<(), VmError> {
+    legacy_random_integer(ed, rv, eg, "rand", true)
 }
 
 fn fn_getrandmax(
@@ -15724,8 +15815,12 @@ fn fn_random_int(
     rv: *mut Value,
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
-    let min = arg_long!(ed, 0);
-    let max = arg_long!(ed, 1);
+    let Some(min) = typed_internal_int_argument(ed, eg, "random_int", 0, "min")? else {
+        return Ok(());
+    };
+    let Some(max) = typed_internal_int_argument(ed, eg, "random_int", 1, "max")? else {
+        return Ok(());
+    };
     if min > max {
         eg.exception = Some(crate::value::make_error_value(
             "ValueError",

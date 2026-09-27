@@ -7,6 +7,61 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit deterministic random seeding
+
+The `phpunit-mt-srand` checkpoint over `581ade59` implements PHP 8.5's legacy
+random-function surface needed by PHPUnit without delegating to host PHP or a
+native random library. `srand()`, `mt_srand()`, `rand()` and `mt_rand()` now
+share a request-local, independently implemented MT19937 engine with both the
+standard recurrence and the deprecated historical `MT_RAND_PHP` variant.
+Reflection metadata, extension ownership, nullable/default seed and mode,
+optional-without-default range arguments, return types, constants,
+deprecations, weak/strict coercion, named-argument gaps, inverted ranges and
+wide signed ranges match the PHP 8.5 oracle. `random_bytes()`, `random_int()`,
+`getrandmax()`, `mt_getrandmax()` and `lcg_value()` now complete the nine exact
+global functions attributed to the `random` extension.
+
+The seeded engine is also the single observable state used by `array_rand()`,
+`shuffle()` and `str_shuffle()`. The array selector follows PHP's smaller-set
+marking and insertion-order emission, including its observable draw count.
+Four original E2E cases cover exact Reflection, standard and historical
+sequences, negative and 64-bit seeds/ranges, shared consumers, deprecations and
+argument diagnostics. Two engine unit tests and three adjacent shuffle/strtok
+unit tests cover the underlying state and range projection. The nine directly
+applicable upstream `ext/random` PHPTs pass byte-exactly.
+
+The complete Cargo matrix is green: default **7,015/0**, no-default
+**6,666/0**, generics-erased **7,086/0**, generics-reified **7,108/0** and
+all-features **7,159/0**, plus all-feature/all-target checking. The unsafe
+inventory remains **1,627 blocks / 289 functions**. The complete release
+Zend/lang ledger and pass set remain byte-identical at **5,396 pass / 0 fail /
+117 skip / 86 unsupported**, with no timeout or crash.
+
+PHPUnit 13.2.6 prints its version and accepts
+`--order-by=random --random-order-seed=1234`; its one-test suite then reaches
+the independently missing core method `ReflectionMethod::getStartLine()`.
+Across 273 vendor-observed builtins, the inventory improves to **266 present /
+7 missing / 0 call-shape mismatches**. The remaining missing library functions
+are `pcntl_alarm()`, `pcntl_async_signals()`, `pcntl_signal()`, `fsockopen()`,
+`posix_geteuid()`, `posix_getpwuid()` and `posix_isatty()`.
+
+This checkpoint does not claim the object-oriented Random API, every random
+algorithm or complete PHPUnit execution. Performance was intentionally not
+measured by user direction.
+
+SHA-256 evidence: release
+`f82fafc3729faa2fd5e48aee4e41937c7aab97723793d5012cdbb067ddbe8f6b`;
+focused PHPT manifest
+`2a8524fd23ca8685bac36a8ed01646d838a7285f3acc72cbbbf8577bbcac18d3`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+Cargo matrix
+`fbf47c7e10c2da0150e382cebbd2327f01cd257d9160367885ce7df8cd8e039b`;
+vendor audit summary
+`0bb12e6708d3a223232394e33753e5d1098741d7f9471bcd5674953f58659495`.
+
 ### PHPUnit temporary-file lifecycle
 
 The `phpunit-tmpfile` checkpoint over `5f51fb4d` implements the complete

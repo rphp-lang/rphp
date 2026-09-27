@@ -36,6 +36,30 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-mt-srand` checkpoint over `581ade59` adds the exact PHP 8.5
+legacy random-function contract used by PHPUnit. An independent request-local
+MT19937 engine implements the standard recurrence and deprecated
+`MT_RAND_PHP` variant; `srand()`/`mt_srand()` seed the shared state consumed by
+`rand()`, `mt_rand()`, `array_rand()`, `shuffle()` and `str_shuffle()`.
+Reflection, defaults, constants, weak/strict conversion, diagnostics, 64-bit
+ranges and observable draw order are covered by original regressions and nine
+byte-exact upstream random PHPTs.
+
+The full default/no-default/erased/reified/all-features Cargo matrix and
+all-target check are green, unsafe remains **1,627/289**, and the complete
+release Zend/lang ledger and pass set remain byte-identical at **5,396 pass /
+0 fail / 117 skip / 86 unsupported**. Performance remains deferred by user
+direction.
+
+PHPUnit 13.2.6 accepts a fixed random-order seed and then reaches the separate
+core boundary `ReflectionMethod::getStartLine()`. Across 273 vendor-observed
+builtins, the inventory improves to **266 present / 7 missing / 0 call-shape
+mismatches**. The next independent library priorities are the small POSIX
+identity/TTY surface, `fsockopen()` and the PCNTL signal cluster. See
+[exact evidence](compatibility.md).
+
+### Preceding PHPUnit temporary-file checkpoint
+
 The `phpunit-tmpfile` checkpoint over `5f51fb4d` adds PHP 8.5-exact
 `tmpfile()` Reflection and lifecycle behavior. It creates an ordinary seekable
 `plainfile` / `STDIO` resource in `r+b` mode, preserves the backing pathname
@@ -52,7 +76,7 @@ deferred by user direction.
 PHPUnit 13.2.6's unmodified `ErrorLogCapture` now completes its real temporary
 stream lifecycle. Across 273 vendor-observed builtins, the inventory improves
 to **265 present / 8 missing / 0 call-shape mismatches**. The next independent
-library priorities are `mt_srand()`, the small POSIX identity/TTY surface,
+library priorities were `mt_srand()`, the small POSIX identity/TTY surface,
 `fsockopen()` and the PCNTL signal cluster. Using stream resources as
 `proc_open()` descriptors remains a separate process-control checkpoint. See
 [exact evidence](compatibility.md).

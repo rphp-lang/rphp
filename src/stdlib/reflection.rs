@@ -1779,6 +1779,9 @@ pub(crate) fn report_deprecated_global_constant_use(
         "DATE_RFC7231" => Some(
             "Constant DATE_RFC7231 is deprecated since 8.5, as this format ignores the associated timezone and always uses GMT",
         ),
+        "MT_RAND_PHP" => Some(
+            "Constant MT_RAND_PHP is deprecated since 8.3, as it uses a biased non-standard variant of Mt19937",
+        ),
         "SUNFUNCS_RET_TIMESTAMP" | "SUNFUNCS_RET_STRING" | "SUNFUNCS_RET_DOUBLE" => {
             Some(match name {
                 "SUNFUNCS_RET_TIMESTAMP" => {

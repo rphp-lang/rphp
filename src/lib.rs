@@ -107,6 +107,9 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "PHP_ROUND_HALF_DOWN",
     "PHP_ROUND_HALF_EVEN",
     "PHP_ROUND_HALF_ODD",
+    "MT_RAND_MT19937",
+    "MT_RAND_PHP",
+    "MT_RAND_MAX",
     "PHP_MAJOR_VERSION",
     "PHP_MINOR_VERSION",
     "PHP_RELEASE_VERSION",
@@ -589,6 +592,9 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "PHP_ROUND_HALF_DOWN" => Some(value::Value::long(2)),
         "PHP_ROUND_HALF_EVEN" => Some(value::Value::long(3)),
         "PHP_ROUND_HALF_ODD" => Some(value::Value::long(4)),
+        "MT_RAND_MT19937" => Some(value::Value::long(0)),
+        "MT_RAND_PHP" => Some(value::Value::long(1)),
+        "MT_RAND_MAX" => Some(value::Value::long(i64::from(i32::MAX))),
 
         // Public PHP compatibility contract.
         "PHP_MAJOR_VERSION" => Some(value::Value::long(PHP_COMPAT_MAJOR_VERSION)),

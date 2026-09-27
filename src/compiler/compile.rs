@@ -14996,6 +14996,7 @@ impl Compiler {
                             "E_STRICT"
                                 | "FILTER_SANITIZE_STRING"
                                 | "FILTER_SANITIZE_STRIPPED"
+                                | "MT_RAND_PHP"
                                 | "DATE_RFC7231"
                                 | "SUNFUNCS_RET_TIMESTAMP"
                                 | "SUNFUNCS_RET_STRING"

@@ -651,7 +651,19 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("strlen", fn_strlen, 1, 1, "string");
     reg!("strtok", fn_strtok, 2, 1, "string", "token");
     reg!("str_shuffle", fn_str_shuffle, 1, 1, "string");
-    reg!("random_bytes", fn_random_bytes, 1, 1, "length");
+    reg_typed!(
+        "random_bytes",
+        fn_random_bytes,
+        1,
+        1,
+        ["length"],
+        [ParamTypeHint::Int],
+        ParamTypeHint::String
+    );
+    let random_bytes = eg
+        .find_function("random_bytes")
+        .expect("random_bytes was just registered");
+    eg.register_internal_function_extension(random_bytes, "random");
     reg!("bin2hex", fn_bin2hex, 1, 1, "string");
     reg_typed!(
         "hex2bin",
@@ -1968,8 +1980,62 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     reg!("is_nan", fn_is_nan, 1, 1, "num");
     reg!("is_finite", fn_is_finite, 1, 1, "num");
     reg!("is_infinite", fn_is_infinite, 1, 1, "num");
-    reg!("rand", fn_rand, 2, 0, "min", "max");
-    reg!("mt_rand", fn_rand, 2, 0, "min", "max");
+    for (name, handler) in [
+        (
+            "rand",
+            fn_rand as crate::vm::function::InternalFunctionHandler,
+        ),
+        (
+            "mt_rand",
+            fn_mt_rand as crate::vm::function::InternalFunctionHandler,
+        ),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 2, 0, Vec::new())
+                .with_static_parameter_names(&["min", "max"]),
+        );
+        function.common.sig.param_type_hints = vec![ParamTypeHint::Int, ParamTypeHint::Int];
+        function.common.sig.return_type_hint = ParamTypeHint::Int;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_reflection_metadata(
+            pointer,
+            vec![Some(Value::undef()), Some(Value::undef())],
+            "random",
+        );
+        funcs.push(function);
+    }
+    for (name, handler) in [
+        (
+            "srand",
+            fn_srand as crate::vm::function::InternalFunctionHandler,
+        ),
+        (
+            "mt_srand",
+            fn_mt_srand as crate::vm::function::InternalFunctionHandler,
+        ),
+    ] {
+        let mut function = Box::new(
+            make_internal_function(handler, 2, 0, Vec::new())
+                .with_static_parameter_names(&["seed", "mode"]),
+        );
+        function.common.sig.param_type_hints = vec![
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ParamTypeHint::Int,
+        ];
+        function.common.sig.return_type_hint = ParamTypeHint::Void;
+        function.handler_validates_types = true;
+        let pointer = &function.common as *const FunctionCommon;
+        eg.register_function(name, pointer).unwrap();
+        eg.register_internal_function_reflection_metadata_with_diagnostics(
+            pointer,
+            vec![Some(Value::null()), Some(Value::long(0))],
+            &[Some("NULL"), Some("MT_RAND_MT19937")],
+            "random",
+        );
+        funcs.push(function);
+    }
     reg_typed!(
         "getrandmax",
         fn_getrandmax,
@@ -1979,7 +2045,23 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [],
         ParamTypeHint::Int
     );
-    reg!("random_int", fn_random_int, 2, 2, "min", "max");
+    let getrandmax = eg
+        .find_function("getrandmax")
+        .expect("getrandmax was just registered");
+    eg.register_internal_function_extension(getrandmax, "random");
+    reg_typed!(
+        "random_int",
+        fn_random_int,
+        2,
+        2,
+        ["min", "max"],
+        [ParamTypeHint::Int, ParamTypeHint::Int],
+        ParamTypeHint::Int
+    );
+    let random_int = eg
+        .find_function("random_int")
+        .expect("random_int was just registered");
+    eg.register_internal_function_extension(random_int, "random");
 
     // --- Output ---
     reg_var_typed!(

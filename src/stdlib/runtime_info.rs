@@ -800,7 +800,10 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         eg.register_internal_function_reflection_metadata(
             pointer,
             (declaration.defaults)(),
-            "standard",
+            match declaration.name {
+                "lcg_value" | "mt_getrandmax" => "random",
+                _ => "standard",
+            },
         );
         functions.push(function);
     }
