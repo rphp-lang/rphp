@@ -28034,6 +28034,22 @@ storage directly instead of walking the array from its start on every call
 storage layout). Full calls also skip the SipHash probes of the empty pending
 named-argument and closure-capture tables.
 
+The `property-write-cache` checkpoint traces why 129k property writes per
+cold PHPStan run still took the canonical handler: classes declaring
+`__set` (Nette `SmartObject`) marked every write uncacheable, although PHP
+lets `__set` intercept only inaccessible, undeclared or explicitly unset
+properties, and the typed-property cache rejected every `$this->items[$k]
+= $v` write-back on `array` properties (php-parser's token stacks). Declared
+accessible slots of magic-set classes are cached and the warmed dispatch
+sends an undef (unset) slot of such a class back to the cold path; typed
+array write-backs stay cold only while the slot does not yet hold an array.
+`tests/e2e_property_write_cache.rs` pins both against reference PHP. The
+same round reuses one child buffer while expanding the request-final cycle
+graph and interns short repeated token texts inside one `token_get_all()`
+call (`tests/e2e_tokenizer_interning.rs`; strings are values, so sharing
+is unobservable). Cold callgrind: 35.5 G to 33.6 G; `token_get_all` on a
+25 KB file 3.8 ms to 2.6 ms.
+
 Note on the gate itself: `ff253d2b` (PHPUnit process control) made
 `proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
 does and spawns worker processes over TCP sockets (react/socket). That path
