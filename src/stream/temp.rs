@@ -9,6 +9,38 @@ const DEFAULT_MAX_MEMORY: usize = 2 * 1024 * 1024;
 
 static NEXT_FILE: AtomicU64 = AtomicU64::new(1);
 
+pub(super) fn create_temporary_file() -> io::Result<(File, PathBuf)> {
+    for _ in 0..128 {
+        let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
+        let timestamp = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let mut path = std::env::temp_dir();
+        path.push(format!(
+            ".rphp-stream-{}-{timestamp}-{sequence}.tmp",
+            std::process::id()
+        ));
+
+        let mut options = OpenOptions::new();
+        options.read(true).write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((file, path)),
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "could not allocate a unique temporary stream file",
+    ))
+}
+
 pub(super) fn memory_limit(path: &str) -> Option<usize> {
     if path == "php://temp" {
         return Some(DEFAULT_MAX_MEMORY);
@@ -16,56 +48,27 @@ pub(super) fn memory_limit(path: &str) -> Option<usize> {
     path.strip_prefix("php://temp/maxmemory:")?.parse().ok()
 }
 
-struct TemporaryFile {
+pub(super) struct TemporaryFile {
     file: Option<File>,
     path: PathBuf,
 }
 
 impl TemporaryFile {
-    fn create() -> io::Result<Self> {
-        for _ in 0..128 {
-            let sequence = NEXT_FILE.fetch_add(1, Ordering::Relaxed);
-            let timestamp = std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_nanos();
-            let mut path = std::env::temp_dir();
-            path.push(format!(
-                ".rphp-stream-{}-{timestamp}-{sequence}.tmp",
-                std::process::id()
-            ));
-
-            let mut options = OpenOptions::new();
-            options.read(true).write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            match options.open(&path) {
-                Ok(file) => {
-                    return Ok(Self {
-                        file: Some(file),
-                        path,
-                    });
-                }
-                Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
-                Err(error) => return Err(error),
-            }
-        }
-        Err(io::Error::new(
-            io::ErrorKind::AlreadyExists,
-            "could not allocate a unique php://temp file",
-        ))
+    pub(super) fn create() -> io::Result<Self> {
+        let (file, path) = create_temporary_file()?;
+        Ok(Self {
+            file: Some(file),
+            path,
+        })
     }
 
     #[inline]
-    fn file_mut(&mut self) -> &mut File {
+    pub(super) fn file_mut(&mut self) -> &mut File {
         self.file.as_mut().expect("temporary stream file is open")
     }
 
     #[inline]
-    fn file(&self) -> &File {
+    pub(super) fn file(&self) -> &File {
         self.file.as_ref().expect("temporary stream file is open")
     }
 

@@ -36,6 +36,29 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-tmpfile` checkpoint over `5f51fb4d` adds PHP 8.5-exact
+`tmpfile()` Reflection and lifecycle behavior. It creates an ordinary seekable
+`plainfile` / `STDIO` resource in `r+b` mode, preserves the backing pathname
+across PHP resource aliases, and closes then unlinks it on explicit close or
+request shutdown. Three original E2E boundaries cover Reflection, diagnostics,
+metadata, I/O/stat, aliasing and both cleanup paths.
+
+The three directly applicable upstream stream PHPTs pass byte-exactly. The
+full default/no-default/erased/reified/all-features Cargo matrix and all-target
+check are green. The complete release Zend/lang ledger remains byte-identical
+at **5,396 pass / 0 fail / 117 skip / 86 unsupported**. Performance remains
+deferred by user direction.
+
+PHPUnit 13.2.6's unmodified `ErrorLogCapture` now completes its real temporary
+stream lifecycle. Across 273 vendor-observed builtins, the inventory improves
+to **265 present / 8 missing / 0 call-shape mismatches**. The next independent
+library priorities are `mt_srand()`, the small POSIX identity/TTY surface,
+`fsockopen()` and the PCNTL signal cluster. Using stream resources as
+`proc_open()` descriptors remains a separate process-control checkpoint. See
+[exact evidence](compatibility.md).
+
+### Preceding PHPUnit process-control checkpoint
+
 The `phpunit-process-control` checkpoint over `d275b265` adds PHPUnit's paired
 `proc_open()` / `proc_close()` lifecycle. It provides PHP 8.5-exact Reflection,
 direct argv and shell commands, standard stdin/stdout/stderr pipe descriptors,

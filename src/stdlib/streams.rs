@@ -51,6 +51,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             2,
             &["filename", "mode", "use_include_path", "context"][..],
         ),
+        ("tmpfile", fn_tmpfile, 0, 0, &[]),
         ("fstat", fn_fstat, 1, 1, &["stream"]),
         #[cfg(feature = "stream-context")]
         (
@@ -278,6 +279,8 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             );
         } else if name == "fstat" {
             eg.register_internal_function_reflection_metadata(pointer, vec![None], "standard");
+        } else if name == "tmpfile" {
+            eg.register_internal_function_extension(pointer, "standard");
         } else if name == "is_resource" {
             eg.register_internal_function_extension(pointer, "standard");
         }
@@ -354,6 +357,29 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         );
         functions.push(function);
     }
+}
+
+#[cold]
+fn fn_tmpfile(
+    _execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let value = match PhpStream::temporary_file() {
+        Ok(stream) => {
+            super::filesystem::clear_filesystem_stat_cache(eg);
+            #[cfg(feature = "resource-lifetime")]
+            {
+                insert_stream(eg, stream)
+            }
+            #[cfg(not(feature = "resource-lifetime"))]
+            {
+                Value::resource(insert_stream(eg, stream))
+            }
+        }
+        Err(_) => Value::bool(false),
+    };
+    return_value(return_pointer, value)
 }
 
 #[cold]

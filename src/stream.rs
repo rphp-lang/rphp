@@ -3,6 +3,7 @@ use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
 use std::path::Path;
+use std::path::PathBuf;
 use std::process::{ChildStderr, ChildStdin, ChildStdout};
 
 #[cfg(feature = "stream-context")]
@@ -29,7 +30,7 @@ mod truncate;
 
 #[cfg(not(target_vendor = "apple"))]
 pub(crate) use csv::{CsvEncoder, CsvParser};
-use temp::{TempStream, memory_limit as temp_memory_limit};
+use temp::{TempStream, create_temporary_file, memory_limit as temp_memory_limit};
 
 /// Parse the complete byte string supplied to `str_getcsv()`. This shares the
 /// stream CSV state machine without giving embedded newlines stream-record
@@ -118,11 +119,57 @@ fn php_memory_stream_mode(mode: &str) -> StreamMode {
 }
 
 enum StreamBackend {
-    File(File),
+    File(FileBackend),
     Memory(Cursor<Vec<u8>>),
     Temp(TempStream),
     Standard(StandardStream),
     ProcessPipe(ProcessPipe),
+}
+
+struct FileBackend {
+    // Declaration order is the lifetime contract: close the descriptor before
+    // `UnlinkOnDrop` removes a temporary pathname (required on Windows, and
+    // observable through PHP's `file_exists()` after `fclose()`).
+    file: File,
+    _unlink_on_drop: Option<UnlinkOnDrop>,
+}
+
+struct UnlinkOnDrop(PathBuf);
+
+impl Drop for UnlinkOnDrop {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.0);
+    }
+}
+
+impl FileBackend {
+    fn persistent(file: File) -> Self {
+        Self {
+            file,
+            _unlink_on_drop: None,
+        }
+    }
+
+    fn temporary(file: File, path: PathBuf) -> Self {
+        Self {
+            file,
+            _unlink_on_drop: Some(UnlinkOnDrop(path)),
+        }
+    }
+}
+
+impl std::ops::Deref for FileBackend {
+    type Target = File;
+
+    fn deref(&self) -> &Self::Target {
+        &self.file
+    }
+}
+
+impl std::ops::DerefMut for FileBackend {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.file
+    }
 }
 
 enum ProcessPipe {
@@ -372,6 +419,27 @@ impl PhpStream {
         )
     }
 
+    /// Create the ordinary seekable plain-file stream returned by `tmpfile()`.
+    /// The backend owns its pathname and removes it only after the descriptor
+    /// has closed, whether closure is explicit or occurs at request teardown.
+    pub(crate) fn temporary_file() -> io::Result<Self> {
+        let (file, path) = create_temporary_file()?;
+        let uri = path.to_string_lossy().into_owned();
+        Ok(Self {
+            backend: StreamBackend::File(FileBackend::temporary(file, path)),
+            mode: StreamMode::parse("r+b").expect("constant stream mode"),
+            reported_mode: Cow::Borrowed("r+b"),
+            uri: Cow::Owned(uri),
+            eof: false,
+            read_buffer: None,
+            plain_file_io: false,
+            memory_append_after_truncate: false,
+            eager_eof: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
+        })
+    }
+
     pub fn open(path: &str, mode: &str) -> io::Result<Self> {
         let requested_mode = mode;
 
@@ -464,7 +532,7 @@ impl PhpStream {
             .truncate(mode.truncate);
         let file = options.open(file_path)?;
         Ok(Self {
-            backend: StreamBackend::File(file),
+            backend: StreamBackend::File(FileBackend::persistent(file)),
             mode,
             reported_mode: Cow::Owned(requested_mode.to_string()),
             uri: Cow::Owned(path.to_string()),
@@ -1137,7 +1205,7 @@ impl PhpStream {
         // as LOCK_UN.
         let operation = operation & 3;
         let file = match &self.backend {
-            StreamBackend::File(file) => Some(file),
+            StreamBackend::File(file) => Some(&**file),
             StreamBackend::Temp(temp) => temp.lock_file(),
             _ => None,
         };

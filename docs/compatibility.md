@@ -7,6 +7,57 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit temporary-file lifecycle
+
+The `phpunit-tmpfile` checkpoint over `5f51fb4d` implements the complete
+PHPUnit-observed `tmpfile()` contract. Reflection matches PHP 8.5: the function
+belongs to `standard`, accepts no arguments and intentionally exposes no return
+type. A successful call returns an ordinary seekable `plainfile` / `STDIO`
+stream in `r+b` mode, backed by a uniquely created mode-0600 file in the system
+temporary directory on Unix. The stream participates in the existing read, write,
+seek, flush, stat and metadata boundaries.
+
+The temporary pathname remains present while any PHP resource alias owns the
+stream. Explicit `fclose()` and request shutdown close the descriptor before
+unlinking that pathname, including the resource-lifetime and erased-resource
+configurations. Allocation failure returns `false` without publishing a
+partially initialized resource. Three original E2E cases cover exact
+Reflection, surplus-argument diagnostics, metadata, I/O/stat behavior, alias
+lifetime, explicit close and request-shutdown cleanup.
+
+The three directly applicable upstream stream PHPTs (`bug46426`,
+`stream_get_contents_001` and `stream_get_contents_negative_length`) pass
+byte-exactly. The full Cargo matrix is green: default **7,006/0**, no-default
+**6,657/0**, generics-erased **7,077/0**, generics-reified **7,099/0** and
+all-features **7,150/0**, plus all-feature/all-target checking. The complete
+release Zend/lang ledger remains byte-identical at **5,396 pass / 0 fail / 117
+skip / 86 unsupported**, with no timeout or crash.
+
+PHPUnit 13.2.6's unmodified `ErrorLogCapture` now starts, verifies and stops
+successfully. The vendor inventory improves to **265 present / 8 missing / 0
+call-shape mismatches** among 273 observed builtins, and `tmpfile()` itself is
+Reflection-exact. The remaining missing functions are `pcntl_alarm()`,
+`pcntl_async_signals()`, `pcntl_signal()`, `fsockopen()`, `mt_srand()`,
+`posix_geteuid()`, `posix_getpwuid()` and `posix_isatty()`.
+
+Not claimed: accepting an existing stream resource as a `proc_open()`
+descriptor, the independently missing `hash_update_stream()` function, or
+memory-limit semantics required by `bug78326`. Performance was intentionally
+not measured by user direction.
+
+SHA-256 evidence: release
+`424e73e8e17ffa5087a9ce1f0571fce06c49801f0133779211a97cfadc1f9648`;
+focused PHPT manifest
+`cdb444d88901272d3e82af767d0d5ce392e9f9bf234170b097adb2324a80b6ef`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+Cargo matrix
+`4e2106de74260645467aa15af71dac061d0f7b8844303f62e795a66906a9df2d`;
+vendor audit summary
+`14c89b16ef896c76d99fe622f37c0093c0616309e657cfaf626604fd0f14b22b`.
+
 ### PHPUnit process-control lifecycle
 
 The `phpunit-process-control` checkpoint over `d275b265` implements the
