@@ -12,12 +12,12 @@ impl Parser {
 
     fn parse_foreach_destructure(&mut self) -> Result<Option<Vec<ListTarget>>, String> {
         let end = if matches!(self.peek_ref(), Token::LBracket(_)) {
-            self.advance();
+            self.skip();
             Token::RBracket
         } else if matches!(self.peek_ref(), Token::Identifier(name, _) if name.eq_ignore_ascii_case("list"))
             && matches!(self.peek_at_ref(1), Token::LParen(_))
         {
-            self.advance();
+            self.skip();
             self.expect_lparen()?;
             Token::RParen
         } else {
@@ -250,8 +250,8 @@ impl Parser {
         if let Token::Identifier(name, _) | Token::Enum { name, .. } = self.peek() {
             if *self.peek_at_ref(1) == Token::Colon {
                 let line = self.current_token_source_line();
-                self.advance();
-                self.advance();
+                self.skip();
+                self.skip();
                 return Ok(Stmt::Label { name, line });
             }
         }
@@ -261,7 +261,7 @@ impl Parser {
             return Err(self.source_error("syntax error, unexpected token \":\"", line));
         }
         if let Token::Goto { line, .. } = self.peek() {
-            self.advance();
+            self.skip();
             let name = match self.advance() {
                 Token::Identifier(label, _) | Token::Enum { name: label, .. } => label,
                 Token::Exit { .. } => {
@@ -277,7 +277,7 @@ impl Parser {
         }
         match self.peek() {
             Token::HaltCompiler { offset, line } => {
-                self.advance();
+                self.skip();
                 self.halted = true;
                 if !self.outermost_scope {
                     let _ = self.compile_error(
@@ -288,7 +288,7 @@ impl Parser {
                 Ok(Stmt::HaltCompiler { offset, line })
             }
             Token::LBrace(_) => {
-                self.advance();
+                self.skip();
                 let mut body = Vec::new();
                 while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                     body.push(self.parse_stmt_in_scope(false)?);
@@ -297,28 +297,28 @@ impl Parser {
                 Ok(Stmt::Block(body))
             }
             Token::ParseError(message, line) => {
-                self.advance();
+                self.skip();
                 Err(self.source_error(&message, line))
             }
             Token::CompileError(message, line) => {
-                self.advance();
+                self.skip();
                 self.compile_error(message, line);
                 Ok(Stmt::Noop)
             }
             Token::CompileWarning(message, line) => {
-                self.advance();
+                self.skip();
                 Ok(Stmt::ExprStmt(Expr::CompileWarning { message, line }))
             }
             Token::CompileDeprecation(message, line) => {
-                self.advance();
+                self.skip();
                 Ok(Stmt::ExprStmt(Expr::CompileDeprecation { message, line }))
             }
             Token::Semicolon(_) => {
-                self.advance();
+                self.skip();
                 Ok(Stmt::Noop)
             }
             Token::Declare => {
-                self.advance(); // consume 'declare'
+                self.skip(); // consume 'declare'
                 self.expect_lparen()?;
                 let mut directives = Vec::new();
                 let mut invalid_strict_placement = false;
@@ -347,7 +347,7 @@ impl Parser {
                     let value = if directive.eq_ignore_ascii_case("encoding") {
                         match self.peek() {
                             Token::StringLiteral(_) | Token::BinaryStringLiteral(_) => {
-                                self.advance();
+                                self.skip();
                                 0
                             }
                             _ => {
@@ -376,7 +376,7 @@ impl Parser {
                     if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
-                    self.advance();
+                    self.skip();
                 }
                 self.expect(&Token::RParen)?;
                 let invalid_strict_block = strict_line.is_some()
@@ -388,7 +388,7 @@ impl Parser {
                     );
                 }
                 let body = if matches!(self.peek_ref(), Token::LBrace(_)) {
-                    self.advance();
+                    self.skip();
                     let mut body = Vec::new();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         body.push(self.parse_stmt_in_scope(false)?);
@@ -396,11 +396,11 @@ impl Parser {
                     self.expect(&Token::RBrace(0))?;
                     Some(body)
                 } else if *self.peek_ref() == Token::Colon {
-                    self.advance();
+                    self.skip();
                     let body = self.parse_statements_until(|token| {
                         matches!(token, Token::Identifier(name, _) if name.eq_ignore_ascii_case("enddeclare"))
                     })?;
-                    self.advance();
+                    self.skip();
                     self.expect(&Token::Semicolon(0))?;
                     Some(body)
                 } else if matches!(self.peek_ref(), Token::Semicolon(_)) {
@@ -424,7 +424,7 @@ impl Parser {
                 }
             }
             Token::Namespace if *self.peek_at_ref(1) != Token::Backslash => {
-                self.advance(); // consume 'namespace'
+                self.skip(); // consume 'namespace'
                 // The bracketed global namespace has no name: `namespace { ... }`.
                 // Keep the empty spelling in the AST so compilation can restore
                 // global resolution while retaining the namespace block boundary.
@@ -473,7 +473,7 @@ impl Parser {
                 }
                 if style == NamespaceDeclarationStyle::Bracketed {
                     // Braced namespace: namespace App\Models { ... }
-                    self.advance(); // consume '{'
+                    self.skip(); // consume '{'
                     let mut body = Vec::new();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && *self.peek_ref() != Token::Eof {
                         body.push(self.parse_stmt_in_namespace_scope()?);
@@ -499,12 +499,12 @@ impl Parser {
             Token::Use(use_line) if !self.in_class_body => {
                 // Top-level class/function import. Their alias tables are
                 // separate in PHP even when the source alias is identical.
-                self.advance(); // consume 'use'
+                self.skip(); // consume 'use'
                 let kind = if matches!(self.peek_ref(), Token::Function(_)) {
-                    self.advance();
+                    self.skip();
                     UseKind::Function
                 } else if *self.peek_ref() == Token::Const {
-                    self.advance();
+                    self.skip();
                     UseKind::Const
                 } else {
                     UseKind::Class
@@ -526,7 +526,7 @@ impl Parser {
                                     self.current_token_source_line(),
                                 ));
                             }
-                            self.advance();
+                            self.skip();
                             UseKind::Function
                         } else if *self.peek_ref() == Token::Const {
                             if kind != UseKind::Class {
@@ -535,7 +535,7 @@ impl Parser {
                                     self.current_token_source_line(),
                                 ));
                             }
-                            self.advance();
+                            self.skip();
                             UseKind::Const
                         } else {
                             kind
@@ -592,7 +592,7 @@ impl Parser {
                         if !matches!(self.peek_ref(), Token::Comma(_)) {
                             break;
                         }
-                        self.advance();
+                        self.skip();
                         if matches!(self.peek_ref(), Token::RBrace(_)) {
                             break;
                         }
@@ -631,7 +631,7 @@ impl Parser {
                         if !matches!(self.peek_ref(), Token::Comma(_)) {
                             break;
                         }
-                        self.advance();
+                        self.skip();
                         let (next_name, nested_group, _) = self.parse_use_name()?;
                         if nested_group {
                             return Err("Group use prefix must start a use declaration".to_string());
@@ -653,7 +653,7 @@ impl Parser {
                         self.current_token_source_line(),
                     ));
                 }
-                self.advance(); // consume 'const'
+                self.skip(); // consume 'const'
                 let mut declarations = Vec::new();
                 let mut const_line = 0;
                 loop {
@@ -707,7 +707,7 @@ impl Parser {
                     if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
-                    self.advance();
+                    self.skip();
                 }
                 if let Token::LBrace(line) = self.peek() {
                     return Err(self.source_error(
@@ -723,13 +723,13 @@ impl Parser {
                 })
             }
             Token::Echo { line } | Token::ShortEcho { line } => {
-                self.advance();
+                self.skip();
                 let mut expressions = vec![self.with_new_postfix_error_suffix(
                     Some(", expecting \",\" or \";\""),
                     |parser| parser.parse_expr(),
                 )?];
                 while matches!(self.peek_ref(), Token::Comma(_)) {
-                    self.advance();
+                    self.skip();
                     expressions.push(self.with_new_postfix_error_suffix(
                         Some(", expecting \",\" or \";\""),
                         |parser| parser.parse_expr(),
@@ -778,9 +778,9 @@ impl Parser {
                             Token::Variable(name, line) => (name, line),
                             _ => unreachable!(),
                         };
-                        self.advance(); // consume '['
-                        self.advance(); // consume ']'
-                        self.advance(); // consume '='
+                        self.skip(); // consume '['
+                        self.skip(); // consume ']'
+                        self.skip(); // consume '='
                         let expr = self.parse_expr()?;
                         self.expect(&Token::Semicolon(0))?;
                         if var_name == "GLOBALS" {
@@ -846,7 +846,7 @@ impl Parser {
                     };
                     self.expect(&Token::Assign)?;
                     if matches!(self.peek_ref(), Token::Ampersand(_)) {
-                        self.advance();
+                        self.skip();
                         let target = self.parse_empty_dimension_target_prefix()?;
                         if !self.is_empty_array_dimension_suffix() {
                             self.expect(&Token::Semicolon(0))?;
@@ -917,7 +917,7 @@ impl Parser {
                         Token::Variable(name, line) => (name, line),
                         _ => unreachable!(),
                     };
-                    self.advance(); // consume the compound operator
+                    self.skip(); // consume the compound operator
                     let rhs = self.parse_expr()?;
                     self.expect(&Token::Semicolon(0))?;
                     if var_name == "GLOBALS" {
@@ -955,7 +955,7 @@ impl Parser {
                                 ..
                             } = expr
                             {
-                                self.advance(); // consume '='
+                                self.skip(); // consume '='
                                 let rhs = self.parse_expr()?;
                                 self.expect(&Token::Semicolon(0))?;
                                 return Ok(Stmt::AssignProp {
@@ -971,7 +971,7 @@ impl Parser {
                                 _ => unreachable!(),
                             };
                             let (root, mut indices) = Self::split_array_access(expr);
-                            self.advance(); // consume '='
+                            self.skip(); // consume '='
                             let rhs = self.parse_expr()?;
                             self.expect(&Token::Semicolon(0))?;
                             if indices.len() == 1
@@ -1014,7 +1014,7 @@ impl Parser {
                 self.parse_if()
             }
             Token::While => {
-                self.advance(); // consume 'while'
+                self.skip(); // consume 'while'
                 self.expect_lparen()?;
                 let condition = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
@@ -1022,7 +1022,7 @@ impl Parser {
                 Ok(Stmt::While { condition, body })
             }
             Token::Do => {
-                self.advance(); // consume 'do'
+                self.skip(); // consume 'do'
                 let body = self.parse_block_or_stmt()?;
                 if self.halted {
                     return Ok(Stmt::DoWhile {
@@ -1038,29 +1038,29 @@ impl Parser {
                 Ok(Stmt::DoWhile { condition, body })
             }
             Token::Break { line } => {
-                self.advance();
+                self.skip();
                 let level = self.parse_break_continue_level("break", line)?;
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Break { level, line })
             }
             Token::Continue { line } => {
-                self.advance();
+                self.skip();
                 let level = self.parse_break_continue_level("continue", line)?;
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Continue { level, line })
             }
             Token::Switch => {
-                self.advance(); // consume 'switch'
+                self.skip(); // consume 'switch'
                 self.expect_lparen()?;
                 let expr = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 let alternative = match self.peek() {
                     Token::LBrace(_) => {
-                        self.advance();
+                        self.skip();
                         false
                     }
                     Token::Colon => {
-                        self.advance();
+                        self.skip();
                         true
                     }
                     token => return Err(format!("Expected switch body, got {token:?}")),
@@ -1070,7 +1070,7 @@ impl Parser {
                 while !matches!(self.peek_ref(), Token::RBrace(_) | Token::EndSwitch) && !self.at_eof() {
                     match self.peek() {
                         Token::Case(_) => {
-                            self.advance();
+                            self.skip();
                             let value = self.parse_expr()?;
                             self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
@@ -1098,7 +1098,7 @@ impl Parser {
                             } else {
                                 has_default = true;
                             }
-                            self.advance();
+                            self.skip();
                             self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
                             while !matches!(
@@ -1130,7 +1130,7 @@ impl Parser {
                 Ok(Stmt::Switch { expr, cases })
             }
             Token::For => {
-                self.advance(); // consume 'for'
+                self.skip(); // consume 'for'
                 self.expect_lparen()?;
 
                 // Init: optional assignment or expression before first ;
@@ -1140,7 +1140,7 @@ impl Parser {
                     if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
-                    self.advance();
+                    self.skip();
                 }
                 self.expect(&Token::Semicolon(0))?;
 
@@ -1152,7 +1152,7 @@ impl Parser {
                     if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
-                    self.advance();
+                    self.skip();
                 }
                 if let Some(Expr::Cast {
                     cast_type: CastType::Void,
@@ -1173,7 +1173,7 @@ impl Parser {
                     if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
-                    self.advance();
+                    self.skip();
                 }
                 self.expect(&Token::RParen)?;
 
@@ -1186,7 +1186,7 @@ impl Parser {
                 })
             }
             Token::Foreach { line } => {
-                self.advance(); // consume 'foreach'
+                self.skip(); // consume 'foreach'
                 self.expect_lparen()?;
                 let array = self.parse_expr()?;
                 if !self.consume_as_keyword() {
@@ -1199,7 +1199,7 @@ impl Parser {
                     // source/as boundary, including when the key starts on a
                     // following line.
                     let line = self.closest_token_source_line();
-                    self.advance();
+                    self.skip();
                     Some(line)
                 } else {
                     None
@@ -1230,9 +1230,9 @@ impl Parser {
                     if let Some(line) = first_reference_line {
                         let _ = self.compile_error("Key element cannot be a reference", line);
                     }
-                    self.advance(); // consume '=>'
+                    self.skip(); // consume '=>'
                     let by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-                        self.advance();
+                        self.skip();
                         true
                     } else {
                         false
@@ -1280,7 +1280,7 @@ impl Parser {
                                 | Token::Exit { .. }
                         )) =>
             {
-                self.advance(); // consume 'function'
+                self.skip(); // consume 'function'
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
                 // contract, matching the closure parser's bounded handling.
@@ -1333,9 +1333,9 @@ impl Parser {
                 })
             }
             Token::Return { line } => {
-                self.advance(); // consume 'return'
+                self.skip(); // consume 'return'
                 if matches!(self.peek_ref(), Token::Semicolon(_)) {
-                    self.advance();
+                    self.skip();
                     Ok(Stmt::Return { expr: None, line })
                 } else {
                     let expr = self.with_new_postfix_error_suffix(
@@ -1350,7 +1350,7 @@ impl Parser {
                 }
             }
             Token::Unset => {
-                self.advance();
+                self.skip();
                 let list_line = self.expect_lparen()?;
                 if matches!(self.peek_ref(), Token::Comma(_)) {
                     return Err(self.comma_list_error(list_line, false));
@@ -1371,7 +1371,7 @@ impl Parser {
             Token::Try => self.parse_try_catch(),
             Token::Throw(line) => {
                 let line = line as usize;
-                self.advance();
+                self.skip();
                 let expr = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Throw { expr, line })
@@ -1547,7 +1547,7 @@ impl Parser {
                 self.parse_expression_statement()
             }
             Token::Global => {
-                self.advance(); // consume 'global'
+                self.skip(); // consume 'global'
                 let mut vars = Vec::new();
                 loop {
                     match self.peek() {
@@ -1558,15 +1558,15 @@ impl Parser {
                             _ => unreachable!(),
                         },
                         Token::This(line) => {
-                            self.advance();
+                            self.skip();
                             vars.push(GlobalTarget::Variable(
                                 self.invalid_this_binding("global", line),
                             ));
                         }
                         Token::Dollar(_) => {
-                            self.advance();
+                            self.skip();
                             let name = if matches!(self.peek_ref(), Token::LBrace(_)) {
-                                self.advance();
+                                self.skip();
                                 let name = self.parse_expr()?;
                                 self.expect(&Token::RBrace(0))?;
                                 name
@@ -1583,7 +1583,7 @@ impl Parser {
                         }
                     }
                     if matches!(self.peek_ref(), Token::Comma(_)) {
-                        self.advance();
+                        self.skip();
                     } else {
                         break;
                     }
@@ -1598,7 +1598,7 @@ impl Parser {
                 if matches!(self.peek_at_ref(1), Token::Variable(_, _) | Token::This(_)) =>
             {
                 // static $var = expr; (function-level static variable)
-                self.advance(); // consume 'static'
+                self.skip(); // consume 'static'
                 let line = match self.peek() {
                     Token::Variable(_, line) | Token::This(line) => line,
                     _ => unreachable!("static-variable lookahead was already validated"),
@@ -1618,14 +1618,14 @@ impl Parser {
                         }
                     };
                     let default = if *self.peek_ref() == Token::Assign {
-                        self.advance();
+                        self.skip();
                         Some(self.parse_expr()?)
                     } else {
                         None
                     };
                     vars.push((var_name, default));
                     if matches!(self.peek_ref(), Token::Comma(_)) {
-                        self.advance();
+                        self.skip();
                     } else {
                         break;
                     }
@@ -1683,7 +1683,7 @@ impl Parser {
             ) {
                 return Err("Unsupported static array assignment target".into());
             }
-            self.advance();
+            self.skip();
             let value = self.parse_expr()?;
             self.expect(&Token::Semicolon(0))?;
             return Ok(Stmt::NestedArrayAssign {
@@ -1704,7 +1704,7 @@ impl Parser {
         };
         if let Some((class_name, property, line)) = static_property {
             if *self.peek_ref() == Token::Assign {
-                self.advance();
+                self.skip();
                 let value = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
                 return Ok(Stmt::AssignStaticProp {
@@ -1715,7 +1715,7 @@ impl Parser {
                 });
             }
             if let Some(op) = Self::compound_assign_op(self.peek_ref()) {
-                self.advance();
+                self.skip();
                 let right = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
                 return Ok(Stmt::AssignStaticProp {
@@ -1854,7 +1854,7 @@ impl Parser {
     /// Parse if / elseif / else chain.
     fn parse_if(&mut self) -> Result<Stmt, String> {
         let elseif = *self.peek_ref() == Token::ElseIf;
-        self.advance(); // consume 'if' or 'elseif'
+        self.skip(); // consume 'if' or 'elseif'
         self.expect_lparen()?;
         let condition = self.parse_expr()?;
         self.expect(&Token::RParen)?;
@@ -1866,7 +1866,7 @@ impl Parser {
             // elseif desugars to else { if (...) { ... } }
             vec![self.parse_if()?]
         } else if *self.peek_ref() == Token::Else {
-            self.advance();
+            self.skip();
             // Check for "else if" (two tokens) which is equivalent to "elseif"
             if *self.peek_ref() == Token::If {
                 vec![self.parse_if()?]
@@ -1891,14 +1891,14 @@ impl Parser {
         })?;
         let else_body = match self.peek() {
             Token::ElseIf => {
-                self.advance();
+                self.skip();
                 self.expect_lparen()?;
                 let elseif_condition = self.parse_expr()?;
                 self.expect(&Token::RParen)?;
                 vec![self.parse_alternative_if_after_condition(elseif_condition)?]
             }
             Token::Else => {
-                self.advance();
+                self.skip();
                 self.expect(&Token::Colon)?;
                 let body = self.parse_statements_until(|token| *token == Token::EndIf)?;
                 self.expect(&Token::EndIf)?;
@@ -1906,7 +1906,7 @@ impl Parser {
                 body
             }
             Token::EndIf => {
-                self.advance();
+                self.skip();
                 self.expect(&Token::Semicolon(0))?;
                 Vec::new()
             }
@@ -1940,7 +1940,7 @@ impl Parser {
                     Token::Variable(name, line) => (name, line),
                     _ => unreachable!(),
                 };
-                self.advance(); // consume compound operator
+                self.skip(); // consume compound operator
                 let rhs = self.parse_expr()?;
                 return Ok(Stmt::CompoundAssign {
                     target: Expr::Variable {
@@ -1959,7 +1959,7 @@ impl Parser {
     /// Parse either { stmts } or a single stmt
     fn parse_block_or_stmt(&mut self) -> Result<Vec<Stmt>, String> {
         if matches!(self.peek_ref(), Token::LBrace(_)) {
-            self.advance(); // consume {
+            self.skip(); // consume {
             let mut stmts = Vec::new();
             while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                 stmts.push(self.parse_stmt_in_scope(false)?);
@@ -1992,7 +1992,7 @@ impl Parser {
         if *self.peek_ref() != Token::Colon {
             return self.parse_block_or_stmt();
         }
-        self.advance();
+        self.skip();
         let body = self.parse_statements_until(|token| *token == end_token)?;
         self.expect(&end_token)?;
         self.expect(&Token::Semicolon(0))?;
@@ -2024,11 +2024,11 @@ impl Parser {
     fn consume_switch_label_separator(&mut self) -> Result<(), String> {
         match self.peek() {
             Token::Colon => {
-                self.advance();
+                self.skip();
                 Ok(())
             }
             Token::Semicolon(line) => {
-                self.advance();
+                self.skip();
                 self.deferred_compile_deprecations.push((
                     "Case statements followed by a semicolon (;) are deprecated, use a colon (:) instead"
                         .to_string(),

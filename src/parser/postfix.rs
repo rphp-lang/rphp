@@ -22,8 +22,8 @@ impl Parser {
         if !matches!(self.peek_ref(), Token::DotDotDot(_)) || *self.peek_at_ref(1) != Token::RParen {
             return false;
         }
-        self.advance();
-        self.advance();
+        self.skip();
+        self.skip();
         true
     }
 
@@ -65,7 +65,7 @@ impl Parser {
             token => return Err(format!("Expected dynamic static member, got {token:?}")),
         };
         let name = if matches!(self.peek_ref(), Token::LBrace(_)) {
-            self.advance();
+            self.skip();
             let name = self.parse_expr()?;
             self.expect(&Token::RBrace(0))?;
             name
@@ -82,7 +82,7 @@ impl Parser {
         loop {
             match self.peek() {
                 Token::LBracket(line) if *self.peek_at_ref(1) != Token::RBracket => {
-                    self.advance();
+                    self.skip();
                     let index = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
                     expr = Expr::ArrayAccess {
@@ -93,9 +93,9 @@ impl Parser {
                 }
                 Token::Arrow | Token::NullSafe => {
                     let nullsafe = matches!(self.peek_ref(), Token::NullSafe);
-                    self.advance();
+                    self.skip();
                     if matches!(self.peek_ref(), Token::LBrace(_)) {
-                        self.advance();
+                        self.skip();
                         let property = self.parse_expr()?;
                         self.expect(&Token::RBrace(0))?;
                         expr = Expr::DynamicPropertyAccess {
@@ -107,7 +107,7 @@ impl Parser {
                         continue;
                     }
                     if let Token::Variable(property, property_line) = self.peek() {
-                        self.advance();
+                        self.skip();
                         expr = Expr::DynamicPropertyAccess {
                             object: Box::new(expr),
                             property: Box::new(Expr::Variable {
@@ -143,7 +143,7 @@ impl Parser {
                 Token::DoubleColon
                     if matches!(self.peek_at_ref(1), Token::Dollar(_) | Token::Variable(_, _)) =>
                 {
-                    self.advance();
+                    self.skip();
                     let (property, property_line) = if matches!(self.peek_ref(), Token::Dollar(_)) {
                         self.parse_indirect_static_member_name()?
                     } else {
@@ -176,7 +176,7 @@ impl Parser {
         {
             return Ok(None);
         }
-        self.advance();
+        self.skip();
         let expr = if matches!(self.peek_ref(), Token::Dollar(_)) {
             let (property, line) = self.parse_indirect_static_member_name()?;
             Expr::DynamicNamedStaticProperty {
@@ -262,7 +262,7 @@ impl Parser {
             .unwrap_or_else(|| self.closest_token_source_line());
         self.expect(&Token::DoubleColon)?;
         if matches!(self.peek_ref(), Token::LBrace(_)) {
-            self.advance();
+            self.skip();
             let constant = self.parse_expr()?;
             self.expect(&Token::RBrace(0))?;
             if matches!(self.peek_ref(), Token::LParen(_)) {
@@ -428,8 +428,8 @@ impl Parser {
             if !generic_args.is_empty() {
                 return Err("Generic first-class static callables are not supported yet".into());
             }
-            self.advance();
-            self.advance();
+            self.skip();
+            self.skip();
             return Ok(Self::first_class_callable(Expr::ArrayLiteral(vec![
                 ArrayElement {
                     key: None,
@@ -480,8 +480,8 @@ impl Parser {
                                 | Token::PlusPlus
                                 | Token::MinusMinus
                         ) {
-                            self.advance();
-                            self.advance();
+                            self.skip();
+                            self.skip();
                             expr = Expr::ArrayAppendArgument {
                                 target: Box::new(expr),
                                 line: expression_line.unwrap_or(line),
@@ -494,8 +494,8 @@ impl Parser {
                         {
                             break;
                         }
-                        self.advance();
-                        self.advance();
+                        self.skip();
+                        self.skip();
                         if self.empty_dimension_unset_context {
                             expr = self.compile_error(
                                 "Cannot use [] for unsetting",
@@ -513,7 +513,7 @@ impl Parser {
                         }
                         continue;
                     }
-                    self.advance();
+                    self.skip();
                     let index = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
                     expr = Expr::ArrayAccess {
@@ -523,7 +523,7 @@ impl Parser {
                     };
                 }
                 Token::LParen(line) => {
-                    self.advance();
+                    self.skip();
                     if self.consume_first_class_callable_placeholder() {
                         expr = Self::first_class_callable(expr, line);
                     } else {
@@ -552,7 +552,7 @@ impl Parser {
                     };
                 }
                 Token::DoubleColon => {
-                    self.advance();
+                    self.skip();
                     if matches!(self.peek_ref(), Token::Dollar(_)) {
                         let (property, dollar_line) = self.parse_indirect_static_member_name()?;
                         if matches!(self.peek_ref(), Token::LParen(_)) {
@@ -617,7 +617,7 @@ impl Parser {
                     }
                     let dynamic_name = matches!(self.peek_ref(), Token::LBrace(_));
                     let constant = if dynamic_name {
-                        self.advance();
+                        self.skip();
                         let constant = self.parse_expr()?;
                         self.expect(&Token::RBrace(0))?;
                         constant
@@ -654,9 +654,9 @@ impl Parser {
                 }
                 Token::Arrow | Token::NullSafe => {
                     let nullsafe = matches!(self.peek_ref(), Token::NullSafe);
-                    self.advance();
+                    self.skip();
                     if matches!(self.peek_ref(), Token::LBrace(_)) {
-                        self.advance();
+                        self.skip();
                         let member = self.parse_expr()?;
                         self.expect(&Token::RBrace(0))?;
                         if matches!(self.peek_ref(), Token::LParen(_)) {
@@ -736,7 +736,7 @@ impl Parser {
                         continue;
                     }
                     if let Token::Variable(member_name, member_line) = self.peek() {
-                        self.advance();
+                        self.skip();
                         let member = Expr::Variable {
                             name: member_name,
                             line: member_line,
@@ -807,8 +807,8 @@ impl Parser {
                                         .into(),
                                 );
                             }
-                            self.advance();
-                            self.advance();
+                            self.skip();
+                            self.skip();
                             expr = if nullsafe {
                                 self.compile_error(
                                     "Cannot combine nullsafe operator with Closure creation",
@@ -844,7 +844,7 @@ impl Parser {
                 }
                 Token::PlusPlus | Token::MinusMinus => {
                     let increment = *self.peek_ref() == Token::PlusPlus;
-                    self.advance();
+                    self.skip();
                     if let Some(line) = Self::nullsafe_chain_line(&expr) {
                         expr = self.nullsafe_write_error(line);
                         continue;

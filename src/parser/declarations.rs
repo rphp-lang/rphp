@@ -103,12 +103,12 @@ impl Parser {
             || is_final
             || matches!(self.peek_ref(), Token::Static(_) | Token::Abstract(_))
         {
-            self.advance();
+            self.skip();
         }
         if let Token::Identifier(ref modifier, line) = self.peek()
             && modifier.eq_ignore_ascii_case("readonly")
         {
-            self.advance();
+            self.skip();
             let _ = self.compile_error("Cannot use the readonly modifier on a method", line);
         }
         let alias = if matches!(self.peek_ref(), Token::Semicolon(_)) {
@@ -142,7 +142,7 @@ impl Parser {
         while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let hook_attributes = self.parse_attribute_groups()?;
             let hook_is_final = if matches!(self.peek_ref(), Token::Final(_)) {
-                self.advance();
+                self.skip();
                 true
             } else {
                 false
@@ -155,14 +155,14 @@ impl Parser {
                 _ => None,
             };
             if let Some(modifier) = invalid_modifier {
-                self.advance();
+                self.skip();
                 self.compile_error(
                     format!("Cannot use the {modifier} modifier on a property hook"),
                     property.line,
                 );
             }
             let hook_returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-                self.advance();
+                self.skip();
                 true
             } else {
                 false
@@ -235,10 +235,10 @@ impl Parser {
             };
             let previous_reference_context = std::mem::replace(&mut self.reference_return_context, hook_returns_by_ref);
             let (body, hook_is_abstract) = if matches!(self.peek_ref(), Token::Semicolon(_)) {
-                self.advance();
+                self.skip();
                 (Vec::new(), true)
             } else if *self.peek_ref() == Token::DoubleArrow {
-                self.advance();
+                self.skip();
                 let expression = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
                 let body = if is_get {
@@ -312,7 +312,7 @@ impl Parser {
                 self.defer_duplicate_member_modifier(modifiers, line);
             }
             let default = if *self.peek_ref() == Token::Assign {
-                self.advance();
+                self.skip();
                 Some(self.parse_expr()?)
             } else {
                 None
@@ -337,7 +337,7 @@ impl Parser {
             if !matches!(self.peek_ref(), Token::Comma(_)) {
                 break;
             }
-            self.advance();
+            self.skip();
         }
         if matches!(self.peek_ref(), Token::LBrace(_)) {
             if properties.len() != 1 {
@@ -346,7 +346,7 @@ impl Parser {
             if modifiers.is_static {
                 self.compile_error("Cannot declare hooks for static property", properties[0].line);
             }
-            self.advance();
+            self.skip();
             let property = properties.last_mut().unwrap();
             if matches!(self.peek_ref(), Token::RBrace(_)) {
                 self.compile_error("Property hook list must not be empty", property.line);
@@ -354,7 +354,7 @@ impl Parser {
             while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                 let hook_attributes = self.parse_attribute_groups()?;
                 let hook_is_final = if matches!(self.peek_ref(), Token::Final(_)) {
-                    self.advance();
+                    self.skip();
                     true
                 } else {
                     false
@@ -367,14 +367,14 @@ impl Parser {
                     _ => None,
                 };
                 if let Some(modifier) = invalid_modifier {
-                    self.advance();
+                    self.skip();
                     self.compile_error(
                         format!("Cannot use the {modifier} modifier on a property hook"),
                         property.line,
                     );
                 }
                 let hook_returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-                    self.advance();
+                    self.skip();
                     true
                 } else {
                     false
@@ -451,10 +451,10 @@ impl Parser {
                 };
                 let previous_reference_context = std::mem::replace(&mut self.reference_return_context, hook_returns_by_ref);
                 let (body, hook_is_abstract) = if matches!(self.peek_ref(), Token::Semicolon(_)) {
-                    self.advance();
+                    self.skip();
                     (Vec::new(), true)
                 } else if *self.peek_ref() == Token::DoubleArrow {
-                    self.advance();
+                    self.skip();
                     let expression = self.parse_expr()?;
                     self.expect(&Token::Semicolon(0))?;
                     let body = if is_get {
@@ -512,7 +512,7 @@ impl Parser {
     /// but parsing its complete shape lets later syntax errors retain priority.
     fn parse_non_enum_case_declaration(&mut self) -> Result<usize, String> {
         debug_assert!(matches!(self.peek_ref(), Token::Case(_)));
-        self.advance();
+        self.skip();
         let case_line = match self.advance() {
             Token::Identifier(_, line) | Token::Enum { line, .. } | Token::Exit { line, .. } => {
                 line
@@ -527,7 +527,7 @@ impl Parser {
         };
         let _ = self.compile_error("Case can only be used in enums", case_line);
         if *self.peek_ref() == Token::Assign {
-            self.advance();
+            self.skip();
             self.parse_expr()?;
         }
         self.expect(&Token::Semicolon(0))?;
@@ -575,7 +575,7 @@ impl Parser {
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
                 if matches!(self.peek_ref(), Token::LBrace(_)) {
-                    self.advance();
+                    self.skip();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
@@ -680,7 +680,7 @@ impl Parser {
 
     /// Parse try { } catch (Type $e) { } finally { }
     fn parse_try_catch(&mut self) -> Result<Stmt, String> {
-        self.advance(); // consume 'try'
+        self.skip(); // consume 'try'
         let try_line = match self.peek() {
             Token::LBrace(line) => line,
             _ => self.closest_token_source_line(),
@@ -701,7 +701,7 @@ impl Parser {
 
         let mut catches = Vec::new();
         while *self.peek_ref() == Token::Catch {
-            self.advance(); // consume 'catch'
+            self.skip(); // consume 'catch'
             let catch_line = self.expect_lparen()?;
             // Parse exception type(s): ExA | ExB
             let mut types = Vec::new();
@@ -711,7 +711,7 @@ impl Parser {
             )?;
             types.push(type_name);
             while *self.peek_ref() == Token::Pipe {
-                self.advance();
+                self.skip();
                 let t = self.parse_qualified_name_with_reserved_static(
                     ReservedStaticRole::Catch,
                     Some(catch_line),
@@ -724,7 +724,7 @@ impl Parser {
                     _ => unreachable!(),
                 },
                 Token::This(line) => {
-                    self.advance();
+                    self.skip();
                     let _ = self.compile_error("Cannot re-assign $this", line);
                     Some("this".to_string())
                 }
@@ -752,7 +752,7 @@ impl Parser {
         }
 
         let finally_body = if *self.peek_ref() == Token::Finally {
-            self.advance();
+            self.skip();
             self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
             while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
@@ -785,7 +785,7 @@ impl Parser {
         loop {
             match self.peek() {
                 Token::Abstract(line) => {
-                    self.advance();
+                    self.skip();
                     if is_abstract {
                         let _ = self
                             .compile_error("Multiple abstract modifiers are not allowed", line);
@@ -798,7 +798,7 @@ impl Parser {
                     is_abstract = true;
                 }
                 Token::Final(line) => {
-                    self.advance();
+                    self.skip();
                     if is_final {
                         let _ =
                             self.compile_error("Multiple final modifiers are not allowed", line);
@@ -813,7 +813,7 @@ impl Parser {
                 Token::Identifier(ref modifier, line)
                     if modifier.eq_ignore_ascii_case("abstract") =>
                 {
-                    self.advance();
+                    self.skip();
                     if is_abstract {
                         let _ = self
                             .compile_error("Multiple abstract modifiers are not allowed", line);
@@ -828,7 +828,7 @@ impl Parser {
                 Token::Identifier(ref modifier, line)
                     if modifier.eq_ignore_ascii_case("final") =>
                 {
-                    self.advance();
+                    self.skip();
                     if is_final {
                         let _ =
                             self.compile_error("Multiple final modifiers are not allowed", line);
@@ -841,7 +841,7 @@ impl Parser {
                     is_final = true;
                 }
                 Token::Identifier(ref name, line) if name.eq_ignore_ascii_case("readonly") => {
-                    self.advance();
+                    self.skip();
                     if is_readonly {
                         let _ = self.compile_error(
                             "Multiple readonly modifiers are not allowed",
@@ -862,7 +862,7 @@ impl Parser {
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         let parent = if *self.peek_ref() == Token::Extends {
-            self.advance();
+            self.skip();
             Some(self.parse_generic_ancestor_with_reserved_static(
                 ReservedStaticRole::Class,
                 Some(line),
@@ -871,7 +871,7 @@ impl Parser {
             None
         };
         let implements = if *self.peek_ref() == Token::Implements {
-            self.advance();
+            self.skip();
             let mut ifaces = Vec::new();
             loop {
                 ifaces.push(self.parse_generic_ancestor_with_reserved_static(
@@ -879,7 +879,7 @@ impl Parser {
                     Some(line),
                 )?);
                 if matches!(self.peek_ref(), Token::Comma(_)) {
-                    self.advance();
+                    self.skip();
                 } else {
                     break;
                 }
@@ -931,12 +931,12 @@ impl Parser {
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
                 if matches!(self.peek_ref(), Token::LBrace(_)) {
-                    self.advance();
+                    self.skip();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
                         if *self.peek_ref() == Token::Insteadof {
-                            self.advance();
+                            self.skip();
                             let Some(trait_name) = trait_name else {
                                 return Err("Trait precedence requires an explicit trait name".into());
                             };
@@ -947,7 +947,7 @@ impl Parser {
                                     Some(adaptation_line),
                                 )?);
                                 if matches!(self.peek_ref(), Token::Comma(_)) {
-                                    self.advance();
+                                    self.skip();
                                 } else {
                                     break;
                                 }
@@ -1072,7 +1072,7 @@ impl Parser {
     /// Parse trait declaration
     fn parse_trait(&mut self) -> Result<Stmt, String> {
         let doc_comment = self.declaration_doc_comment();
-        self.advance(); // consume 'trait'
+        self.skip(); // consume 'trait'
         let (name, line) = self.parse_classlike_declaration_name("trait")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
@@ -1116,12 +1116,12 @@ impl Parser {
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
                 if matches!(self.peek_ref(), Token::LBrace(_)) {
-                    self.advance();
+                    self.skip();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
                         if *self.peek_ref() == Token::Insteadof {
-                            self.advance();
+                            self.skip();
                             let Some(trait_name) = trait_name else {
                                 return Err("Trait precedence requires an explicit trait name".into());
                             };
@@ -1132,7 +1132,7 @@ impl Parser {
                                     Some(adaptation_line),
                                 )?);
                                 if matches!(self.peek_ref(), Token::Comma(_)) {
-                                    self.advance();
+                                    self.skip();
                                 } else {
                                     break;
                                 }
@@ -1248,13 +1248,13 @@ impl Parser {
     /// Parse interface declaration
     fn parse_interface(&mut self) -> Result<Stmt, String> {
         let doc_comment = self.declaration_doc_comment();
-        self.advance(); // consume 'interface'
+        self.skip(); // consume 'interface'
         let (name, line) = self.parse_classlike_declaration_name("interface")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         // interface Foo extends Bar, Baz { ... }
         let extends = if *self.peek_ref() == Token::Extends {
-            self.advance();
+            self.skip();
             let mut parents = Vec::new();
             loop {
                 parents.push(self.parse_generic_ancestor_with_reserved_static(
@@ -1262,7 +1262,7 @@ impl Parser {
                     Some(line),
                 )?);
                 if matches!(self.peek_ref(), Token::Comma(_)) {
-                    self.advance();
+                    self.skip();
                 } else {
                     break;
                 }
@@ -1298,12 +1298,12 @@ impl Parser {
                     .unwrap_or("")
                     .to_string();
                 if matches!(self.peek_ref(), Token::LBrace(_)) {
-                    self.advance();
+                    self.skip();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
                         if *self.peek_ref() == Token::Insteadof {
-                            self.advance();
+                            self.skip();
                             let Some(_) = trait_name else {
                                 return Err(
                                     "Trait precedence requires an explicit trait name".into()
@@ -1315,7 +1315,7 @@ impl Parser {
                                     Some(adaptation_line),
                                 )?;
                                 if matches!(self.peek_ref(), Token::Comma(_)) {
-                                    self.advance();
+                                    self.skip();
                                 } else {
                                     break;
                                 }
@@ -1454,18 +1454,18 @@ impl Parser {
     /// Parse enum declaration
     fn parse_enum(&mut self) -> Result<Stmt, String> {
         let doc_comment = self.declaration_doc_comment();
-        self.advance(); // consume 'enum'
+        self.skip(); // consume 'enum'
         let (name, line) = self.parse_classlike_declaration_name("enum")?;
         // Optional backing type: enum Foo: string { ... }
         let backing_type = if *self.peek_ref() == Token::Colon {
-            self.advance(); // consume ':'
+            self.skip(); // consume ':'
             let hint = self.parse_base_type_hint()?;
             Some(self.maybe_parse_compound_type(hint)?)
         } else {
             None
         };
         let implements = if *self.peek_ref() == Token::Implements {
-            self.advance();
+            self.skip();
             let mut interfaces = Vec::new();
             loop {
                 interfaces.push(self.parse_generic_ancestor_with_reserved_static(
@@ -1475,7 +1475,7 @@ impl Parser {
                 if !matches!(self.peek_ref(), Token::Comma(_)) {
                     break;
                 }
-                self.advance();
+                self.skip();
             }
             interfaces
         } else {
@@ -1505,7 +1505,7 @@ impl Parser {
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
                 if matches!(self.peek_ref(), Token::LBrace(_)) {
-                    self.advance();
+                    self.skip();
                     while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
@@ -1517,14 +1517,14 @@ impl Parser {
                     self.expect(&Token::Semicolon(0))?;
                 }
             } else if matches!(self.peek_ref(), Token::Case(_)) {
-                self.advance(); // consume 'case'
+                self.skip(); // consume 'case'
                 let (case_name, case_line) = match self.advance() {
                     Token::Identifier(n, line) | Token::Enum { name: n, line } => (n, line),
                     Token::Exit { name, line } => (name, line),
                     other => return Err(format!("Expected enum case name, got {:?}", other)),
                 };
                 let value = if *self.peek_ref() == Token::Assign {
-                    self.advance();
+                    self.skip();
                     Some(self.parse_expr()?)
                 } else {
                     None
@@ -1629,7 +1629,7 @@ impl Parser {
         loop {
             match self.peek() {
                 Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("var") => {
-                    self.advance();
+                    self.skip();
                     if modifiers.has_visibility {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
@@ -1637,7 +1637,7 @@ impl Parser {
                     modifiers.visibility = Visibility::Public;
                 }
                 Token::Public => {
-                    self.advance();
+                    self.skip();
                     if modifiers.has_visibility {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
@@ -1645,7 +1645,7 @@ impl Parser {
                     modifiers.visibility = Visibility::Public;
                 }
                 Token::Protected => {
-                    self.advance();
+                    self.skip();
                     if modifiers.has_visibility {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
@@ -1653,7 +1653,7 @@ impl Parser {
                     modifiers.visibility = Visibility::Protected;
                 }
                 Token::Private => {
-                    self.advance();
+                    self.skip();
                     if modifiers.has_visibility {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Access);
                     }
@@ -1673,28 +1673,28 @@ impl Parser {
                     modifiers.set_visibility = Some(visibility);
                 }
                 Token::Static(_) => {
-                    self.advance();
+                    self.skip();
                     if modifiers.is_static {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Static);
                     }
                     modifiers.is_static = true;
                 }
                 Token::Final(_) => {
-                    self.advance();
+                    self.skip();
                     if modifiers.is_final {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Final);
                     }
                     modifiers.is_final = true;
                 }
                 Token::Abstract(_) => {
-                    self.advance();
+                    self.skip();
                     if modifiers.is_abstract {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Abstract);
                     }
                     modifiers.is_abstract = true;
                 }
                 Token::Identifier(ref s, line) if s.eq_ignore_ascii_case("readonly") => {
-                    self.advance();
+                    self.skip();
                     if modifiers.is_readonly {
                         record_duplicate(&mut modifiers, DuplicateMemberModifier::Readonly);
                     }
@@ -1770,7 +1770,7 @@ impl Parser {
             if !matches!(self.peek_ref(), Token::Comma(_)) {
                 break;
             }
-            self.advance();
+            self.skip();
         }
         self.expect(&Token::Semicolon(0))?;
         Ok(constants)
@@ -1787,7 +1787,7 @@ impl Parser {
         }
 
         let hint = if *self.peek_ref() == Token::Question {
-            self.advance();
+            self.skip();
             TypeHint::Nullable(Box::new(self.parse_base_type_hint()?))
         } else if matches!(
             self.peek_ref(),
@@ -1822,7 +1822,7 @@ impl Parser {
     ) -> Result<(Vec<Stmt>, bool), String> {
         if modifiers.duplicate.is_some() {
             if matches!(self.peek_ref(), Token::Semicolon(_)) {
-                self.advance();
+                self.skip();
                 return Ok((Vec::new(), false));
             }
             let body = self.parse_function_body()?;
@@ -1836,14 +1836,14 @@ impl Parser {
                 );
             }
             if matches!(self.peek_ref(), Token::Semicolon(_)) {
-                self.advance();
+                self.skip();
                 return Ok((Vec::new(), false));
             }
             let body = self.parse_function_body()?;
             return Ok((body, true));
         }
         if matches!(self.peek_ref(), Token::Semicolon(_)) {
-            self.advance();
+            self.skip();
             return Ok((Vec::new(), false));
         }
         let body = self.parse_function_body()?;
@@ -1873,11 +1873,11 @@ impl Parser {
                 } else {
                     has_default = true;
                 }
-                self.advance();
+                self.skip();
                 if matches!(self.peek_ref(), Token::Comma(_))
                     && *self.peek_at_ref(1) == Token::DoubleArrow
                 {
-                    self.advance();
+                    self.skip();
                 }
                 self.expect(&Token::DoubleArrow)?;
                 let body = self.parse_expr()?;
@@ -1892,10 +1892,10 @@ impl Parser {
                 while matches!(self.peek_ref(), Token::Comma(_)) {
                     // A comma immediately before => terminates the condition list.
                     if *self.peek_at_ref(1) == Token::DoubleArrow {
-                        self.advance();
+                        self.skip();
                         break;
                     }
-                    self.advance(); // consume comma
+                    self.skip(); // consume comma
                     conditions.push(self.parse_expr()?);
                 }
                 self.expect(&Token::DoubleArrow)?;
@@ -1907,7 +1907,7 @@ impl Parser {
             }
             // Optional trailing comma between arms
             if matches!(self.peek_ref(), Token::Comma(_)) {
-                self.advance();
+                self.skip();
             }
         }
         self.expect(&Token::RBrace(0))?;
@@ -1926,7 +1926,7 @@ impl Parser {
             token => return Err(format!("Expected fn, got {token:?}")),
         };
         let returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-            self.advance();
+            self.skip();
             true
         } else {
             false
@@ -1963,17 +1963,19 @@ impl Parser {
         );
         Ok(Expr::Closure {
             line,
-            attributes: Vec::new(),
-            is_static,
-            returns_by_ref,
-            params,
-            use_vars: free_vars
-                .into_iter()
-                .map(|name| (name, false, 0))
-                .collect(),
-            body,
-            return_type,
-            generic_params,
+            closure: Box::new(ClosureExpr {
+                attributes: Vec::new(),
+                is_static,
+                returns_by_ref,
+                params,
+                use_vars: free_vars
+                    .into_iter()
+                    .map(|name| (name, false, 0))
+                    .collect(),
+                body,
+                return_type,
+                generic_params,
+            }),
         })
     }
 
@@ -2130,9 +2132,9 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
-            Expr::Closure { use_vars, .. } => {
+            Expr::Closure { closure, .. } => {
                 // Nested closure — only capture its explicit use vars
-                for (v, _, _) in use_vars {
+                for (v, _, _) in &closure.use_vars {
                     if !bound.contains(v.as_str()) && !out.contains(v) {
                         out.push(v.clone());
                     }
@@ -2165,8 +2167,8 @@ impl Parser {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
-            Expr::AnonymousNew { args, .. } => {
-                for arg in args {
+            Expr::AnonymousNew { class, .. } => {
+                for arg in &class.args {
                     Self::collect_free_vars(arg.expr(), bound, out);
                 }
             }
@@ -2301,7 +2303,7 @@ impl Parser {
             token => return Err(format!("Expected function, got {token:?}")),
         };
         let returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-            self.advance();
+            self.skip();
             true
         } else {
             false
@@ -2314,11 +2316,11 @@ impl Parser {
 
         let mut use_vars = Vec::new();
         if matches!(self.peek_ref(), Token::Use(_)) {
-            self.advance();
+            self.skip();
             self.expect_lparen()?;
             loop {
                 let is_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-                    self.advance();
+                    self.skip();
                     true
                 } else {
                     false
@@ -2370,7 +2372,7 @@ impl Parser {
                 let Token::Comma(_) = self.peek() else {
                     break;
                 };
-                self.advance();
+                self.skip();
                 if *self.peek_ref() == Token::RParen {
                     break;
                 }
@@ -2393,14 +2395,16 @@ impl Parser {
         self.reference_return_context = previous_reference_context;
         Ok(Expr::Closure {
             line,
-            attributes: Vec::new(),
-            is_static,
-            returns_by_ref,
-            params,
-            use_vars,
-            body,
-            return_type,
-            generic_params,
+            closure: Box::new(ClosureExpr {
+                attributes: Vec::new(),
+                is_static,
+                returns_by_ref,
+                params,
+                use_vars,
+                body,
+                return_type,
+                generic_params,
+            }),
         })
     }
 }

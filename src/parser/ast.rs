@@ -322,14 +322,8 @@ pub enum Expr {
     Closure {
         // [static] function($x) use($y) { ... }: ReturnType
         line: usize,
-        attributes: Vec<Attribute>,
-        is_static: bool,
-        returns_by_ref: bool,
-        params: Vec<Param>,
-        use_vars: Vec<(String, bool, usize)>, // (name, captured by reference, source line)
-        body: Vec<Stmt>,
-        return_type: Option<TypeHint>,
-        generic_params: Vec<GenericParameter>,
+        /// Boxed so that a closure literal does not size every `Expr`.
+        closure: Box<ClosureExpr>,
     },
     New {
         // new ClassName(args)
@@ -347,20 +341,9 @@ pub enum Expr {
         call_line: usize,
     },
     AnonymousNew {
-        attributes: Vec<Attribute>,
-        args: Vec<CallArg>,
-        is_readonly: bool,
-        allow_dynamic_properties: bool,
-        parent: Option<GenericAncestor>,
-        implements: Vec<GenericAncestor>,
-        properties: Vec<ClassProperty>,
-        constants: Vec<ClassConstant>,
-        methods: Vec<ClassMethod>,
-        uses: Vec<GenericAncestor>,
-        trait_aliases: Vec<TraitAlias>,
         line: usize,
-        end_line: usize,
-        call_line: usize,
+        /// Boxed so that an anonymous class does not size every `Expr`.
+        class: Box<AnonymousClassExpr>,
     },
     PropertyAccess {
         // $obj->prop or $obj?->prop
@@ -678,8 +661,8 @@ impl Expr {
             Expr::DynamicNew { class, args, .. } => {
                 class.contains_yield() || args.iter().any(CallArg::contains_yield)
             }
-            Expr::AnonymousNew { args, .. } => {
-                args.iter().any(CallArg::contains_yield)
+            Expr::AnonymousNew { class, .. } => {
+                class.args.iter().any(CallArg::contains_yield)
             }
             Expr::MethodCall { object, args, .. } => {
                 object.contains_yield() || args.iter().any(CallArg::contains_yield)
@@ -829,6 +812,42 @@ pub struct GenericParameter {
 
 /// A class-like name in an inheritance clause together with its pre-erasure
 /// generic arguments. Runtime class lookup continues to use only `name`.
+
+/// Payload of `Expr::Closure`. Kept behind a `Box` so the closure literal,
+/// the largest expression shape, does not dictate the size of every `Expr`
+/// moved through the parser's precedence cascade.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClosureExpr {
+    pub attributes: Vec<Attribute>,
+    pub is_static: bool,
+    pub returns_by_ref: bool,
+    pub params: Vec<Param>,
+    /// (name, captured by reference, source line)
+    pub use_vars: Vec<(String, bool, usize)>,
+    pub body: Vec<Stmt>,
+    pub return_type: Option<TypeHint>,
+    pub generic_params: Vec<GenericParameter>,
+}
+
+/// Payload of `Expr::AnonymousNew`; boxed for the same reason as
+/// [`ClosureExpr`].
+#[derive(Debug, Clone, PartialEq)]
+pub struct AnonymousClassExpr {
+    pub attributes: Vec<Attribute>,
+    pub args: Vec<CallArg>,
+    pub is_readonly: bool,
+    pub allow_dynamic_properties: bool,
+    pub parent: Option<GenericAncestor>,
+    pub implements: Vec<GenericAncestor>,
+    pub properties: Vec<ClassProperty>,
+    pub constants: Vec<ClassConstant>,
+    pub methods: Vec<ClassMethod>,
+    pub uses: Vec<GenericAncestor>,
+    pub trait_aliases: Vec<TraitAlias>,
+    pub end_line: usize,
+    pub call_line: usize,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct GenericAncestor {
     pub name: std::string::String,

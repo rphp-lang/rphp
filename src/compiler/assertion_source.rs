@@ -1,6 +1,7 @@
 use crate::parser::{
-    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod, ClassProperty, EnumCase, Expr,
-    ForeachTarget, GenericAncestor, GlobalTarget, ListTarget, Param, Stmt, TypeHint, Visibility,
+    AnonymousClassExpr, Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod,
+    ClassProperty, ClosureExpr, EnumCase, Expr, ForeachTarget, GenericAncestor, GlobalTarget,
+    ListTarget, Param, Stmt, TypeHint, Visibility,
 };
 
 #[cold]
@@ -2027,23 +2028,25 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 ),
                 100,
             ),
-            Expr::AnonymousNew {
-                attributes,
-                args,
-                is_readonly,
-                allow_dynamic_properties,
-                parent,
-                implements,
-                properties,
-                constants,
-                methods,
-                uses,
-                trait_aliases,
-                ..
-            } if !*allow_dynamic_properties
-                && optional_ancestor_has_no_arguments(parent.as_ref())
-                && ancestors_have_no_arguments(implements) =>
+            Expr::AnonymousNew { class, .. }
+                if !class.allow_dynamic_properties
+                    && optional_ancestor_has_no_arguments(class.parent.as_ref())
+                    && ancestors_have_no_arguments(&class.implements) =>
             {
+                let AnonymousClassExpr {
+                    attributes,
+                    args,
+                    is_readonly,
+                    allow_dynamic_properties: _,
+                    parent,
+                    implements,
+                    properties,
+                    constants,
+                    methods,
+                    uses,
+                    trait_aliases,
+                    ..
+                } = &**class;
                 let attributes = render_attributes(attributes)?;
                 let attributes = if attributes.is_empty() {
                     String::new()
@@ -2273,17 +2276,17 @@ pub(crate) fn assertion_expression_source(expr: &Expr) -> Option<String> {
                 ),
                 100,
             ),
-            Expr::Closure {
-                attributes,
-                is_static,
-                returns_by_ref,
-                params,
-                use_vars,
-                body,
-                return_type,
-                generic_params,
-                ..
-            } if generic_params.is_empty() => {
+            Expr::Closure { closure, .. } if closure.generic_params.is_empty() => {
+                let ClosureExpr {
+                    attributes,
+                    is_static,
+                    returns_by_ref,
+                    params,
+                    use_vars,
+                    body,
+                    return_type,
+                    generic_params: _,
+                } = &**closure;
                 let attributes = render_attributes(attributes)?;
                 let attributes = if attributes.is_empty() {
                     String::new()

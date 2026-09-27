@@ -137,7 +137,7 @@ impl Parser {
     /// Consume PHP's marker for a function or method returning by reference.
     pub(super) fn consume_reference_return_marker(&mut self) {
         if matches!(self.peek_ref(), Token::Ampersand(_)) {
-            self.advance();
+            self.skip();
         }
     }
 
@@ -280,7 +280,7 @@ impl Parser {
         if !matches!(self.peek_ref(), Token::Comma(_)) {
             return Ok(false);
         }
-        self.advance();
+        self.skip();
         if *self.peek_ref() == Token::RParen {
             return Ok(false);
         }
@@ -389,7 +389,7 @@ impl Parser {
                 if let Some(_label) = Self::token_as_named_arg_label(self.peek_ref()) {
                     if *self.peek_at_ref(1) == Token::Colon {
                         let name = Self::token_as_named_arg_label(&self.advance()).unwrap();
-                        self.advance(); // consume ':'
+                        self.skip(); // consume ':'
                         let value = self.with_new_postfix_error_suffix(
                             Some(", expecting \")\""),
                             |parser| parser.parse_expr(),
@@ -418,7 +418,7 @@ impl Parser {
                             "Cannot use argument unpacking after named arguments".to_string()
                         );
                     }
-                    self.advance();
+                    self.skip();
                     let expr = self.with_new_postfix_error_suffix(
                         Some(", expecting \")\""),
                         |parser| parser.parse_expr(),
@@ -490,7 +490,7 @@ impl Parser {
                 if let Some(_label) = Self::token_as_named_arg_label(self.peek_ref()) {
                     if *self.peek_at_ref(1) == Token::Colon {
                         let name = Self::token_as_named_arg_label(&self.advance()).unwrap();
-                        self.advance(); // consume ':'
+                        self.skip(); // consume ':'
                         let diagnostic_checkpoint =
                             self.assertion_diagnostic_checkpoint(args.is_empty());
                         let capture_attributes = args.is_empty();
@@ -530,7 +530,7 @@ impl Parser {
                             "Cannot use argument unpacking after named arguments".to_string()
                         );
                     }
-                    self.advance();
+                    self.skip();
                     let diagnostic_checkpoint =
                         self.assertion_diagnostic_checkpoint(args.is_empty());
                     let capture_attributes = args.is_empty();
@@ -642,18 +642,18 @@ impl Parser {
         let mut attributes = Vec::new();
         let mut first_group = true;
         while let Token::AttributeStart(line) = self.peek() {
-            self.advance();
+            self.skip();
             if self.assertion_source_capture && !first_group {
                 attributes.push(Attribute::assertion_group_marker(line));
             }
             loop {
                 let name = self.parse_attribute_name()?;
                 let args = if matches!(self.peek_ref(), Token::LParen(_)) {
-                    self.advance();
+                    self.skip();
                     if matches!(self.peek_ref(), Token::DotDotDot(_))
                         && *self.peek_at_ref(1) == Token::RParen
                     {
-                        self.advance();
+                        self.skip();
                         self.expect(&Token::RParen)?;
                         self.compile_error("Cannot create Closure as attribute argument", line);
                         Vec::new()
@@ -688,7 +688,7 @@ impl Parser {
                 if !matches!(self.peek_ref(), Token::Comma(_)) {
                     break;
                 }
-                self.advance();
+                self.skip();
                 if *self.peek_ref() == Token::RBracket {
                     break;
                 }
@@ -778,14 +778,19 @@ impl Parser {
                     target.push(marker);
                 }
             }
-            Stmt::ExprStmt(Expr::Closure {
-                attributes: target,
-                ..
-            })
-            | Stmt::ExprStmt(Expr::AnonymousNew {
-                attributes: target,
-                ..
-            }) => {
+            Stmt::ExprStmt(Expr::Closure { closure, .. }) => {
+                let target = &mut closure.attributes;
+                let non_enum_case_marker = target
+                    .iter()
+                    .find(|attribute| attribute.is_non_enum_case_marker())
+                    .cloned();
+                *target = attributes;
+                if let Some(marker) = non_enum_case_marker {
+                    target.push(marker);
+                }
+            }
+            Stmt::ExprStmt(Expr::AnonymousNew { class, .. }) => {
+                let target = &mut class.attributes;
                 let non_enum_case_marker = target
                     .iter()
                     .find(|attribute| attribute.is_non_enum_case_marker())
@@ -877,6 +882,20 @@ impl Parser {
         }))
     }
 
+    /// Consume the current token without materializing it. Most call sites
+    /// only step over a token whose kind they already checked; cloning its
+    /// payload there was a third of all string allocations while parsing.
+    #[inline]
+    fn skip(&mut self) {
+        if let Some(Token::Variable(name, _)) = self.tokens.get(self.pos)
+            && name.starts_with('_')
+        {
+            let name = name.clone();
+            self.note_auto_global(&name);
+        }
+        self.pos += 1;
+    }
+
     fn advance(&mut self) -> Token {
         let tok = self.peek();
         self.pos += 1;
@@ -937,6 +956,10 @@ impl Parser {
     }
 
     fn expect(&mut self, expected: &Token) -> Result<(), String> {
+        if std::mem::discriminant(self.peek_ref()) == std::mem::discriminant(expected) {
+            self.skip();
+            return Ok(());
+        }
         let tok = self.advance();
         if std::mem::discriminant(&tok) == std::mem::discriminant(expected) {
             Ok(())
@@ -969,7 +992,7 @@ impl Parser {
         if self.is_param_start() {
             params.push(self.parse_one_param()?);
             while matches!(self.peek_ref(), Token::Comma(_)) {
-                self.advance();
+                self.skip();
                 // Allow trailing comma before closing paren
                 if !self.is_param_start() {
                     break;
@@ -1020,7 +1043,7 @@ impl Parser {
         let mut parts = Vec::new();
         // Optional leading backslash (fully qualified)
         let leading_bs = if *self.peek_ref() == Token::Backslash {
-            self.advance();
+            self.skip();
             true
         } else {
             false
@@ -1045,7 +1068,7 @@ impl Parser {
             }
         }
         while *self.peek_ref() == Token::Backslash {
-            self.advance(); // consume '\'
+            self.skip(); // consume '\'
             match self.advance() {
                 Token::Identifier(n, _) | Token::Enum { name: n, .. } => parts.push(n),
                 Token::Clone(_) => parts.push("clone".to_string()),
@@ -1087,7 +1110,7 @@ impl Parser {
             if *self.peek_ref() != Token::Backslash {
                 break;
             }
-            self.advance();
+            self.skip();
         }
         Ok(parts.join("\\"))
     }
@@ -1136,7 +1159,7 @@ impl Parser {
         adaptation_line: usize,
     ) -> Result<(Option<String>, String), String> {
         if let Token::ShortEcho { line } = self.peek() {
-            self.advance();
+            self.skip();
             return Err(self.source_error("Cannot use \"<?=\" as an identifier", line));
         }
         let first = match self.peek() {
@@ -1147,7 +1170,7 @@ impl Parser {
                 self.parse_qualified_name()?
             }
             Token::Static(line) if *self.peek_at_ref(1) == Token::DoubleColon => {
-                self.advance();
+                self.skip();
                 self.last_primary_line = Some(line);
                 self.compile_error(ReservedStaticRole::Trait.diagnostic(), adaptation_line);
                 "static".to_string()
@@ -1163,7 +1186,7 @@ impl Parser {
         if *self.peek_ref() != Token::DoubleColon {
             return Ok((None, first));
         }
-        self.advance();
+        self.skip();
         let token = self.advance();
         let method = Self::token_as_named_arg_label(&token)
             .ok_or_else(|| format!("Expected trait method name, got {token:?}"))?;
@@ -1175,7 +1198,7 @@ impl Parser {
     /// name. Whitespace is already absent from the token stream.
     fn parse_use_name(&mut self) -> Result<(String, bool, usize), String> {
         let leading_backslash = if *self.peek_ref() == Token::Backslash {
-            self.advance();
+            self.skip();
             true
         } else {
             false
@@ -1197,9 +1220,9 @@ impl Parser {
             }
         };
         while *self.peek_ref() == Token::Backslash {
-            self.advance();
+            self.skip();
             if matches!(self.peek_ref(), Token::LBrace(_)) {
-                self.advance();
+                self.skip();
                 let mut prefix = parts.join("\\");
                 if leading_backslash {
                     prefix.insert(0, '\\');
@@ -1228,7 +1251,7 @@ impl Parser {
         let is_alias = matches!(self.peek_ref(), Token::As(_))
             || matches!(self.peek_ref(), Token::Identifier(name, _) if name.eq_ignore_ascii_case("as"));
         if is_alias {
-            self.advance();
+            self.skip();
         }
         is_alias
     }
@@ -1239,10 +1262,10 @@ impl Parser {
         bindable_closure: bool,
     ) -> Result<Option<TypeHint>, String> {
         if *self.peek_ref() == Token::Colon {
-            self.advance(); // consume ':'
+            self.skip(); // consume ':'
             // Handle nullable return types: ?: type
             let hint = if *self.peek_ref() == Token::Question {
-                self.advance(); // consume '?'
+                self.skip(); // consume '?'
                 let inner = self.parse_base_type_hint()?;
                 if matches!(self.peek_ref(), Token::Ampersand(_)) {
                     return Err(self.source_error(
@@ -1280,7 +1303,7 @@ impl Parser {
         }
         let mut types = vec![first];
         while *self.peek_ref() == Token::Pipe {
-            self.advance(); // consume '|'
+            self.skip(); // consume '|'
             let t = self.parse_base_type_hint()?;
             types.push(self.maybe_parse_intersection_type(t)?);
         }
@@ -1306,7 +1329,7 @@ impl Parser {
                     | Some(Token::Static(_))
             )
         {
-            self.advance();
+            self.skip();
             types.push(self.parse_base_type_hint()?);
         }
         if types.len() == 1 {
@@ -1433,7 +1456,7 @@ impl Parser {
                     | Some(Token::False)
             );
             if is_type {
-                self.advance(); // consume '?'
+                self.skip(); // consume '?'
                 let inner = self.parse_base_type_hint()?;
                 return Ok(Some(TypeHint::Nullable(Box::new(inner))));
             }
@@ -1641,7 +1664,7 @@ impl Parser {
     ) -> Result<String, String> {
         let mut parts = vec![first];
         while *self.peek_ref() == Token::Backslash {
-            self.advance();
+            self.skip();
             match self.advance() {
                 Token::Identifier(name, _) | Token::Enum { name, .. } => parts.push(name),
                 other => {
@@ -1728,18 +1751,18 @@ impl Parser {
                     };
                     promo_visibility = Some(vis);
                     if matches!(self.peek_ref(), Token::Identifier(s, _) if s == "readonly") {
-                        self.advance();
+                        self.skip();
                         promo_readonly = true;
                     }
                     continue;
                 }
                 Token::Identifier(ref s, _) if s == "readonly" && promo_visibility.is_some() => {
-                    self.advance();
+                    self.skip();
                     promo_readonly = true;
                     continue;
                 }
                 Token::Final(_) => {
-                    self.advance();
+                    self.skip();
                     promo_final = true;
                     continue;
                 }
@@ -1757,13 +1780,13 @@ impl Parser {
         let type_hint = self.try_parse_type_hint(true)?;
         // Optional & prefix for pass-by-reference
         let is_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
-            self.advance(); // consume '&'
+            self.skip(); // consume '&'
             true
         } else {
             false
         };
         let is_variadic = if matches!(self.peek_ref(), Token::DotDotDot(_)) {
-            self.advance(); // consume '...'
+            self.skip(); // consume '...'
             true
         } else {
             false
@@ -1774,7 +1797,7 @@ impl Parser {
             other => return Err(format!("Expected parameter variable, got {:?}", other)),
         };
         let default = if *self.peek_ref() == Token::Assign {
-            self.advance(); // consume '='
+            self.skip(); // consume '='
             Some(self.parse_expr()?)
         } else {
             None
@@ -2178,7 +2201,7 @@ impl Parser {
             Token::Identifier(_, line) => line,
             _ => 0,
         };
-        self.advance(); // consume 'list' identifier
+        self.skip(); // consume 'list' identifier
         self.expect_lparen()?;
         let targets = self.parse_list_targets(&Token::RParen)?;
         self.expect(&Token::RParen)?;
@@ -2198,7 +2221,7 @@ impl Parser {
             Token::LBracket(line) => line,
             _ => 0,
         };
-        self.advance(); // consume '['
+        self.skip(); // consume '['
         let targets = self.parse_list_targets(&Token::RBracket)?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
@@ -2365,7 +2388,7 @@ impl Parser {
 
     fn parse_one_list_target(&mut self, end_token: &Token) -> Result<ListTarget, String> {
         if let Token::DotDotDot(line) = self.peek() {
-            self.advance();
+            self.skip();
             if !matches!(self.peek_ref(), Token::Variable(_, _) | Token::This(_)) {
                 return Err(
                     "Expected assignment target after spread operator in destructuring".into(),
@@ -2378,14 +2401,14 @@ impl Parser {
             )));
         }
         if matches!(self.peek_ref(), Token::Ampersand(_)) {
-            self.advance();
+            self.skip();
             return Ok(ListTarget::Reference(self.parse_list_reference_target()?));
         }
         if let Token::LBracket(line) = self.peek() {
             if *end_token == Token::RParen {
                 self.compile_error("Cannot mix [] and list()", line);
             }
-            self.advance();
+            self.skip();
             let nested = self.parse_list_targets(&Token::RBracket)?;
             self.expect(&Token::RBracket)?;
             return Ok(ListTarget::Nested(nested));
@@ -2397,7 +2420,7 @@ impl Parser {
             if *end_token == Token::RBracket {
                 self.compile_error("Cannot mix [] and list()", line);
             }
-            self.advance();
+            self.skip();
             self.expect_lparen()?;
             let nested = self.parse_list_targets(&Token::RParen)?;
             self.expect(&Token::RParen)?;
@@ -2415,7 +2438,7 @@ impl Parser {
         };
         let expression = self.parse_empty_dimension_target_prefix()?;
         if *self.peek_ref() == Token::DoubleArrow {
-            self.advance();
+            self.skip();
             let target = self.parse_one_list_target(end_token)?;
             return Ok(self.key_list_target(expression, target));
         }
@@ -2435,7 +2458,7 @@ impl Parser {
                 // Skip element (empty slot before comma or between commas)
                 targets.push(ListTarget::Skip);
                 saw_skip = true;
-                self.advance(); // consume ','
+                self.skip(); // consume ','
                 continue;
             }
             let target = self.parse_one_list_target(end_token)?;
@@ -2453,7 +2476,7 @@ impl Parser {
             targets.push(target);
             // Consume comma if present
             if matches!(self.peek_ref(), Token::Comma(_)) {
-                self.advance();
+                self.skip();
             } else {
                 break;
             }

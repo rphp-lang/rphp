@@ -51,7 +51,7 @@ impl Parser {
         let Token::Static(static_line) = self.peek() else {
             return self.parse_generic_ancestor();
         };
-        self.advance();
+        self.skip();
         self.last_primary_line = Some(static_line);
         self.compile_error(role.diagnostic(), diagnostic_line.unwrap_or(static_line));
         self.finish_generic_ancestor("static".to_string())
@@ -80,7 +80,7 @@ impl Parser {
         let Token::Static(static_line) = self.peek() else {
             return self.parse_qualified_or_namespace_relative_name();
         };
-        self.advance();
+        self.skip();
         self.last_primary_line = Some(static_line);
         self.compile_error(role.diagnostic(), diagnostic_line.unwrap_or(static_line));
         Ok("static".to_string())
@@ -103,7 +103,7 @@ impl Parser {
             if !matches!(self.peek_ref(), Token::Comma(_)) {
                 break;
             }
-            self.advance();
+            self.skip();
         }
         Ok((ancestors, first_ancestor_line.unwrap_or(use_line)))
     }
@@ -124,7 +124,7 @@ impl Parser {
                     .to_string(),
             );
         }
-        self.advance();
+        self.skip();
 
         if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
             return Err("A generic parameter list cannot be empty".to_string());
@@ -142,11 +142,11 @@ impl Parser {
 
             let variance = match self.peek() {
                 Token::Plus => {
-                    self.advance();
+                    self.skip();
                     GenericVariance::Covariant
                 }
                 Token::Minus => {
-                    self.advance();
+                    self.skip();
                     GenericVariance::Contravariant
                 }
                 _ => GenericVariance::Invariant,
@@ -179,13 +179,13 @@ impl Parser {
             }
 
             let bound = if *self.peek_ref() == Token::Colon {
-                self.advance();
+                self.skip();
                 Some(self.parse_generic_type_expression()?)
             } else {
                 None
             };
             let default = if *self.peek_ref() == Token::Assign {
-                self.advance();
+                self.skip();
                 seen_default = true;
                 Some(self.parse_generic_type_expression()?)
             } else {
@@ -234,7 +234,7 @@ impl Parser {
 
             match self.peek() {
                 Token::Comma(_) => {
-                    self.advance();
+                    self.skip();
                     if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
                         return Err("A generic parameter list cannot end with a comma".into());
                     }
@@ -295,7 +295,7 @@ impl Parser {
             arguments.push(self.parse_generic_type_expression()?);
             match self.peek() {
                 Token::Comma(_) => {
-                    self.advance();
+                    self.skip();
                     if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
                         return Err("A generic type-argument list cannot end with a comma".into());
                     }
@@ -325,7 +325,7 @@ impl Parser {
                     .to_string(),
             );
         }
-        self.advance(); // ::
+        self.skip(); // ::
         self.parse_generic_type_arguments()
     }
 
@@ -335,13 +335,13 @@ impl Parser {
     fn consume_generic_close(&mut self) -> Result<(), String> {
         match self.peek() {
             Token::Greater => {
-                self.advance();
+                self.skip();
                 Ok(())
             }
             Token::ShiftRight(_) => {
                 self.tokens[self.pos] = Token::Greater;
                 self.tokens.insert(self.pos + 1, Token::Greater);
-                self.advance();
+                self.skip();
                 Ok(())
             }
             other => Err(format!("Expected '>' in generic type, got {:?}", other)),

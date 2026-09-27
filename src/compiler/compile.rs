@@ -58,9 +58,9 @@ use crate::generics::{
     PendingGenericUseSite,
 };
 use crate::parser::{
-    Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod, ClassProperty, EnumCase, Expr,
-    ForeachTarget, GenericAncestor, GlobalTarget, ListTarget, Param, Stmt, TypeHint, UseKind,
-    Visibility,
+    AnonymousClassExpr, Attribute, BinOp, CallArg, CastType, ClassConstant, ClassMethod,
+    ClassProperty, ClosureExpr, EnumCase, Expr, ForeachTarget, GenericAncestor, GlobalTarget,
+    ListTarget, Param, Stmt, TypeHint, UseKind, Visibility,
 };
 use crate::value::{
     ObjectLayout, Value, ValueType,
@@ -2597,18 +2597,12 @@ fn forbidden_object_constant_expression(expression: &Expr) -> Option<(&'static s
 fn invalid_constant_expression(expression: &Expr) -> Option<(&'static str, usize)> {
     let recurse = invalid_constant_expression;
     match expression {
-        Expr::Closure {
-            line,
-            is_static,
-            use_vars,
-            body,
-            ..
-        } => {
-            if matches!(body.as_slice(), [Stmt::Return { line: 0, .. }]) {
+        Expr::Closure { line, closure } => {
+            if matches!(closure.body.as_slice(), [Stmt::Return { line: 0, .. }]) {
                 Some(("Constant expression contains invalid operations", *line))
-            } else if !*is_static {
+            } else if !closure.is_static {
                 Some(("Closures in constant expressions must be static", *line))
-            } else if !use_vars.is_empty() {
+            } else if !closure.use_vars.is_empty() {
                 Some(("Cannot use(...) variables in constant expression", *line))
             } else {
                 None
@@ -13192,17 +13186,17 @@ impl Compiler {
 
                 (result_tmp, OpType::Tmp)
             }
-            Expr::Closure {
-                line,
-                attributes,
-                is_static,
-                returns_by_ref,
-                params,
-                use_vars,
-                body,
-                return_type,
-                generic_params,
-            } => {
+            Expr::Closure { line, closure } => {
+                let ClosureExpr {
+                    attributes,
+                    is_static,
+                    returns_by_ref,
+                    params,
+                    use_vars,
+                    body,
+                    return_type,
+                    generic_params,
+                } = &**closure;
                 let trace_scope = if let Some((_, public_name)) = self
                     .current_function_name
                     .starts_with("__closure_")
@@ -13660,22 +13654,22 @@ impl Compiler {
 
                 (tmp, OpType::Tmp)
             }
-            Expr::AnonymousNew {
-                attributes,
-                args,
-                is_readonly,
-                allow_dynamic_properties,
-                parent,
-                implements,
-                properties,
-                constants,
-                methods,
-                uses,
-                trait_aliases,
-                line,
-                end_line,
-                call_line,
-            } => {
+            Expr::AnonymousNew { line, class } => {
+                let AnonymousClassExpr {
+                    attributes,
+                    args,
+                    is_readonly,
+                    allow_dynamic_properties,
+                    parent,
+                    implements,
+                    properties,
+                    constants,
+                    methods,
+                    uses,
+                    trait_aliases,
+                    end_line,
+                    call_line,
+                } = &**class;
                 let sequence = ANONYMOUS_CLASS_COUNTER.fetch_add(1, Ordering::Relaxed);
                 let class_name = format!("class@anonymous#{sequence}");
                 let declaration = Stmt::Class {

@@ -357,14 +357,14 @@ fn test_parse_closure_reference_captures() {
         .unwrap();
     let stmts = Parser::new(tokens).parse().unwrap();
     let Stmt::Assign {
-        expr: Expr::Closure { use_vars, .. },
+        expr: Expr::Closure { closure, .. },
         ..
     } = &stmts[0]
     else {
         panic!("expected closure assignment");
     };
     assert_eq!(
-        use_vars,
+        &closure.use_vars,
         &vec![
             ("left".to_string(), true, 1),
             ("right".to_string(), true, 1),
@@ -1927,21 +1927,21 @@ fn test_static_anonymous_function_forms_are_expressions() {
     let statements = Parser::new(tokens).parse().unwrap();
 
     let Stmt::Assign {
-        expr: Expr::Closure { is_static, .. },
+        expr: Expr::Closure { closure, .. },
         ..
     } = &statements[0]
     else {
         panic!("expected a static closure assignment");
     };
-    assert!(*is_static);
+    assert!(closure.is_static);
     let Stmt::Assign {
-        expr: Expr::Closure { is_static, .. },
+        expr: Expr::Closure { closure, .. },
         ..
     } = &statements[1]
     else {
         panic!("expected a static arrow assignment");
     };
-    assert!(*is_static);
+    assert!(closure.is_static);
     assert_eq!(statements.len(), 4);
 }
 
