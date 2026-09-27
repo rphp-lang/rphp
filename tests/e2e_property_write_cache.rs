@@ -77,3 +77,51 @@ done
 "#
     );
 }
+
+/// A scoped (non-public) read-cache entry is also write-safe unless the
+/// property is readonly, an enum case or narrows its set visibility, so
+/// `$this->stack[$k] = $v` and `$this->pos++` on protected/private storage
+/// stay cached; readonly, asymmetric and rebound-closure writes keep PHP's
+/// errors.
+#[test]
+fn scoped_property_modifications_follow_php_visibility() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class Base {
+    protected array $stack = [];
+    protected int $pos = 0;
+    private array $mine = [];
+    public function push($v) { $this->stack[$this->pos] = $v; $this->pos++; $this->mine[] = $v; return $this; }
+    public function dump() { return json_encode([$this->stack, $this->pos, $this->mine]); }
+}
+class Child extends Base {
+    private array $mine = ['child'];
+    public function pushTwice($v) { $this->stack[] = $v; $this->stack[] = $v; $this->pos += 2; $this->mine[] = $v; return $this; }
+    public function mine() { return json_encode($this->mine); }
+}
+$b = new Base; for ($i = 0; $i < 4; $i++) { $b->push($i); } echo $b->dump(), "\n";
+$c = new Child; for ($i = 0; $i < 3; $i++) { $c->push($i)->pushTwice("x$i"); } echo $c->dump(), ' ', $c->mine(), "\n";
+class RO { public function __construct(public readonly array $items) {} public function bump() { try { $this->items[] = 1; } catch (Error $e) { return get_class($e) . ': ' . $e->getMessage(); } return 'ok'; } }
+$r = new RO([1]); echo $r->bump(), ' ', $r->bump(), "\n";
+class Asym { public private(set) array $items = []; public protected(set) int $n = 0; public function add($v) { $this->items[] = $v; $this->n++; return count($this->items) . ':' . $this->n; } }
+$a = new Asym; $a->add(1); echo $a->add(2), ' ', json_encode($a->items), "\n";
+try { $a->items[] = 3; } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+class Str { protected string $s = ''; protected $u; public function app() { $this->s .= 'ab'; $this->u .= 'cd'; return $this->s . '|' . $this->u; } }
+$s = new Str; $s->app(); echo $s->app(), "\n";
+$fn = function () { $this->stack[] = 'closure'; $this->pos++; return $this->dump(); };
+echo Closure::bind($fn, $b, Base::class)(), "\n";
+try { echo Closure::bind($fn, $b, null)(); } catch (Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+"#
+        ),
+        r#"[[0,1,2,3],4,[0,1,2,3]]
+[[0,"x0","x0",1,"x1","x1",2,"x2","x2"],9,[0,1,2]] ["child","x0","x1","x2"]
+Error: Cannot indirectly modify readonly property RO::$items Error: Cannot indirectly modify readonly property RO::$items
+2:2 [1,2]
+Error: Cannot indirectly modify private(set) property Asym::$items from global scope
+abab|cdcd
+[[0,1,2,3,"closure"],5,[0,1,2,3]]
+Error: Cannot access protected property Base::$stack
+"#
+    );
+}

@@ -300,7 +300,8 @@ pub struct ObjectLayout {
     /// String on every construction.
     class_name: Option<Rc<str>>,
     keys: Vec<String>,
-    slots: HashMap<String, usize>,
+    /// Property-name lookups on every slow property path; symbol-hashed.
+    slots: HashMap<String, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>,
     iteration_slots: Vec<usize>,
     /// Instances of this class may need the PHP release planner (the class
     /// declares or inherits `__destruct`). Set once by class registration
@@ -310,7 +311,7 @@ pub struct ObjectLayout {
 
 impl ObjectLayout {
     pub fn new(class_name: impl Into<Rc<str>>, keys: Vec<String>) -> Self {
-        let mut slots = HashMap::with_capacity(keys.len());
+        let mut slots = HashMap::with_capacity_and_hasher(keys.len(), Default::default());
         for (slot, key) in keys.iter().enumerate() {
             slots.insert(key.clone(), slot);
         }
@@ -338,7 +339,7 @@ impl ObjectLayout {
         Self {
             class_name: None,
             keys: Vec::new(),
-            slots: HashMap::new(),
+            slots: HashMap::default(),
             iteration_slots: Vec::new(),
             vm_release_tracked: Cell::new(false),
         }

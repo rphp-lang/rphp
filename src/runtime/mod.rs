@@ -973,7 +973,11 @@ pub struct ExecutorGlobals {
     pub generic_metadata: GenericMetadata,
     /// Constant table — name → Value (case-sensitive, like PHP)
     /// Uses RefCell to allow define() from internal functions (which receive &self).
-    pub constant_table: std::cell::RefCell<HashMap<Rc<str>, crate::value::Value>>,
+    /// Constant fetches probe this per `op_fetch_const`; the symbol hasher
+    /// replaces SipHash for the short constant names.
+    pub constant_table: std::cell::RefCell<
+        HashMap<Rc<str>, crate::value::Value, std::hash::BuildHasherDefault<SymbolHasher>>,
+    >,
     /// Successful dynamic-definition order exposed by get_defined_constants().
     /// Lookup remains hash-based; only the cold inventory API walks this list.
     constant_definition_order: std::cell::RefCell<Vec<Rc<str>>>,
@@ -1094,6 +1098,10 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: PendingNamedVariadic,
+    /// Function-table keys of plain internal functions by descriptor pointer,
+    /// remembered after the first reverse scan (see `registered_function_name`).
+    pub(crate) internal_function_names:
+        std::cell::RefCell<HashMap<usize, String, std::hash::BuildHasherDefault<SymbolHasher>>>,
     /// Closure captures and bound receivers cannot enter overlapping CVs
     /// until DoFcall has snapshotted/packed extra or variadic arguments.
     pub(crate) pending_closure_captures:
@@ -2332,7 +2340,7 @@ impl ExecutorGlobals {
             generic_method_contract_cache: std::cell::RefCell::new(None),
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
-            constant_table: std::cell::RefCell::new(HashMap::new()),
+            constant_table: std::cell::RefCell::new(HashMap::default()),
             resource_scope: 0,
             constant_definition_order: std::cell::RefCell::new(Vec::new()),
             compiler_halt_offsets: None,
@@ -2375,6 +2383,7 @@ impl ExecutorGlobals {
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: Default::default(),
+            internal_function_names: Default::default(),
             pending_closure_captures: Default::default(),
             active_closure_owners: None,
             function_argument_state: FunctionArgumentState::new(),
@@ -2478,7 +2487,7 @@ impl ExecutorGlobals {
             generic_method_contract_cache: std::cell::RefCell::new(None),
             #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
             generic_property_contract_cache: std::cell::RefCell::new(None),
-            constant_table: std::cell::RefCell::new(HashMap::new()),
+            constant_table: std::cell::RefCell::new(HashMap::default()),
             resource_scope: 0,
             constant_definition_order: std::cell::RefCell::new(Vec::new()),
             compiler_halt_offsets: None,
@@ -2521,6 +2530,7 @@ impl ExecutorGlobals {
             libxml_entity_loader_disabled: Cell::new(false),
             output_handler_depth: Cell::new(0),
             pending_named_variadic: Default::default(),
+            internal_function_names: Default::default(),
             pending_closure_captures: Default::default(),
             active_closure_owners: None,
             function_argument_state: FunctionArgumentState::new(),

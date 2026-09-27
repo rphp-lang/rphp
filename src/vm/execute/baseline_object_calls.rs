@@ -1887,14 +1887,6 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
     if !declared_name_matches {
         return CachedFetchObjResult::Miss;
     }
-    // Scoped entries are read-only proofs; writes re-check set visibility.
-    if !RUNTIME_NAME
-        && cache.is_scoped_property()
-        && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_INCDEC) != 0
-    {
-        return CachedFetchObjResult::Miss;
-    }
-
     let property_ptr = unsafe {
         obj_val.object_property_slot_unchecked(cache.property_slot())
     };
@@ -2572,8 +2564,18 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                     .instance_property_definition(obj.class_id, slot)
                     .is_some_and(|definition| definition.has_get_hook)
             {
+                // The scope that may read a non-public slot may also modify
+                // it in place unless the property is readonly, an enum case
+                // or narrows its set visibility; then the entry is also
+                // write-safe and fetch-for-modify (`$this->items[$k] = $v`,
+                // `$this->pos++`) stays on the cache.
+                let writable = eg.class_table.get(obj.class_name.as_ref()).is_none_or(|cd| {
+                    !cd.is_enum
+                        && !cd.readonly_props.iter().any(|prop| prop == &name)
+                        && !eg.property_has_asymmetric_set_visibility(&obj.class_name, &name)
+                });
                 let ic_mut = op_array.inline_cache_mut(ip);
-                ic_mut.set_property(obj.class_id, slot, 1);
+                ic_mut.set_property(obj.class_id, slot, if writable { 3 } else { 1 });
                 ic_mut.set_scope_function(scope_function);
                 memoize_property_cache(eg, op_array, ip, obj.class_id);
             }

@@ -3632,6 +3632,7 @@ pub(crate) fn displayed_frame_function_name(
         }
 
         let registered_name = registered_function_name(eg, function);
+        let registered_name: &str = &registered_name;
         let Some((registered_class, registered_method)) = registered_name.rsplit_once("::") else {
             return displayed_function_name(eg, function);
         };
@@ -3840,7 +3841,10 @@ fn called_class_id_for_frame(eg: &ExecutorGlobals, frame: *mut ExecuteData, dept
 /// internal handlers are intentionally kept out of `execute_ex`. These paths
 /// are important for PHP semantics but cold for ordinary fixed-signature user
 /// calls, so outlining them keeps the baseline dispatch working set smaller.
-fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommon) -> &str {
+fn registered_function_name(
+    eg: &ExecutorGlobals,
+    function: *const FunctionCommon,
+) -> std::borrow::Cow<'_, str> {
     // User functions retain their declaration spelling in the OpArray.  The
     // executor's lookup table cannot provide it because PHP function lookup is
     // case-insensitive and its keys are deliberately normalized to lowercase.
@@ -3848,16 +3852,38 @@ fn registered_function_name(eg: &ExecutorGlobals, function: *const FunctionCommo
     // common header discriminant identifies the enclosing function layout.
     unsafe {
         if (*function).fn_type == FunctionType::User {
-            return &(*(function as *const UserFunction)).op_array.name;
+            return std::borrow::Cow::Borrowed(&(*(function as *const UserFunction)).op_array.name);
         }
     }
     if let Some(name) = eg.internal_function_display_name(function) {
-        return name;
+        return std::borrow::Cow::Borrowed(name);
     }
-    eg.function_table
+    // Plain internal functions are named by their function-table key. The
+    // table is keyed by name, so remember each pointer's key after the one
+    // scan that finds it; a replaced registration fails the membership check
+    // below and is scanned again.
+    let key = function as usize;
+    if let Some(name) = eg.internal_function_names.borrow().get(&key)
+        && eg
+            .function_table
+            .get(name.as_str())
+            .is_some_and(|pointer| std::ptr::eq(*pointer, function))
+    {
+        return std::borrow::Cow::Owned(name.clone());
+    }
+    match eg
+        .function_table
         .iter()
-        .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.as_str()))
-        .unwrap_or("internal function")
+        .find_map(|(name, pointer)| std::ptr::eq(*pointer, function).then_some(name.clone()))
+    {
+        Some(name) => {
+            eg.internal_function_names
+                .borrow_mut()
+                .insert(key, name.clone());
+            std::borrow::Cow::Owned(name)
+        }
+        None => std::borrow::Cow::Borrowed("internal function"),
+    }
 }
 
 #[cold]
@@ -3873,6 +3899,7 @@ pub(crate) fn displayed_function_name(
     function: *const FunctionCommon,
 ) -> String {
     let registered_name = registered_function_name(eg, function);
+    let registered_name: &str = &registered_name;
     if let Some((_, hook)) = registered_name.split_once("::$") {
         return eg
             .declaring_class_of(function)
@@ -4764,6 +4791,7 @@ fn execute_full_call<'a>(
             // SAFETY: the live pending frame retains its registered function
             // descriptor for the complete synchronous call attempt.
             let function_name = registered_function_name(eg, unsafe { (*call).func });
+            let function_name: &str = &function_name;
             let parameter_name = func_common
                 .sig
                 .param_names
