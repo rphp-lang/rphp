@@ -4562,6 +4562,71 @@ impl ExecutorGlobals {
             .is_some_and(|index| signature.is_param_by_ref(index))
     }
 
+    /// Allocation-free form of the first dependency-name pass: does either
+    /// signature mention a class that is neither declared, being linked, nor
+    /// a pseudo-type? Most contracts do not, and they used to build resolved
+    /// hint copies plus a name set only to learn that.
+    fn method_contract_mentions_unknown_class(
+        &self,
+        required: MethodDeclaration<'_>,
+        implementation: MethodDeclaration<'_>,
+        linking_class: &ClassDef,
+    ) -> bool {
+        use crate::vm::function::ParamTypeHint;
+
+        fn walk(hint: &ParamTypeHint, unknown: &mut dyn FnMut(&str) -> bool) -> bool {
+            match hint {
+                ParamTypeHint::ClassName(name) => unknown(name),
+                ParamTypeHint::Nullable(inner) => walk(inner, unknown),
+                ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+                    parts.iter().any(|part| walk(part, unknown))
+                }
+                _ => false,
+            }
+        }
+        const PSEUDO_TYPES: [&str; 8] = [
+            "self", "parent", "static", "object", "iterable", "false", "true", "null",
+        ];
+        for declaration in [required, implementation] {
+            let scope_owner = self.variance_scope_owner(declaration.owner, Some(linking_class));
+            let mut unknown = |name: &str| {
+                let resolved = if name.eq_ignore_ascii_case("self") {
+                    scope_owner
+                } else if name.eq_ignore_ascii_case("parent") {
+                    match linking_class
+                        .name
+                        .eq_ignore_ascii_case(scope_owner)
+                        .then_some(linking_class.parent.as_deref())
+                        .unwrap_or_else(|| {
+                            self.find_class(scope_owner)
+                                .and_then(|class| class.parent.as_deref())
+                        }) {
+                        Some(parent) => parent,
+                        None => return false,
+                    }
+                } else if PSEUDO_TYPES
+                    .iter()
+                    .any(|pseudo_type| name.eq_ignore_ascii_case(pseudo_type))
+                {
+                    return false;
+                } else {
+                    name
+                };
+                !self.variance_class_is_known(resolved, Some(linking_class))
+            };
+            let signature = declaration.signature;
+            if signature
+                .param_type_hints
+                .iter()
+                .any(|hint| walk(hint, &mut unknown))
+                || walk(&signature.return_type_hint, &mut unknown)
+            {
+                return true;
+            }
+        }
+        false
+    }
+
     #[cold]
     #[inline(never)]
     fn method_contract_variance_dependency_names(
@@ -4570,6 +4635,9 @@ impl ExecutorGlobals {
         implementation: MethodDeclaration<'_>,
         linking_class: &ClassDef,
     ) -> Option<(Vec<String>, bool, bool)> {
+        if !self.method_contract_mentions_unknown_class(required, implementation, linking_class) {
+            return None;
+        }
         let mut referenced_classes = Vec::new();
         let mut referenced_seen = std::collections::HashSet::new();
         for declaration in [required, implementation] {

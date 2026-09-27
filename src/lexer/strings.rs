@@ -55,7 +55,21 @@ impl<'a> Lexer<'a> {
                 }
                 self.pos += 1;
             } else {
-                binary |= Self::push_utf8_bytes(self.src, &mut self.pos, &mut result)?;
+                // Copy the plain ASCII run in one step; only non-ASCII bytes
+                // need per-sequence validation.
+                let start = self.pos;
+                while self.pos < self.src.len() {
+                    let byte = self.src[self.pos];
+                    if byte == quote || byte == b'\\' || byte >= 0x80 {
+                        break;
+                    }
+                    self.pos += 1;
+                }
+                if self.pos > start {
+                    result.extend_from_slice(&self.src[start..self.pos]);
+                } else {
+                    binary |= Self::push_utf8_bytes(self.src, &mut self.pos, &mut result)?;
+                }
             }
         }
         if self.pos >= self.src.len() {

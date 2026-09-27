@@ -5413,7 +5413,7 @@ impl Compiler {
                         && !self.unit_constants.contains_key(&declaration_name)
                         && !self.known_constants.contains_key(&declaration_name)
                     {
-                        self.unit_constants
+                        Rc::make_mut(&mut self.unit_constants)
                             .insert(declaration_name.clone(), ct_val.clone());
                     }
                     (self.add_literal(ct_val), OpType::Const)
@@ -7905,9 +7905,9 @@ impl Compiler {
                             })
                             .collect();
                         for (constant, value) in constants {
-                            self.unit_constants
+                            Rc::make_mut(&mut self.unit_constants)
                                 .insert(format!("self::{constant}"), value.clone());
-                            self.unit_constants
+                            Rc::make_mut(&mut self.unit_constants)
                                 .insert(format!("{resolved_enum}::{constant}"), value);
                         }
                     }
@@ -8660,7 +8660,7 @@ impl Compiler {
                 ) else {
                     continue;
                 };
-                self.unit_constants
+                Rc::make_mut(&mut self.unit_constants)
                     .insert(format!("{}::{}", owner, constant.name), value.clone());
                 values[index] = Some(value);
                 remaining -= 1;

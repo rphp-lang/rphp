@@ -609,7 +609,12 @@ impl OpArray {
         if !cfg!(feature = "quick-loops") {
             return;
         }
-        if std::env::var_os("RPHP_DISABLE_QUICK_LOOPS").is_some() {
+        // The kill switch is process-wide; one environment probe serves every
+        // op array instead of a getenv per compiled function.
+        static QUICK_LOOPS_DISABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+        if *QUICK_LOOPS_DISABLED
+            .get_or_init(|| std::env::var_os("RPHP_DISABLE_QUICK_LOOPS").is_some())
+        {
             return;
         }
 

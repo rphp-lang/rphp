@@ -2970,6 +2970,41 @@ fn constant_expression_dependency_is_unavailable(reason: &str) -> bool {
             && reason.ends_with("\") is not a compile-time constant"))
 }
 
+/// The leading bytes of an expression's Debug rendering. Constant folding
+/// probes many expressions that are not constant, and formatting whole
+/// subtrees into rejection messages nobody reads dominated the probes.
+fn expr_debug_prefix(expr: &Expr) -> String {
+    struct Prefix {
+        text: String,
+        limit: usize,
+    }
+    impl std::fmt::Write for Prefix {
+        fn write_str(&mut self, part: &str) -> std::fmt::Result {
+            if self.text.len() >= self.limit {
+                return Err(std::fmt::Error);
+            }
+            let room = self.limit - self.text.len();
+            if part.len() <= room {
+                self.text.push_str(part);
+                Ok(())
+            } else {
+                let mut end = room;
+                while !part.is_char_boundary(end) {
+                    end -= 1;
+                }
+                self.text.push_str(&part[..end]);
+                Err(std::fmt::Error)
+            }
+        }
+    }
+    let mut prefix = Prefix {
+        text: String::new(),
+        limit: 48,
+    };
+    let _ = std::fmt::write(&mut prefix, format_args!("{expr:?}"));
+    prefix.text
+}
+
 #[derive(Debug, Clone)]
 pub struct RuntimeCallableConstantFactory {
     pub name: String,
@@ -3579,7 +3614,8 @@ pub struct Compiler {
     known_constants: Rc<HashMap<String, Value>>,
     /// Constants this unit declares or derives while compiling; layered over
     /// the shared table by `ConstantScope` instead of copying it.
-    unit_constants: HashMap<String, Value>,
+    /// Shared with child compilers, which never declare unit constants.
+    unit_constants: Rc<HashMap<String, Value>>,
     /// Canonical declaration names of enums whose case objects are available
     /// to the declaration-time constant folder in this compilation scope.
     known_enum_classes: Rc<HashSet<String>>,
@@ -3950,7 +3986,7 @@ impl Compiler {
             source_directory: String::new(),
             implicit_return_value: Value::null(),
             known_constants: Rc::new(HashMap::new()),
-            unit_constants: HashMap::new(),
+            unit_constants: Rc::default(),
             known_enum_classes: Rc::new(HashSet::new()),
             compiler_halt_offset: None,
             compiling_constant_expression: false,
@@ -4833,7 +4869,7 @@ impl Compiler {
             None,
             &mut HashSet::new(),
             &self.known_constants,
-            &mut self.unit_constants,
+            Rc::make_mut(&mut self.unit_constants),
             file_context,
             self.precision,
         );
@@ -4843,7 +4879,7 @@ impl Compiler {
             None,
             &mut HashSet::new(),
             &self.known_constants,
-            &mut self.unit_constants,
+            Rc::make_mut(&mut self.unit_constants),
             file_context,
             self.precision,
         );
@@ -6258,7 +6294,7 @@ impl Compiler {
             Self::find_compiler_halt_offset(stmts).and_then(|offset| i64::try_from(offset).ok())
         });
         if let Some(offset) = self.compiler_halt_offset {
-            self.unit_constants
+            Rc::make_mut(&mut self.unit_constants)
                 .insert("__COMPILER_HALT_OFFSET__".to_string(), Value::long(offset));
         }
 
@@ -8266,8 +8302,8 @@ impl Compiler {
             }
             Expr::ArrayAppendArgument { .. } => Err("Cannot use [] for reading".to_string()),
             _ => Err(format!(
-                "expression {:?} is not a compile-time constant",
-                expr
+                "expression {} is not a compile-time constant",
+                expr_debug_prefix(expr)
             )),
         }
     }

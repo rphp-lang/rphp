@@ -1467,11 +1467,14 @@ fn include_origin_index(
     op_array: &crate::compiler::OpArray,
     opline: &crate::vm::instruction::Instruction,
 ) -> usize {
-    let ip = op_array
-        .instructions
-        .iter()
-        .position(|instruction| std::ptr::eq(instruction, opline))
-        .expect("active include instruction belongs to its op array");
+    let base = op_array.instructions.as_ptr() as usize;
+    let offset = (opline as *const crate::vm::instruction::Instruction as usize).wrapping_sub(base);
+    let ip = offset / std::mem::size_of::<crate::vm::instruction::Instruction>();
+    debug_assert!(
+        offset % std::mem::size_of::<crate::vm::instruction::Instruction>() == 0
+            && ip < op_array.instructions.len(),
+        "active include instruction belongs to its op array"
+    );
     if op_array.source_line(ip).is_some() {
         ip
     } else {
