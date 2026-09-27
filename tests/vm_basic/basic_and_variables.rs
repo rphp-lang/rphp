@@ -32,6 +32,7 @@ fn test_echo_int() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -76,6 +77,7 @@ fn test_echo_negative() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -129,6 +131,7 @@ fn test_add_and_echo() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -176,6 +179,7 @@ fn test_overflow_to_float() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -220,6 +224,7 @@ fn test_timeout_interrupt() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -286,6 +291,7 @@ fn test_assign_and_echo_cv() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -355,6 +361,7 @@ fn test_assign_add_echo() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);

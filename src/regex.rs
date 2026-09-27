@@ -606,6 +606,9 @@ pub struct Regex {
     /// Literal that every match must start with, when it can be proven from
     /// the AST. Used to skip impossible start positions before backtracking.
     start_literal: Option<char>,
+    /// Every match must begin at the subject start (`^`/`\A` without the
+    /// multiline flag): after position 0 no further attempt can succeed.
+    anchored_start: bool,
     /// Whether boolean matching must retain capture contents for a later
     /// numeric or named backreference in the pattern.
     uses_backreferences: bool,
@@ -1051,6 +1054,7 @@ impl Regex {
             ));
         }
         let start_literal = required_start_literal(&ast);
+        let anchored_start = !flags.multiline && required_start_anchor(&ast);
         let uses_backreferences = contains_backreference(&ast)
             || parser
                 .subpatterns_by_index
@@ -1092,6 +1096,7 @@ impl Regex {
                 features,
             },
             start_literal,
+            anchored_start,
             uses_backreferences,
         })
     }
@@ -1135,6 +1140,9 @@ impl Regex {
         let mut budget = MatchBudget::new(self.effective_limits(limits));
         let mut start = 0;
         while start <= chars.len() {
+            if self.anchored_start && !self.flags.anchored && start > 0 {
+                break;
+            }
             if let Some(literal) = self.start_literal
                 && !self.flags.anchored
             {
@@ -1216,7 +1224,7 @@ impl Regex {
             if start < next_allowed_start {
                 continue;
             }
-            if self.flags.anchored && start > 0 {
+            if (self.flags.anchored || self.anchored_start) && start > 0 {
                 break;
             }
             if let Some(literal) = self.start_literal {
@@ -1328,6 +1336,35 @@ impl Regex {
             if count == limit {
                 result.push_str(&subject[byte_offsets.get(pos)..]);
                 break;
+            }
+            // Skip start positions that cannot match: past position 0 for a
+            // subject-anchored pattern, and positions not holding the required
+            // first literal. Skipped subject text is copied through unchanged.
+            if !retry_nonempty && !self.flags.anchored {
+                if self.anchored_start && pos > 0 {
+                    result.push_str(&subject[byte_offsets.get(pos)..]);
+                    break;
+                }
+                if let Some(literal) = self.start_literal {
+                    match chars[pos..]
+                        .iter()
+                        .position(|&candidate| chars_equal(candidate, literal, self.flags))
+                    {
+                        Some(relative_pos) => {
+                            if relative_pos > 0 {
+                                result.push_str(
+                                    &subject[byte_offsets.get(pos)
+                                        ..byte_offsets.get(pos + relative_pos)],
+                                );
+                                pos += relative_pos;
+                            }
+                        }
+                        None => {
+                            result.push_str(&subject[byte_offsets.get(pos)..]);
+                            break;
+                        }
+                    }
+                }
             }
             let mut groups = vec![None; self.num_groups + 1];
             let mut mark = None;
@@ -1477,6 +1514,9 @@ impl Regex {
         let start_literal = self.start_literal.filter(|_| !self.flags.anchored);
 
         while pos <= chars.len() {
+            if !retry_nonempty && self.anchored_start && !self.flags.anchored && pos > 0 {
+                break;
+            }
             if !retry_nonempty && let Some(literal) = start_literal {
                 let Some(relative_pos) = chars[pos..]
                     .iter()
@@ -1573,6 +1613,9 @@ impl Regex {
         let start_literal = self.start_literal.filter(|_| !self.flags.anchored);
 
         while pos <= chars.len() {
+            if !retry_nonempty && self.anchored_start && !self.flags.anchored && pos > 0 {
+                break;
+            }
             if !retry_nonempty && let Some(literal) = start_literal {
                 let Some(relative_pos) = chars[pos..]
                     .iter()
@@ -1999,6 +2042,31 @@ fn node_definitely_consumes(node: &Node) -> bool {
 
 /// Find a literal that must occur at the first consumed position. Returning
 /// None is always safe; Some is returned only when the AST proves the prefix.
+/// Whether every match must start at the subject start because the pattern
+/// begins with `^` or `\A` (before any input-consuming node). Only valid
+/// when the multiline flag is off, where `^` also matches after newlines.
+fn required_start_anchor(node: &Node) -> bool {
+    match node {
+        Node::Anchor(Anchor::Start | Anchor::AbsoluteStart) => true,
+        Node::Sequence(nodes) => {
+            for node in nodes {
+                match node {
+                    Node::Anchor(Anchor::Start | Anchor::AbsoluteStart) => return true,
+                    Node::Mark(_) | Node::ResetStart | Node::CaptureEnd { .. } => continue,
+                    _ => return required_start_anchor(node),
+                }
+            }
+            false
+        }
+        Node::Group { inner, .. } | Node::ScriptRun { inner, .. } => required_start_anchor(inner),
+        Node::Alternation(branches) => {
+            !branches.is_empty() && branches.iter().all(required_start_anchor)
+        }
+        Node::Quantifier { inner, min, .. } if *min > 0 => required_start_anchor(inner),
+        _ => false,
+    }
+}
+
 fn required_start_literal(node: &Node) -> Option<char> {
     match node {
         Node::Literal(ch) => Some(*ch),

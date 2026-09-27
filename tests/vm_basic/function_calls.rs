@@ -73,6 +73,7 @@ fn test_internal_function_call() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -127,6 +128,7 @@ fn test_user_function_call() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let add_one_func = make_user_function_with_args(fn_op_array, 1);
@@ -184,6 +186,7 @@ fn test_user_function_call() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(main_op_array);
@@ -233,6 +236,7 @@ fn test_undefined_function_error() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
 
     let main_func = make_user_function(op_array);
@@ -306,6 +310,7 @@ fn test_nested_calls() {
             block_counters: Vec::new(),
             block_plans: Vec::new(),
             ip_to_block: Vec::new(),
+            snapshot_producers: std::cell::OnceCell::new(),
         },
         1,
     );
@@ -392,6 +397,7 @@ fn test_nested_calls() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     let (mut eg, buf) = make_eg_with_capture();

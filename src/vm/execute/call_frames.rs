@@ -2727,6 +2727,15 @@ fn release_failed_expression_temps(
 /// just the temporary's GC admission. A changed CV/property, callback return,
 /// or fresh expression keeps the ordinary release path.
 #[cold]
+/// The three instruction kinds whose result temporary can be a live read
+/// snapshot of storage owned elsewhere.
+#[inline]
+fn snapshot_producer_kind(instruction: &Instruction) -> bool {
+    instruction.opcode == OpCode::FetchCvR
+        || (instruction.opcode == OpCode::FetchDimR && instruction._pad & FETCH_DIM_MUTABLE != 0)
+        || (instruction.opcode == OpCode::FetchObjR && instruction._pad & FETCH_OBJ_MODIFY != 0)
+}
+
 fn statement_temp_is_live_read_snapshot<'a>(
     eg: &ExecutorGlobals,
     op_array: &crate::compiler::OpArray,
@@ -2738,12 +2747,33 @@ fn statement_temp_is_live_read_snapshot<'a>(
     let same_owner = |owner: &Value| {
         owner.dereferenced().cycle_node().map(|(candidate, _)| candidate) == Some(identity)
     };
-    for instruction in &op_array.instructions {
-        if usize::from(instruction.result) != slot
-            || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
-        {
-            continue;
+    let producers = op_array.snapshot_producers.get_or_init(|| {
+        let slots = (op_array.num_cvs + op_array.num_temps) as usize;
+        let mut producers = vec![u32::MAX; slots];
+        for (index, instruction) in op_array.instructions.iter().enumerate() {
+            let result = usize::from(instruction.result);
+            if result >= slots
+                || !matches!(instruction.result_type, OpType::Tmp | OpType::Var)
+                || producers[result] != u32::MAX
+                || !snapshot_producer_kind(instruction)
+            {
+                continue;
+            }
+            producers[result] = index as u32;
         }
+        producers.into_boxed_slice()
+    });
+    let Some(&index) = producers.get(slot) else { return false; };
+    if index == u32::MAX {
+        return false;
+    }
+    // Runtime specialization may have rewritten the producer; the exact
+    // instruction kind decides, so a changed opcode simply proves nothing.
+    let Some(instruction) = op_array.instructions.get(index as usize) else { return false; };
+    if usize::from(instruction.result) != slot || !snapshot_producer_kind(instruction) {
+        return false;
+    }
+    {
         if instruction.opcode == OpCode::FetchCvR {
             return same_owner(read(instruction.op1, OpType::Cv));
         }

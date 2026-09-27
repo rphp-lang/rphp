@@ -77,6 +77,12 @@ pub struct OpArray {
     /// All CVs in this op_array: (cv_index, variable_name).
     /// Used by include to share the caller's full local scope.
     pub all_cvs: Vec<(u32, String)>,
+    /// Per frame slot, the first instruction whose result is that slot and
+    /// whose kind can prove a statement temporary is a live read snapshot
+    /// (`FetchCvR`, mutable `FetchDimR`, modifying `FetchObjR`); `u32::MAX`
+    /// when none. Built on first use so statement release does not rescan the
+    /// whole op array per heap temporary.
+    pub snapshot_producers: std::cell::OnceCell<Box<[u32]>>,
     /// Inline cache side table — one entry per instruction.
     /// Call initialization and generic guard opcodes use their own entries.
     pub cache: Vec<InlineCache>,
@@ -6387,6 +6393,7 @@ pub fn clone_trait_method_with_static_storage(
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     };
     let storage_name = op_array.name.clone();
     let mut bound_class_literal = None;

@@ -27775,6 +27775,21 @@ writes whose replaced arrays still need the pre-walk while WeakReference
 release work exists (8 %), statement temporary release (7 %) and PHPStan's
 own `token_get_all` calls (6 %).
 
+Two of those followed in the `scan-skips` checkpoint. Statement temporary
+release proved, for every heap temporary of every statement, whether the
+temporary was a live read snapshot by rescanning the whole op array for its
+producing instruction; each op array now builds that slot-to-producer table
+once (`snapshot_producers`) and the proof re-checks only the recorded
+instruction's kind. The native PCRE scanning loops tried a match at every
+subject position even for patterns that begin with `^`/`\A` (without the
+multiline flag) or with a required literal: `preg_replace`,
+`preg_replace_callback` and the shared capture visitor now stop after
+position 0 for subject-anchored patterns and jump to the next occurrence of
+the required first literal (`tests/e2e_regex_scan_skips.rs` checks anchors
+under the multiline flag, `\G`, the `A` modifier, empty matches,
+alternations, groups, marks, lookaheads and UTF-8 subjects against reference
+PHP).
+
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,
 `Phar::canWrite()`/`canCompress()`/`getSupportedSignatures()`, the class

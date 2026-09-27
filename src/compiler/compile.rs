@@ -4298,6 +4298,7 @@ impl Compiler {
             block_counters: Vec::new(),
             block_plans: Vec::new(),
             ip_to_block: Vec::new(),
+            snapshot_producers: std::cell::OnceCell::new(),
         };
         let user_function = make_user_function_typed(
             op_array,
@@ -6460,6 +6461,7 @@ impl Compiler {
                 block_counters: Vec::new(),
                 block_plans: Vec::new(),
                 ip_to_block: Vec::new(),
+                snapshot_producers: std::cell::OnceCell::new(),
             },
             compiler_halt_offset: self.compiler_halt_offset,
             functions,
@@ -13373,6 +13375,7 @@ impl Compiler {
                     block_counters: Vec::new(),
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
+                    snapshot_producers: std::cell::OnceCell::new(),
                 };
                 let mut user_func = make_user_function_typed(
                     op_array,

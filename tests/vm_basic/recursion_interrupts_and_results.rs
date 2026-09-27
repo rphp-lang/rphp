@@ -48,6 +48,7 @@ fn test_recursive_countdown() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     // f2: return f1()
@@ -88,6 +89,7 @@ fn test_recursive_countdown() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     // f3: return f2()
@@ -128,6 +130,7 @@ fn test_recursive_countdown() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     // main: echo f3()
@@ -172,6 +175,7 @@ fn test_recursive_countdown() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     let (mut eg, buf) = make_eg_with_capture();
@@ -225,6 +229,7 @@ fn test_interrupt_during_deep_call() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     // main: init_fcall f1, do_fcall, echo "2", return
@@ -268,6 +273,7 @@ fn test_interrupt_during_deep_call() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     let (mut eg, _buf) = make_eg_with_capture();
@@ -342,6 +348,7 @@ fn test_assign_result_used() {
         block_counters: Vec::new(),
         block_plans: Vec::new(),
         ip_to_block: Vec::new(),
+        snapshot_producers: std::cell::OnceCell::new(),
     });
 
     let (mut eg, buf) = make_eg_with_capture();

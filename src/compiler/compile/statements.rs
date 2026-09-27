@@ -3526,6 +3526,7 @@ impl Compiler {
                     block_counters: Vec::new(),
                     block_plans: Vec::new(),
                     ip_to_block: Vec::new(),
+                    snapshot_producers: std::cell::OnceCell::new(),
                 };
                 let mut user_func = make_user_function_typed(
                     op_array,
@@ -6050,6 +6051,7 @@ impl Compiler {
                         block_counters: Vec::new(),
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
+                        snapshot_producers: std::cell::OnceCell::new(),
                     };
                     // Methods have $this at CV 0 — add 1 to num_args to include $this
                     // and set this_offset=1 so arity check and visibility detection work correctly
@@ -6845,6 +6847,7 @@ impl Compiler {
                         block_counters: Vec::new(),
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
+                        snapshot_producers: std::cell::OnceCell::new(),
                     };
                     let mut user_func = make_user_function_typed(
                         op_array,
@@ -7229,6 +7232,7 @@ impl Compiler {
                         block_counters: Vec::new(),
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
+                        snapshot_producers: std::cell::OnceCell::new(),
                     };
                     let mut user_func = finalize_user_method(
                         make_user_function_typed(
@@ -8261,6 +8265,7 @@ impl Compiler {
                         block_counters: Vec::new(),
                         block_plans: Vec::new(),
                         ip_to_block: Vec::new(),
+                        snapshot_producers: std::cell::OnceCell::new(),
                     };
                     let mut user_func = finalize_user_method(
                         make_user_function_typed(
