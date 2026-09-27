@@ -7,6 +7,69 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit process-control lifecycle
+
+The `phpunit-process-control` checkpoint over `d275b265` implements the
+PHPUnit-observed `proc_open()` / `proc_close()` lifecycle. Reflection matches
+PHP 8.5 for all six `proc_open` parameters, including the `array|string`
+command, the untyped by-reference `$pipes` output, nullable defaults and the
+absence of a reflected return type. `proc_close($process): int` has the exact
+parameter and return metadata; both functions belong to `standard`.
+
+String commands execute through the platform shell, while command arrays spawn
+their argument vector directly without shell interpolation. The admitted
+descriptor surface is the ordinary child standard-stream contract used by
+PHPUnit: `0 => ['pipe', 'r']`, `1 => ['pipe', 'w']`,
+`2 => ['pipe', 'w']`, or an empty descriptor specification. Child pipes are
+request-owned stream resources and support the existing stream read, write,
+flush, close and EOF boundaries. The implementation also admits a working
+directory, an explicit replacement environment and the `suppress_errors`
+option. `proc_close()` closes the process-owned pipe resources before waiting,
+so a child waiting for stdin EOF cannot deadlock the caller, and returns the
+child exit status.
+
+Six original E2E cases cover exact Reflection, array and shell commands,
+working directory, environment, stdin/stdout/stderr, invalid command
+diagnostics, suppressed spawn failures, pipe lifetime and a real `PHP_BINARY
+-n -r` child. The three directly applicable upstream PHP 8.5 PHPTs
+(`proc_open`, `proc_open_array` and `proc_open_pipes2`) pass byte-exactly. The
+full Cargo matrix is green: default **7,001/0**, no-default **6,652/0**,
+generics-erased **7,072/0**, generics-reified **7,094/0**, all-features
+**7,145/0**, plus all-feature/all-target checking. The unsafe inventory is
+**1,627 blocks / 289 functions**.
+
+The stale full-corpus gate also exposed a parent regression in warmed scoped
+property writeback: dimension-unset on an uninitialized typed property could
+publish its internal no-op marker. The shared write-cache boundary now defers
+that marker to the canonical cold writer, and an original warm-cache regression
+test covers initialized followed by uninitialized receivers. The complete
+release Zend/lang ledger is **5,396 pass / 0 fail / 117 skip / 86 unsupported**,
+exact **+1/-0** against the parent, with no timeout or crash.
+PHPUnit 13.2.6 prints its version, and unmodified `sebastian/environment`
+successfully executes its process-backed runtime-settings path. A real one-test
+suite now reaches the independent missing core method
+`ReflectionMethod::getStartLine()`. The vendor inventory improves from 11 to
+**9 missing functions**, with **264 present / 0 call-shape mismatches** among
+273 observed builtins.
+
+Not claimed: descriptor files, descriptor resources, null descriptors,
+descriptors beyond the three standard streams, reversed pipe modes,
+`proc_get_status()`, `proc_terminate()` or a general process/signal extension.
+Performance was intentionally not measured by user direction.
+
+SHA-256 evidence: release
+`40c6fa021ae03af99bed9d64e1295e16534ae3373f5a52880dcd2b6f8f38e50d`;
+focused PHPT manifest
+`36a8fe7a2a207c1fba13b2e3e2e2e6ca8f3bea0d4b77060d0139a7fb0ca424a0`;
+Zend/lang manifest
+`4af0aacd7902ab7cef6dbb14bf38db5fd718ca2d67471984c9393ba3617488fb`;
+sorted pass set
+`ca89df8299d976be65a4f97181efe2db75b435505a6083bd1ba424881b4c10cb`;
+Cargo matrix
+`3244e2e6ef0ce84f497228e70386f6d42fa75996d19c828f3e872c5c27b9a8cf`;
+vendor audit summary
+`c4a30dc5098f32d15c11519a5e79b798c8e06251ba1cf77487d20bf5a8f4faa1`.
+
 ### PHPUnit INI registry projection
 
 The `phpunit-ini-get-all` checkpoint over `45550b71` implements

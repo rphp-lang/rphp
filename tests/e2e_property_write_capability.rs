@@ -3,6 +3,36 @@ mod common;
 use common::run_php;
 
 #[test]
+fn warmed_scoped_writeback_preserves_uninitialized_dimension_unset_noop() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+class ScopedUnsetBox {
+    public private(set) array $items;
+
+    public function initialize(): void {
+        $this->items = [];
+    }
+
+    public function unsetFirst(): void {
+        unset($this->items[0]);
+        echo "done\n";
+    }
+}
+
+$initialized = new ScopedUnsetBox();
+$initialized->initialize();
+$initialized->unsetFirst();
+
+$uninitialized = new ScopedUnsetBox();
+$uninitialized->unsetFirst();
+"#,
+        ),
+        "done\ndone\n",
+    );
+}
+
+#[test]
 fn restricted_properties_distinguish_nested_object_mutation_from_storage_writes() {
     assert_eq!(
         run_php(

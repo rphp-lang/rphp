@@ -1421,6 +1421,58 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     );
     reg!("shell_exec", fn_shell_exec, 1, 1, "command");
     reg_ref!("system", fn_system, 2, 1, 0b10, "command", "result_code");
+    reg_typed_ref!(
+        "proc_open",
+        fn_proc_open,
+        6,
+        3,
+        0b100,
+        [
+            "command",
+            "descriptor_spec",
+            "pipes",
+            "cwd",
+            "env_vars",
+            "options"
+        ],
+        [
+            ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String]),
+            ParamTypeHint::Array,
+            ParamTypeHint::None,
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+        ],
+        ParamTypeHint::None
+    );
+    let proc_open = eg
+        .find_function("proc_open")
+        .expect("proc_open was just registered");
+    eg.register_internal_function_reflection_metadata(
+        proc_open,
+        vec![
+            None,
+            None,
+            None,
+            Some(Value::null()),
+            Some(Value::null()),
+            Some(Value::null()),
+        ],
+        "standard",
+    );
+    reg_typed!(
+        "proc_close",
+        fn_proc_close,
+        1,
+        1,
+        ["process"],
+        [ParamTypeHint::None],
+        ParamTypeHint::Int
+    );
+    let proc_close = eg
+        .find_function("proc_close")
+        .expect("proc_close was just registered");
+    eg.register_internal_function_reflection_metadata(proc_close, vec![None], "standard");
 
     // --- Regex functions ---
     reg_typed_ref!(

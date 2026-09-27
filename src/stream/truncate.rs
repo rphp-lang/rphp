@@ -24,9 +24,9 @@ impl PhpStream {
                 Ok(())
             }
             StreamBackend::Temp(temp) => temp.truncate(length),
-            StreamBackend::Standard(_) => Err(io::Error::new(
+            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "standard stream does not support truncation",
+                "stream does not support truncation",
             )),
         }
     }

@@ -36,31 +36,44 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-process-control` checkpoint over `d275b265` adds PHPUnit's paired
+`proc_open()` / `proc_close()` lifecycle. It provides PHP 8.5-exact Reflection,
+direct argv and shell commands, standard stdin/stdout/stderr pipe descriptors,
+working-directory and explicit-environment setup, suppressed spawn errors,
+request-owned child stream resources and close-before-wait semantics. The
+contract is deliberately bounded to PHPUnit's standard-pipe use: file/resource
+descriptors, extra descriptors, status/termination APIs and general signal
+control remain unclaimed.
+
+Six original E2E cases and the three directly applicable upstream PHP 8.5
+PHPTs pass. The complete default/no-default/erased/reified/all-features Cargo
+matrix and all-target check are green, the unsafe ceiling is unchanged, and
+the release Zend/lang ledger is **5,396 pass / 0 fail / 117 skip / 86
+unsupported**, exact **+1/-0** against the parent. The gain repairs a stale
+warmed property-write regression exposed by the final full-corpus gate and is
+covered by an original initialized/uninitialized cache-order test. Performance
+remains deferred by user direction.
+
+PHPUnit 13.2.6 prints its version and unmodified `sebastian/environment` now
+executes the process-backed runtime-settings path. A real one-test suite reaches
+the separate core boundary `ReflectionMethod::getStartLine()`. Across 273
+vendor-observed builtins, the inventory improves to **264 present / 9 missing /
+0 call-shape mismatches**. The remaining library priorities are PCNTL signal
+control, `tmpfile()`, `fsockopen()`, `mt_srand()` and the small POSIX identity
+surface; the Reflection source-location blocker belongs to the core workstream.
+See [exact evidence](compatibility.md).
+
+### Preceding PHPUnit INI registry checkpoint
+
 The `phpunit-ini-get-all` checkpoint over `45550b71` adds the complete
 PHPUnit-observed `ini_get_all(?string $extension = null, bool $details =
-true): array|false` contract. RPHP now projects its 44 honestly admitted INI
-directives in PHP's alphabetical order, including distinct startup/global and
-request-local values, nullable compiled defaults, exact access masks and
-case-sensitive module filtering. Unknown modules produce PHP's warning and
-false result; admitted modules with no directives return an empty array.
-
-Three original E2E tests cover Reflection, detailed and scalar projections,
-startup/runtime mutation, extension ownership, warning and strict/weak type
-boundaries. The adjacent 64-case INI/PCRE/call-shape packet, five focused Cargo
-configurations, all-feature/all-target compile check and the 865-test library
-suite pass. The complete Zend/lang release ledger remains byte-identical at
-**5,396 pass / 0 fail / 117 skip / 86 unsupported**. The sole upstream
-`ini_get_all` PHPT remains an explicit no-JIT skip because its fixture requires
-`PCRE_JIT_SUPPORT`; RPHP's original test exercises the corresponding two-entry
-PCRE registry instead.
-
-PHPUnit 13.2.6's real `GlobalState::getIniSettingsAsString()` path now runs on
-RPHP. Its static vendor inventory improves to **262 present / 11 missing / 0
-call-shape mismatches** across 273 observed builtins, and `ini_get_all()` is
-Reflection-exact. The next independent library boundary exposed by
-`sebastian/environment` is the paired `proc_open()` / `proc_close()` lifecycle;
-smaller independent follow-ups remain `tmpfile()` and `mt_srand()`. Performance
-remains deferred by user direction. See [exact evidence](compatibility.md).
+true): array|false` contract. RPHP projects its 44 honestly admitted INI
+directives with distinct startup/global and request-local values, nullable
+compiled defaults, exact access masks and case-sensitive module filtering.
+The full Zend/lang release ledger remains byte-identical at **5,396 pass / 0
+fail / 117 skip / 86 unsupported**. Its static vendor inventory is **262
+present / 11 missing / 0 call-shape mismatches** across 273 observed builtins.
+See [exact evidence](compatibility.md).
 
 ### Preceding PHPUnit hash equality checkpoint
 

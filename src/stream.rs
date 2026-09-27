@@ -3,6 +3,7 @@ use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
 #[cfg(test)]
 use std::path::Path;
+use std::process::{ChildStderr, ChildStdin, ChildStdout};
 
 #[cfg(feature = "stream-context")]
 use crate::value::PhpArray;
@@ -121,6 +122,13 @@ enum StreamBackend {
     Memory(Cursor<Vec<u8>>),
     Temp(TempStream),
     Standard(StandardStream),
+    ProcessPipe(ProcessPipe),
+}
+
+enum ProcessPipe {
+    Stdin(ChildStdin),
+    Stdout(ChildStdout),
+    Stderr(ChildStderr),
 }
 
 pub(crate) enum StreamStat {
@@ -206,7 +214,9 @@ impl PhpStream {
                 std::io::stdout().is_terminal()
             }
             StreamBackend::Standard(StandardStream::Error) => std::io::stderr().is_terminal(),
-            StreamBackend::Memory(_) | StreamBackend::Temp(_) => false,
+            StreamBackend::Memory(_) | StreamBackend::Temp(_) | StreamBackend::ProcessPipe(_) => {
+                false
+            }
         }
     }
 
@@ -299,6 +309,67 @@ impl PhpStream {
             #[cfg(feature = "stream-context")]
             context: None,
         }
+    }
+
+    fn process_pipe(backend: ProcessPipe, mode: StreamMode, reported_mode: &'static str) -> Self {
+        Self {
+            backend: StreamBackend::ProcessPipe(backend),
+            mode,
+            reported_mode: Cow::Borrowed(reported_mode),
+            uri: Cow::Borrowed("pipe"),
+            eof: false,
+            read_buffer: None,
+            plain_file_io: false,
+            memory_append_after_truncate: false,
+            eager_eof: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
+        }
+    }
+
+    pub(crate) fn process_stdin(stdin: ChildStdin) -> Self {
+        Self::process_pipe(
+            ProcessPipe::Stdin(stdin),
+            StreamMode {
+                read: false,
+                write: true,
+                append: false,
+                create: false,
+                truncate: false,
+                exclusive: false,
+            },
+            "w",
+        )
+    }
+
+    pub(crate) fn process_stdout(stdout: ChildStdout) -> Self {
+        Self::process_pipe(
+            ProcessPipe::Stdout(stdout),
+            StreamMode {
+                read: true,
+                write: false,
+                append: false,
+                create: false,
+                truncate: false,
+                exclusive: false,
+            },
+            "r",
+        )
+    }
+
+    pub(crate) fn process_stderr(stderr: ChildStderr) -> Self {
+        Self::process_pipe(
+            ProcessPipe::Stderr(stderr),
+            StreamMode {
+                read: true,
+                write: false,
+                append: false,
+                create: false,
+                truncate: false,
+                exclusive: false,
+            },
+            "r",
+        )
     }
 
     pub fn open(path: &str, mode: &str) -> io::Result<Self> {
@@ -498,6 +569,12 @@ impl PhpStream {
                     io::ErrorKind::PermissionDenied,
                     "standard stream is not readable",
                 )),
+                StreamBackend::ProcessPipe(ProcessPipe::Stdout(pipe)) => pipe.read(buffer),
+                StreamBackend::ProcessPipe(ProcessPipe::Stderr(pipe)) => pipe.read(buffer),
+                StreamBackend::ProcessPipe(ProcessPipe::Stdin(_)) => Err(io::Error::new(
+                    io::ErrorKind::PermissionDenied,
+                    "process stdin is not readable",
+                )),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -514,6 +591,10 @@ impl PhpStream {
             StreamBackend::Standard(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "standard stream does not support seeking",
+            )),
+            StreamBackend::ProcessPipe(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "process pipe does not support seeking",
             )),
         }
     }
@@ -994,6 +1075,13 @@ impl PhpStream {
                     io::ErrorKind::PermissionDenied,
                     "standard stream is not writable",
                 )),
+                StreamBackend::ProcessPipe(ProcessPipe::Stdin(pipe)) => pipe.write(buffer),
+                StreamBackend::ProcessPipe(ProcessPipe::Stdout(_) | ProcessPipe::Stderr(_)) => {
+                    Err(io::Error::new(
+                        io::ErrorKind::PermissionDenied,
+                        "process output is not writable",
+                    ))
+                }
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -1034,6 +1122,8 @@ impl PhpStream {
                 io::stdout().lock().flush()
             }
             StreamBackend::Standard(StandardStream::Error) => io::stderr().lock().flush(),
+            StreamBackend::ProcessPipe(ProcessPipe::Stdin(pipe)) => pipe.flush(),
+            StreamBackend::ProcessPipe(ProcessPipe::Stdout(_) | ProcessPipe::Stderr(_)) => Ok(()),
         }
     }
 
@@ -1076,12 +1166,13 @@ impl PhpStream {
     pub fn lock_exclusive(&self) -> io::Result<()> {
         match &self.backend {
             StreamBackend::File(file) => file.lock(),
-            StreamBackend::Memory(_) | StreamBackend::Temp(_) | StreamBackend::Standard(_) => {
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "exclusive locks require a regular file",
-                ))
-            }
+            StreamBackend::Memory(_)
+            | StreamBackend::Temp(_)
+            | StreamBackend::Standard(_)
+            | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "exclusive locks require a regular file",
+            )),
         }
     }
 
@@ -1096,12 +1187,13 @@ impl PhpStream {
                 self.eof = false;
                 Ok(())
             }
-            StreamBackend::Memory(_) | StreamBackend::Temp(_) | StreamBackend::Standard(_) => {
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "truncate after locking requires a regular file",
-                ))
-            }
+            StreamBackend::Memory(_)
+            | StreamBackend::Temp(_)
+            | StreamBackend::Standard(_)
+            | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "truncate after locking requires a regular file",
+            )),
         }
     }
 
@@ -1116,7 +1208,7 @@ impl PhpStream {
                 true
             }
             StreamBackend::Temp(temp) => temp.seek(SeekFrom::Start(0)).is_ok(),
-            StreamBackend::Standard(_) => false,
+            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) => false,
         };
         if succeeded {
             self.discard_prefetched();
@@ -1147,9 +1239,9 @@ impl PhpStream {
             StreamBackend::File(file) => file.stream_position(),
             StreamBackend::Memory(memory) => Ok(memory.position()),
             StreamBackend::Temp(temp) => temp.position(),
-            StreamBackend::Standard(_) => Err(io::Error::new(
+            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
-                "standard stream does not expose a position",
+                "stream does not expose a position",
             )),
         }?;
         Ok(position.saturating_sub(self.unread_len() as u64))
@@ -1173,6 +1265,7 @@ impl PhpStream {
             StreamBackend::Memory(_) => (Some(false), Some(true), Some(self.eof), "PHP", "MEMORY"),
             StreamBackend::Temp(_) => (None, None, None, "PHP", "TEMP"),
             StreamBackend::Standard(_) => (Some(false), Some(true), Some(self.eof), "PHP", "STDIO"),
+            StreamBackend::ProcessPipe(_) => (Some(false), Some(true), Some(self.eof), "", "STDIO"),
         };
         StreamMetadata {
             timed_out,
@@ -1182,7 +1275,10 @@ impl PhpStream {
             stream_type,
             mode: &self.reported_mode,
             unread_bytes: self.unread_len(),
-            seekable: !matches!(self.backend, StreamBackend::Standard(_)),
+            seekable: !matches!(
+                self.backend,
+                StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_)
+            ),
             uri: &self.uri,
         }
     }
@@ -1213,6 +1309,7 @@ impl PhpStream {
                     Ok(None)
                 }
             }
+            StreamBackend::ProcessPipe(_) => Ok(None),
         }
     }
 

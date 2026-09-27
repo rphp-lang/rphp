@@ -9684,9 +9684,31 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         )
                     };
                     let ic = &op_array.cache[ip];
+                    // A preceding indirect property operation may have
+                    // mutated the exposed storage already, or deliberately
+                    // completed as a no-op (for example unset of a dimension
+                    // on an uninitialized typed property). The canonical cold
+                    // writer consumes this marker and retires its temporary;
+                    // never let a warmed write cache publish that sentinel as
+                    // a new property value.
+                    let indirect_modify_completed = opline._pad & ASSIGN_OBJ_MODIFY != 0
+                        && unsafe {
+                            // SAFETY: `frame` is the live execute frame for
+                            // this opcode, and the compiler emitted `result`
+                            // plus `result_type` as an operand in `op_array`.
+                            // The temporary remains live until AssignObjProp
+                            // consumes or retires it below.
+                            (&*(*frame).get_op_ptr(
+                                opline.result as u32,
+                                opline.result_type,
+                                op_array,
+                            ))
+                            .is_indirect_property_modification_result()
+                        };
                     let mut cache_matches = ic.class_id == obj_class_id
                         && obj_class_id != 0
-                        && dynamic_name_matches;
+                        && dynamic_name_matches
+                        && !indirect_modify_completed;
                     // Lazy shells share the ordinary class/layout cache. Only
                     // still-undef slots need the cold sidecar guard; ordinary
                     // warmed writes retain the allocation-free cache hit.
