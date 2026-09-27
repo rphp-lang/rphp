@@ -4735,6 +4735,13 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         OpCode::IsSmallerOrEqual => l1 <= l2,
                         _ => unreachable!(),
                     }
+                } else if matches!(opline.opcode, OpCode::IsEqual | OpCode::IsNotEqual)
+                    && let Some(equal) = long_string_loose_equal(op1, op2)
+                {
+                    // `switch` over token ids meets string tokens constantly;
+                    // decide integer/string equality before the numeric pair
+                    // probe parses the string a first time.
+                    if opline.opcode == OpCode::IsEqual { equal } else { !equal }
                 } else if let Some((d1, d2)) = comparison_numeric_pair(op1, op2) {
                     match opline.opcode {
                         OpCode::IsEqual => d1 == d2,
@@ -4752,12 +4759,6 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         OpCode::IsSmallerOrEqual => ordering != std::cmp::Ordering::Greater,
                         _ => unreachable!(),
                     }
-                } else if matches!(opline.opcode, OpCode::IsEqual | OpCode::IsNotEqual)
-                    && let Some(equal) = long_string_loose_equal(op1, op2)
-                {
-                    // `switch` over token ids meets string tokens constantly;
-                    // the generic comparison formatted the integer per case.
-                    if opline.opcode == OpCode::IsEqual { equal } else { !equal }
                 } else {
                     let result = prepared_comparison_result(
                         eg, frame, op_array, opline, opline.opcode, op1, op2,
@@ -10828,8 +10829,32 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
             }
 
             OpCode::FetchConst => {
-                op_fetch_const(eg, frame, op_array, opline)?;
-                resume_pending_exception!();
+                // A site that already resolved a scalar constant replays it
+                // from its cache word; define(), deprecated built-ins and
+                // deprecation-metadata requests keep the canonical path.
+                let ip = (opline as *const Instruction as usize
+                    - op_array.instructions.as_ptr() as usize)
+                    / std::mem::size_of::<Instruction>();
+                let cached = if opline.extended_value != 1
+                    && opline._pad & crate::vm::instruction::FETCH_CONST_DEPRECATED_BUILTIN == 0
+                    && !eg.constant_deprecation_metadata_present
+                {
+                    op_array.cache[ip].scalar_constant()
+                } else {
+                    None
+                };
+                if let Some(value) = cached {
+                    // SAFETY: the compiler-emitted result slot belongs to the
+                    // live frame; a scalar carries no owner to release.
+                    unsafe {
+                        let result_ptr =
+                            (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                        frame_result_set(frame, result_ptr, opline.result_type, value);
+                    }
+                } else {
+                    op_fetch_const(eg, frame, op_array, opline)?;
+                    resume_pending_exception!();
+                }
             }
 
             OpCode::BindDefaultParam => {

@@ -3417,6 +3417,11 @@ fn push_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize, receiver:
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn take_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize) -> Option<Value> {
+    // Ordinary calls carry no pending receiver; answer before touching the
+    // stack representation.
+    if eg.pending_invoke_this.is_none() {
+        return None;
+    }
     let matches_current = {
         let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
         let key_index = stack.len().checked_sub(2)?;

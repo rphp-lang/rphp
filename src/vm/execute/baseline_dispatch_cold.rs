@@ -5522,13 +5522,20 @@ fn op_fetch_const(
         // `opline` lies inside this op array so its same-index cache entry
         // exists; the cache reference is not used once the deprecation
         // paths below re-derive their own.
-        let (name_val, site_cache) = unsafe {
+        // SAFETY: operand 2 is an in-bounds constant literal exactly when the
+        // namespace-fallback marker is set, so its read is in bounds too.
+        let (name_val, site_cache, fallback) = unsafe {
             let ip = (opline as *const Instruction)
                 .offset_from(op_array.instructions.as_ptr()) as usize;
             (
                 &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
                 &mut *(op_array.cache.as_ptr().add(ip)
                     as *mut crate::vm::instruction::InlineCache),
+                (opline.extended_value == 2).then(|| {
+                    (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array))
+                        .as_str()
+                        .unwrap_or("")
+                }),
             )
         };
         let name = name_val.as_str().unwrap_or("");
@@ -5541,13 +5548,6 @@ fn op_fetch_const(
         let value = if let Some(value) = cached {
             value
         } else {
-            // SAFETY: the compiler emits operand 2 as an in-bounds constant
-            // literal exactly when the namespace-fallback marker is set.
-            let fallback = (opline.extended_value == 2).then(|| unsafe {
-                (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array))
-                    .as_str()
-                    .unwrap_or("")
-            });
             // Like PHP's run-time cache, a site keeps the spelling that first
             // resolved: a namespaced constant defined later does not displace
             // the global fallback this site already took.
