@@ -15,44 +15,75 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
 - Cross-thread free 2,5 % (parser vlákno alokuje AST, hlavní vlákno uvolňuje).
 - glibc malloc/free = 16 % instrukcí a ~20 % času cold běhu.
 
-## Architektura v1
+## Architektura v7 (aktuální stav větve)
 
 - **Rezervace adresního prostoru**: jeden `mmap(MAP_NORESERVE)` 64 GiB
-  (fallback poloviční až 256 MiB). Stránky 64 KiB se odřezávají sekvenčně
-  (`PAGE_CURSOR`). Vlastnictví bloku = jedno porovnání rozsahu
-  (`in_pool`), bez hlaviček bloků.
-- **Velikostní třídy** (20): 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112,
-  128, 152, 168, 192, 256, 384, 512, 768, 1024. Dvě konstantní tabulky
-  `(size+7)/8 → třída` (pro align ≤ 8 a pro align 16, kde třída musí být
-  násobek 16). Nad 1 KiB nebo align > 16 → systémový alokátor (bloky leží
-  mimo rezervaci, `dealloc` je rozliší rozsahem).
-- **Stránka** = jedna třída; hlavička 64 B na začátku: třída, vlastník (tid,
-  0 = osiřelá), atomický remote free list, bump kurzor, konec, link do
-  seznamu stránek vlastníka, ukazatel na heap vlastníka, link do fronty
-  „stránky s remote free“, příznak zařazení.
-- **Thread heap** (`thread_local!` bez destruktoru → přímý `fs:` přístup):
-  per třída LIFO free list (intrusive, první slovo bloku), aktuální stránka
-  pro bump, seznam stránek; `mode` (pool/system) zkopírovaný do TLS bloku;
-  atomická fronta stránek s remote free.
-- **Rychlá cesta alloc**: TLS → tabulka tříd → pop free listu; když prázdný,
-  bump z aktuální stránky; jinak tail-call do studeného `refill_or_system`
-  (drain fronty remote stránek → adopce osiřelé stránky → nová stránka →
-  systémový fallback).
-- **Rychlá cesta free**: rozsah → hlavička stránky → `owner == tid` → push
-  na lokální free list; jinak CAS push na remote list stránky a při prvním
-  bloku zařazení stránky do fronty vlastníka (`owner_heap`).
+  (fallback poloviční až 256 MiB). Dolní polovina = region malých stránek
+  (64 KiB), horní polovina = region středních stránek (1 MiB). Vlastnictví
+  bloku = jedno odečtení a porovnání s rozsahem (`pool_offset`), hlavička
+  stránky = maska podle regionu; žádné hlavičky bloků. Tři rozsahové
+  hodnoty leží v jedné 64 B statice (`RANGE`), takže rychlá cesta bez LTO
+  dělá jediný GOT load.
+- **Velikostní třídy** (40): malé 8, 16, 24, 32, 40, 48, 56, 64, 80, 96,
+  112, 128, 152, 168, 192, 256, 384, 512, 768, 1024 (dvě konstantní tabulky
+  `(size+7)/8 → třída`, pro align ≤ 8 a pro align 16); střední 1280 … 32768
+  ve čtyřech krocích na oktávu (1,25×, 1,5×, 1,75×, 2×), třída spočtená
+  z `bsr`. Nad 32 KiB nebo align > 16 → systémový alokátor (bloky leží mimo
+  rezervaci).
+- **Stránka** = jedna třída; hlavička 128 B, horké owner-only položky
+  v prvním řádku cache: `local_free` (LIFO uvolněných bloků vlastníka),
+  `bump`, `end`, `used` (počet vydaných bloků), `class`; dále
+  `owner_state` (adresa heapu vlastníka | příznak QUEUED | počet
+  právě zařazujících remote uvolňovatelů), atomický `remote_free` list,
+  `next_queued` (fronta remote stránek u vlastníka nebo globální pool
+  volných stránek), `listing` (0 nezařazena / 1 v seznamu dostupných / 2
+  aktuální stránka třídy), oboustranně vázané seznamy všech stránek vlastníka
+  a dostupných stránek třídy.
+- **Thread heap** (`thread_local!` bez destruktoru, 64 B zarovnaný): per
+  třída aktuální stránka a seznam dalších dostupných stránek, seznam všech
+  stránek, `mode`, atomická fronta stránek s remote free.
+- **Rychlá cesta alloc**: `class_for` → aktuální stránka třídy → pop
+  z `local_free` stránky, jinak bump, `used += 1`; při vyčerpání tail-call
+  do studeného `alloc_slow` (rozhodnutí režimu při prvním použití → `refill`:
+  drain fronty remote stránek → aktuální stránka → další dostupná stránka →
+  adopce osiřelé → recyklovaná z globálního poolu → nová z rezervace →
+  systémový fallback). Režim se v horké cestě nečte: v režimu system jsou
+  všechny aktuální stránky null.
+- **Rychlá cesta free**: offset v rezervaci → hlavička → `owner_state`
+  patří našemu heapu → push na `local_free` stránky, `used -= 1`; stránka,
+  která tím poprvé získala volný blok, se zařadí mezi dostupné; stránka,
+  která se vyprázdnila a není aktuální, jde do globálního poolu (`recycle_page`).
+  Cizí blok → CAS push na `remote_free` stránky a (není-li už QUEUED)
+  zařazení stránky do fronty vlastníka pod ochranou počtu pusherů.
+- **Protokol vlastnictví** (řeší závod remote free × zánik vlastníka):
+  remote uvolňovatel CAS-em nastaví QUEUED a zvýší počet pusherů, teprve
+  pak sáhne na heap vlastníka a poté počet sníží. Vlastník před vzdáním se
+  stránky (`detach`/`try_detach`) čeká na nulový počet pusherů a CAS-em
+  nuluje stav; `try_detach` odmítne, dokud je stránka QUEUED, aby ve frontě
+  nezůstal záznam na stránku, kterou už nevlastní.
+- **Recyklace stránek**: plně volná neaktuální stránka → per-region
+  lock-free pool volných stránek (znovu použitelný libovolnou třídou,
+  hlavička se přepíše). Nad rozpočet 16 MiB rezidentních stránek na region
+  se blokový prostor stránky vrací OS přes `madvise(MADV_DONTNEED)`.
 - **Zánik vlákna**: `EXIT_GUARD` (TLS s destruktorem, registrovaný při
-  prvním použití) přesune všechny stránky do globálního orphan poolu
-  (mutex; přeskočen, když `ORPHAN_COUNT == 0`), free listy vrátí do remote
-  listů stránek. Adoptující vlákno přebírá vlastnictví a remote bloky.
+  první stránce) přesune plně volné stránky do poolu a ostatní do orphan
+  seznamu (mutex, přeskočen při `ORPHAN_COUNT == 0`), přepne vlákno do
+  režimu system (pozdější TLS destruktory alokují u systému, nic neuniká).
 - **realloc**: ve stejné třídě vrací tentýž blok; jinak alloc+copy+free.
   Systémový blok zůstává u systému.
+- **Debug režim** (`--features php-heap-debug`): uvolněný blok otráven
+  0xDE, druhé slovo nese značku; opakované uvolnění téhož bloku → abort
+  s hlášením.
 - **`RPHP_HEAP=system`** přepne vše na systémový alokátor (A/B bez rebuildu).
+- **`--features php-heap-asm`**: ruční x86-64 sekvence rychlé cesty alloc
+  (offsety hlavičky jsou přišpendlené `const` asserty).
 
 Invarianty: blok patří přesně jedné stránce; stránka má nejvýš jednoho
-vlastníka; osiřelá stránka má `owner == 0` a `owner_heap == 0`, její remote
-list vlastní adoptující; free listy vlákna obsahují jen bloky stránek, které
-vlastní; alokátor nikdy neunwinduje a nealokuje přes sebe.
+vlastníka (`owner_state & !0x3F`); `used == 0` znamená, že nikde neexistuje
+vydaný blok stránky (remote bloky se odečítají až při absorpci); stránka je
+ve frontě remote vlastníka jen s nastaveným QUEUED a jen dokud je jeho;
+osiřelá/poolovaná stránka má stav 0 a její remote list přebírá adoptující;
+alokátor nikdy neunwinduje a nealokuje přes sebe.
 
 ## Měření (stejný stroj, sekvenčně; zátěž ostatních agentů kolísá)
 
@@ -85,31 +116,31 @@ vlákna, mimalloc alokuje ze seznamu jedné stránky, dokud ji nevyčerpá
 v1 (refill při každém bumpu, průchod všech stránek) byl 8× pomalejší než
 glibc — připomínka, že politika, ne instrukce, rozhoduje.
 
-## Co je ještě otevřené (podle review)
+## Co je ještě otevřené
 
-1. **Vracení paměti OS / plně volné stránky**: v1 stránky neuvolňuje. Nutné
-   pro dlouhé běhy: per-page počet použitých bloků (owner only) + `madvise`
-   nebo návrat stránky do globálního volného seznamu stránek.
-2. **Zánik vlákna po `EXIT_GUARD`**: alokace v pozdějších TLS destruktorech
-   téhož vlákna vytvoří stránky, které už nikdo neosiří (malý, ohraničený
-   únik). Řešení: druhý průchod nebo lazy orphaning při dalším refillu.
-3. **Velké bloky**: systémový alokátor; pro FPM-styl a velké pole zvážit
-   vlastní správu > 1 KiB (segmenty, bitmapy).
-4. **Typované pooly a inline rychlá cesta na konkrétních místech**
+1. **Typované pooly a inline rychlá cesta na konkrétních místech**
    (`Rc<String>`, `Rc<PhpArray>`, objekty): obchází i `Layout` výpočet.
-5. **Jednoalokační řetězce** (hlavička + bajty): největší snížení počtu
+2. **Jednoalokační řetězce** (hlavička + bajty): největší snížení počtu
    alokací (2,55 M/běh); vyžaduje vlastní owner místo `Rc<String>` a
-   společný kontrakt s klíči polí, cache a účtováním.
-6. **ASM varianta rychlé cesty**: porovnat disassembler Rust verze
-   s ruční sekvencí na stejné struktuře; přijmout jen s měřitelným zlepšením.
-7. **Debug režim**: kanárky, otrávení, detekce double-free; sanitizer nezná
-   hranice slotů uvnitř stránky.
-8. **Účtování `request_memory`**: nezávislé na alokátoru; vlastní string
+   společný kontrakt s klíči polí, cache a účtováním (`as_string_mut`
+   vrací `&mut String` na stovkách míst).
+3. **Bloky > 32 KiB**: systémový alokátor (0,1 % alokací); vlastní správa
+   by dávala smysl až pro FPM-styl workloady.
+4. **Remote free na stránce, jejíž vlastník už nerefilluje**: bloky čekají
+   v `remote_free`, dokud vlastník nepotřebuje paměť (nebo nezanikne).
+5. **Prolog `__rust_alloc`**: LLVM ukládá argumenty do callee-saved
+   registrů (3 push/pop) kvůli tail-callům do studených cest; přeuspořádání
+   argumentů nepomohlo. Fat LTO (`max-perf`) navíc odstraní GOT nepřímost.
+6. **Účtování `request_memory`**: nezávislé na alokátoru; vlastní string
    owner by mohl účtovat přímo místo weak hash mapy.
 
 ## Testy
 
-`src/heap/tests.rs`: tabulka tříd, LIFO reuse, zeroed/align kontrakty,
-realloc, stress 200 k operací s náhodnými velikostmi a kontrolou obsahu.
-`tests/heap_adoption.rs` (vlastní proces): adopce stránek zaniklého vlákna.
+`src/heap/tests.rs`: tabulka tříd (malé i střední), LIFO reuse, zeroed/align
+kontrakty, realloc, recyklace prázdných stránek přes pool, střední třídy na
+středních stránkách, stress 200 k operací s náhodnými velikostmi a kontrolou
+obsahu. `tests/heap_adoption.rs` (vlastní proces): adopce stránek zaniklého
+vlákna. `tests/heap_remote_free.rs` (vlastní proces): ping-pong producent /
+4 uvolňující vlákna, návrat remote bloků vlastníkovi. Vše běží i s
+`php-heap-asm` a `php-heap-debug`.
 Celá default e2e sada běží pod heapem (globální alokátor je v lib).

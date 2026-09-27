@@ -29,6 +29,7 @@ default = [
 quick-loops = []
 php-heap = []
 php-heap-asm = ["php-heap"]
+php-heap-debug = ["php-heap"]
 vm-stats = []
 jit-prototype = []
 coroutines = []
