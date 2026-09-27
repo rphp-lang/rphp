@@ -36,6 +36,24 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `phpunit-xmlwriter-extension` checkpoint over `08703b60` admits the PHP
+8.5 CLI XMLWriter surface through an independently implemented serializer.
+All 42 procedures and 45 class methods expose exact Reflection contracts;
+memory, URI and stream targets cover namespace, DTD, encoding, flush,
+invalidation and subclass-constructor lifetimes. The complete upstream packet
+is **50 pass / 0 fail / 1 XMLReader-dependent skip**.
+
+The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip / 99
+unsupported**, exact **+0/-0**, with an identical pass set. Five Cargo
+variants, all-targets, Composer S0, unsafe/static and runner gates pass.
+Performance is deferred by user direction. The staged PHPUnit startup surface
+now finds Ctype, Filter, JSON, Libxml, Tokenizer and XMLWriter. Next: implement
+DOM in bounded document/tree slices, then complete Mbstring. This is not a
+blanket PHPUnit or XML-parser compatibility claim. See
+[exact evidence](compatibility.md).
+
+### Preceding PHPUnit Libxml foundation checkpoint
+
 The `phpunit-libxml-extension` checkpoint over `c8cbe909` honestly admits the
 shared CLI Libxml foundation. All eight PHP 8.5 globals have exact Reflection
 contracts, `LibXMLError` has the canonical typed public layout, and retained
@@ -54,10 +72,10 @@ The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip /
 variants, all-targets, Composer S0, unsafe/static and runner gates pass.
 Performance is deferred by user direction. See [exact evidence](compatibility.md).
 
-The staged PHPUnit startup surface now finds Ctype, Filter, JSON, Libxml and
-Tokenizer. Next: build DOM and XMLWriter on the admitted XML state, then
-complete Mbstring. This remains dependency-ordered extension work, not a
-blanket PHPUnit, XML-parser or HTTP-SAPI compatibility claim.
+The staged PHPUnit startup surface at that checkpoint found Ctype, Filter,
+JSON, Libxml and Tokenizer. XMLWriter was the next dependency-ordered slice;
+DOM and Mbstring remained missing. This was not a blanket PHPUnit, XML-parser
+or HTTP-SAPI compatibility claim.
 
 ### Preceding PHPUnit JSON foundation checkpoint
 

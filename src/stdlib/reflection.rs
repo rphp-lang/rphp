@@ -10587,7 +10587,8 @@ fn class_is_cloneable(
     eg: &mut ExecutorGlobals,
 ) -> Result<(), VmError> {
     class_kind_predicate(ed, rv, eg, |class| {
-        !(class.is_interface || class.is_trait || class.is_abstract || class.is_enum)
+        class.name != "XMLWriter"
+            && !(class.is_interface || class.is_trait || class.is_abstract || class.is_enum)
             && class
                 .methods
                 .iter()
@@ -10816,6 +10817,8 @@ fn class_get_extension_name(
         "json"
     } else if lowered == "libxmlerror" {
         "libxml"
+    } else if lowered == "xmlwriter" {
+        "xmlwriter"
     } else if lowered == "phar" || lowered == "pharexception" {
         "Phar"
     } else if lowered == "phptoken" {

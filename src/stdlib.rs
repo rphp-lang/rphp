@@ -240,6 +240,7 @@ mod strings;
 mod superglobals;
 pub(crate) mod ticks;
 mod weak;
+mod xml_writer;
 
 pub use runtime_info::set_startup_config;
 pub use superglobals::{JIT_AUTO_GLOBALS, REQUEST_AUTO_GLOBAL_ORDER, register_request_globals};
@@ -268,14 +269,24 @@ pub(crate) use date::{
 /// Keeping the borrow inside the callback bounds it to the handler's live
 /// activation while still allowing reference metadata inspection without
 /// spreading raw frame access across individual builtins.
+#[inline(always)]
+pub(super) fn with_internal_frame_and_raw_argument<R>(
+    ed: *mut ExecuteData,
+    index: u32,
+    inspect: impl FnOnce(&ExecuteData, &Value) -> R,
+) -> R {
+    // SAFETY: internal handlers receive a live ExecuteData frame, their
+    // registered arity guarantees this CV index, and the callback cannot
+    // retain either borrow beyond this synchronous call.
+    unsafe { inspect(&*ed, (*ed).cv(index)) }
+}
+
 pub(super) fn with_raw_argument<R>(
     ed: *mut ExecuteData,
     index: u32,
     inspect: impl FnOnce(&Value) -> R,
 ) -> R {
-    // SAFETY: internal handlers receive a live ExecuteData frame and their
-    // registered arity guarantees this CV index for the handler call.
-    unsafe { inspect((*ed).cv(index)) }
+    with_internal_frame_and_raw_argument(ed, index, |_, value| inspect(value))
 }
 
 pub(super) fn owned_argument(ed: *mut ExecuteData, index: u32) -> Value {
@@ -14158,9 +14169,14 @@ fn fn_get_extension_funcs(
             names.push(name.clone());
         }
     }
-    if requested.eq_ignore_ascii_case("libxml") {
-        names.sort_unstable_by_key(|name| {
+    if requested.eq_ignore_ascii_case("libxml") || requested.eq_ignore_ascii_case("xmlwriter") {
+        let order = if requested.eq_ignore_ascii_case("libxml") {
             LIBXML_EXTENSION_FUNCTION_NAMES
+        } else {
+            XMLWRITER_EXTENSION_FUNCTION_NAMES
+        };
+        names.sort_unstable_by_key(|name| {
+            order
                 .iter()
                 .position(|candidate| name.eq_ignore_ascii_case(candidate))
                 .unwrap_or(usize::MAX)
@@ -31721,6 +31737,7 @@ const LOADED_EXTENSION_NAMES: &[&str] = &[
     "Phar",
     "pcre",
     "tokenizer",
+    "xmlwriter",
 ];
 
 const LIBXML_EXTENSION_FUNCTION_NAMES: &[&str] = &[
@@ -31732,6 +31749,51 @@ const LIBXML_EXTENSION_FUNCTION_NAMES: &[&str] = &[
     "libxml_disable_entity_loader",
     "libxml_set_external_entity_loader",
     "libxml_get_external_entity_loader",
+];
+
+const XMLWRITER_EXTENSION_FUNCTION_NAMES: &[&str] = &[
+    "xmlwriter_open_uri",
+    "xmlwriter_open_memory",
+    "xmlwriter_set_indent",
+    "xmlwriter_set_indent_string",
+    "xmlwriter_start_comment",
+    "xmlwriter_end_comment",
+    "xmlwriter_start_attribute",
+    "xmlwriter_end_attribute",
+    "xmlwriter_write_attribute",
+    "xmlwriter_start_attribute_ns",
+    "xmlwriter_write_attribute_ns",
+    "xmlwriter_start_element",
+    "xmlwriter_end_element",
+    "xmlwriter_full_end_element",
+    "xmlwriter_start_element_ns",
+    "xmlwriter_write_element",
+    "xmlwriter_write_element_ns",
+    "xmlwriter_start_pi",
+    "xmlwriter_end_pi",
+    "xmlwriter_write_pi",
+    "xmlwriter_start_cdata",
+    "xmlwriter_end_cdata",
+    "xmlwriter_write_cdata",
+    "xmlwriter_text",
+    "xmlwriter_write_raw",
+    "xmlwriter_start_document",
+    "xmlwriter_end_document",
+    "xmlwriter_write_comment",
+    "xmlwriter_start_dtd",
+    "xmlwriter_end_dtd",
+    "xmlwriter_write_dtd",
+    "xmlwriter_start_dtd_element",
+    "xmlwriter_end_dtd_element",
+    "xmlwriter_write_dtd_element",
+    "xmlwriter_start_dtd_attlist",
+    "xmlwriter_end_dtd_attlist",
+    "xmlwriter_write_dtd_attlist",
+    "xmlwriter_start_dtd_entity",
+    "xmlwriter_end_dtd_entity",
+    "xmlwriter_write_dtd_entity",
+    "xmlwriter_output_memory",
+    "xmlwriter_flush",
 ];
 
 #[inline(always)]

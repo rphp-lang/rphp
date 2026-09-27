@@ -7,6 +7,50 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### PHPUnit extension foundation: XMLWriter
+
+The `phpunit-xmlwriter-extension` checkpoint over `08703b60` admits the PHP
+8.5 CLI XMLWriter surface without linking to or delegating serialization to
+libxml2. All 42 procedural functions and all 45 `XMLWriter` methods have exact
+Reflection-visible names, arity, parameter types/defaults, return contracts
+and extension ownership. The internal class is subclassable and uncloneable;
+late-static factories construct user subclasses before installing the native
+writer state, including constructor exceptions.
+
+The independently implemented serializer covers memory, URI and PHP stream
+targets, namespace declaration ordering and deduplication, attributes, CDATA,
+comments, processing instructions, DTD declarations, indentation, escaping,
+buffer peek/flush lifetime, stream invalidation and output encoding. Invalid
+XML names and target resources report the PHP 8.5 exception contracts. The
+complete 51-case upstream `ext/xmlwriter` packet is **50 pass / 0 fail / 1
+skip** without timeout or crash; the sole skip requires the still-unavailable
+XMLReader extension.
+
+The stable 7,174-case ledger remains **6,881 pass / 0 fail / 194 skip / 99
+unsupported**, exact **+0/-0**, with the identical 6,881-path pass set. Five
+complete Cargo configurations pass: default **6,965**, no-default **6,619**,
+erased **7,036**, reified **7,058** and all-features **7,109**; ignored
+15/15/15/15/18. All-targets, Composer 2.8.12 S0, format, PHPT runner and unsafe
+policy gates pass. Production remains at **1,627 unsafe blocks / 289 unsafe
+functions**. Performance is deferred by user direction and no performance
+claim is made.
+
+This remains a staged PHPUnit foundation, not a PHPUnit compatibility or XML
+parser claim. The startup surface now finds Ctype, Filter, JSON, Libxml,
+Tokenizer and XMLWriter. DOM and Mbstring remain honest missing extension
+blockers and are the next dependency-ordered checkpoints.
+
+SHA-256 evidence: release
+`3f6a313e0e6208594105cd44d4f7a9ebabd9a117faea5a9eddcc5208ae0214bb`;
+XMLWriter manifest
+`5097715c5349c09414f504951127498f429c113f05f8f8f05f2aef1671df9363`;
+stable manifest
+`f86e4e098cc809485e466255bbe498a41746c51520f0b30cffaf5074f316decb`;
+Cargo matrix
+`130a40181b15adb78d502e5d7c6dc444087a0dcddc9dd011fb66c0d8fd08d88f`;
+builtin audit summary
+`a6d710a75cdace984452811d4bc92406ca16ea9e99ed324e14c77077c20576b4`.
+
 ### PHPUnit extension foundation: Libxml
 
 The `phpunit-libxml-extension` checkpoint over `c8cbe909` admits the shared
