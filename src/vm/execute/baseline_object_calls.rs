@@ -5468,9 +5468,10 @@ fn op_assign_obj_prop_inner<'a>(
         // __set on its next assignment. Keep that pay-for-use class family on
         // the canonical handler instead of charging every ordinary cached
         // property write for a per-instance unset-state guard.
-        if eg.class_magic_set(php_obj.class_id, &php_obj.class_name) {
-            prop_is_writable = false;
-        }
+        // `__set` only intercepts writes to inaccessible, undeclared or
+        // explicitly unset properties. Declared, accessible slots stay
+        // cacheable; the warmed dispatch sends an undef (unset) slot of a
+        // magic-set class back to this canonical handler.
         if let Some(class_def) = eg.class_table.get(php_obj.class_name.as_ref()) {
             if class_def.is_enum {
                 let message = if class_def.readonly_props.contains(&name) {

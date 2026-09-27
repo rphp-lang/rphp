@@ -78,7 +78,9 @@ fn try_assign_cached_typed_instance_property<'a>(
     // A Reference points at a live VM slot, flags == 2 proves that the tagged
     // cache word contains a stable PropertyDefinition pointer, and the guarded
     // class ID proves that the cached object slot is addressable here.
-    let (source, definition, overflow_stored) = unsafe {
+    // SAFETY: the stored-type read inspects the same guarded slot before any
+    // write and does not retain the borrow.
+    let (source, definition, overflow_stored, stored_type) = unsafe {
         let source = &*(*frame).get_op_ptr(
             opline.result as u32,
             opline.result_type,
@@ -89,21 +91,25 @@ fn try_assign_cached_typed_instance_property<'a>(
         } else {
             source
         };
+        let stored = &*object.object_property_slot_unchecked(cache.property_slot());
         (
             source,
             cache
                 .typed_instance_property_definition()
                 .expect("typed instance cache must retain its definition"),
-            overflow.map(|_| {
-                (&*object.object_property_slot_unchecked(cache.property_slot())).clone()
-            }),
+            overflow.map(|_| stored.clone()),
+            stored.dereferenced().value_type(),
         )
     };
     let tag = cache.typed_instance_property_tag();
-    if opline._pad & ASSIGN_OBJ_MODIFY != 0 && source.value_type() == ValueType::Array {
+    if opline._pad & ASSIGN_OBJ_MODIFY != 0
+        && source.value_type() == ValueType::Array
+        && stored_type != ValueType::Array
+    {
         // Array auto-initialization needs the stored null/undef state and its
-        // exact property/reference diagnostic. Keep this rare modify case on
-        // the canonical cold path instead of widening every typed cache hit.
+        // exact property/reference diagnostic. Only that case stays on the
+        // canonical cold path; `$this->items[$k] = $v` on an initialized array
+        // property is the ordinary write-back.
         return Ok(None);
     }
     if let (Some(overflow), Some(stored)) = (overflow, overflow_stored.as_ref()) {

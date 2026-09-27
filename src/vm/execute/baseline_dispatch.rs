@@ -9720,7 +9720,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     // Lazy shells share the ordinary class/layout cache. Only
                     // still-undef slots need the cold sidecar guard; ordinary
                     // warmed writes retain the allocation-free cache hit.
-                    if cached_slot_is_undef && eg.lazy_object_state(obj_val).is_some() {
+                    if cached_slot_is_undef
+                        && (eg.class_magic_set(obj_class_id, "")
+                            || eg.lazy_object_state(obj_val).is_some())
+                    {
                         cache_matches = false;
                     }
                     // flags == 3: read-safe + write-safe declared property slot.
