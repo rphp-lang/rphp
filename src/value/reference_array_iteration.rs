@@ -4,78 +4,148 @@
 //! unrelated replacement instead starts at its own internal array pointer.
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::hash::BuildHasherDefault;
+
+use super::IntKeyHasher;
+
+type IdentityMap<V> = HashMap<usize, V, BuildHasherDefault<IntKeyHasher>>;
 
 struct Cursor {
     array: Option<usize>,
     position: usize,
     /// Positions remembered for copies of the iterated array, keyed by copy
-    /// identity. Array releases and copies touch every live cursor, so the
-    /// per-cursor lookups must not scan.
-    copies: HashMap<usize, usize>,
+    /// identity.
+    copies: IdentityMap<usize>,
+}
+
+/// Live cursors plus the reverse index from array identity to the cursors
+/// that reference it (as the iterated array or as a remembered copy). Array
+/// copies and releases consult the index instead of scanning every cursor:
+/// a flagged array with no interested cursor costs one lookup.
+#[derive(Default)]
+struct Registry {
+    cursors: IdentityMap<Cursor>,
+    by_array: IdentityMap<Vec<usize>>,
 }
 
 thread_local! {
-    static CURSORS: RefCell<HashMap<usize, Cursor>> = RefCell::new(HashMap::new());
+    static REGISTRY: RefCell<Registry> = RefCell::new(Registry::default());
+}
+
+fn link(by_array: &mut IdentityMap<Vec<usize>>, array: usize, key: usize) {
+    by_array.entry(array).or_default().push(key);
+}
+
+fn unlink_one(by_array: &mut IdentityMap<Vec<usize>>, array: usize, key: usize) {
+    if let Some(keys) = by_array.get_mut(&array) {
+        keys.retain(|candidate| *candidate != key);
+        if keys.is_empty() {
+            by_array.remove(&array);
+        }
+    }
+}
+
+fn unlink(by_array: &mut IdentityMap<Vec<usize>>, key: usize, cursor: &Cursor) {
+    if let Some(array) = cursor.array {
+        unlink_one(by_array, array, key);
+    }
+    for array in cursor.copies.keys() {
+        unlink_one(by_array, *array, key);
+    }
 }
 
 pub(super) fn register(key: usize, array: usize) {
-    CURSORS.with(|cursors| {
-        cursors.borrow_mut().insert(
-            key,
-            Cursor {
-                array: Some(array),
-                position: 0,
-                copies: HashMap::new(),
-            },
-        );
+    REGISTRY.with(|registry| {
+        let mut registry = registry.borrow_mut();
+        let cursor = Cursor {
+            array: Some(array),
+            position: 0,
+            copies: IdentityMap::default(),
+        };
+        if let Some(previous) = registry.cursors.insert(key, cursor) {
+            unlink(&mut registry.by_array, key, &previous);
+        }
+        link(&mut registry.by_array, array, key);
     });
 }
 
 pub(super) fn resolve(key: usize, array: usize, fallback: usize) -> usize {
-    CURSORS.with(|cursors| {
-        let mut cursors = cursors.borrow_mut();
-        let cursor = cursors
+    REGISTRY.with(|registry| {
+        let registry = &mut *registry.borrow_mut();
+        let cursor = registry
+            .cursors
             .get_mut(&key)
             .expect("live reference foreach cursor");
         if cursor.array != Some(array) {
-            cursor.position = cursor.copies.get(&array).copied().unwrap_or(fallback);
-            cursor.array = Some(array);
-            cursor.copies.clear();
+            let position = cursor.copies.get(&array).copied().unwrap_or(fallback);
+            let previous = std::mem::replace(
+                cursor,
+                Cursor {
+                    array: Some(array),
+                    position,
+                    copies: IdentityMap::default(),
+                },
+            );
+            unlink(&mut registry.by_array, key, &previous);
+            link(&mut registry.by_array, array, key);
         }
         cursor.position
     })
 }
 
 pub(super) fn advance(key: usize, position: usize) {
-    CURSORS.with(|cursors| {
-        if let Some(cursor) = cursors.borrow_mut().get_mut(&key) {
+    REGISTRY.with(|registry| {
+        if let Some(cursor) = registry.borrow_mut().cursors.get_mut(&key) {
             cursor.position = position;
         }
     });
 }
 
-pub(super) fn copied(source: usize, target: usize) {
-    CURSORS.with(|cursors| {
-        for cursor in cursors.borrow_mut().values_mut() {
+/// Records `target` as a copy of `source` for every cursor interested in
+/// `source`. Returns whether any cursor was interested, so callers can stop
+/// propagating the reference-foreach flag to copies nobody iterates.
+pub(super) fn copied(source: usize, target: usize) -> bool {
+    REGISTRY.with(|registry| {
+        let registry = &mut *registry.borrow_mut();
+        let Some(keys) = registry.by_array.get(&source) else {
+            return false;
+        };
+        let mut linked = Vec::with_capacity(keys.len());
+        for key in keys {
+            let Some(cursor) = registry.cursors.get_mut(key) else {
+                continue;
+            };
             let position = if cursor.array == Some(source) {
                 Some(cursor.position)
             } else {
                 cursor.copies.get(&source).copied()
             };
-            if let Some(position) = position {
-                cursor.copies.insert(target, position);
+            if let Some(position) = position
+                && cursor.copies.insert(target, position).is_none()
+            {
+                linked.push(*key);
             }
         }
-    });
+        if !linked.is_empty() {
+            registry.by_array.entry(target).or_default().extend(linked);
+        }
+        true
+    })
 }
 
 pub(super) fn release_array(array: usize) {
-    let _ = CURSORS.try_with(|cursors| {
-        for cursor in cursors.borrow_mut().values_mut() {
-            if cursor.array == Some(array) {
-                cursor.array = None;
+    let _ = REGISTRY.try_with(|registry| {
+        let registry = &mut *registry.borrow_mut();
+        let Some(keys) = registry.by_array.remove(&array) else {
+            return;
+        };
+        for key in keys {
+            if let Some(cursor) = registry.cursors.get_mut(&key) {
+                if cursor.array == Some(array) {
+                    cursor.array = None;
+                }
+                cursor.copies.remove(&array);
             }
-            cursor.copies.remove(&array);
         }
     });
 }
@@ -89,8 +159,15 @@ pub(super) fn splice(array: usize, start: usize, removed: usize, inserted: usize
                 .saturating_add(inserted);
         }
     };
-    CURSORS.with(|cursors| {
-        for cursor in cursors.borrow_mut().values_mut() {
+    REGISTRY.with(|registry| {
+        let registry = &mut *registry.borrow_mut();
+        let Some(keys) = registry.by_array.get(&array) else {
+            return;
+        };
+        for key in keys {
+            let Some(cursor) = registry.cursors.get_mut(key) else {
+                continue;
+            };
             if cursor.array == Some(array) {
                 adjust(&mut cursor.position);
             }
@@ -102,8 +179,11 @@ pub(super) fn splice(array: usize, start: usize, removed: usize, inserted: usize
 }
 
 pub(super) fn release_cursor(key: usize) {
-    let _ = CURSORS.try_with(|cursors| {
-        cursors.borrow_mut().remove(&key);
+    let _ = REGISTRY.try_with(|registry| {
+        let registry = &mut *registry.borrow_mut();
+        if let Some(cursor) = registry.cursors.remove(&key) {
+            unlink(&mut registry.by_array, key, &cursor);
+        }
     });
 }
 
@@ -122,11 +202,15 @@ mod tests {
         assert_eq!(source.cycle_strong_count(), Some(1));
         let snapshot = cursor.clone_closure_capture();
         drop(source);
-        CURSORS.with(|cursors| assert!(cursors.borrow()[&key].array.is_none()));
+        REGISTRY.with(|registry| assert!(registry.borrow().cursors[&key].array.is_none()));
         drop(cursor);
-        CURSORS.with(|cursors| assert!(cursors.borrow().contains_key(&key)));
+        REGISTRY.with(|registry| assert!(registry.borrow().cursors.contains_key(&key)));
         drop(snapshot);
-        CURSORS.with(|cursors| assert!(!cursors.borrow().contains_key(&key)));
+        REGISTRY.with(|registry| {
+            let registry = registry.borrow();
+            assert!(!registry.cursors.contains_key(&key));
+            assert!(registry.by_array.is_empty());
+        });
     }
 
     #[test]
@@ -145,12 +229,17 @@ mod tests {
         let key = cursor.reference_identity().unwrap();
         drop(source);
         drop(copy);
-        CURSORS.with(|cursors| {
-            let cursors = cursors.borrow();
-            assert!(cursors[&key].array.is_none());
-            assert!(cursors[&key].copies.is_empty());
+        REGISTRY.with(|registry| {
+            let registry = registry.borrow();
+            assert!(registry.cursors[&key].array.is_none());
+            assert!(registry.cursors[&key].copies.is_empty());
+            assert!(registry.by_array.is_empty());
         });
         drop(cursor);
-        CURSORS.with(|cursors| assert!(!cursors.borrow().contains_key(&key)));
+        REGISTRY.with(|registry| {
+            let registry = registry.borrow();
+            assert!(!registry.cursors.contains_key(&key));
+            assert!(registry.by_array.is_empty());
+        });
     }
 }

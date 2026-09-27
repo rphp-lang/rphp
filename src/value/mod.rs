@@ -7370,13 +7370,14 @@ impl Value {
         let result = Self::array(array);
         if source.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
             let target = result.as_array().unwrap();
-            target
-                .cursor
-                .set(target.cursor.get() | ARRAY_REFERENCE_FOREACH);
-            reference_array_iteration::copied(
+            if reference_array_iteration::copied(
                 source as *const PhpArray as usize,
                 target as *const PhpArray as usize,
-            );
+            ) {
+                target
+                    .cursor
+                    .set(target.cursor.get() | ARRAY_REFERENCE_FOREACH);
+            }
         }
         result
     }
@@ -8573,11 +8574,16 @@ impl Value {
                 let cloned = (*rc_ptr).clone();
                 Rc::decrement_strong_count(rc_ptr as *const PhpArray);
                 let new_rc = Rc::new(cloned);
-                if new_rc.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
-                    reference_array_iteration::copied(
+                if new_rc.cursor.get() & ARRAY_REFERENCE_FOREACH != 0
+                    && !reference_array_iteration::copied(
                         rc_ptr as usize,
                         Rc::as_ptr(&new_rc) as usize,
-                    );
+                    )
+                {
+                    // The clone inherited the flag; no cursor follows this copy.
+                    new_rc
+                        .cursor
+                        .set(new_rc.cursor.get() & !ARRAY_REFERENCE_FOREACH);
                 }
                 self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
                 &mut *(self.data.ptr as *mut PhpArray)
@@ -9044,14 +9050,15 @@ impl Value {
             && source.cursor.get() & ARRAY_REFERENCE_FOREACH != 0
         {
             let target = replacement.as_array().unwrap();
-            target
-                .cursor
-                .set(target.cursor.get() | ARRAY_REFERENCE_FOREACH);
-            reference_array_iteration::copied(
+            if reference_array_iteration::copied(
                 source as *const PhpArray as usize,
                 target as *const PhpArray as usize,
-            );
-            target.adjust_reference_foreach_positions(start, removed, inserted);
+            ) {
+                target
+                    .cursor
+                    .set(target.cursor.get() | ARRAY_REFERENCE_FOREACH);
+                target.adjust_reference_foreach_positions(start, removed, inserted);
+            }
         }
         *self = replacement;
     }

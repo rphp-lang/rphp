@@ -151,3 +151,87 @@ $w = \WeakReference::create($obj = new \stdClass); $map = new \WeakMap; $map[$ob
         "eol|30719|8|u|u|UUU|42|42|42|D|U\n7|7|7|U|Error:Undefined constant \"App\\MISSING\"|now|now\nns|ns|ns|U\n[10,20,30,40][10,20,3,4,99][4,4,4,4]\n[[2,3],[4,5]][[2,3],[4,5]]\n1|end\n"
     );
 }
+
+/// The reference-foreach cursor registry indexes arrays by identity: copies
+/// made while a cursor is live inherit its position, copies of a formerly
+/// iterated array without a live cursor stop carrying the flag, splices adjust
+/// both the iterated array and remembered copies, and generators keep their
+/// cursor across suspensions.
+#[test]
+fn reference_foreach_cursor_index_follows_php() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+function f1() {
+    $a = [1, 2, 3, 4];
+    $out = [];
+    foreach ($a as $k => &$v) {
+        if ($k === 1) { $b = $a; $b[] = 5; $a = $b; }
+        $v *= 10;
+        $out[] = $v;
+    }
+    unset($v);
+    return [$a, $out];
+}
+function f2() {
+    $a = [1, 2, 3, 4];
+    foreach ($a as &$v) { $v++; }
+    unset($v);
+    $c = $a;            // flagged source, no live cursor
+    $c[] = 9;
+    array_splice($c, 1, 1);
+    $d = $c;
+    foreach ($d as $k => &$w) { if ($k === 1) { array_splice($d, 0, 1); } $w += 100; }
+    unset($w);
+    return [$a, $c, $d];
+}
+function f3() {
+    $a = ['x' => [1, 2], 'y' => [3]];
+    $seen = [];
+    foreach ($a as $k => &$v) {
+        $copy = $a;
+        $copy[$k][] = 'c';
+        $v[] = 'r';
+        $seen[] = count($copy[$k]);
+        if ($k === 'x') { $a = $copy; }
+    }
+    unset($v);
+    return [$a, $seen];
+}
+function f4() {
+    $a = range(1, 6);
+    $res = [];
+    foreach ($a as $k => &$v) {
+        if ($k === 2) { unset($a[3]); $a[] = 7; }
+        $res[] = $v;
+    }
+    unset($v);
+    return [$a, $res];
+}
+function f5() {
+    $rows = [[1], [2], [3]];
+    foreach ($rows as &$row) {
+        foreach ($row as &$cell) { $cell *= 2; }
+        unset($cell);
+        $snapshot = $rows;
+        $snapshot[] = [0];
+        $row[] = count($snapshot);
+    }
+    unset($row);
+    return $rows;
+}
+foreach (['f1', 'f2', 'f3', 'f4', 'f5'] as $fn) { echo $fn, ': ', json_encode($fn()), "\n"; }
+$gen = (function () { $a = [1, 2, 3]; foreach ($a as &$v) { $b = $a; $b[0] = 40; yield $v; if ($v === 2) { $a = $b; } } })();
+foreach ($gen as $x) echo $x, ' ';
+echo "\n";
+"#
+        ),
+        r#"f1: [[10,20,30,40,50],[10,20,30,40,50]]
+f2: [[2,3,4,5],[2,4,5,9],[109]]
+f3: [{"x":[1,2,"c","r"],"y":[3,"c","r"]},[4,3]]
+f4: [{"0":1,"1":2,"2":3,"4":5,"5":6,"6":7},[1,2,3,5,6,7]]
+f5: [[2,4],[4,4],[6,4]]
+40 2 3 
+"#
+    );
+}
