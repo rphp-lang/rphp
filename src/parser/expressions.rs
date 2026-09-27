@@ -6,7 +6,7 @@ impl Parser {
 
     fn parse_keyword_or(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_keyword_xor()?;
-        while self.peek() == Token::LogicalOr {
+        while *self.peek_ref() == Token::LogicalOr {
             self.advance();
             let right = self.parse_keyword_xor()?;
             left = Expr::BinaryOp {
@@ -20,7 +20,7 @@ impl Parser {
     }
 
     fn finish_keyword_logical_tail(&mut self, mut left: Expr) -> Result<Expr, String> {
-        while self.peek() == Token::LogicalAnd {
+        while *self.peek_ref() == Token::LogicalAnd {
             self.advance();
             let right = self.parse_assignment_or_yield()?;
             left = Expr::BinaryOp {
@@ -30,7 +30,7 @@ impl Parser {
                 line: 0,
             };
         }
-        while self.peek() == Token::LogicalXor {
+        while *self.peek_ref() == Token::LogicalXor {
             self.advance();
             let right = self.parse_keyword_and()?;
             left = Expr::BinaryOp {
@@ -40,7 +40,7 @@ impl Parser {
                 line: 0,
             };
         }
-        while self.peek() == Token::LogicalOr {
+        while *self.peek_ref() == Token::LogicalOr {
             self.advance();
             let right = self.parse_keyword_xor()?;
             left = Expr::BinaryOp {
@@ -55,7 +55,7 @@ impl Parser {
 
     fn parse_keyword_xor(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_keyword_and()?;
-        while self.peek() == Token::LogicalXor {
+        while *self.peek_ref() == Token::LogicalXor {
             self.advance();
             let right = self.parse_keyword_and()?;
             left = Expr::BinaryOp {
@@ -70,7 +70,7 @@ impl Parser {
 
     fn parse_keyword_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_assignment_or_yield()?;
-        while self.peek() == Token::LogicalAnd {
+        while *self.peek_ref() == Token::LogicalAnd {
             self.advance();
             let right = self.parse_assignment_or_yield()?;
             left = Expr::BinaryOp {
@@ -93,15 +93,15 @@ impl Parser {
             Expr::ErrorSuppress(inner) => (*inner, true),
             target => (target, false),
         };
-        let assignment = if self.peek() == Token::Assign
-            && matches!(self.peek_at(1), Token::Ampersand(_))
+        let assignment = if *self.peek_ref() == Token::Assign
+            && matches!(self.peek_at_ref(1), Token::Ampersand(_))
         {
             // Reference assignment has lower precedence than bitwise AND. It
             // must be recognized before parse_bitwise_and consumes `&` as an
             // infix operator and asks for an expression after `$left =`.
             self.finish_assignment_expression(target)?
         } else if self.is_empty_array_dimension_suffix()
-            && Self::compound_assign_op(&self.peek_at(2)).is_some()
+            && Self::compound_assign_op(self.peek_at_ref(2)).is_some()
         {
             let bracket_line = self.expect_lbracket()?;
             self.expect(&Token::RBracket)?;
@@ -112,12 +112,12 @@ impl Parser {
             })?
         } else if self.is_array_append_suffix() {
             self.finish_array_append_assignment_expression(target)?
-        } else if self.peek() == Token::QuestionQuestionAssign {
+        } else if *self.peek_ref() == Token::QuestionQuestionAssign {
             self.finish_coalesce_assignment_expression(target)?
-        } else if self.peek() == Token::Assign {
+        } else if *self.peek_ref() == Token::Assign {
             // Handle assignment as expression: $var = expr
             self.finish_assignment_expression(target)?
-        } else if Self::compound_assign_op(&self.peek()).is_some() {
+        } else if Self::compound_assign_op(self.peek_ref()).is_some() {
             self.finish_compound_assignment_expression(target)?
         } else {
             return Ok(if suppressed {
@@ -145,7 +145,7 @@ impl Parser {
         let bracket_line = self.expect_lbracket()?;
         self.expect(&Token::RBracket)?;
         self.expect(&Token::Assign)?;
-        let by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+        let by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -238,7 +238,7 @@ impl Parser {
 
     fn finish_assignment_expression(&mut self, target: Expr) -> Result<Expr, String> {
         self.expect(&Token::Assign)?;
-        let by_reference = if matches!(self.peek(), Token::Ampersand(_)) {
+        let by_reference = if matches!(self.peek_ref(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -456,7 +456,7 @@ impl Parser {
         };
 
         // yield from <expr>
-        if self.peek() == Token::From {
+        if *self.peek_ref() == Token::From {
             self.advance(); // consume 'from'
             let expr = self.parse_expr()?;
             if self.reference_return_context {
@@ -470,7 +470,7 @@ impl Parser {
 
         // yield; or yield at end of expression context (no value)
         if matches!(
-            self.peek(),
+            self.peek_ref(),
             Token::Semicolon(_)
                 | Token::RParen
                 | Token::RBracket
@@ -488,7 +488,7 @@ impl Parser {
 
         // yield <expr> or yield <key> => <value>
         let first = self.parse_assignment_or_yield()?;
-        if self.peek() == Token::DoubleArrow {
+        if *self.peek_ref() == Token::DoubleArrow {
             self.advance(); // consume '=>'
             let value = self.parse_assignment_or_yield()?;
             self.validate_reference_yield_source(&value);
@@ -519,7 +519,7 @@ impl Parser {
     fn parse_ternary(&mut self) -> Result<Expr, String> {
         let expr = self.parse_null_coalesce()?;
 
-        if self.peek() == Token::Question {
+        if *self.peek_ref() == Token::Question {
             // Resolve the diagnostic line only for an actual ternary: the
             // forward semicolon scan is linear in the remaining tokens.
             let ternary_line = self.last_primary_line.unwrap_or_else(|| {
@@ -529,7 +529,7 @@ impl Parser {
             self.advance(); // consume ?
 
             // Elvis operator: $x ?: $y  (evaluates lhs once)
-            if self.peek() == Token::Colon {
+            if *self.peek_ref() == Token::Colon {
                 self.advance(); // consume :
                 let right = self.parse_null_coalesce()?;
                 let right = self.finish_assignment_tail(right)?;
@@ -537,7 +537,7 @@ impl Parser {
                     left: Box::new(expr),
                     right: Box::new(right),
                 };
-                while self.peek() == Token::Question && self.peek_at(1) == Token::Colon {
+                while *self.peek_ref() == Token::Question && *self.peek_at_ref(1) == Token::Colon {
                     self.advance();
                     self.advance();
                     let right = self.parse_null_coalesce()?;
@@ -547,7 +547,7 @@ impl Parser {
                         right: Box::new(right),
                     };
                 }
-                if self.peek() == Token::Question {
+                if *self.peek_ref() == Token::Question {
                     let error = self.compile_error(
                         "Unparenthesized `a ?: b ? c : d` is not supported. Use either `(a ?: b) ? c : d` or `a ?: (b ? c : d)`",
                         ternary_line,
@@ -568,8 +568,8 @@ impl Parser {
             let else_expr = self.parse_null_coalesce()?;
             let else_expr = self.finish_assignment_tail(else_expr)?;
 
-            if self.peek() == Token::Question {
-                let nested_elvis = self.peek_at(1) == Token::Colon;
+            if *self.peek_ref() == Token::Question {
+                let nested_elvis = *self.peek_at_ref(1) == Token::Colon;
                 let message = if nested_elvis {
                     "Unparenthesized `a ? b : c ?: d` is not supported. Use either `(a ? b : c) ?: d` or `a ? b : (c ?: d)`"
                 } else {
@@ -615,7 +615,7 @@ impl Parser {
     fn parse_null_coalesce(&mut self) -> Result<Expr, String> {
         let left = self.parse_logical_or()?;
 
-        if self.peek() == Token::QuestionQuestion {
+        if *self.peek_ref() == Token::QuestionQuestion {
             self.advance();
             let right = self.parse_null_coalesce()?; // right-associative
             // Assignment is lower precedence than `??`, but it may start on
@@ -634,7 +634,7 @@ impl Parser {
     fn parse_logical_or(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_logical_and()?;
 
-        while self.peek() == Token::PipePipe {
+        while *self.peek_ref() == Token::PipePipe {
             self.advance();
             let right = self.parse_logical_or_operand()?;
             left = Expr::BinaryOp {
@@ -657,7 +657,7 @@ impl Parser {
     fn parse_logical_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_bitwise_or()?;
 
-        while self.peek() == Token::AmpAmp {
+        while *self.peek_ref() == Token::AmpAmp {
             self.advance();
             let right = self.parse_logical_and_operand()?;
             left = Expr::BinaryOp {
@@ -687,7 +687,7 @@ impl Parser {
     fn parse_bitwise_or(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_bitwise_xor()?;
 
-        while self.peek() == Token::Pipe {
+        while *self.peek_ref() == Token::Pipe {
             self.advance();
             let right = self.parse_bitwise_xor()?;
             let right = self.finish_assignment_tail(right)?;
@@ -706,7 +706,7 @@ impl Parser {
     fn parse_bitwise_xor(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_bitwise_and()?;
 
-        while self.peek() == Token::Caret {
+        while *self.peek_ref() == Token::Caret {
             self.advance();
             let right = self.parse_bitwise_and()?;
             let right = self.finish_assignment_tail(right)?;
@@ -725,7 +725,7 @@ impl Parser {
     fn parse_bitwise_and(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_comparison()?;
 
-        while matches!(self.peek(), Token::Ampersand(_)) {
+        while matches!(self.peek_ref(), Token::Ampersand(_)) {
             self.advance();
             let right = self.parse_comparison()?;
             let right = self.finish_assignment_tail(right)?;
@@ -742,22 +742,22 @@ impl Parser {
 
     /// Comparison: ==, !=, <, <=, >, >=, <=>, instanceof
     fn finish_instanceof_expression(&mut self, expr: Expr) -> Result<Expr, String> {
-        if self.peek() == Token::Backslash
-            || matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
+        if *self.peek_ref() == Token::Backslash
+            || matches!(self.peek_ref(), Token::Identifier(_, _) | Token::Enum { .. })
         {
             return Ok(Expr::Instanceof {
                 expr: Box::new(expr),
                 class_name: self.parse_qualified_name()?,
             });
         }
-        if matches!(self.peek(), Token::Static(_)) {
+        if matches!(self.peek_ref(), Token::Static(_)) {
             self.advance();
             return Ok(Expr::Instanceof {
                 expr: Box::new(expr),
                 class_name: "static".to_string(),
             });
         }
-        let class = if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+        let class = if matches!(self.peek_ref(), Token::Variable(_, _) | Token::This(_)) {
             let class = match self.advance() {
                 Token::Variable(name, line) => Self::variable_expression(name, line),
                 Token::This(line) => Expr::Variable {
@@ -767,7 +767,7 @@ impl Parser {
                 _ => unreachable!(),
             };
             self.parse_dynamic_new_class_expression(class)?
-        } else if matches!(self.peek(), Token::LParen(_)) {
+        } else if matches!(self.peek_ref(), Token::LParen(_)) {
             self.advance();
             let class = self.parse_expr()?;
             self.expect(&Token::RParen)?;
@@ -836,7 +836,7 @@ impl Parser {
         while let Token::PipeGreater(line) = self.peek() {
             let line = line;
             self.advance();
-            if matches!(self.peek(), Token::Fn(_)) {
+            if matches!(self.peek_ref(), Token::Fn(_)) {
                 self.compile_error(
                     "Arrow functions on the right hand side of |> must be parenthesized",
                     line,
@@ -859,7 +859,7 @@ impl Parser {
     fn parse_concat(&mut self) -> Result<Expr, String> {
         let mut left = self.parse_shift()?;
 
-        while self.peek() == Token::Dot {
+        while *self.peek_ref() == Token::Dot {
             self.advance();
             let right = self.parse_shift()?;
             let right = self.finish_assignment_tail(right)?;
@@ -972,9 +972,9 @@ impl Parser {
                 }
                 // PHP permits `!$value ??= $fallback` and applies `!` to the
                 // value produced by the coalescing assignment.
-                if self.peek() == Token::QuestionQuestionAssign {
+                if *self.peek_ref() == Token::QuestionQuestionAssign {
                     expr = self.finish_coalesce_assignment_expression(expr)?;
-                } else if self.peek() == Token::Assign {
+                } else if *self.peek_ref() == Token::Assign {
                     expr = self.finish_assignment_expression(expr)?;
                 }
                 Ok(Expr::Not(Box::new(expr)))
@@ -1004,7 +1004,7 @@ impl Parser {
             }
             Token::Clone(line) => {
                 self.advance();
-                let (expr, with_properties, source_args) = if matches!(self.peek(), Token::LParen(_)) {
+                let (expr, with_properties, source_args) = if matches!(self.peek_ref(), Token::LParen(_)) {
                     self.advance();
                     if self.consume_first_class_callable_placeholder() {
                         return Ok(Expr::FirstClassFunctionCallable {
@@ -1190,7 +1190,7 @@ impl Parser {
         let atom = self.parse_primary_atom()?;
         let base = self.parse_postfix_chain(atom)?;
 
-        if self.peek() == Token::StarStar {
+        if *self.peek_ref() == Token::StarStar {
             self.advance();
             let exp = self.parse_unary()?; // right-associative: recurse through unary
             let exp = self.finish_assignment_tail(exp)?;
@@ -1285,7 +1285,7 @@ impl Parser {
             Token::Dollar(line) => {
                 self.advance();
                 self.last_primary_line = Some(line);
-                let name = if matches!(self.peek(), Token::LBrace(_)) {
+                let name = if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
                     let name = self.parse_expr()?;
                     self.expect(&Token::RBrace(0))?;
@@ -1436,7 +1436,7 @@ impl Parser {
             Token::Isset => {
                 self.advance();
                 let list_line = self.expect_lparen()?;
-                if matches!(self.peek(), Token::Comma(_)) {
+                if matches!(self.peek_ref(), Token::Comma(_)) {
                     return Err(self.comma_list_error(list_line, false));
                 }
                 let mut args = Vec::new();
@@ -1480,8 +1480,8 @@ impl Parser {
                 if !generic_args.is_empty() {
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
-                    if matches!(self.peek(), Token::DotDotDot(_))
-                        && self.peek_at(1) == Token::RParen
+                    if matches!(self.peek_ref(), Token::DotDotDot(_))
+                        && *self.peek_at_ref(1) == Token::RParen
                     {
                         return Err("Generic first-class function callables are not supported yet"
                             .into());
@@ -1501,14 +1501,14 @@ impl Parser {
                         line,
                     });
                 }
-                if self.peek() == Token::DoubleColon {
+                if *self.peek_ref() == Token::DoubleColon {
                     return self.parse_named_static_access(name);
                 }
-                if matches!(self.peek(), Token::LParen(_)) {
+                if matches!(self.peek_ref(), Token::LParen(_)) {
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
-                    if matches!(self.peek(), Token::DotDotDot(_))
-                        && self.peek_at(1) == Token::RParen
+                    if matches!(self.peek_ref(), Token::DotDotDot(_))
+                        && *self.peek_at_ref(1) == Token::RParen
                     {
                         self.advance();
                         self.advance();
@@ -1550,13 +1550,13 @@ impl Parser {
                 Token::MagicConstant { name, line } => Ok(Expr::MagicConstant { name, line }),
                 _ => unreachable!(),
             },
-            Token::Namespace if self.peek_at(1) == Token::Backslash => {
+            Token::Namespace if *self.peek_at_ref(1) == Token::Backslash => {
                 let name = self.parse_namespace_relative_name()?;
                 let named_line = self.last_primary_line;
-                if self.peek() == Token::DoubleColon {
+                if *self.peek_ref() == Token::DoubleColon {
                     return self.parse_named_static_access(name);
                 }
-                if matches!(self.peek(), Token::LParen(_)) {
+                if matches!(self.peek_ref(), Token::LParen(_)) {
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
                     if self.consume_first_class_callable_placeholder() {
@@ -1594,7 +1594,7 @@ impl Parser {
             Token::Exit { line, .. } => {
                 self.advance();
                 self.last_primary_line = Some(line);
-                if matches!(self.peek(), Token::LParen(_)) {
+                if matches!(self.peek_ref(), Token::LParen(_)) {
                     self.expect_lparen()?;
                     if self.consume_first_class_callable_placeholder() {
                         Ok(Expr::FirstClassFunctionCallable {
@@ -1620,8 +1620,8 @@ impl Parser {
                 }
             }
             Token::Identifier(_, _) | Token::Enum { .. } | Token::From => {
-                let name = if matches!(self.peek(), Token::Identifier(_, _) | Token::Enum { .. })
-                    && self.peek_at(1) == Token::Backslash
+                let name = if matches!(self.peek_ref(), Token::Identifier(_, _) | Token::Enum { .. })
+                    && *self.peek_at_ref(1) == Token::Backslash
                 {
                     // Qualified name: App\Models\User
                     self.parse_qualified_name()?
@@ -1644,8 +1644,8 @@ impl Parser {
                 if !generic_args.is_empty() {
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
-                    if matches!(self.peek(), Token::DotDotDot(_))
-                        && self.peek_at(1) == Token::RParen
+                    if matches!(self.peek_ref(), Token::DotDotDot(_))
+                        && *self.peek_at_ref(1) == Token::RParen
                     {
                         return Err("Generic first-class function callables are not supported yet"
                             .into());
@@ -1659,11 +1659,11 @@ impl Parser {
                     });
                 }
                 // Static access: ClassName::method() or ClassName::$prop
-                if self.peek() == Token::DoubleColon {
+                if *self.peek_ref() == Token::DoubleColon {
                     return self.parse_named_static_access(name);
                 }
                 // Check if this is a function call (followed by `(`)
-                if matches!(self.peek(), Token::LParen(_)) {
+                if matches!(self.peek_ref(), Token::LParen(_)) {
                     if name.eq_ignore_ascii_case("list") && self.is_legacy_list_assign() {
                         let line = named_line.unwrap_or_else(|| match self.peek() {
                             Token::LParen(line) => line,
@@ -1682,8 +1682,8 @@ impl Parser {
                     }
                     let paren_line = self.expect_lparen()?;
                     let line = named_line.unwrap_or(paren_line);
-                    if matches!(self.peek(), Token::DotDotDot(_))
-                        && self.peek_at(1) == Token::RParen
+                    if matches!(self.peek_ref(), Token::DotDotDot(_))
+                        && *self.peek_at_ref(1) == Token::RParen
                     {
                         self.advance();
                         self.advance();
@@ -1732,17 +1732,17 @@ impl Parser {
                 }
             }
             Token::Static(line) => {
-                if matches!(self.peek_at(1), Token::Function(_)) {
+                if matches!(self.peek_at_ref(1), Token::Function(_)) {
                     self.advance(); // consume 'static'
                     return self.parse_closure(true);
                 }
-                if matches!(self.peek_at(1), Token::Fn(_)) {
+                if matches!(self.peek_at_ref(1), Token::Fn(_)) {
                     self.advance(); // consume 'static'
                     return self.parse_arrow_function(true);
                 }
                 self.advance();
                 self.last_primary_line = Some(line);
-                if self.peek() != Token::DoubleColon {
+                if *self.peek_ref() != Token::DoubleColon {
                     return Err(format!(
                         "Expected :: after static, got {:?}",
                         self.peek()
@@ -1767,10 +1767,10 @@ impl Parser {
                     Token::Function(_) => self.parse_closure(false)?,
                     Token::Fn(_) => self.parse_arrow_function(false)?,
                     Token::Static(_)
-                        if matches!(self.peek_at(1), Token::Function(_) | Token::Fn(_)) =>
+                        if matches!(self.peek_at_ref(1), Token::Function(_) | Token::Fn(_)) =>
                     {
                         self.advance();
-                        if matches!(self.peek(), Token::Function(_)) {
+                        if matches!(self.peek_ref(), Token::Function(_)) {
                             self.parse_closure(true)?
                         } else {
                             self.parse_arrow_function(true)?
@@ -1815,7 +1815,7 @@ impl Parser {
                         Token::Identifier(ref name, _)
                             if name.eq_ignore_ascii_case("readonly")
                                 && matches!(
-                                    self.peek_at(1),
+                                    self.peek_at_ref(1),
                                     Token::Class
                                         | Token::Abstract(_)
                                         | Token::Final(_)
@@ -1823,8 +1823,8 @@ impl Parser {
                                 )
                                 || name.eq_ignore_ascii_case("readonly")
                                     && matches!(
-                                        self.peek_at(1),
-                                        Token::Identifier(ref next, _)
+                                        self.peek_at_ref(1),
+                                        Token::Identifier(next, _)
                                             if next.eq_ignore_ascii_case("readonly")
                                     ) =>
                         {
@@ -1854,7 +1854,7 @@ impl Parser {
                         _ => break,
                     }
                 }
-                if self.peek() == Token::Class {
+                if *self.peek_ref() == Token::Class {
                     self.advance();
                     if anonymous_readonly && allow_dynamic_properties {
                         self.compile_error(
@@ -1863,7 +1863,7 @@ impl Parser {
                         );
                     }
                     let (args, _) = self.parse_new_arguments(line)?;
-                    let parent = if self.peek() == Token::Extends {
+                    let parent = if *self.peek_ref() == Token::Extends {
                         self.advance();
                         Some(self.parse_generic_ancestor_with_reserved_static(
                             ReservedStaticRole::Class,
@@ -1872,7 +1872,7 @@ impl Parser {
                     } else {
                         None
                     };
-                    let implements = if self.peek() == Token::Implements {
+                    let implements = if *self.peek_ref() == Token::Implements {
                         self.advance();
                         let mut interfaces = Vec::new();
                         loop {
@@ -1880,7 +1880,7 @@ impl Parser {
                                 ReservedStaticRole::Interface,
                                 Some(line),
                             )?);
-                            if matches!(self.peek(), Token::Comma(_)) {
+                            if matches!(self.peek_ref(), Token::Comma(_)) {
                                 self.advance();
                             } else {
                                 break;
@@ -1923,7 +1923,7 @@ impl Parser {
                     self.validate_new_expression_suffix(true, false, line)?;
                     return Ok(expression);
                 }
-                if matches!(self.peek(), Token::LParen(_)) {
+                if matches!(self.peek_ref(), Token::LParen(_)) {
                     self.expect_lparen()?;
                     let class = self.with_new_postfix_error_suffix(
                         Some(", expecting \")\""),
@@ -1945,7 +1945,7 @@ impl Parser {
                     )?;
                     return Ok(expression);
                 }
-                if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+                if matches!(self.peek_ref(), Token::Variable(_, _) | Token::This(_)) {
                     let (class, call_line) = match self.advance() {
                         Token::Variable(name, variable_line) => {
                             (Self::variable_expression(name, variable_line), variable_line)
@@ -1982,9 +1982,9 @@ impl Parser {
                     | Token::Identifier(_, _)
                     | Token::Enum { .. }
                     | Token::Namespace => {
-                        let class_name = if self.peek() == Token::Namespace {
-                            if self.peek_at(1) != Token::Backslash {
-                                return Err(self.unexpected_token_error(&self.peek(), "\"class\"", self.current_token_source_line()));
+                        let class_name = if *self.peek_ref() == Token::Namespace {
+                            if *self.peek_at_ref(1) != Token::Backslash {
+                                return Err(self.unexpected_token_error(self.peek_ref(), "\"class\"", self.current_token_source_line()));
                             }
                             self.parse_namespace_relative_name()?
                         } else {
@@ -2092,7 +2092,7 @@ impl Parser {
     fn parse_array_elements(&mut self, end_token: Token) -> Result<Vec<ArrayElement>, String> {
         let mut elements = Vec::new();
         let mut separator_line = None;
-        if std::mem::discriminant(&self.peek()) == std::mem::discriminant(&end_token) {
+        if std::mem::discriminant(self.peek_ref()) == std::mem::discriminant(&end_token) {
             return Ok(elements);
         }
         loop {
@@ -2101,7 +2101,7 @@ impl Parser {
                 self.compile_error("Cannot use empty array elements in arrays", diagnostic_line);
                 self.advance();
                 separator_line = Some(comma_line);
-                if std::mem::discriminant(&self.peek()) == std::mem::discriminant(&end_token) {
+                if std::mem::discriminant(self.peek_ref()) == std::mem::discriminant(&end_token) {
                     break;
                 }
                 continue;
@@ -2117,9 +2117,9 @@ impl Parser {
                 });
             } else {
                 if self.tokens.get(self.pos).is_some_and(Self::is_statement_only_keyword) {
-                    return Err(self.expected_token_error(&self.peek(), &end_token, self.current_token_source_line()));
+                    return Err(self.expected_token_error(self.peek_ref(), &end_token, self.current_token_source_line()));
                 }
-                let leading_reference = if matches!(self.peek(), Token::Ampersand(_)) {
+                let leading_reference = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                     self.advance();
                     true
                 } else {
@@ -2127,12 +2127,12 @@ impl Parser {
                 };
                 let value = self.parse_expr()?;
                 let value = self.normalize_array_element_value(value);
-                if self.peek() == Token::DoubleArrow {
+                if *self.peek_ref() == Token::DoubleArrow {
                     if leading_reference {
                         return Err("Array keys cannot be references".into());
                     }
                     self.advance();
-                    let by_reference = if matches!(self.peek(), Token::Ampersand(_)) {
+                    let by_reference = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                         self.advance();
                         true
                     } else {
@@ -2160,7 +2160,7 @@ impl Parser {
             if let Token::Comma(comma_line) = self.peek() {
                 self.advance();
                 // Allow trailing comma
-                if std::mem::discriminant(&self.peek()) == std::mem::discriminant(&end_token) {
+                if std::mem::discriminant(self.peek_ref()) == std::mem::discriminant(&end_token) {
                     break;
                 }
                 separator_line = Some(comma_line);

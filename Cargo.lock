@@ -384,6 +384,7 @@ dependencies = [
  "serde_json",
  "serde_stacker",
  "sha-crypt",
+ "sha2 0.11.0",
  "stacker",
  "xxhash-rust",
 ]

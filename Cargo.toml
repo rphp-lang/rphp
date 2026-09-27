@@ -54,6 +54,9 @@ memchr = "2.8.0"
 md5crypt = "1.0.0"
 pwhash = "1.0.0"
 sha-crypt = { version = "0.6.0", default-features = false }
+# Already in the tree through sha-crypt; its SHA-512 core replaces the
+# hand-written compression that dominated phar signature verification.
+sha2 = { version = "0.11.0", default-features = false }
 serde = "1.0.228"
 serde_json = { version = "1.0.149", features = ["unbounded_depth"] }
 serde_stacker = "0.1.14"

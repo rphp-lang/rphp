@@ -2139,6 +2139,13 @@ const RESOLVED_CONSTANT_EXPRESSION_PREFIX: &str = "\0rphp-resolved-symbol\0";
 /// overlay, and a class scope translates `self::`/`parent::` spellings at
 /// lookup time. Nothing here copies the shared table: a 2,500-file bootstrap
 /// used to clone it several times per class.
+#[derive(Clone)]
+struct ChildKnownSignatures {
+    function_count: usize,
+    ref_args: Rc<HashMap<String, KnownRefArgs>>,
+    param_names: Rc<HashMap<String, Vec<String>>>,
+}
+
 pub(crate) struct ConstantScope<'a> {
     /// Expression-local spellings; highest precedence.
     overlay: Option<HashMap<String, Value>>,
@@ -3459,7 +3466,7 @@ pub struct Compiler {
     /// Reference signatures for functions known from parent scope (inherited
     /// by child compilers). The repeated-tail boundary is compiler-only data
     /// for call positions beyond the ordinary 64-bit runtime mask.
-    known_ref_args: HashMap<String, KnownRefArgs>,
+    known_ref_args: Rc<HashMap<String, KnownRefArgs>>,
     /// Source-linked constructors with no by-reference parameters. Keep this
     /// proof independent of access: private by-value constructors still need
     /// validation before argument evaluation.
@@ -3472,7 +3479,12 @@ pub struct Compiler {
     /// the compilation unit. Together with `known_ref_args`, this lets named
     /// arguments select the same FUNC_ARG l-value context before or after the
     /// textual function declaration.
-    known_param_names: HashMap<String, Vec<String>>,
+    known_param_names: Rc<HashMap<String, Vec<String>>>,
+    /// Child-compiler views of `known_ref_args`/`known_param_names` plus
+    /// this unit's declared functions, keyed by the function count they
+    /// were built from, so nested function bodies share one table instead
+    /// of rebuilding and rehashing it per function.
+    child_known_signatures: RefCell<Option<ChildKnownSignatures>>,
     /// Per-file strict_types flag from `declare(strict_types=1);`
     strict_types: bool,
     /// Lexical declaration state, propagated only to child source op arrays.
@@ -3902,10 +3914,11 @@ impl Compiler {
             generic_use_sites: Rc::new(RefCell::new(Vec::new())),
             compile_deprecations: Rc::new(RefCell::new(CompileDiagnostics::default())),
             deferred_error: None,
-            known_ref_args: HashMap::new(),
+            known_ref_args: Rc::default(),
             known_value_constructors: HashSet::new(),
             known_public_constructors: None,
-            known_param_names: HashMap::new(),
+            known_param_names: Rc::default(),
+            child_known_signatures: RefCell::new(None),
             strict_types: false,
             tick_interval: 0,
             zend_assertions: 1,
@@ -4849,8 +4862,8 @@ impl Compiler {
         Self::prescan_function_signatures_pass(
             stmts,
             namespace.as_deref(),
-            &mut self.known_ref_args,
-            &mut self.known_param_names,
+            Rc::make_mut(&mut self.known_ref_args),
+            Rc::make_mut(&mut self.known_param_names),
         );
     }
 
@@ -6136,38 +6149,52 @@ impl Compiler {
 
     /// Build a snapshot of all currently known function ref_args
     /// (own functions + inherited known_ref_args) to pass to child compilers.
-    fn build_known_ref_args(&self) -> HashMap<String, KnownRefArgs> {
-        let mut map = self.known_ref_args.clone();
-        for (fname, uf) in &self.functions {
-            let signature = &uf.common.sig;
-            map.insert(
-                fname.clone(),
-                KnownRefArgs {
-                    mask: signature.ref_args,
-                    variadic_start: (signature.is_variadic
-                        && signature.is_param_by_ref(signature.public_arity()))
-                    .then_some(signature.public_arity() as usize),
-                },
-            );
+    fn child_known_signatures(&self) -> ChildKnownSignatures {
+        let mut cache = self.child_known_signatures.borrow_mut();
+        let cached = cache.get_or_insert_with(|| ChildKnownSignatures {
+            function_count: 0,
+            ref_args: Rc::new((*self.known_ref_args).clone()),
+            param_names: Rc::new((*self.known_param_names).clone()),
+        });
+        // Functions are only appended while a unit compiles, so bring the
+        // shared view forward by the new declarations instead of rebuilding
+        // it for every nested body. `make_mut` copies only while a child
+        // compiler still holds the previous view, which does not happen
+        // between sibling function bodies.
+        if cached.function_count < self.functions.len() {
+            let ref_args = Rc::make_mut(&mut cached.ref_args);
+            let param_names = Rc::make_mut(&mut cached.param_names);
+            for (fname, uf) in &self.functions[cached.function_count..] {
+                let signature = &uf.common.sig;
+                ref_args.insert(
+                    fname.clone(),
+                    KnownRefArgs {
+                        mask: signature.ref_args,
+                        variadic_start: (signature.is_variadic
+                            && signature.is_param_by_ref(signature.public_arity()))
+                        .then_some(signature.public_arity() as usize),
+                    },
+                );
+                param_names.insert(
+                    fname.clone(),
+                    signature
+                        .param_names
+                        .iter()
+                        .map(|name| name.to_string())
+                        .collect(),
+                );
+            }
+            cached.function_count = self.functions.len();
         }
-        map
+        cached.clone()
     }
 
-    fn build_known_param_names(&self) -> HashMap<String, Vec<String>> {
-        let mut map = self.known_param_names.clone();
-        for (name, function) in &self.functions {
-            map.insert(
-                name.clone(),
-                function
-                    .common
-                    .sig
-                    .param_names
-                    .iter()
-                    .map(|name| name.to_string())
-                    .collect(),
-            );
-        }
-        map
+    fn build_known_ref_args(&self) -> Rc<HashMap<String, KnownRefArgs>> {
+        self.child_known_signatures().ref_args
+    }
+
+    fn build_known_param_names(&self) -> Rc<HashMap<String, Vec<String>>> {
+        self.child_known_signatures().param_names
     }
 
     pub fn compile(self, stmts: &[Stmt]) -> Result<CompileResult, CompileFailure> {

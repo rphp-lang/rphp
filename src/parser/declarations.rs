@@ -101,7 +101,7 @@ impl Parser {
         };
         if visibility.is_some()
             || is_final
-            || matches!(self.peek(), Token::Static(_) | Token::Abstract(_))
+            || matches!(self.peek_ref(), Token::Static(_) | Token::Abstract(_))
         {
             self.advance();
         }
@@ -111,7 +111,7 @@ impl Parser {
             self.advance();
             let _ = self.compile_error("Cannot use the readonly modifier on a method", line);
         }
-        let alias = if matches!(self.peek(), Token::Semicolon(_)) {
+        let alias = if matches!(self.peek_ref(), Token::Semicolon(_)) {
             None
         } else {
             let token = self.advance();
@@ -136,12 +136,12 @@ impl Parser {
     ) -> Result<Vec<ClassMethod>, String> {
         self.expect(&Token::LBrace(0))?;
         let mut hook_methods = Vec::new();
-        if matches!(self.peek(), Token::RBrace(_)) {
+        if matches!(self.peek_ref(), Token::RBrace(_)) {
             self.compile_error("Property hook list must not be empty", property.line);
         }
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let hook_attributes = self.parse_attribute_groups()?;
-            let hook_is_final = if matches!(self.peek(), Token::Final(_)) {
+            let hook_is_final = if matches!(self.peek_ref(), Token::Final(_)) {
                 self.advance();
                 true
             } else {
@@ -161,7 +161,7 @@ impl Parser {
                     property.line,
                 );
             }
-            let hook_returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+            let hook_returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                 self.advance();
                 true
             } else {
@@ -179,7 +179,7 @@ impl Parser {
                     hook_line,
                 );
             }
-            let params = if is_get && matches!(self.peek(), Token::LParen(_)) {
+            let params = if is_get && matches!(self.peek_ref(), Token::LParen(_)) {
                 self.expect_lparen()?;
                 let mut params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
@@ -200,7 +200,7 @@ impl Parser {
                 params
             } else if is_get {
                 Vec::new()
-            } else if matches!(self.peek(), Token::LParen(_)) {
+            } else if matches!(self.peek_ref(), Token::LParen(_)) {
                 self.expect_lparen()?;
                 let mut params = self.parse_param_list()?;
                 self.expect(&Token::RParen)?;
@@ -234,10 +234,10 @@ impl Parser {
                 }]
             };
             let previous_reference_context = std::mem::replace(&mut self.reference_return_context, hook_returns_by_ref);
-            let (body, hook_is_abstract) = if matches!(self.peek(), Token::Semicolon(_)) {
+            let (body, hook_is_abstract) = if matches!(self.peek_ref(), Token::Semicolon(_)) {
                 self.advance();
                 (Vec::new(), true)
-            } else if self.peek() == Token::DoubleArrow {
+            } else if *self.peek_ref() == Token::DoubleArrow {
                 self.advance();
                 let expression = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
@@ -311,7 +311,7 @@ impl Parser {
             if properties.is_empty() {
                 self.defer_duplicate_member_modifier(modifiers, line);
             }
-            let default = if self.peek() == Token::Assign {
+            let default = if *self.peek_ref() == Token::Assign {
                 self.advance();
                 Some(self.parse_expr()?)
             } else {
@@ -334,12 +334,12 @@ impl Parser {
                 has_set_hook: false,
                 has_abstract_set_hook: false,
             });
-            if !matches!(self.peek(), Token::Comma(_)) {
+            if !matches!(self.peek_ref(), Token::Comma(_)) {
                 break;
             }
             self.advance();
         }
-        if matches!(self.peek(), Token::LBrace(_)) {
+        if matches!(self.peek_ref(), Token::LBrace(_)) {
             if properties.len() != 1 {
                 return Err("Hooked properties cannot declare multiple properties".into());
             }
@@ -348,12 +348,12 @@ impl Parser {
             }
             self.advance();
             let property = properties.last_mut().unwrap();
-            if matches!(self.peek(), Token::RBrace(_)) {
+            if matches!(self.peek_ref(), Token::RBrace(_)) {
                 self.compile_error("Property hook list must not be empty", property.line);
             }
-            while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+            while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                 let hook_attributes = self.parse_attribute_groups()?;
-                let hook_is_final = if matches!(self.peek(), Token::Final(_)) {
+                let hook_is_final = if matches!(self.peek_ref(), Token::Final(_)) {
                     self.advance();
                     true
                 } else {
@@ -373,7 +373,7 @@ impl Parser {
                         property.line,
                     );
                 }
-                let hook_returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+                let hook_returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                     self.advance();
                     true
                 } else {
@@ -391,7 +391,7 @@ impl Parser {
                         hook_line,
                     );
                 }
-                let params = if is_get && matches!(self.peek(), Token::LParen(_)) {
+                let params = if is_get && matches!(self.peek_ref(), Token::LParen(_)) {
                     self.expect_lparen()?;
                     let mut params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
@@ -414,7 +414,7 @@ impl Parser {
                     params
                 } else if is_get {
                     Vec::new()
-                } else if matches!(self.peek(), Token::LParen(_)) {
+                } else if matches!(self.peek_ref(), Token::LParen(_)) {
                     self.expect_lparen()?;
                     let mut params = self.parse_param_list()?;
                     self.expect(&Token::RParen)?;
@@ -450,10 +450,10 @@ impl Parser {
                     }]
                 };
                 let previous_reference_context = std::mem::replace(&mut self.reference_return_context, hook_returns_by_ref);
-                let (body, hook_is_abstract) = if matches!(self.peek(), Token::Semicolon(_)) {
+                let (body, hook_is_abstract) = if matches!(self.peek_ref(), Token::Semicolon(_)) {
                     self.advance();
                     (Vec::new(), true)
-                } else if self.peek() == Token::DoubleArrow {
+                } else if *self.peek_ref() == Token::DoubleArrow {
                     self.advance();
                     let expression = self.parse_expr()?;
                     self.expect(&Token::Semicolon(0))?;
@@ -511,7 +511,7 @@ impl Parser {
     /// the member out of the AST: a non-enum case has no declaration semantics,
     /// but parsing its complete shape lets later syntax errors retain priority.
     fn parse_non_enum_case_declaration(&mut self) -> Result<usize, String> {
-        debug_assert!(matches!(self.peek(), Token::Case(_)));
+        debug_assert!(matches!(self.peek_ref(), Token::Case(_)));
         self.advance();
         let case_line = match self.advance() {
             Token::Identifier(_, line) | Token::Enum { line, .. } | Token::Exit { line, .. } => {
@@ -526,7 +526,7 @@ impl Parser {
             token => return Err(format!("Expected case name, got {token:?}")),
         };
         let _ = self.compile_error("Case can only be used in enums", case_line);
-        if self.peek() == Token::Assign {
+        if *self.peek_ref() == Token::Assign {
             self.advance();
             self.parse_expr()?;
         }
@@ -558,15 +558,15 @@ impl Parser {
         self.in_class_body = true;
         self.class_scope_active = true;
 
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
-            if matches!(self.peek(), Token::Case(_)) {
+            if matches!(self.peek_ref(), Token::Case(_)) {
                 let line = self.parse_non_enum_case_declaration()?;
                 invalid_case_line.get_or_insert(line);
                 continue;
             }
-            if matches!(self.peek(), Token::Use(_)) {
+            if matches!(self.peek_ref(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
@@ -574,9 +574,9 @@ impl Parser {
                 let (trait_uses, adaptation_line) =
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if matches!(self.peek(), Token::LBrace(_)) {
+                if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
-                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
                         trait_aliases
@@ -589,7 +589,7 @@ impl Parser {
                 continue;
             }
             let modifiers = self.parse_member_modifiers();
-            if matches!(self.peek(), Token::Function(_)) {
+            if matches!(self.peek_ref(), Token::Function(_)) {
                 let line = match self.advance() {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
@@ -600,7 +600,7 @@ impl Parser {
                 // return-reference contract is a separate compatibility
                 // slice, but retaining the declaration as an ordinary method
                 // keeps unexercised library helpers loadable.
-                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
+                let returns_by_ref = matches!(self.peek_ref(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -639,7 +639,7 @@ impl Parser {
                     generic_params,
                 });
                 methods.extend(promoted_hooks);
-            } else if self.peek() == Token::Const {
+            } else if *self.peek_ref() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(
                     &modifiers,
                     false,
@@ -653,7 +653,7 @@ impl Parser {
                     "syntax error, unexpected token \"case\", expecting variable",
                     line,
                 ));
-            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
+            } else if matches!(self.peek_ref(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 let (declared, hooks) =
                     self.parse_property_declaration(&modifiers, &attributes)?;
                 properties.extend(declared);
@@ -687,7 +687,7 @@ impl Parser {
         };
         self.expect(&Token::LBrace(0))?;
         let mut try_body = Vec::new();
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             try_body.push(self.parse_stmt_in_scope(false)?);
         }
         self.expect(&Token::RBrace(0))?;
@@ -700,7 +700,7 @@ impl Parser {
         }
 
         let mut catches = Vec::new();
-        while self.peek() == Token::Catch {
+        while *self.peek_ref() == Token::Catch {
             self.advance(); // consume 'catch'
             let catch_line = self.expect_lparen()?;
             // Parse exception type(s): ExA | ExB
@@ -710,7 +710,7 @@ impl Parser {
                 None,
             )?;
             types.push(type_name);
-            while self.peek() == Token::Pipe {
+            while *self.peek_ref() == Token::Pipe {
                 self.advance();
                 let t = self.parse_qualified_name_with_reserved_static(
                     ReservedStaticRole::Catch,
@@ -739,7 +739,7 @@ impl Parser {
             self.expect(&Token::RParen)?;
             self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
-            while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+            while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                 body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace(0))?;
@@ -751,11 +751,11 @@ impl Parser {
             });
         }
 
-        let finally_body = if self.peek() == Token::Finally {
+        let finally_body = if *self.peek_ref() == Token::Finally {
             self.advance();
             self.expect(&Token::LBrace(0))?;
             let mut body = Vec::new();
-            while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+            while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                 body.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace(0))?;
@@ -861,7 +861,7 @@ impl Parser {
         let (name, line) = self.parse_classlike_declaration_name("class")?;
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
-        let parent = if self.peek() == Token::Extends {
+        let parent = if *self.peek_ref() == Token::Extends {
             self.advance();
             Some(self.parse_generic_ancestor_with_reserved_static(
                 ReservedStaticRole::Class,
@@ -870,7 +870,7 @@ impl Parser {
         } else {
             None
         };
-        let implements = if self.peek() == Token::Implements {
+        let implements = if *self.peek_ref() == Token::Implements {
             self.advance();
             let mut ifaces = Vec::new();
             loop {
@@ -878,7 +878,7 @@ impl Parser {
                     ReservedStaticRole::Interface,
                     Some(line),
                 )?);
-                if matches!(self.peek(), Token::Comma(_)) {
+                if matches!(self.peek_ref(), Token::Comma(_)) {
                     self.advance();
                 } else {
                     break;
@@ -888,8 +888,8 @@ impl Parser {
         } else {
             Vec::new()
         };
-        if matches!(self.peek(), Token::Identifier(_, _))
-            && self.peek_at(1) == Token::Backslash
+        if matches!(self.peek_ref(), Token::Identifier(_, _))
+            && *self.peek_at_ref(1) == Token::Backslash
         {
             let line = self.current_token_source_line();
             let unexpected = self.parse_qualified_name()?;
@@ -913,16 +913,16 @@ impl Parser {
         let prev_in_class = self.in_class_body;
         self.in_class_body = true;
 
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
-            if matches!(self.peek(), Token::Case(_)) {
+            if matches!(self.peek_ref(), Token::Case(_)) {
                 let line = self.parse_non_enum_case_declaration()?;
                 invalid_case_line.get_or_insert(line);
                 continue;
             }
             // Trait `use` statements: use Foo, Bar;
-            if matches!(self.peek(), Token::Use(_)) {
+            if matches!(self.peek_ref(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
@@ -930,12 +930,12 @@ impl Parser {
                 let (trait_uses, adaptation_line) =
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if matches!(self.peek(), Token::LBrace(_)) {
+                if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
-                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
-                        if self.peek() == Token::Insteadof {
+                        if *self.peek_ref() == Token::Insteadof {
                             self.advance();
                             let Some(trait_name) = trait_name else {
                                 return Err("Trait precedence requires an explicit trait name".into());
@@ -946,7 +946,7 @@ impl Parser {
                                     ReservedStaticRole::Trait,
                                     Some(adaptation_line),
                                 )?);
-                                if matches!(self.peek(), Token::Comma(_)) {
+                                if matches!(self.peek_ref(), Token::Comma(_)) {
                                     self.advance();
                                 } else {
                                     break;
@@ -972,14 +972,14 @@ impl Parser {
 
             let modifiers = self.parse_member_modifiers();
 
-            if matches!(self.peek(), Token::Function(_)) {
+            if matches!(self.peek_ref(), Token::Function(_)) {
                 // Method
                 let line = match self.advance() {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
                 self.defer_method_modifier_diagnostics(&modifiers, line);
-                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
+                let returns_by_ref = matches!(self.peek_ref(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -1015,7 +1015,7 @@ impl Parser {
                     generic_params,
                 });
                 methods.extend(promoted_hooks);
-            } else if self.peek() == Token::Const {
+            } else if *self.peek_ref() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(
                     &modifiers,
                     false,
@@ -1029,7 +1029,7 @@ impl Parser {
                     "syntax error, unexpected token \"case\", expecting variable",
                     line,
                 ));
-            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
+            } else if matches!(self.peek_ref(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint: `private int $x = 0;`
                 let (declared, hooks) =
                     self.parse_property_declaration(&modifiers, &attributes)?;
@@ -1099,15 +1099,15 @@ impl Parser {
         let mut trait_precedences = Vec::new();
         let mut invalid_case_line = None;
 
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
-            if matches!(self.peek(), Token::Case(_)) {
+            if matches!(self.peek_ref(), Token::Case(_)) {
                 let line = self.parse_non_enum_case_declaration()?;
                 invalid_case_line.get_or_insert(line);
                 continue;
             }
-            if matches!(self.peek(), Token::Use(_)) {
+            if matches!(self.peek_ref(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
@@ -1115,12 +1115,12 @@ impl Parser {
                 let (trait_uses, adaptation_line) =
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if matches!(self.peek(), Token::LBrace(_)) {
+                if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
-                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
-                        if self.peek() == Token::Insteadof {
+                        if *self.peek_ref() == Token::Insteadof {
                             self.advance();
                             let Some(trait_name) = trait_name else {
                                 return Err("Trait precedence requires an explicit trait name".into());
@@ -1131,7 +1131,7 @@ impl Parser {
                                     ReservedStaticRole::Trait,
                                     Some(adaptation_line),
                                 )?);
-                                if matches!(self.peek(), Token::Comma(_)) {
+                                if matches!(self.peek_ref(), Token::Comma(_)) {
                                     self.advance();
                                 } else {
                                     break;
@@ -1156,13 +1156,13 @@ impl Parser {
             }
             let modifiers = self.parse_member_modifiers();
 
-            if matches!(self.peek(), Token::Function(_)) {
+            if matches!(self.peek_ref(), Token::Function(_)) {
                 let line = match self.advance() {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
                 self.defer_method_modifier_diagnostics(&modifiers, line);
-                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
+                let returns_by_ref = matches!(self.peek_ref(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -1198,7 +1198,7 @@ impl Parser {
                     generic_params: method_generic_params,
                 });
                 methods.extend(promoted_hooks);
-            } else if self.peek() == Token::Const {
+            } else if *self.peek_ref() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(
                     &modifiers,
                     false,
@@ -1212,7 +1212,7 @@ impl Parser {
                     "syntax error, unexpected token \"case\", expecting variable",
                     line,
                 ));
-            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
+            } else if matches!(self.peek_ref(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 // Property — possibly with type hint
                 let (declared, hooks) =
                     self.parse_property_declaration(&modifiers, &attributes)?;
@@ -1253,7 +1253,7 @@ impl Parser {
         let generic_params = self.parse_generic_parameters()?;
         self.push_generic_scope(&generic_params);
         // interface Foo extends Bar, Baz { ... }
-        let extends = if self.peek() == Token::Extends {
+        let extends = if *self.peek_ref() == Token::Extends {
             self.advance();
             let mut parents = Vec::new();
             loop {
@@ -1261,7 +1261,7 @@ impl Parser {
                     ReservedStaticRole::Interface,
                     Some(line),
                 )?);
-                if matches!(self.peek(), Token::Comma(_)) {
+                if matches!(self.peek_ref(), Token::Comma(_)) {
                     self.advance();
                 } else {
                     break;
@@ -1277,15 +1277,15 @@ impl Parser {
         let mut constants = Vec::new();
         let mut methods = Vec::new();
         let mut invalid_case_line = None;
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
-            if matches!(self.peek(), Token::Case(_)) {
+            if matches!(self.peek_ref(), Token::Case(_)) {
                 let line = self.parse_non_enum_case_declaration()?;
                 invalid_case_line.get_or_insert(line);
                 continue;
             }
-            if matches!(self.peek(), Token::Use(_)) {
+            if matches!(self.peek_ref(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
@@ -1297,12 +1297,12 @@ impl Parser {
                     .map(|ancestor| ancestor.name.rsplit('\\').next().unwrap_or(&ancestor.name))
                     .unwrap_or("")
                     .to_string();
-                if matches!(self.peek(), Token::LBrace(_)) {
+                if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
-                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
-                        if self.peek() == Token::Insteadof {
+                        if *self.peek_ref() == Token::Insteadof {
                             self.advance();
                             let Some(_) = trait_name else {
                                 return Err(
@@ -1314,7 +1314,7 @@ impl Parser {
                                     ReservedStaticRole::Trait,
                                     Some(adaptation_line),
                                 )?;
-                                if matches!(self.peek(), Token::Comma(_)) {
+                                if matches!(self.peek_ref(), Token::Comma(_)) {
                                     self.advance();
                                 } else {
                                     break;
@@ -1338,7 +1338,7 @@ impl Parser {
                 continue;
             }
             let modifiers = self.parse_member_modifiers();
-            if self.peek() == Token::Const {
+            if *self.peek_ref() == Token::Const {
                 constants.extend(self.parse_class_constant_declaration(
                     &modifiers,
                     true,
@@ -1352,13 +1352,13 @@ impl Parser {
                     "syntax error, unexpected token \"case\", expecting variable",
                     line,
                 ));
-            } else if matches!(self.peek(), Token::Function(_)) {
+            } else if matches!(self.peek_ref(), Token::Function(_)) {
                 let line = match self.advance() {
                     Token::Function(line) => line,
                     _ => unreachable!("method parser starts at function"),
                 };
                 self.defer_method_modifier_diagnostics(&modifiers, line);
-                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
+                let returns_by_ref = matches!(self.peek_ref(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let token = self.advance();
                 let method_name = Self::token_as_named_arg_label(&token)
@@ -1418,7 +1418,7 @@ impl Parser {
                     generic_params: method_generic_params,
                 });
                 methods.extend(promoted_hooks);
-            } else if matches!(self.peek(), Token::Variable(_, _)) || self.is_type_hint_start() {
+            } else if matches!(self.peek_ref(), Token::Variable(_, _)) || self.is_type_hint_start() {
                 let (declared, hooks) =
                     self.parse_property_declaration(&modifiers, &attributes)?;
                 properties.extend(declared);
@@ -1457,14 +1457,14 @@ impl Parser {
         self.advance(); // consume 'enum'
         let (name, line) = self.parse_classlike_declaration_name("enum")?;
         // Optional backing type: enum Foo: string { ... }
-        let backing_type = if self.peek() == Token::Colon {
+        let backing_type = if *self.peek_ref() == Token::Colon {
             self.advance(); // consume ':'
             let hint = self.parse_base_type_hint()?;
             Some(self.maybe_parse_compound_type(hint)?)
         } else {
             None
         };
-        let implements = if self.peek() == Token::Implements {
+        let implements = if *self.peek_ref() == Token::Implements {
             self.advance();
             let mut interfaces = Vec::new();
             loop {
@@ -1472,7 +1472,7 @@ impl Parser {
                     ReservedStaticRole::Interface,
                     Some(line),
                 )?);
-                if !matches!(self.peek(), Token::Comma(_)) {
+                if !matches!(self.peek_ref(), Token::Comma(_)) {
                     break;
                 }
                 self.advance();
@@ -1493,10 +1493,10 @@ impl Parser {
         let prev_in_class = self.in_class_body;
         self.in_class_body = true;
 
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             let member_start = self.pos;
             let attributes = self.parse_attribute_groups()?;
-            if matches!(self.peek(), Token::Use(_)) {
+            if matches!(self.peek_ref(), Token::Use(_)) {
                 let use_line = match self.advance() {
                     Token::Use(line) => line,
                     _ => unreachable!("trait use parser starts at use"),
@@ -1504,9 +1504,9 @@ impl Parser {
                 let (trait_uses, adaptation_line) =
                     self.parse_trait_ancestor_list(use_line)?;
                 uses.extend(trait_uses);
-                if matches!(self.peek(), Token::LBrace(_)) {
+                if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
-                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         let (trait_name, method) =
                             self.parse_trait_method_reference(adaptation_line)?;
                         trait_aliases
@@ -1516,14 +1516,14 @@ impl Parser {
                 } else {
                     self.expect(&Token::Semicolon(0))?;
                 }
-            } else if matches!(self.peek(), Token::Case(_)) {
+            } else if matches!(self.peek_ref(), Token::Case(_)) {
                 self.advance(); // consume 'case'
                 let (case_name, case_line) = match self.advance() {
                     Token::Identifier(n, line) | Token::Enum { name: n, line } => (n, line),
                     Token::Exit { name, line } => (name, line),
                     other => return Err(format!("Expected enum case name, got {:?}", other)),
                 };
-                let value = if self.peek() == Token::Assign {
+                let value = if *self.peek_ref() == Token::Assign {
                     self.advance();
                     Some(self.parse_expr()?)
                 } else {
@@ -1539,20 +1539,20 @@ impl Parser {
             } else {
                 // Method in enum
                 let modifiers = self.parse_member_modifiers();
-                if self.peek() == Token::Const {
+                if *self.peek_ref() == Token::Const {
                     constants.extend(self.parse_class_constant_declaration(
                         &modifiers,
                         false,
                         &attributes,
                         self.class_member_doc_comment(member_start, self.pos),
                     )?);
-                } else if matches!(self.peek(), Token::Function(_)) {
+                } else if matches!(self.peek_ref(), Token::Function(_)) {
                     let line = match self.advance() {
                         Token::Function(line) => line,
                         _ => unreachable!("method parser starts at function"),
                     };
                     self.defer_method_modifier_diagnostics(&modifiers, line);
-                    let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
+                    let returns_by_ref = matches!(self.peek_ref(), Token::Ampersand(_));
                     self.consume_reference_return_marker();
                     let token = self.advance();
                     let method_name = Self::token_as_named_arg_label(&token)
@@ -1583,7 +1583,7 @@ impl Parser {
                         return_type,
                         generic_params,
                     });
-                } else if matches!(self.peek(), Token::Variable(_, _))
+                } else if matches!(self.peek_ref(), Token::Variable(_, _))
                     || self.is_type_hint_start()
                 {
                     let (declared, hooks) =
@@ -1767,7 +1767,7 @@ impl Parser {
                 type_hint: type_hint.clone(),
                 is_final: modifiers.is_final,
             });
-            if !matches!(self.peek(), Token::Comma(_)) {
+            if !matches!(self.peek_ref(), Token::Comma(_)) {
                 break;
             }
             self.advance();
@@ -1777,7 +1777,7 @@ impl Parser {
     }
 
     fn try_parse_class_constant_type(&mut self) -> Result<Option<TypeHint>, String> {
-        if self.peek_at(1) == Token::Assign
+        if *self.peek_at_ref(1) == Token::Assign
             && self.tokens.get(self.pos).is_some_and(|token| {
                 matches!(token, Token::Identifier(..) | Token::Enum { .. } | Token::Goto { .. })
                     || Self::token_as_named_arg_label(token).is_some()
@@ -1786,11 +1786,11 @@ impl Parser {
             return Ok(None);
         }
 
-        let hint = if self.peek() == Token::Question {
+        let hint = if *self.peek_ref() == Token::Question {
             self.advance();
             TypeHint::Nullable(Box::new(self.parse_base_type_hint()?))
         } else if matches!(
-            self.peek(),
+            self.peek_ref(),
             Token::Identifier(_, _)
                 | Token::ArrayKw
                 | Token::Null
@@ -1821,7 +1821,7 @@ impl Parser {
         method_line: usize,
     ) -> Result<(Vec<Stmt>, bool), String> {
         if modifiers.duplicate.is_some() {
-            if matches!(self.peek(), Token::Semicolon(_)) {
+            if matches!(self.peek_ref(), Token::Semicolon(_)) {
                 self.advance();
                 return Ok((Vec::new(), false));
             }
@@ -1835,14 +1835,14 @@ impl Parser {
                     method_line,
                 );
             }
-            if matches!(self.peek(), Token::Semicolon(_)) {
+            if matches!(self.peek_ref(), Token::Semicolon(_)) {
                 self.advance();
                 return Ok((Vec::new(), false));
             }
             let body = self.parse_function_body()?;
             return Ok((body, true));
         }
-        if matches!(self.peek(), Token::Semicolon(_)) {
+        if matches!(self.peek_ref(), Token::Semicolon(_)) {
             self.advance();
             return Ok((Vec::new(), false));
         }
@@ -1863,7 +1863,7 @@ impl Parser {
 
         let mut arms = Vec::new();
         let mut has_default = false;
-        while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+        while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
             if let Token::Default(default_line) = self.peek() {
                 if has_default {
                     let _ = self.compile_error(
@@ -1874,8 +1874,8 @@ impl Parser {
                     has_default = true;
                 }
                 self.advance();
-                if matches!(self.peek(), Token::Comma(_))
-                    && self.peek_at(1) == Token::DoubleArrow
+                if matches!(self.peek_ref(), Token::Comma(_))
+                    && *self.peek_at_ref(1) == Token::DoubleArrow
                 {
                     self.advance();
                 }
@@ -1889,9 +1889,9 @@ impl Parser {
                 // One or more comma-separated conditions
                 let mut conditions = Vec::new();
                 conditions.push(self.parse_expr()?);
-                while matches!(self.peek(), Token::Comma(_)) {
+                while matches!(self.peek_ref(), Token::Comma(_)) {
                     // A comma immediately before => terminates the condition list.
-                    if self.peek_at(1) == Token::DoubleArrow {
+                    if *self.peek_at_ref(1) == Token::DoubleArrow {
                         self.advance();
                         break;
                     }
@@ -1906,7 +1906,7 @@ impl Parser {
                 });
             }
             // Optional trailing comma between arms
-            if matches!(self.peek(), Token::Comma(_)) {
+            if matches!(self.peek_ref(), Token::Comma(_)) {
                 self.advance();
             }
         }
@@ -1925,7 +1925,7 @@ impl Parser {
             Token::Fn(line) => line,
             token => return Err(format!("Expected fn, got {token:?}")),
         };
-        let returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+        let returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -2300,7 +2300,7 @@ impl Parser {
             Token::Function(line) => line,
             token => return Err(format!("Expected function, got {token:?}")),
         };
-        let returns_by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+        let returns_by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
             self.advance();
             true
         } else {
@@ -2313,11 +2313,11 @@ impl Parser {
         self.expect(&Token::RParen)?;
 
         let mut use_vars = Vec::new();
-        if matches!(self.peek(), Token::Use(_)) {
+        if matches!(self.peek_ref(), Token::Use(_)) {
             self.advance();
             self.expect_lparen()?;
             loop {
-                let is_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+                let is_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                     self.advance();
                     true
                 } else {
@@ -2371,7 +2371,7 @@ impl Parser {
                     break;
                 };
                 self.advance();
-                if self.peek() == Token::RParen {
+                if *self.peek_ref() == Token::RParen {
                     break;
                 }
                 if let Token::Comma(second_comma_line) = self.peek() {

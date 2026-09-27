@@ -19,7 +19,7 @@ impl Parser {
     }
 
     fn consume_first_class_callable_placeholder(&mut self) -> bool {
-        if !matches!(self.peek(), Token::DotDotDot(_)) || self.peek_at(1) != Token::RParen {
+        if !matches!(self.peek_ref(), Token::DotDotDot(_)) || *self.peek_at_ref(1) != Token::RParen {
             return false;
         }
         self.advance();
@@ -64,7 +64,7 @@ impl Parser {
             Token::Dollar(line) => line,
             token => return Err(format!("Expected dynamic static member, got {token:?}")),
         };
-        let name = if matches!(self.peek(), Token::LBrace(_)) {
+        let name = if matches!(self.peek_ref(), Token::LBrace(_)) {
             self.advance();
             let name = self.parse_expr()?;
             self.expect(&Token::RBrace(0))?;
@@ -81,7 +81,7 @@ impl Parser {
     fn parse_dynamic_new_class_expression(&mut self, mut expr: Expr) -> Result<Expr, String> {
         loop {
             match self.peek() {
-                Token::LBracket(line) if self.peek_at(1) != Token::RBracket => {
+                Token::LBracket(line) if *self.peek_at_ref(1) != Token::RBracket => {
                     self.advance();
                     let index = self.parse_expr()?;
                     self.expect(&Token::RBracket)?;
@@ -92,9 +92,9 @@ impl Parser {
                     };
                 }
                 Token::Arrow | Token::NullSafe => {
-                    let nullsafe = matches!(self.peek(), Token::NullSafe);
+                    let nullsafe = matches!(self.peek_ref(), Token::NullSafe);
                     self.advance();
-                    if matches!(self.peek(), Token::LBrace(_)) {
+                    if matches!(self.peek_ref(), Token::LBrace(_)) {
                         self.advance();
                         let property = self.parse_expr()?;
                         self.expect(&Token::RBrace(0))?;
@@ -119,7 +119,7 @@ impl Parser {
                         };
                         continue;
                     }
-                    if matches!(self.peek(), Token::Dollar(_)) {
+                    if matches!(self.peek_ref(), Token::Dollar(_)) {
                         let property = self.parse_primary_atom()?;
                         expr = Expr::DynamicPropertyAccess {
                             object: Box::new(expr),
@@ -141,10 +141,10 @@ impl Parser {
                     };
                 }
                 Token::DoubleColon
-                    if matches!(self.peek_at(1), Token::Dollar(_) | Token::Variable(_, _)) =>
+                    if matches!(self.peek_at_ref(1), Token::Dollar(_) | Token::Variable(_, _)) =>
                 {
                     self.advance();
-                    let (property, property_line) = if matches!(self.peek(), Token::Dollar(_)) {
+                    let (property, property_line) = if matches!(self.peek_ref(), Token::Dollar(_)) {
                         self.parse_indirect_static_member_name()?
                     } else {
                         match self.advance() {
@@ -171,13 +171,13 @@ impl Parser {
         &mut self,
         class_name: String,
     ) -> Result<Option<Expr>, String> {
-        if self.peek() != Token::DoubleColon
-            || !matches!(self.peek_at(1), Token::Dollar(_) | Token::Variable(_, _))
+        if *self.peek_ref() != Token::DoubleColon
+            || !matches!(self.peek_at_ref(1), Token::Dollar(_) | Token::Variable(_, _))
         {
             return Ok(None);
         }
         self.advance();
-        let expr = if matches!(self.peek(), Token::Dollar(_)) {
+        let expr = if matches!(self.peek_ref(), Token::Dollar(_)) {
             let (property, line) = self.parse_indirect_static_member_name()?;
             Expr::DynamicNamedStaticProperty {
                 class_name,
@@ -204,10 +204,10 @@ impl Parser {
         named_class_syntax: bool,
         line: usize,
     ) -> Result<(), String> {
-        if self.peek() == Token::Assign {
+        if *self.peek_ref() == Token::Assign {
             return Err(self.source_error("syntax error, unexpected token \"=\"", line));
         }
-        if self.empty_dimension_unset_context && self.peek() == Token::RParen {
+        if self.empty_dimension_unset_context && *self.peek_ref() == Token::RParen {
             return Err(self.source_error(
                 "syntax error, unexpected token \")\", expecting \"->\" or \"?->\" or \"[\"",
                 line,
@@ -261,11 +261,11 @@ impl Parser {
             .last_primary_line
             .unwrap_or_else(|| self.closest_token_source_line());
         self.expect(&Token::DoubleColon)?;
-        if matches!(self.peek(), Token::LBrace(_)) {
+        if matches!(self.peek_ref(), Token::LBrace(_)) {
             self.advance();
             let constant = self.parse_expr()?;
             self.expect(&Token::RBrace(0))?;
-            if matches!(self.peek(), Token::LParen(_)) {
+            if matches!(self.peek_ref(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
                         return Ok(self.first_class_member_callable(
@@ -302,9 +302,9 @@ impl Parser {
                 line: owner_line,
             });
         }
-        if matches!(self.peek(), Token::Dollar(_)) {
+        if matches!(self.peek_ref(), Token::Dollar(_)) {
             let (property, dollar_line) = self.parse_indirect_static_member_name()?;
-            if matches!(self.peek(), Token::LParen(_)) {
+            if matches!(self.peek_ref(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
                         return Ok(self.first_class_member_callable(
@@ -347,13 +347,13 @@ impl Parser {
                 line: dollar_line,
             });
         }
-        if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+        if matches!(self.peek_ref(), Token::Variable(_, _) | Token::This(_)) {
             let (property, property_line) = match self.advance() {
                 Token::Variable(name, line) => (name, line),
                 Token::This(line) => ("this".to_string(), line),
                 _ => unreachable!(),
             };
-            if matches!(self.peek(), Token::LParen(_)) {
+            if matches!(self.peek_ref(), Token::LParen(_)) {
                 let line = self.expect_lparen()?;
                 if self.consume_first_class_callable_placeholder() {
                         return Ok(self.first_class_member_callable(
@@ -411,7 +411,7 @@ impl Parser {
         let member = Self::token_as_named_arg_label(&token)
             .ok_or_else(|| format!("Expected member name after ::, got {token:?}"))?;
         let generic_args = self.parse_optional_turbofish()?;
-        if !matches!(self.peek(), Token::LParen(_)) {
+        if !matches!(self.peek_ref(), Token::LParen(_)) {
             if !generic_args.is_empty() {
                 return Err("Generic type arguments must be followed by a method call".into());
             }
@@ -424,7 +424,7 @@ impl Parser {
 
         let paren_line = self.expect_lparen()?;
         let line = member_line.unwrap_or(paren_line);
-        if matches!(self.peek(), Token::DotDotDot(_)) && self.peek_at(1) == Token::RParen {
+        if matches!(self.peek_ref(), Token::DotDotDot(_)) && *self.peek_at_ref(1) == Token::RParen {
             if !generic_args.is_empty() {
                 return Err("Generic first-class static callables are not supported yet".into());
             }
@@ -471,9 +471,9 @@ impl Parser {
                     // An empty dimension is only valid as a write target. Leave
                     // it for the statement parser instead of trying to parse
                     // `]` as an index expression.
-                    if self.peek_at(1) == Token::RBracket {
+                    if *self.peek_at_ref(1) == Token::RBracket {
                         if matches!(
-                            self.peek_at(2),
+                            self.peek_at_ref(2),
                             Token::LBracket(_)
                                 | Token::Arrow
                                 | Token::NullSafe
@@ -489,8 +489,8 @@ impl Parser {
                             continue;
                         }
                         if self.preserve_empty_dimension_suffix
-                            || self.peek_at(2) == Token::Assign
-                            || Self::compound_assign_op(&self.peek_at(2)).is_some()
+                            || *self.peek_at_ref(2) == Token::Assign
+                            || Self::compound_assign_op(self.peek_at_ref(2)).is_some()
                         {
                             break;
                         }
@@ -538,7 +538,7 @@ impl Parser {
                         };
                     }
                 }
-                Token::DoubleColon if self.peek_at(1) == Token::Less => {
+                Token::DoubleColon if *self.peek_at_ref(1) == Token::Less => {
                     let generic_args = self.parse_optional_turbofish()?;
                     let line = self.expect_lparen()?;
                     let args = self.parse_call_args()?;
@@ -553,9 +553,9 @@ impl Parser {
                 }
                 Token::DoubleColon => {
                     self.advance();
-                    if matches!(self.peek(), Token::Dollar(_)) {
+                    if matches!(self.peek_ref(), Token::Dollar(_)) {
                         let (property, dollar_line) = self.parse_indirect_static_member_name()?;
-                        if matches!(self.peek(), Token::LParen(_)) {
+                        if matches!(self.peek_ref(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             let method = Expr::DynamicVariable {
                                 name: Box::new(property),
@@ -582,13 +582,13 @@ impl Parser {
                         }
                         continue;
                     }
-                    if matches!(self.peek(), Token::Variable(_, _) | Token::This(_)) {
+                    if matches!(self.peek_ref(), Token::Variable(_, _) | Token::This(_)) {
                         let (member_name, member_line) = match self.advance() {
                             Token::Variable(name, line) => (name, line),
                             Token::This(line) => ("this".to_string(), line),
                             _ => unreachable!(),
                         };
-                        if matches!(self.peek(), Token::LParen(_)) {
+                        if matches!(self.peek_ref(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             let method = Expr::Variable {
                                 name: member_name,
@@ -615,7 +615,7 @@ impl Parser {
                         }
                         continue;
                     }
-                    let dynamic_name = matches!(self.peek(), Token::LBrace(_));
+                    let dynamic_name = matches!(self.peek_ref(), Token::LBrace(_));
                     let constant = if dynamic_name {
                         self.advance();
                         let constant = self.parse_expr()?;
@@ -628,7 +628,7 @@ impl Parser {
                         })?;
                         Expr::StringLiteral(name)
                     };
-                    if matches!(self.peek(), Token::LParen(_)) {
+                    if matches!(self.peek_ref(), Token::LParen(_)) {
                         let line = self.expect_lparen()?;
                         if self.consume_first_class_callable_placeholder() {
                             expr = self.first_class_member_callable(expr, constant, true, line);
@@ -653,13 +653,13 @@ impl Parser {
                     };
                 }
                 Token::Arrow | Token::NullSafe => {
-                    let nullsafe = matches!(self.peek(), Token::NullSafe);
+                    let nullsafe = matches!(self.peek_ref(), Token::NullSafe);
                     self.advance();
-                    if matches!(self.peek(), Token::LBrace(_)) {
+                    if matches!(self.peek_ref(), Token::LBrace(_)) {
                         self.advance();
                         let member = self.parse_expr()?;
                         self.expect(&Token::RBrace(0))?;
-                        if matches!(self.peek(), Token::LParen(_)) {
+                        if matches!(self.peek_ref(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             if self.consume_first_class_callable_placeholder() {
                                 expr = if nullsafe {
@@ -696,9 +696,9 @@ impl Parser {
                         }
                         continue;
                     }
-                    if matches!(self.peek(), Token::Dollar(_)) {
+                    if matches!(self.peek_ref(), Token::Dollar(_)) {
                         let member = self.parse_primary_atom()?;
-                        if matches!(self.peek(), Token::LParen(_)) {
+                        if matches!(self.peek_ref(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             if self.consume_first_class_callable_placeholder() {
                                 expr = if nullsafe {
@@ -741,7 +741,7 @@ impl Parser {
                             name: member_name,
                             line: member_line,
                         };
-                        if matches!(self.peek(), Token::LParen(_)) {
+                        if matches!(self.peek_ref(), Token::LParen(_)) {
                             let line = self.expect_lparen()?;
                             if self.consume_first_class_callable_placeholder() {
                                 expr = if nullsafe {
@@ -795,11 +795,11 @@ impl Parser {
                         )
                     })?;
                     let generic_args = self.parse_optional_turbofish()?;
-                    if matches!(self.peek(), Token::LParen(_)) {
+                    if matches!(self.peek_ref(), Token::LParen(_)) {
                         let paren_line = self.expect_lparen()?;
                         let line = member_line.unwrap_or(paren_line);
-                        if matches!(self.peek(), Token::DotDotDot(_))
-                            && self.peek_at(1) == Token::RParen
+                        if matches!(self.peek_ref(), Token::DotDotDot(_))
+                            && *self.peek_at_ref(1) == Token::RParen
                         {
                             if !generic_args.is_empty() {
                                 return Err(
@@ -843,7 +843,7 @@ impl Parser {
                     }
                 }
                 Token::PlusPlus | Token::MinusMinus => {
-                    let increment = self.peek() == Token::PlusPlus;
+                    let increment = *self.peek_ref() == Token::PlusPlus;
                     self.advance();
                     if let Some(line) = Self::nullsafe_chain_line(&expr) {
                         expr = self.nullsafe_write_error(line);

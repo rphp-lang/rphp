@@ -11,11 +11,11 @@ impl Parser {
     const DEDICATED_STACK_SIZE: usize = 64 * 1024 * 1024;
 
     fn parse_foreach_destructure(&mut self) -> Result<Option<Vec<ListTarget>>, String> {
-        let end = if matches!(self.peek(), Token::LBracket(_)) {
+        let end = if matches!(self.peek_ref(), Token::LBracket(_)) {
             self.advance();
             Token::RBracket
-        } else if matches!(self.peek(), Token::Identifier(ref name, _) if name.eq_ignore_ascii_case("list"))
-            && matches!(self.peek_at(1), Token::LParen(_))
+        } else if matches!(self.peek_ref(), Token::Identifier(name, _) if name.eq_ignore_ascii_case("list"))
+            && matches!(self.peek_at_ref(1), Token::LParen(_))
         {
             self.advance();
             self.expect_lparen()?;
@@ -206,8 +206,8 @@ impl Parser {
     #[inline(never)]
     fn parse_tick_interval(&mut self, line: usize) -> Result<i64, String> {
         let mut offset = 0;
-        while matches!(self.peek_at(offset), Token::LParen(_)) { offset += 1; }
-        let literal = matches!(self.peek_at(offset), Token::Integer(_) | Token::Float(_)
+        while matches!(self.peek_at_ref(offset), Token::LParen(_)) { offset += 1; }
+        let literal = matches!(self.peek_at_ref(offset), Token::Integer(_) | Token::Float(_)
             | Token::StringLiteral(_) | Token::BinaryStringLiteral(_));
         let expression = self.parse_expr()?;
         let value = if literal { match expression {
@@ -237,18 +237,18 @@ impl Parser {
         if self.outermost_scope
             && self.namespace_style == Some(NamespaceDeclarationStyle::Bracketed)
             && !matches!(
-                self.peek(),
+                self.peek_ref(),
                 Token::Namespace | Token::Semicolon(_) | Token::HaltCompiler { .. } | Token::Eof
             )
         {
             let line = self.current_token_source_line();
             self.compile_error("No code may exist outside of namespace {}", line);
         }
-        if !matches!(self.peek(), Token::Declare | Token::Semicolon(_)) {
+        if !matches!(self.peek_ref(), Token::Declare | Token::Semicolon(_)) {
             self.strict_types_allowed = false;
         }
         if let Token::Identifier(name, _) | Token::Enum { name, .. } = self.peek() {
-            if self.peek_at(1) == Token::Colon {
+            if *self.peek_at_ref(1) == Token::Colon {
                 let line = self.current_token_source_line();
                 self.advance();
                 self.advance();
@@ -256,7 +256,7 @@ impl Parser {
             }
         }
         if let Token::Exit { line, .. } = self.peek()
-            && self.peek_at(1) == Token::Colon
+            && *self.peek_at_ref(1) == Token::Colon
         {
             return Err(self.source_error("syntax error, unexpected token \":\"", line));
         }
@@ -290,7 +290,7 @@ impl Parser {
             Token::LBrace(_) => {
                 self.advance();
                 let mut body = Vec::new();
-                while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                     body.push(self.parse_stmt_in_scope(false)?);
                 }
                 self.expect(&Token::RBrace(0))?;
@@ -373,29 +373,29 @@ impl Parser {
                         }
                     };
                     directives.push((directive, value));
-                    if !matches!(self.peek(), Token::Comma(_)) {
+                    if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
                 }
                 self.expect(&Token::RParen)?;
                 let invalid_strict_block = strict_line.is_some()
-                    && !matches!(self.peek(), Token::Semicolon(_));
+                    && !matches!(self.peek_ref(), Token::Semicolon(_));
                 if invalid_strict_block {
                     let _ = self.compile_error(
                         "strict_types declaration must not use block mode",
                         strict_line.unwrap_or(1),
                     );
                 }
-                let body = if matches!(self.peek(), Token::LBrace(_)) {
+                let body = if matches!(self.peek_ref(), Token::LBrace(_)) {
                     self.advance();
                     let mut body = Vec::new();
-                    while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                         body.push(self.parse_stmt_in_scope(false)?);
                     }
                     self.expect(&Token::RBrace(0))?;
                     Some(body)
-                } else if self.peek() == Token::Colon {
+                } else if *self.peek_ref() == Token::Colon {
                     self.advance();
                     let body = self.parse_statements_until(|token| {
                         matches!(token, Token::Identifier(name, _) if name.eq_ignore_ascii_case("enddeclare"))
@@ -403,7 +403,7 @@ impl Parser {
                     self.advance();
                     self.expect(&Token::Semicolon(0))?;
                     Some(body)
-                } else if matches!(self.peek(), Token::Semicolon(_)) {
+                } else if matches!(self.peek_ref(), Token::Semicolon(_)) {
                     self.expect(&Token::Semicolon(0))?;
                     None
                 } else {
@@ -423,12 +423,12 @@ impl Parser {
                     Ok(Stmt::Declare { directives, body })
                 }
             }
-            Token::Namespace if self.peek_at(1) != Token::Backslash => {
+            Token::Namespace if *self.peek_at_ref(1) != Token::Backslash => {
                 self.advance(); // consume 'namespace'
                 // The bracketed global namespace has no name: `namespace { ... }`.
                 // Keep the empty spelling in the AST so compilation can restore
                 // global resolution while retaining the namespace block boundary.
-                let name = if matches!(self.peek(), Token::LBrace(_)) {
+                let name = if matches!(self.peek_ref(), Token::LBrace(_)) {
                     String::new()
                 } else {
                     self.parse_namespace_declaration_name()?
@@ -436,7 +436,7 @@ impl Parser {
                 let line = self
                     .last_primary_line
                     .unwrap_or_else(|| self.current_token_source_line());
-                let style = if matches!(self.peek(), Token::LBrace(_)) {
+                let style = if matches!(self.peek_ref(), Token::LBrace(_)) {
                     NamespaceDeclarationStyle::Bracketed
                 } else {
                     NamespaceDeclarationStyle::Unbracketed
@@ -475,7 +475,7 @@ impl Parser {
                     // Braced namespace: namespace App\Models { ... }
                     self.advance(); // consume '{'
                     let mut body = Vec::new();
-                    while !matches!(self.peek(), Token::RBrace(_)) && self.peek() != Token::Eof {
+                    while !matches!(self.peek_ref(), Token::RBrace(_)) && *self.peek_ref() != Token::Eof {
                         body.push(self.parse_stmt_in_namespace_scope()?);
                     }
                     if self.halted && self.at_eof() {
@@ -487,9 +487,9 @@ impl Parser {
                     // Unbraced namespace: namespace App\Models; (rest of file belongs to this namespace)
                     self.expect(&Token::Semicolon(0))?;
                     let mut body = Vec::new();
-                    while self.peek() != Token::Eof
-                        && self.peek() != Token::Namespace
-                        && !matches!(self.peek(), Token::RBrace(_))
+                    while *self.peek_ref() != Token::Eof
+                        && *self.peek_ref() != Token::Namespace
+                        && !matches!(self.peek_ref(), Token::RBrace(_))
                     {
                         body.push(self.parse_stmt_in_scope(true)?);
                     }
@@ -500,10 +500,10 @@ impl Parser {
                 // Top-level class/function import. Their alias tables are
                 // separate in PHP even when the source alias is identical.
                 self.advance(); // consume 'use'
-                let kind = if matches!(self.peek(), Token::Function(_)) {
+                let kind = if matches!(self.peek_ref(), Token::Function(_)) {
                     self.advance();
                     UseKind::Function
-                } else if self.peek() == Token::Const {
+                } else if *self.peek_ref() == Token::Const {
                     self.advance();
                     UseKind::Const
                 } else {
@@ -512,14 +512,14 @@ impl Parser {
                 let (first_name, grouped, name_line) = self.parse_use_name()?;
                 let mut imports = Vec::new();
                 if grouped {
-                    if matches!(self.peek(), Token::RBrace(_)) {
+                    if matches!(self.peek_ref(), Token::RBrace(_)) {
                         return Err(self.group_use_missing_item_error(kind, "}", use_line));
                     }
-                    if matches!(self.peek(), Token::Comma(_)) {
+                    if matches!(self.peek_ref(), Token::Comma(_)) {
                         return Err(self.group_use_missing_item_error(kind, ",", use_line));
                     }
                     loop {
-                        let item_kind = if matches!(self.peek(), Token::Function(_)) {
+                        let item_kind = if matches!(self.peek_ref(), Token::Function(_)) {
                             if kind != UseKind::Class {
                                 return Err(self.source_error(
                                     "syntax error, unexpected token \"function\", expecting \"}\"",
@@ -528,7 +528,7 @@ impl Parser {
                             }
                             self.advance();
                             UseKind::Function
-                        } else if self.peek() == Token::Const {
+                        } else if *self.peek_ref() == Token::Const {
                             if kind != UseKind::Class {
                                 return Err(self.source_error(
                                     "syntax error, unexpected token \"const\", expecting \"}\"",
@@ -540,19 +540,19 @@ impl Parser {
                         } else {
                             kind
                         };
-                        if matches!(self.peek(), Token::RBrace(_)) {
+                        if matches!(self.peek_ref(), Token::RBrace(_)) {
                             return Err(self.group_use_missing_item_error(
                                 item_kind, "}", use_line,
                             ));
                         }
-                        if matches!(self.peek(), Token::Comma(_)) {
+                        if matches!(self.peek_ref(), Token::Comma(_)) {
                             return Err(self.group_use_missing_item_error(
                                 item_kind, ",", use_line,
                             ));
                         }
-                        if self.peek() == Token::Backslash {
+                        if *self.peek_ref() == Token::Backslash {
                             let line = self.current_token_source_line();
-                            let name = Self::token_as_named_arg_label(&self.peek_at(1))
+                            let name = Self::token_as_named_arg_label(self.peek_at_ref(1))
                                 .unwrap_or_default();
                             return Err(self.source_error(
                                 &format!(
@@ -589,14 +589,14 @@ impl Parser {
                             alias,
                             explicit_alias,
                         ));
-                        if !matches!(self.peek(), Token::Comma(_)) {
+                        if !matches!(self.peek_ref(), Token::Comma(_)) {
                             break;
                         }
                         self.advance();
-                        if matches!(self.peek(), Token::RBrace(_)) {
+                        if matches!(self.peek_ref(), Token::RBrace(_)) {
                             break;
                         }
-                        if matches!(self.peek(), Token::Comma(_)) {
+                        if matches!(self.peek_ref(), Token::Comma(_)) {
                             return Err(self.source_error(
                                 "syntax error, unexpected token \",\", expecting \"}\"",
                                 use_line,
@@ -628,7 +628,7 @@ impl Parser {
                             fqn.rsplit('\\').next().unwrap_or(&fqn).to_string()
                         };
                         imports.push((kind, fqn, alias, explicit_alias));
-                        if !matches!(self.peek(), Token::Comma(_)) {
+                        if !matches!(self.peek_ref(), Token::Comma(_)) {
                             break;
                         }
                         self.advance();
@@ -704,7 +704,7 @@ impl Parser {
                     }
                     self.expect(&Token::Assign)?;
                     declarations.push((name, self.parse_expr()?));
-                    if !matches!(self.peek(), Token::Comma(_)) {
+                    if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -728,7 +728,7 @@ impl Parser {
                     Some(", expecting \",\" or \";\""),
                     |parser| parser.parse_expr(),
                 )?];
-                while matches!(self.peek(), Token::Comma(_)) {
+                while matches!(self.peek_ref(), Token::Comma(_)) {
                     self.advance();
                     expressions.push(self.with_new_postfix_error_suffix(
                         Some(", expecting \",\" or \";\""),
@@ -803,7 +803,7 @@ impl Parser {
                             _ => unreachable!(),
                         };
                         let mut indices = Vec::new();
-                        while matches!(self.peek(), Token::LBracket(_)) {
+                        while matches!(self.peek_ref(), Token::LBracket(_)) {
                             self.expect_lbracket()?;
                             indices.push(self.parse_expr()?);
                             self.expect(&Token::RBracket)?;
@@ -832,10 +832,10 @@ impl Parser {
                     if self.is_array_append_suffix() {
                         return self.finish_array_append_statement(expr);
                     }
-                    if self.peek() == Token::QuestionQuestionAssign {
+                    if *self.peek_ref() == Token::QuestionQuestionAssign {
                         return self.finish_coalesce_assign_statement(expr);
                     }
-                    if Self::compound_assign_op(&self.peek()).is_some() {
+                    if Self::compound_assign_op(self.peek_ref()).is_some() {
                         return self.finish_compound_assign_statement(expr);
                     }
                     self.finish_value_expression_statement(expr)
@@ -845,7 +845,7 @@ impl Parser {
                         _ => unreachable!(),
                     };
                     self.expect(&Token::Assign)?;
-                    if matches!(self.peek(), Token::Ampersand(_)) {
+                    if matches!(self.peek_ref(), Token::Ampersand(_)) {
                         self.advance();
                         let target = self.parse_empty_dimension_target_prefix()?;
                         if !self.is_empty_array_dimension_suffix() {
@@ -936,14 +936,14 @@ impl Parser {
                     if self.is_array_append_suffix() {
                         return self.finish_array_append_statement(expr);
                     }
-                    if self.peek() == Token::QuestionQuestionAssign {
+                    if *self.peek_ref() == Token::QuestionQuestionAssign {
                         return self.finish_coalesce_assign_statement(expr);
                     }
-                    if Self::compound_assign_op(&self.peek()).is_some() {
+                    if Self::compound_assign_op(self.peek_ref()).is_some() {
                         return self.finish_compound_assign_statement(expr);
                     }
                     // Check for property/array-dim assignment: $obj->prop = expr or $obj->prop[$key] = expr
-                    if self.peek() == Token::Assign {
+                    if *self.peek_ref() == Token::Assign {
                         // Check structure without consuming
                         let is_prop_assign = matches!(&expr, Expr::PropertyAccess { .. });
 
@@ -1067,7 +1067,7 @@ impl Parser {
                 };
                 let mut cases = Vec::new();
                 let mut has_default = false;
-                while !matches!(self.peek(), Token::RBrace(_) | Token::EndSwitch) && !self.at_eof() {
+                while !matches!(self.peek_ref(), Token::RBrace(_) | Token::EndSwitch) && !self.at_eof() {
                     match self.peek() {
                         Token::Case(_) => {
                             self.advance();
@@ -1075,7 +1075,7 @@ impl Parser {
                             self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
                             while !matches!(
-                                self.peek(),
+                                self.peek_ref(),
                                 Token::Case(_)
                                     | Token::Default(_)
                                     | Token::RBrace(_)
@@ -1102,7 +1102,7 @@ impl Parser {
                             self.consume_switch_label_separator()?;
                             let mut body = Vec::new();
                             while !matches!(
-                                self.peek(),
+                                self.peek_ref(),
                                 Token::Case(_)
                                     | Token::Default(_)
                                     | Token::RBrace(_)
@@ -1135,9 +1135,9 @@ impl Parser {
 
                 // Init: optional assignment or expression before first ;
                 let mut init = Vec::new();
-                while !matches!(self.peek(), Token::Semicolon(_)) {
+                while !matches!(self.peek_ref(), Token::Semicolon(_)) {
                     init.push(self.parse_for_init()?);
-                    if !matches!(self.peek(), Token::Comma(_)) {
+                    if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -1147,9 +1147,9 @@ impl Parser {
                 // Every comma-separated condition is evaluated; the last one
                 // determines whether the loop continues.
                 let mut condition = Vec::new();
-                while !matches!(self.peek(), Token::Semicolon(_)) {
+                while !matches!(self.peek_ref(), Token::Semicolon(_)) {
                     condition.push(self.parse_expr()?);
-                    if !matches!(self.peek(), Token::Comma(_)) {
+                    if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -1168,9 +1168,9 @@ impl Parser {
                 self.expect(&Token::Semicolon(0))?;
 
                 let mut update = Vec::new();
-                while self.peek() != Token::RParen {
+                while *self.peek_ref() != Token::RParen {
                     update.push(self.parse_expr()?);
-                    if !matches!(self.peek(), Token::Comma(_)) {
+                    if !matches!(self.peek_ref(), Token::Comma(_)) {
                         break;
                     }
                     self.advance();
@@ -1194,7 +1194,7 @@ impl Parser {
                 }
                 // foreach ($arr as $key => $val), foreach ($arr as $val),
                 // and the corresponding destructuring value forms.
-                let first_reference_line = if matches!(self.peek(), Token::Ampersand(_)) {
+                let first_reference_line = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                     // PHP locates the invalid key-reference diagnostic at the
                     // source/as boundary, including when the key starts on a
                     // following line.
@@ -1216,7 +1216,7 @@ impl Parser {
                     let first_expr = self.parse_foreach_target_expression()?;
                     self.into_foreach_target(first_expr)?
                 };
-                let (key, value, by_ref) = if self.peek() == Token::DoubleArrow {
+                let (key, value, by_ref) = if *self.peek_ref() == Token::DoubleArrow {
                     let first = if matches!(&first, ForeachTarget::Destructure(_)) {
                         self.deferred_compile_error = deferred_before_first_target;
                         let first_target_line =
@@ -1231,7 +1231,7 @@ impl Parser {
                         let _ = self.compile_error("Key element cannot be a reference", line);
                     }
                     self.advance(); // consume '=>'
-                    let by_ref = if matches!(self.peek(), Token::Ampersand(_)) {
+                    let by_ref = if matches!(self.peek_ref(), Token::Ampersand(_)) {
                         self.advance();
                         true
                     } else {
@@ -1265,15 +1265,15 @@ impl Parser {
             }
             Token::Function(line)
                 if matches!(
-                    self.peek_at(1),
+                    self.peek_at_ref(1),
                     Token::Identifier(_, _)
                         | Token::Enum { .. }
                         | Token::From
                         | Token::Exit { .. }
                 )
-                    || (matches!(self.peek_at(1), Token::Ampersand(_))
+                    || (matches!(self.peek_at_ref(1), Token::Ampersand(_))
                         && matches!(
-                            self.peek_at(2),
+                            self.peek_at_ref(2),
                             Token::Identifier(_, _)
                                 | Token::Enum { .. }
                                 | Token::From
@@ -1284,7 +1284,7 @@ impl Parser {
                 // Accept the PHP reference-return declaration marker. Return
                 // aliasing itself remains outside the current execution
                 // contract, matching the closure parser's bounded handling.
-                let returns_by_ref = matches!(self.peek(), Token::Ampersand(_));
+                let returns_by_ref = matches!(self.peek_ref(), Token::Ampersand(_));
                 self.consume_reference_return_marker();
                 let name = match self.advance() {
                     Token::Identifier(ref name, line) if Self::reserved_identifier(name).is_some() => {
@@ -1334,7 +1334,7 @@ impl Parser {
             }
             Token::Return { line } => {
                 self.advance(); // consume 'return'
-                if matches!(self.peek(), Token::Semicolon(_)) {
+                if matches!(self.peek_ref(), Token::Semicolon(_)) {
                     self.advance();
                     Ok(Stmt::Return { expr: None, line })
                 } else {
@@ -1352,7 +1352,7 @@ impl Parser {
             Token::Unset => {
                 self.advance();
                 let list_line = self.expect_lparen()?;
-                if matches!(self.peek(), Token::Comma(_)) {
+                if matches!(self.peek_ref(), Token::Comma(_)) {
                     return Err(self.comma_list_error(list_line, false));
                 }
                 let mut targets = Vec::new();
@@ -1394,7 +1394,7 @@ impl Parser {
             Token::Identifier(ref name, _)
                 if name.eq_ignore_ascii_case("readonly")
                     && matches!(
-                        self.peek_at(1),
+                        self.peek_at_ref(1),
                         Token::Enum { .. } | Token::Interface | Token::Trait
                     ) =>
             {
@@ -1414,18 +1414,18 @@ impl Parser {
             Token::Identifier(ref name, _)
                 if name.eq_ignore_ascii_case("readonly")
                     && (matches!(
-                        self.peek_at(1),
+                        self.peek_at_ref(1),
                         Token::Class | Token::Abstract(_) | Token::Final(_)
                     ) || matches!(
-                        self.peek_at(1),
-                        Token::Identifier(ref keyword, _)
+                        self.peek_at_ref(1),
+                        Token::Identifier(keyword, _)
                             if keyword.eq_ignore_ascii_case("class")
                                 || keyword.eq_ignore_ascii_case("readonly")
                     )) =>
             {
                 self.parse_class()
             }
-            Token::Enum { .. } if matches!(self.peek_at(1), Token::LBrace(_)) => {
+            Token::Enum { .. } if matches!(self.peek_at_ref(1), Token::LBrace(_)) => {
                 let Token::LBrace(line) = self.peek_at(1) else {
                     unreachable!("guarded contextual enum block diagnostic")
                 };
@@ -1433,12 +1433,12 @@ impl Parser {
             }
             Token::Enum { .. }
                 if matches!(
-                    self.peek_at(1),
+                    self.peek_at_ref(1),
                     Token::Identifier(_, _) | Token::Enum { .. }
                 ) => self.parse_enum(),
             Token::Enum { .. }
                 if matches!(
-                    self.peek_at(1),
+                    self.peek_at_ref(1),
                     Token::Backslash
                         | Token::DoubleColon
                         | Token::LParen(_)
@@ -1486,12 +1486,12 @@ impl Parser {
             Token::Enum { .. } => self.parse_enum(),
             Token::Interface => self.parse_interface(),
             Token::Trait => self.parse_trait(),
-            Token::Static(_) if self.peek_at(1) == Token::DoubleColon => {
+            Token::Static(_) if *self.peek_at_ref(1) == Token::DoubleColon => {
                 let expr = self.parse_expr()?;
                 self.finish_static_property_statement(expr)
             }
             Token::Static(_)
-                if matches!(self.peek_at(1), Token::Function(_) | Token::Fn(_)) =>
+                if matches!(self.peek_at_ref(1), Token::Function(_) | Token::Fn(_)) =>
             {
                 self.parse_expression_statement()
             }
@@ -1530,7 +1530,7 @@ impl Parser {
                 // Check for list() destructuring: list($a, $b) = expr;
                 if let Token::Identifier(ref name, _) = self.peek() {
                     if name.eq_ignore_ascii_case("list")
-                        && matches!(self.peek_at(1), Token::LParen(_))
+                        && matches!(self.peek_at_ref(1), Token::LParen(_))
                     {
                         return self.parse_list_assign();
                     }
@@ -1565,7 +1565,7 @@ impl Parser {
                         }
                         Token::Dollar(_) => {
                             self.advance();
-                            let name = if matches!(self.peek(), Token::LBrace(_)) {
+                            let name = if matches!(self.peek_ref(), Token::LBrace(_)) {
                                 self.advance();
                                 let name = self.parse_expr()?;
                                 self.expect(&Token::RBrace(0))?;
@@ -1582,20 +1582,20 @@ impl Parser {
                             ));
                         }
                     }
-                    if matches!(self.peek(), Token::Comma(_)) {
+                    if matches!(self.peek_ref(), Token::Comma(_)) {
                         self.advance();
                     } else {
                         break;
                     }
                 }
-                if !matches!(self.peek(), Token::Semicolon(_)) {
-                    return Err(self.unexpected_token_error(&self.peek(), "\",\" or \";\"", self.current_token_source_line()));
+                if !matches!(self.peek_ref(), Token::Semicolon(_)) {
+                    return Err(self.unexpected_token_error(self.peek_ref(), "\",\" or \";\"", self.current_token_source_line()));
                 }
                 self.expect(&Token::Semicolon(0))?;
                 Ok(Stmt::Global(vars))
             }
             Token::Static(_)
-                if matches!(self.peek_at(1), Token::Variable(_, _) | Token::This(_)) =>
+                if matches!(self.peek_at_ref(1), Token::Variable(_, _) | Token::This(_)) =>
             {
                 // static $var = expr; (function-level static variable)
                 self.advance(); // consume 'static'
@@ -1617,14 +1617,14 @@ impl Parser {
                             ));
                         }
                     };
-                    let default = if self.peek() == Token::Assign {
+                    let default = if *self.peek_ref() == Token::Assign {
                         self.advance();
                         Some(self.parse_expr()?)
                     } else {
                         None
                     };
                     vars.push((var_name, default));
-                    if matches!(self.peek(), Token::Comma(_)) {
+                    if matches!(self.peek_ref(), Token::Comma(_)) {
                         self.advance();
                     } else {
                         break;
@@ -1663,13 +1663,13 @@ impl Parser {
         if self.is_array_append_suffix() {
             return self.finish_array_append_statement(expr);
         }
-        if self.peek() == Token::QuestionQuestionAssign {
+        if *self.peek_ref() == Token::QuestionQuestionAssign {
             return self.finish_coalesce_assign_statement(expr);
         }
-        if Self::compound_assign_op(&self.peek()).is_some() {
+        if Self::compound_assign_op(self.peek_ref()).is_some() {
             return self.finish_compound_assign_statement(expr);
         }
-        if self.peek() == Token::Assign && matches!(expr, Expr::ArrayAccess { .. }) {
+        if *self.peek_ref() == Token::Assign && matches!(expr, Expr::ArrayAccess { .. }) {
             let line = match &expr {
                 Expr::ArrayAccess { line, .. } => *line,
                 _ => unreachable!(),
@@ -1703,7 +1703,7 @@ impl Parser {
             _ => None,
         };
         if let Some((class_name, property, line)) = static_property {
-            if self.peek() == Token::Assign {
+            if *self.peek_ref() == Token::Assign {
                 self.advance();
                 let value = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
@@ -1714,7 +1714,7 @@ impl Parser {
                     line,
                 });
             }
-            if let Some(op) = Self::compound_assign_op(&self.peek()) {
+            if let Some(op) = Self::compound_assign_op(self.peek_ref()) {
                 self.advance();
                 let right = self.parse_expr()?;
                 self.expect(&Token::Semicolon(0))?;
@@ -1736,11 +1736,11 @@ impl Parser {
 
     fn is_array_append_suffix(&self) -> bool {
         self.is_empty_array_dimension_suffix()
-            && self.peek_at(2) == Token::Assign
+            && *self.peek_at_ref(2) == Token::Assign
     }
 
     fn is_empty_array_dimension_suffix(&self) -> bool {
-        matches!(self.peek(), Token::LBracket(_)) && self.peek_at(1) == Token::RBracket
+        matches!(self.peek_ref(), Token::LBracket(_)) && *self.peek_at_ref(1) == Token::RBracket
     }
 
     fn finish_array_append_statement(&mut self, target: Expr) -> Result<Stmt, String> {
@@ -1853,22 +1853,22 @@ impl Parser {
 
     /// Parse if / elseif / else chain.
     fn parse_if(&mut self) -> Result<Stmt, String> {
-        let elseif = self.peek() == Token::ElseIf;
+        let elseif = *self.peek_ref() == Token::ElseIf;
         self.advance(); // consume 'if' or 'elseif'
         self.expect_lparen()?;
         let condition = self.parse_expr()?;
         self.expect(&Token::RParen)?;
-        if self.peek() == Token::Colon {
+        if *self.peek_ref() == Token::Colon {
             return self.parse_alternative_if_after_condition(condition);
         }
         let then_body = self.parse_block_or_stmt()?;
-        let else_body = if self.peek() == Token::ElseIf {
+        let else_body = if *self.peek_ref() == Token::ElseIf {
             // elseif desugars to else { if (...) { ... } }
             vec![self.parse_if()?]
-        } else if self.peek() == Token::Else {
+        } else if *self.peek_ref() == Token::Else {
             self.advance();
             // Check for "else if" (two tokens) which is equivalent to "elseif"
-            if self.peek() == Token::If {
+            if *self.peek_ref() == Token::If {
                 vec![self.parse_if()?]
             } else {
                 self.parse_block_or_stmt()?
@@ -1958,10 +1958,10 @@ impl Parser {
 
     /// Parse either { stmts } or a single stmt
     fn parse_block_or_stmt(&mut self) -> Result<Vec<Stmt>, String> {
-        if matches!(self.peek(), Token::LBrace(_)) {
+        if matches!(self.peek_ref(), Token::LBrace(_)) {
             self.advance(); // consume {
             let mut stmts = Vec::new();
-            while !matches!(self.peek(), Token::RBrace(_)) && !self.at_eof() {
+            while !matches!(self.peek_ref(), Token::RBrace(_)) && !self.at_eof() {
                 stmts.push(self.parse_stmt_in_scope(false)?);
             }
             self.expect(&Token::RBrace(0))?;
@@ -1989,7 +1989,7 @@ impl Parser {
     }
 
     fn parse_control_body(&mut self, end_token: Token) -> Result<Vec<Stmt>, String> {
-        if self.peek() != Token::Colon {
+        if *self.peek_ref() != Token::Colon {
             return self.parse_block_or_stmt();
         }
         self.advance();
@@ -2049,10 +2049,10 @@ impl Parser {
         if self.is_array_append_suffix() {
             return self.finish_array_append_statement(expr);
         }
-        if self.peek() == Token::QuestionQuestionAssign {
+        if *self.peek_ref() == Token::QuestionQuestionAssign {
             return self.finish_coalesce_assign_statement(expr);
         }
-        if Self::compound_assign_op(&self.peek()).is_some() {
+        if Self::compound_assign_op(self.peek_ref()).is_some() {
             return self.finish_compound_assign_statement(expr);
         }
         self.finish_value_expression_statement(expr)

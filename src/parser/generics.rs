@@ -58,7 +58,7 @@ impl Parser {
     }
 
     fn finish_generic_ancestor(&mut self, name: String) -> Result<GenericAncestor, String> {
-        let arguments = if self.peek() == Token::Less {
+        let arguments = if *self.peek_ref() == Token::Less {
             if !GenericRuntimeCapabilities::CONFIGURED.syntax_enabled() {
                 return Err(
                     "Generic syntax requires php-generics-erased or php-generics-reified"
@@ -100,7 +100,7 @@ impl Parser {
             if first_ancestor_line.is_none() {
                 first_ancestor_line = Some(self.last_primary_line.unwrap_or(use_line));
             }
-            if !matches!(self.peek(), Token::Comma(_)) {
+            if !matches!(self.peek_ref(), Token::Comma(_)) {
                 break;
             }
             self.advance();
@@ -112,7 +112,7 @@ impl Parser {
     /// a declaration name. The two Cargo features select the runtime model;
     /// without either one the shared engine remains compiled but syntax is rejected.
     fn parse_generic_parameters(&mut self) -> Result<Vec<GenericParameter>, String> {
-        if self.peek() != Token::Less {
+        if *self.peek_ref() != Token::Less {
             return Ok(Vec::new());
         }
         if !cfg!(any(
@@ -126,7 +126,7 @@ impl Parser {
         }
         self.advance();
 
-        if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
+        if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
             return Err("A generic parameter list cannot be empty".to_string());
         }
 
@@ -178,13 +178,13 @@ impl Parser {
                 ));
             }
 
-            let bound = if self.peek() == Token::Colon {
+            let bound = if *self.peek_ref() == Token::Colon {
                 self.advance();
                 Some(self.parse_generic_type_expression()?)
             } else {
                 None
             };
-            let default = if self.peek() == Token::Assign {
+            let default = if *self.peek_ref() == Token::Assign {
                 self.advance();
                 seen_default = true;
                 Some(self.parse_generic_type_expression()?)
@@ -235,7 +235,7 @@ impl Parser {
             match self.peek() {
                 Token::Comma(_) => {
                     self.advance();
-                    if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
+                    if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
                         return Err("A generic parameter list cannot end with a comma".into());
                     }
                 }
@@ -280,7 +280,7 @@ impl Parser {
 
     fn parse_generic_type_arguments(&mut self) -> Result<Vec<TypeHint>, String> {
         self.expect(&Token::Less)?;
-        if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
+        if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
             return Err("A generic type-argument list cannot be empty".to_string());
         }
 
@@ -296,7 +296,7 @@ impl Parser {
             match self.peek() {
                 Token::Comma(_) => {
                     self.advance();
-                    if matches!(self.peek(), Token::Greater | Token::ShiftRight(_)) {
+                    if matches!(self.peek_ref(), Token::Greater | Token::ShiftRight(_)) {
                         return Err("A generic type-argument list cannot end with a comma".into());
                     }
                 }
@@ -316,7 +316,7 @@ impl Parser {
     }
 
     fn parse_optional_turbofish(&mut self) -> Result<Vec<TypeHint>, String> {
-        if self.peek() != Token::DoubleColon || self.peek_at(1) != Token::Less {
+        if *self.peek_ref() != Token::DoubleColon || *self.peek_at_ref(1) != Token::Less {
             return Ok(Vec::new());
         }
         if !GenericRuntimeCapabilities::CONFIGURED.syntax_enabled() {

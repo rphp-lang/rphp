@@ -27647,12 +27647,24 @@ detectors of the quick-loop planner ran their literal lookups at every
 instruction of every function and now visit only `InitFcall` entries, and
 each nested function compiler cloned the unit's four import tables, which are
 now shared read-only (`Rc`) and copied only when a `use` statement writes.
-Bootstrap instructions fell from 27.4 to 11.2 billion; on a loaded host the
-bootstrap takes about 1.4 s, the warm analysis about 1.9 s and the cold one
-about 6.4 s. The remaining bootstrap is genuine work whose per-unit cost is
-still higher than PHP's: compilation (41 %), parsing (21 %), lexing (11 %),
-the SHA-512 phar signature check (11 %) and class linking (10 %). That gap
-stays open.
+The `frontend-allocations` checkpoint then trimmed the front end itself: the
+parser's `peek()` cloned the current token (with its identifier or string
+payload) for every grammar decision, about ten times per token, and now
+borrows it for comparisons and `matches!` checks; the per-unit
+`known_ref_args`/`known_param_names` view handed to nested function
+compilers was rebuilt and rehashed for every function body and is now
+extended incrementally and shared; the token vector is pre-sized; and the
+hand-written scalar SHA-512 that verified the 29 MB phar signature at about
+40 instructions per byte gave way to the `sha2` crate already present in the
+dependency tree through `sha-crypt` (`hash('sha512')` uses it too). Bootstrap
+instructions fell from 27.4 to 9.0 billion; on a loaded host the bootstrap
+takes about 1.35 s, the warm analysis about 1.8 s and the cold one about
+7 s. What remains is spread thin: allocation and freeing (about 20 %, mostly
+owned `String` payloads in tokens and the AST), the SHA-512 core (11 %),
+`memcpy` of the 272-byte `Expr` moving through the precedence cascade
+(9 %), the byte lexer (7 %) and class linking. Shrinking `Expr`/`Stmt`
+(272/856 bytes) and moving tokens out of the parser instead of cloning them
+are the next structural steps and stay open.
 
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,

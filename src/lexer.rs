@@ -604,7 +604,9 @@ impl<'a> Lexer<'a> {
     }
 
     pub fn tokenize(&mut self) -> Result<Vec<Token>, String> {
-        let mut tokens = Vec::new();
+        // PHP source averages roughly one token per six bytes; reserving up
+        // front avoids the repeated doubling copies of a 40-byte element.
+        let mut tokens = Vec::with_capacity(self.src.len() / 6 + 16);
         let mut assertion_scan_position = 0;
         let mut assertion_delimiters = AssertionDelimiterStack::default();
         let mut source_delimiters: Vec<SourceDelimiter> = Vec::new();
