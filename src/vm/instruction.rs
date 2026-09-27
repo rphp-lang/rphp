@@ -869,6 +869,20 @@ impl InlineCache {
         ((self.prop_info & !Self::PROP_SCOPED) >> 2) as usize
     }
 
+    /// Complete property-cache state, for the polymorphic site memo.
+    #[inline(always)]
+    pub fn property_cache_state(&self) -> (u32, u32, usize) {
+        (self.class_id, self.prop_info, self.func as usize)
+    }
+
+    /// Reinstall a property-cache state recorded by `property_cache_state`.
+    #[inline]
+    pub fn restore_property_cache(&mut self, class_id: u32, prop_info: u32, func: usize) {
+        self.class_id = class_id;
+        self.prop_info = prop_info;
+        self.func = func as *const FunctionCommon;
+    }
+
     #[inline(always)]
     pub fn is_scoped_property(&self) -> bool {
         self.class_id != 0 && self.prop_info & Self::PROP_SCOPED != 0

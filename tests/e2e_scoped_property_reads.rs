@@ -88,3 +88,35 @@ echo "\n";
         "111131313|111131313|111131313|\n"
     );
 }
+
+/// One property site executed for many receiver classes (a base-class method
+/// reading and writing private, protected, public and typed properties, with
+/// subclasses shadowing or redeclaring them) refills its inline cache from the
+/// polymorphic memo; results must stay exactly PHP's. The tail exercises
+/// preg_replace group reuse across iterations. Verified against reference PHP.
+#[test]
+fn polymorphic_property_sites_keep_php_semantics() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+abstract class Base {
+    private $secret = 'base'; protected $shared = 0; public $pub = 0; protected int $typed = 0; private array $items = [];
+    function tick($v) { $this->shared += 1; $this->pub = $v; $this->typed = (int) $v; $this->items[] = $v; $this->secret = $v . static::class; return [$this->shared, $this->pub, $this->typed, count($this->items), $this->secret, $this->readSecret()]; }
+    function readSecret() { return $this->secret; }
+}
+class A extends Base {}
+class B extends Base { private $secret = 'B-own'; function readSecret() { return $this->secret; } }
+class C extends Base { protected int $typed = 5; }
+class D extends Base { public $pub = 'd'; }
+class E extends Base { function tick($v) { $r = parent::tick($v); $this->shared *= 2; return $r; } }
+$objs = [new A, new B, new C, new D, new E, new A, new B];
+for ($round = 0; $round < 3; $round++) {
+    foreach ($objs as $i => $o) { echo $i, ':', json_encode($o->tick("v$round")), '|'; }
+    echo "\n";
+}
+$s = "aXbXcXd"; for ($i = 0; $i < 3; $i++) echo preg_replace('/(X)(.)/', '[$2$1]', $s), preg_replace('/(?<n>\w)(?=X)/', '<$1>', $s), preg_replace('/(a)|(b)/', '{$1|$2}', $s), "\n";
+"#
+        ),
+        "0:[1,\"v0\",0,1,\"v0A\",\"v0A\"]|1:[1,\"v0\",0,1,\"v0B\",\"B-own\"]|2:[1,\"v0\",0,1,\"v0C\",\"v0C\"]|3:[1,\"v0\",0,1,\"v0D\",\"v0D\"]|4:[1,\"v0\",0,1,\"v0E\",\"v0E\"]|5:[1,\"v0\",0,1,\"v0A\",\"v0A\"]|6:[1,\"v0\",0,1,\"v0B\",\"B-own\"]|\n0:[2,\"v1\",0,2,\"v1A\",\"v1A\"]|1:[2,\"v1\",0,2,\"v1B\",\"B-own\"]|2:[2,\"v1\",0,2,\"v1C\",\"v1C\"]|3:[2,\"v1\",0,2,\"v1D\",\"v1D\"]|4:[3,\"v1\",0,2,\"v1E\",\"v1E\"]|5:[2,\"v1\",0,2,\"v1A\",\"v1A\"]|6:[2,\"v1\",0,2,\"v1B\",\"B-own\"]|\n0:[3,\"v2\",0,3,\"v2A\",\"v2A\"]|1:[3,\"v2\",0,3,\"v2B\",\"B-own\"]|2:[3,\"v2\",0,3,\"v2C\",\"v2C\"]|3:[3,\"v2\",0,3,\"v2D\",\"v2D\"]|4:[7,\"v2\",0,3,\"v2E\",\"v2E\"]|5:[3,\"v2\",0,3,\"v2A\",\"v2A\"]|6:[3,\"v2\",0,3,\"v2B\",\"B-own\"]|\na[bX][cX][dX]<a>X<b>X<c>Xd{a|}X{|b}XcXd\na[bX][cX][dX]<a>X<b>X<c>Xd{a|}X{|b}XcXd\na[bX][cX][dX]<a>X<b>X<c>Xd{a|}X{|b}XcXd\n"
+    );
+}

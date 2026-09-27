@@ -1705,6 +1705,46 @@ fn finish_cached_restricted_obj_modify<const FUNC_ARG: bool>(
 /// A polymorphic site: the monomorphic inline cache missed, but this receiver
 /// class was already resolved here. Reinstate that resolution and take the
 /// cached path so the full lookup runs once per (site, class).
+/// Record the property cache state just installed at `ip` for `class_id`, so
+/// a later class at the same site can refill it without the slow path.
+#[cold]
+#[inline(never)]
+fn memoize_property_cache(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) {
+    let (cached_class_id, prop_info, func) = op_array.cache[ip].property_cache_state();
+    debug_assert_eq!(cached_class_id, class_id);
+    eg.polymorphic_property_cache
+        .borrow_mut()
+        .insert((op_array.cache.as_ptr() as usize, ip, class_id), (prop_info, func));
+}
+
+/// Refill a property-write cache at `ip` for `class_id` from the memo.
+#[cold]
+#[inline(never)]
+pub(super) fn try_memoized_assign_obj_prop(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) -> bool {
+    let state = eg
+        .polymorphic_property_cache
+        .borrow()
+        .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
+        .copied();
+    let Some((prop_info, func)) = state else {
+        return false;
+    };
+    op_array
+        .inline_cache_mut(ip)
+        .restore_property_cache(class_id, prop_info, func);
+    true
+}
+
 #[cold]
 #[inline(never)]
 fn try_memoized_fetch_obj_r<const FUNC_ARG: bool>(
@@ -1731,17 +1771,17 @@ fn try_memoized_fetch_obj_r<const FUNC_ARG: bool>(
     if class_id == 0 {
         return CachedFetchObjResult::Miss;
     }
-    let packed = eg
-        .polymorphic_property_reads
+    let state = eg
+        .polymorphic_property_cache
         .borrow()
         .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
         .copied();
-    let Some(packed) = packed else {
+    let Some((prop_info, func)) = state else {
         return CachedFetchObjResult::Miss;
     };
     op_array
         .inline_cache_mut(ip)
-        .set_property(class_id, (packed >> 2) as usize, packed & 3);
+        .restore_property_cache(class_id, prop_info, func);
     try_cached_fetch_obj_r::<false, FUNC_ARG>(eg, frame, op_array, opline)
 }
 
@@ -2511,10 +2551,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                         }
                     }
                     if opline.op2_type == OpType::Const {
-                        eg.polymorphic_property_reads.borrow_mut().insert(
-                            (op_array.cache.as_ptr() as usize, ip, obj.class_id),
-                            ((slot as u32) << 2) | flags,
-                        );
+                        memoize_property_cache(eg, op_array, ip, obj.class_id);
                     }
                 }
             }
@@ -2538,6 +2575,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 let ic_mut = op_array.inline_cache_mut(ip);
                 ic_mut.set_property(obj.class_id, slot, 1);
                 ic_mut.set_scope_function(scope_function);
+                memoize_property_cache(eg, op_array, ip, obj.class_id);
             }
         }
 
@@ -5838,11 +5876,18 @@ fn op_assign_obj_prop_inner<'a>(
             && !eg.class_is_a(&object_class_name, "ArrayIterator") {
             // SAFETY: `opline` belongs to `op_array.instructions`, and the
             // instruction-indexed cache slot remains live for this op array.
-            let ic_mut = unsafe {
+            // SAFETY: the same in-bounds `ip` is returned so the polymorphic
+            // memo keys the freshly installed state without a second offset
+            // probe; it indexes only `op_array.cache`, whose length equals
+            // the instruction count.
+            let (ic_mut, ip) = unsafe {
                 let ip = (opline as *const Instruction)
                     .offset_from(op_array.instructions.as_ptr()) as usize;
-                &mut *(op_array.cache.as_ptr().add(ip)
-                    as *mut crate::vm::instruction::InlineCache)
+                (
+                    &mut *(op_array.cache.as_ptr().add(ip)
+                        as *mut crate::vm::instruction::InlineCache),
+                    ip,
+                )
             };
             if let Some(slot) = declared_slot {
                 if let Some(definition) = eg.instance_property_definition(object_class_id, slot)
@@ -5854,6 +5899,9 @@ fn op_assign_obj_prop_inner<'a>(
                 }
                 if scoped_write {
                     ic_mut.mark_scoped_property();
+                }
+                if opline.op2_type == OpType::Const {
+                    memoize_property_cache(eg, op_array, ip, object_class_id);
                 }
             }
         }

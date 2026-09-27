@@ -27853,6 +27853,32 @@ under the multiline flag, `\G`, the `A` modifier, empty matches,
 alternations, groups, marks, lookaheads and UTF-8 subjects against reference
 PHP).
 
+The `polymorphic-memo` checkpoint closes the remaining property-cache gaps
+and trims allocation. PHP array string keys and dynamic property maps hashed
+with SipHash (14 million lookups per run); they use the multiply-rotate
+hasher now, like PHP's own unrandomized array hash. `token_get_all` built
+every token triple through per-push array bookkeeping and now materializes
+its lists in one step. Property sites are monomorphic inline caches; a
+base-class method reading or writing `$this->prop` for many subclasses
+thrashed its cache and fell to the slow path each time. The polymorphic memo
+that already refilled public reads now records the complete cache state
+(slot, flags, scope proof or typed declaration) for scope-proved reads and
+for writes, keyed by (op array, ip, class), so every class seen at a site
+refills without re-resolving. `preg_replace` allocated its capture vector
+per subject position and reuses one now. `tests/e2e_scoped_property_reads.rs`
+adds a polymorphic site exercised across subclasses that shadow or redeclare
+private, protected, public and typed properties, verified against reference
+PHP. Two measurement notes for later work: PHPStan folds the environment into
+its container cache key, so any run under a tool that adds environment
+variables (valgrind) rebuilds the container even with a warm cache, and the
+cold run's wall time is dominated by the Nette container build, in
+particular `DependencyChecker::calculateHash`, whose
+`Nette\Utils\Reflection::getUseStatements` tokenizes every dependency file
+with `TOKEN_PARSE` (that flag runs the full lexer and parser to detect
+syntax errors, as PHP does, and costs about 5.5 ms per 127 KB file here
+against 0.1 ms in PHP). The cold run measures about 5.2 s and the warm one
+about 1.5 s on a loaded host.
+
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,
 `Phar::canWrite()`/`canCompress()`/`getSupportedSignatures()`, the class

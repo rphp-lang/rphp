@@ -1331,6 +1331,7 @@ impl Regex {
         let mut count = 0;
         let mut retry_nonempty = false;
         let mut budget = MatchBudget::new(self.scaled_replacement_limits(limits));
+        let mut groups = vec![None; self.num_groups + 1];
 
         while pos <= chars.len() {
             if count == limit {
@@ -1366,7 +1367,7 @@ impl Regex {
                     }
                 }
             }
-            let mut groups = vec![None; self.num_groups + 1];
+            groups.fill(None);
             let mut mark = None;
             let mut mark_positions = None;
             let mut control = None;

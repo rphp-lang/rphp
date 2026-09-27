@@ -9643,6 +9643,14 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let ip = (opline as *const Instruction)
                             .offset_from(op_array.instructions.as_ptr())
                             as usize;
+                        // A site warmed for another class refills from the
+                        // polymorphic memo before the monomorphic checks.
+                        if obj_class_id != 0
+                            && opline.op2_type == OpType::Const
+                            && op_array.cache[ip].class_id != obj_class_id
+                        {
+                            try_memoized_assign_obj_prop(eg, op_array, ip, obj_class_id);
+                        }
                         let ic = &op_array.cache[ip];
                         let property_flags = ic.property_flags();
                         let dynamic_name_matches = if opline.op2_type == OpType::Const {
