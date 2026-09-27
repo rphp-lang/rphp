@@ -941,6 +941,67 @@ impl InlineCache {
         self.func = (((class_id as usize) << 3) | Self::CLOSURE_SCOPE_TAG) as *const FunctionCommon;
     }
 
+    /// Constant fetch sites remember scalar constants in their cache word:
+    /// the tag lives in `class_id` (values no class id can reach) and the
+    /// payload in `func`. A constant never changes once defined, and the
+    /// namespace fallback verdict is fixed after the first lookup as in PHP.
+    const CONST_CACHE_LONG: u32 = 0xFFFF_FF01;
+    const CONST_CACHE_DOUBLE: u32 = 0xFFFF_FF02;
+    const CONST_CACHE_TRUE: u32 = 0xFFFF_FF03;
+    const CONST_CACHE_FALSE: u32 = 0xFFFF_FF04;
+    const CONST_CACHE_NULL: u32 = 0xFFFF_FF05;
+    /// Non-scalar constants keep only the resolution verdict: which spelling
+    /// (the written name or its global fallback) the table answered.
+    const CONST_CACHE_NAME_DIRECT: u32 = 0xFFFF_FF06;
+    const CONST_CACHE_NAME_FALLBACK: u32 = 0xFFFF_FF07;
+
+    /// Remember a resolved constant: scalars by value, others by the spelling
+    /// that resolved (`used_fallback` names the global fallback).
+    #[inline]
+    pub fn set_constant(&mut self, value: &crate::value::Value, used_fallback: bool) {
+        use crate::value::ValueType;
+        let (tag, payload) = match value.value_type() {
+            ValueType::Long => (Self::CONST_CACHE_LONG, value.as_long().unwrap_or(0) as u64),
+            ValueType::Double => (
+                Self::CONST_CACHE_DOUBLE,
+                value.as_double().unwrap_or(0.0).to_bits(),
+            ),
+            ValueType::True => (Self::CONST_CACHE_TRUE, 0),
+            ValueType::False => (Self::CONST_CACHE_FALSE, 0),
+            ValueType::Null => (Self::CONST_CACHE_NULL, 0),
+            _ if used_fallback => (Self::CONST_CACHE_NAME_FALLBACK, 0),
+            _ => (Self::CONST_CACHE_NAME_DIRECT, 0),
+        };
+        self.class_id = tag;
+        self.prop_info = 0;
+        self.func = payload as usize as *const FunctionCommon;
+    }
+
+    /// Whether this site already resolved a non-scalar constant, and through
+    /// which spelling (`Some(true)` = the global fallback).
+    #[inline(always)]
+    pub fn constant_resolution(&self) -> Option<bool> {
+        match self.class_id {
+            Self::CONST_CACHE_NAME_DIRECT => Some(false),
+            Self::CONST_CACHE_NAME_FALLBACK => Some(true),
+            _ => None,
+        }
+    }
+
+    /// The remembered scalar constant, if this site holds one.
+    #[inline(always)]
+    pub fn scalar_constant(&self) -> Option<crate::value::Value> {
+        let payload = self.func as usize as u64;
+        Some(match self.class_id {
+            Self::CONST_CACHE_LONG => crate::value::Value::long(payload as i64),
+            Self::CONST_CACHE_DOUBLE => crate::value::Value::double(f64::from_bits(payload)),
+            Self::CONST_CACHE_TRUE => crate::value::Value::bool(true),
+            Self::CONST_CACHE_FALSE => crate::value::Value::bool(false),
+            Self::CONST_CACHE_NULL => crate::value::Value::null(),
+            _ => return None,
+        })
+    }
+
     /// The bound class scope a closure-proved entry requires, if any.
     #[inline(always)]
     pub fn closure_scope_class(&self) -> Option<u32> {

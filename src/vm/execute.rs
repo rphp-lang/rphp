@@ -1244,6 +1244,50 @@ fn parse_php_numeric_prefix(value: &str) -> Option<(PhpNumericString<'_>, bool)>
     ))
 }
 
+/// Loose equality of an integer and a string without allocating. A numeric
+/// string compares numerically; any other string equals the integer only if
+/// it spells its decimal representation, which starts with a digit or `-`.
+fn long_string_loose_equal(left: &Value, right: &Value) -> Option<bool> {
+    let (number, text) = match (left.as_long(), right.as_str()) {
+        (Some(number), Some(text)) => (number, text),
+        _ => match (left.as_str(), right.as_long()) {
+            (Some(text), Some(number)) => (number, text),
+            _ => return None,
+        },
+    };
+    if let Some(parsed) = parse_php_numeric_string(text) {
+        return Some(
+            compare_number_to_php_numeric_string(&Value::long(number), parsed)
+                == Some(std::cmp::Ordering::Equal),
+        );
+    }
+    let bytes = text.as_bytes();
+    if !bytes
+        .first()
+        .is_some_and(|byte| byte.is_ascii_digit() || *byte == b'-')
+        || bytes.len() > 20
+    {
+        return Some(false);
+    }
+    let mut buffer = [0u8; 20];
+    let mut end = buffer.len();
+    let negative = number < 0;
+    let mut magnitude = number.unsigned_abs();
+    loop {
+        end -= 1;
+        buffer[end] = b'0' + (magnitude % 10) as u8;
+        magnitude /= 10;
+        if magnitude == 0 {
+            break;
+        }
+    }
+    if negative {
+        end -= 1;
+        buffer[end] = b'-';
+    }
+    Some(&buffer[end..] == bytes)
+}
+
 /// Parse a complete PHP numeric string. The conversion boundary needs to
 /// distinguish an out-of-range decimal integer from float syntax such as
 /// `1e2` while rejecting leading-numeric strings with trailing data.

@@ -4752,6 +4752,12 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         OpCode::IsSmallerOrEqual => ordering != std::cmp::Ordering::Greater,
                         _ => unreachable!(),
                     }
+                } else if matches!(opline.opcode, OpCode::IsEqual | OpCode::IsNotEqual)
+                    && let Some(equal) = long_string_loose_equal(op1, op2)
+                {
+                    // `switch` over token ids meets string tokens constantly;
+                    // the generic comparison formatted the integer per case.
+                    if opline.opcode == OpCode::IsEqual { equal } else { !equal }
                 } else {
                     let result = prepared_comparison_result(
                         eg, frame, op_array, opline, opline.opcode, op1, op2,

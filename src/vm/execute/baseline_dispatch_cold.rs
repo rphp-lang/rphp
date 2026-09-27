@@ -5518,25 +5518,59 @@ fn op_fetch_const(
                 .map_err(VmError::Fatal)?;
         }
     } else {
-        let name_val =
-            unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
+        // SAFETY: the compiler-emitted operand belongs to the live frame, and
+        // `opline` lies inside this op array so its same-index cache entry
+        // exists; the cache reference is not used once the deprecation
+        // paths below re-derive their own.
+        let (name_val, site_cache) = unsafe {
+            let ip = (opline as *const Instruction)
+                .offset_from(op_array.instructions.as_ptr()) as usize;
+            (
+                &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
+                &mut *(op_array.cache.as_ptr().add(ip)
+                    as *mut crate::vm::instruction::InlineCache),
+            )
+        };
         let name = name_val.as_str().unwrap_or("");
-        let mut value = eg.find_constant(name);
-        if value.is_none() && opline.extended_value == 2 {
+        // A site that already resolved a scalar constant replays it from its
+        // cache word; deprecated built-ins and deprecation-metadata requests
+        // keep the canonical lookup.
+        let cacheable = opline._pad & crate::vm::instruction::FETCH_CONST_DEPRECATED_BUILTIN == 0
+            && !eg.constant_deprecation_metadata_present;
+        let cached = if cacheable { site_cache.scalar_constant() } else { None };
+        let value = if let Some(value) = cached {
+            value
+        } else {
             // SAFETY: the compiler emits operand 2 as an in-bounds constant
             // literal exactly when the namespace-fallback marker is set.
-            let fallback = unsafe {
-                &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array)
+            let fallback = (opline.extended_value == 2).then(|| unsafe {
+                (&*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array))
+                    .as_str()
+                    .unwrap_or("")
+            });
+            // Like PHP's run-time cache, a site keeps the spelling that first
+            // resolved: a namespaced constant defined later does not displace
+            // the global fallback this site already took.
+            let resolution = if cacheable { site_cache.constant_resolution() } else { None };
+            let (mut value, mut used_fallback) = match (resolution, fallback) {
+                (Some(true), Some(fallback)) => (eg.find_constant(fallback), true),
+                _ => (eg.find_constant(name), false),
             };
-            let fallback = fallback.as_str().unwrap_or("");
-            value = eg.find_constant(fallback);
-        }
-        let Some(value) = value else {
-            eg.exception = Some(crate::value::make_error_value(
-                "Error",
-                &format!("Undefined constant \"{}\"", name),
-            ));
-            return Ok(());
+            if value.is_none() && let Some(fallback) = fallback {
+                value = eg.find_constant(fallback);
+                used_fallback = true;
+            }
+            let Some(value) = value else {
+                eg.exception = Some(crate::value::make_error_value(
+                    "Error",
+                    &format!("Undefined constant \"{}\"", name),
+                ));
+                return Ok(());
+            };
+            if cacheable {
+                site_cache.set_constant(&value, used_fallback);
+            }
+            value
         };
         if opline._pad & crate::vm::instruction::FETCH_CONST_DEPRECATED_BUILTIN != 0 {
             let resolved_name = if eg.find_constant(name).is_some() {

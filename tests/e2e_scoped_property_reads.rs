@@ -235,3 +235,40 @@ f5: [[2,4],[4,4],[6,4]]
 "#
     );
 }
+
+/// Constant fetch sites cache scalar values and pin the spelling that first
+/// resolved (a namespaced constant defined later does not displace the global
+/// fallback, as with PHP's run-time cache); `switch`/`==` between integers and
+/// strings follow PHP 8 numeric-string rules without formatting the integer.
+#[test]
+fn constant_site_cache_and_loose_int_string_equality_follow_php() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace App;
+const LOCAL = 7;
+function classify($v) {
+    switch ($v) { case \T_STRING: return 'string'; case \T_NAMESPACE: return 'ns'; case '{': return 'open'; case '}': return 'close'; case 0: return 'zero'; case '1e1': return 'ten'; default: return 'other'; }
+}
+$vals = [\T_STRING, \T_NAMESPACE, '{', '}', 0, '0', '', 'abc', 10, '10', ' 10', '10 ', '1e1', 10.0, null, false, true, '-1', -1, 'T_STRING'];
+$out = []; foreach ($vals as $v) { $out[] = classify($v); } echo implode(',', $out), "\n";
+$pairs = [[5, '5'], [5, ' 5'], [5, '5 '], [5, '05'], [5, '5.0'], [5, '5abc'], [5, 'abc'], [5, ''], [-5, '-5'], [0, ''], [0, 'a'], [0, '0.0'], [10, '1e1'], [10, '0x0A'], [-0, '-0'], [PHP_INT_MAX, (string) PHP_INT_MAX], [PHP_INT_MAX, '9223372036854775808'], [PHP_INT_MIN, '-9223372036854775808'], [7, "7\n"], [7, "\n7"], [7, "+7"], [123456789012345678, '123456789012345678'], [1, 'true']];
+$r = []; foreach ($pairs as [$a, $b]) { $r[] = ($a == $b ? 'T' : 'F') . ($b == $a ? 'T' : 'F') . ($a != $b ? 'T' : 'F'); } echo implode(' ', $r), "\n";
+for ($i = 0; $i < 3; $i++) { echo LOCAL, \PHP_INT_SIZE, \E_ALL, PHP_EOL === "\n" ? 'e' : 'x', M_PI > 3 ? 'p' : 'x', \PHP_FLOAT_EPSILON < 1 ? 'f' : 'x', \DIRECTORY_SEPARATOR, INF > 1 ? 'i' : 'x', NAN != NAN ? 'n' : 'x', ' '; } echo "\n";
+function later() { return LATER_CONST; }
+try { later(); } catch (\Error $e) { echo get_class($e), ': ', $e->getMessage(), "\n"; }
+define('App\\LATER_CONST', 42); echo later(), later(), "\n";
+function fb() { return FALLBACK_C; } define('FALLBACK_C', 'global'); echo fb(); define('App\\FALLBACK_C', 'ns'); echo fb(), "\n";
+echo \T_CLASS === T_CLASS ? 'same' : 'diff', ' ', \PHP_VERSION_ID > 80000 ? 'v8' : 'old', "\n";
+"#
+        ),
+        r#"string,ns,open,close,zero,zero,other,other,ten,ten,ten,ten,ten,ten,zero,zero,string,other,other,other
+TTF TTF TTF TTF TTF FFT FFT FFT TTF FFT FFT TTF TTF FFT TTF TTF TTF TTF TTF TTF TTF TTF FFT
+7830719epf/in 7830719epf/in 7830719epf/in 
+Error: Undefined constant "App\LATER_CONST"
+4242
+globalglobal
+same v8
+"#
+    );
+}
