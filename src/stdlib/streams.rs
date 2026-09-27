@@ -1,11 +1,16 @@
 use std::borrow::Cow;
 use std::io::SeekFrom;
-use std::net::{TcpStream, ToSocketAddrs};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, Shutdown, TcpListener, TcpStream, ToSocketAddrs};
+#[cfg(unix)]
+use std::os::fd::OwnedFd;
 use std::time::Duration;
+
+#[cfg(unix)]
+use rustix::event::{PollFd, PollFlags, Timespec, poll};
 
 use crate::compiler::{make_internal_function, make_internal_function_ref};
 use crate::runtime::ExecutorGlobals;
-use crate::value::{PhpArray, Value, ValueType};
+use crate::value::{ArrayKey, PhpArray, Value, ValueType};
 use crate::vm::execute::VmError;
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::ParamTypeHint;
@@ -248,6 +253,64 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             1,
             &["stream"],
         ),
+        ("inet_pton", fn_inet_pton, 1, 1, &["ip"]),
+        ("inet_ntop", fn_inet_ntop, 1, 1, &["ip"]),
+        (
+            "stream_socket_server",
+            fn_stream_socket_server,
+            5,
+            1,
+            &["address", "error_code", "error_message", "flags", "context"],
+        ),
+        (
+            "stream_socket_client",
+            fn_stream_socket_client,
+            6,
+            1,
+            &[
+                "address",
+                "error_code",
+                "error_message",
+                "timeout",
+                "flags",
+                "context",
+            ],
+        ),
+        (
+            "stream_socket_accept",
+            fn_stream_socket_accept,
+            3,
+            1,
+            &["socket", "timeout", "peer_name"],
+        ),
+        (
+            "stream_socket_get_name",
+            fn_stream_socket_get_name,
+            2,
+            2,
+            &["socket", "remote"],
+        ),
+        (
+            "stream_set_blocking",
+            fn_stream_set_blocking,
+            2,
+            2,
+            &["stream", "enable"],
+        ),
+        (
+            "stream_socket_shutdown",
+            fn_stream_socket_shutdown,
+            2,
+            2,
+            &["stream", "mode"],
+        ),
+        (
+            "stream_select",
+            fn_stream_select,
+            5,
+            4,
+            &["read", "write", "except", "seconds", "microseconds"],
+        ),
     ] {
         let parameter_names = parameter_names
             .iter()
@@ -259,6 +322,15 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             }
             "fsockopen" => {
                 make_internal_function_ref(handler, maximum, required, 0b1100, parameter_names)
+            }
+            "stream_socket_server" | "stream_socket_client" => {
+                make_internal_function_ref(handler, maximum, required, 0b110, parameter_names)
+            }
+            "stream_socket_accept" => {
+                make_internal_function_ref(handler, maximum, required, 0b100, parameter_names)
+            }
+            "stream_select" => {
+                make_internal_function_ref(handler, maximum, required, 0b111, parameter_names)
             }
             _ => make_internal_function(handler, maximum, required, parameter_names),
         });
@@ -290,6 +362,67 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             function.common.sig.param_type_hints = vec![ParamTypeHint::Mixed];
             function.common.sig.return_type_hint = ParamTypeHint::Bool;
             function.handler_validates_types = true;
+        } else if matches!(name, "inet_pton" | "inet_ntop") {
+            function.common.sig.param_type_hints = vec![ParamTypeHint::String];
+            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+                ParamTypeHint::String,
+                ParamTypeHint::ClassName("false".to_string()),
+            ]);
+            function.handler_validates_types = true;
+        } else if name == "stream_socket_get_name" {
+            function.common.sig.param_type_hints = vec![ParamTypeHint::None, ParamTypeHint::Bool];
+            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+                ParamTypeHint::String,
+                ParamTypeHint::ClassName("false".to_string()),
+            ]);
+            function.handler_validates_types = true;
+        } else if name == "stream_set_blocking" {
+            function.common.sig.param_type_hints = vec![ParamTypeHint::None, ParamTypeHint::Bool];
+            function.common.sig.return_type_hint = ParamTypeHint::Bool;
+            function.handler_validates_types = true;
+        } else if name == "stream_socket_shutdown" {
+            function.common.sig.param_type_hints = vec![ParamTypeHint::None, ParamTypeHint::Int];
+            function.common.sig.return_type_hint = ParamTypeHint::Bool;
+            function.handler_validates_types = true;
+        } else if name == "stream_socket_server" {
+            function.common.sig.param_type_hints = vec![
+                ParamTypeHint::String,
+                ParamTypeHint::None,
+                ParamTypeHint::None,
+                ParamTypeHint::Int,
+                ParamTypeHint::None,
+            ];
+            function.handler_validates_types = true;
+        } else if name == "stream_socket_client" {
+            function.common.sig.param_type_hints = vec![
+                ParamTypeHint::String,
+                ParamTypeHint::None,
+                ParamTypeHint::None,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+                ParamTypeHint::Int,
+                ParamTypeHint::None,
+            ];
+            function.handler_validates_types = true;
+        } else if name == "stream_socket_accept" {
+            function.common.sig.param_type_hints = vec![
+                ParamTypeHint::None,
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+                ParamTypeHint::None,
+            ];
+            function.handler_validates_types = true;
+        } else if name == "stream_select" {
+            function.common.sig.param_type_hints = vec![
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ];
+            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
+                ParamTypeHint::Int,
+                ParamTypeHint::ClassName("false".to_string()),
+            ]);
+            function.handler_validates_types = true;
         }
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
@@ -317,6 +450,54 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             eg.register_internal_function_extension(pointer, "standard");
         } else if name == "is_resource" {
             eg.register_internal_function_extension(pointer, "standard");
+        } else if matches!(name, "inet_pton" | "inet_ntop") {
+            eg.register_internal_function_reflection_metadata(pointer, vec![None], "standard");
+        } else if name == "stream_socket_server" {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![
+                    None,
+                    Some(Value::null()),
+                    Some(Value::null()),
+                    Some(Value::long(12)),
+                    Some(Value::null()),
+                ],
+                "standard",
+            );
+        } else if name == "stream_socket_client" {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![
+                    None,
+                    Some(Value::null()),
+                    Some(Value::null()),
+                    Some(Value::null()),
+                    Some(Value::long(4)),
+                    Some(Value::null()),
+                ],
+                "standard",
+            );
+        } else if name == "stream_socket_accept" {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![None, Some(Value::null()), Some(Value::null())],
+                "standard",
+            );
+        } else if name == "stream_select" {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![None, None, None, None, Some(Value::null())],
+                "standard",
+            );
+        } else if matches!(
+            name,
+            "stream_socket_get_name" | "stream_set_blocking" | "stream_socket_shutdown"
+        ) {
+            eg.register_internal_function_reflection_metadata(
+                pointer,
+                vec![None; maximum as usize],
+                "standard",
+            );
         }
         functions.push(function);
     }
@@ -390,6 +571,386 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             "standard",
         );
         functions.push(function);
+    }
+}
+
+fn fn_inet_pton(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(ip) = super::typed_internal_string_argument(execute_data, eg, "inet_pton", 0, "ip")?
+    else {
+        return Ok(());
+    };
+    let value = match ip.parse::<IpAddr>() {
+        Ok(IpAddr::V4(address)) => Value::binary_string(&address.octets()),
+        Ok(IpAddr::V6(address)) => Value::binary_string(&address.octets()),
+        Err(_) => Value::bool(false),
+    };
+    return_value(return_pointer, value)
+}
+
+fn fn_inet_ntop(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(ip) = super::typed_internal_string_value_argument_expected(
+        execute_data,
+        eg,
+        "inet_ntop",
+        0,
+        "ip",
+        "string",
+    )?
+    else {
+        return Ok(());
+    };
+    let bytes = ip.php_string_bytes().unwrap();
+    let value = match bytes.len() {
+        4 => Value::string(Ipv4Addr::new(bytes[0], bytes[1], bytes[2], bytes[3]).to_string()),
+        16 => {
+            let mut octets = [0_u8; 16];
+            octets.copy_from_slice(&bytes);
+            Value::string(Ipv6Addr::from(octets).to_string())
+        }
+        _ => Value::bool(false),
+    };
+    return_value(return_pointer, value)
+}
+
+fn socket_endpoint(address: &str) -> Option<&str> {
+    address.strip_prefix("tcp://")
+}
+
+fn socket_failure(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+    function: &str,
+    error: std::io::Error,
+) -> Result<(), VmError> {
+    let code = error.raw_os_error().unwrap_or(0);
+    let message = error.to_string();
+    if optional_argument(execute_data, 1).is_some() {
+        set_argument(execute_data, 1, Value::long(i64::from(code)));
+    }
+    if optional_argument(execute_data, 2).is_some() {
+        set_argument(execute_data, 2, Value::string(&message));
+    }
+    super::report_internal_diagnostic(
+        eg,
+        execute_data,
+        2,
+        "Warning",
+        &format!("{function}(): Unable to connect to socket: {message}"),
+    )?;
+    return_value(return_pointer, Value::bool(false))
+}
+
+fn fn_stream_socket_server(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(address) = super::typed_internal_string_argument(
+        execute_data,
+        eg,
+        "stream_socket_server",
+        0,
+        "address",
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(endpoint) = socket_endpoint(&address) else {
+        return socket_failure(
+            execute_data,
+            return_pointer,
+            eg,
+            "stream_socket_server",
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported transport"),
+        );
+    };
+    match TcpListener::bind(endpoint) {
+        Ok(listener) => {
+            if optional_argument(execute_data, 1).is_some() {
+                set_argument(execute_data, 1, Value::long(0));
+            }
+            if optional_argument(execute_data, 2).is_some() {
+                set_argument(execute_data, 2, Value::string(""));
+            }
+            let stream = PhpStream::tcp_listener(listener, address);
+            #[cfg(feature = "resource-lifetime")]
+            let value = insert_stream(eg, stream);
+            #[cfg(not(feature = "resource-lifetime"))]
+            let value = Value::resource(insert_stream(eg, stream));
+            return_value(return_pointer, value)
+        }
+        Err(error) => socket_failure(
+            execute_data,
+            return_pointer,
+            eg,
+            "stream_socket_server",
+            error,
+        ),
+    }
+}
+
+fn fn_stream_socket_client(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(address) = super::typed_internal_string_argument(
+        execute_data,
+        eg,
+        "stream_socket_client",
+        0,
+        "address",
+    )?
+    else {
+        return Ok(());
+    };
+    let Some(endpoint) = socket_endpoint(&address) else {
+        return socket_failure(
+            execute_data,
+            return_pointer,
+            eg,
+            "stream_socket_client",
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "unsupported transport"),
+        );
+    };
+    let timeout = optional_argument(execute_data, 3)
+        .and_then(Value::as_double)
+        .and_then(|seconds| Duration::try_from_secs_f64(seconds).ok())
+        .unwrap_or_else(|| Duration::from_secs(60));
+    let addresses = match endpoint.to_socket_addrs() {
+        Ok(addresses) => addresses.collect::<Vec<_>>(),
+        Err(error) => {
+            return socket_failure(
+                execute_data,
+                return_pointer,
+                eg,
+                "stream_socket_client",
+                error,
+            );
+        }
+    };
+    let mut last_error = None;
+    for endpoint in addresses {
+        match TcpStream::connect_timeout(&endpoint, timeout.max(Duration::from_nanos(1))) {
+            Ok(stream) => {
+                if optional_argument(execute_data, 1).is_some() {
+                    set_argument(execute_data, 1, Value::long(0));
+                }
+                if optional_argument(execute_data, 2).is_some() {
+                    set_argument(execute_data, 2, Value::string(""));
+                }
+                let stream = PhpStream::tcp(stream, address);
+                #[cfg(feature = "resource-lifetime")]
+                let value = insert_stream(eg, stream);
+                #[cfg(not(feature = "resource-lifetime"))]
+                let value = Value::resource(insert_stream(eg, stream));
+                return return_value(return_pointer, value);
+            }
+            Err(error) => last_error = Some(error),
+        }
+    }
+    socket_failure(
+        execute_data,
+        return_pointer,
+        eg,
+        "stream_socket_client",
+        last_error.unwrap_or_else(|| {
+            std::io::Error::new(std::io::ErrorKind::AddrNotAvailable, "address unavailable")
+        }),
+    )
+}
+
+fn fn_stream_set_blocking(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(resource) = argument(execute_data, 0).as_resource_id() else {
+        super::typed_internal_argument_error(
+            eg,
+            "stream_set_blocking",
+            argument(execute_data, 0),
+            1,
+            "stream",
+            "resource",
+        );
+        return Ok(());
+    };
+    let enable = argument(execute_data, 1).is_truthy();
+    let changed =
+        with_stream(eg, resource, |stream| stream.set_blocking(enable).is_ok()).unwrap_or(false);
+    return_value(return_pointer, Value::bool(changed))
+}
+
+fn fn_stream_socket_get_name(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(resource) = argument(execute_data, 0).as_resource_id() else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+    let remote = argument(execute_data, 1).is_truthy();
+    let value = with_stream(eg, resource, |stream| stream.socket_name(remote))
+        .and_then(Result::ok)
+        .map_or_else(|| Value::bool(false), Value::string);
+    return_value(return_pointer, value)
+}
+
+fn fn_stream_socket_accept(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(resource) = argument(execute_data, 0).as_resource_id() else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+    let accepted = with_stream(eg, resource, |stream| stream.accept()).and_then(Result::ok);
+    let Some((stream, peer)) = accepted else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+    if optional_argument(execute_data, 2).is_some() {
+        set_argument(execute_data, 2, Value::string(peer));
+    }
+    #[cfg(feature = "resource-lifetime")]
+    let value = insert_stream(eg, stream);
+    #[cfg(not(feature = "resource-lifetime"))]
+    let value = Value::resource(insert_stream(eg, stream));
+    return_value(return_pointer, value)
+}
+
+fn fn_stream_socket_shutdown(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(resource) = argument(execute_data, 0).as_resource_id() else {
+        return return_value(return_pointer, Value::bool(false));
+    };
+    let how = match argument(execute_data, 1).as_long().unwrap_or(-1) {
+        0 => Shutdown::Read,
+        1 => Shutdown::Write,
+        2 => Shutdown::Both,
+        _ => return return_value(return_pointer, Value::bool(false)),
+    };
+    let value = with_stream(eg, resource, |stream| stream.shutdown(how).is_ok()).unwrap_or(false);
+    return_value(return_pointer, Value::bool(value))
+}
+
+#[cfg(unix)]
+fn selected_streams(
+    eg: &mut ExecutorGlobals,
+    input: Option<&PhpArray>,
+    event: PollFlags,
+) -> (Vec<(ArrayKey, Value, usize)>, Vec<(OwnedFd, PollFlags)>) {
+    let mut entries = Vec::new();
+    let mut descriptors = Vec::new();
+    if let Some(input) = input {
+        for (key, value) in input.iter() {
+            let Some(resource) = value.as_resource_id() else {
+                continue;
+            };
+            let descriptor = with_stream(eg, resource, |stream| stream.duplicate_descriptor())
+                .and_then(Result::ok)
+                .flatten();
+            if let Some(descriptor) = descriptor {
+                entries.push((key, value.clone(), descriptors.len()));
+                descriptors.push((descriptor, event));
+            }
+        }
+    }
+    (entries, descriptors)
+}
+
+#[cfg(unix)]
+fn ready_array(entries: &[(ArrayKey, Value, usize)], descriptors: &[PollFd<'_>]) -> PhpArray {
+    let mut result = PhpArray::new();
+    for (key, value, index) in entries {
+        if !descriptors[*index].revents().is_empty() {
+            match key {
+                ArrayKey::Int(key) => result.set_int(*key, value.clone()),
+                ArrayKey::String(key) => result.set_str(key, value.clone()),
+            }
+        }
+    }
+    result
+}
+
+fn fn_stream_select(
+    execute_data: *mut ExecuteData,
+    return_pointer: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    #[cfg(not(unix))]
+    {
+        let _ = (execute_data, eg);
+        return return_value(return_pointer, Value::bool(false));
+    }
+    #[cfg(unix)]
+    {
+        let read = argument(execute_data, 0).as_array();
+        let write = argument(execute_data, 1).as_array();
+        let except = argument(execute_data, 2).as_array();
+        let seconds = optional_argument(execute_data, 3).and_then(Value::as_long);
+        let microseconds = optional_argument(execute_data, 4)
+            .and_then(Value::as_long)
+            .unwrap_or(0);
+        let (read_entries, mut read_descriptors) =
+            selected_streams(eg, read.as_deref(), PollFlags::IN);
+        let (write_entries, mut write_descriptors) =
+            selected_streams(eg, write.as_deref(), PollFlags::OUT);
+        let (except_entries, mut except_descriptors) =
+            selected_streams(eg, except.as_deref(), PollFlags::PRI);
+        let read_len = read_descriptors.len();
+        let write_len = write_descriptors.len();
+        let mut descriptors = Vec::with_capacity(read_len + write_len + except_descriptors.len());
+        descriptors.append(&mut read_descriptors);
+        descriptors.append(&mut write_descriptors);
+        descriptors.append(&mut except_descriptors);
+        let timeout_millis = seconds.map(|seconds| {
+            seconds
+                .saturating_mul(1000)
+                .saturating_add(microseconds.saturating_add(999) / 1000)
+                .clamp(0, i64::from(i32::MAX))
+        });
+        let timeout = timeout_millis.map(|millis| Timespec {
+            tv_sec: millis / 1000,
+            tv_nsec: (millis % 1000) * 1_000_000,
+        });
+        let mut descriptors = descriptors
+            .iter()
+            .map(|(descriptor, events)| PollFd::new(descriptor, *events))
+            .collect::<Vec<_>>();
+        let Ok(ready) = poll(&mut descriptors, timeout.as_ref()) else {
+            return return_value(return_pointer, Value::bool(false));
+        };
+        let (read_descriptors, rest) = descriptors.split_at(read_len);
+        let (write_descriptors, except_descriptors) = rest.split_at(write_len);
+        set_argument(
+            execute_data,
+            0,
+            Value::array(ready_array(&read_entries, read_descriptors)),
+        );
+        set_argument(
+            execute_data,
+            1,
+            Value::array(ready_array(&write_entries, write_descriptors)),
+        );
+        set_argument(
+            execute_data,
+            2,
+            Value::array(ready_array(&except_entries, except_descriptors)),
+        );
+        return_value(return_pointer, Value::long(ready as i64))
     }
 }
 

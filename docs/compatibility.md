@@ -7,6 +7,55 @@ RPHP is not certified for a complete PHP version and must not be treated as a
 drop-in PHP replacement. Passing a script is evidence only for the exercised
 behavior.
 
+### Rector 2.5.9 bootstrap
+
+The `rector-bootstrap` checkpoint over `3e1f2580` establishes the first
+unmodified Rector execution milestone. Rector 2.5.9 now prints its version,
+runs its ordinary parallel worker protocol over loopback TCP, detects a
+`PowToExpRector` change, writes the transformed PHP file and completes a second
+idempotent run with **0 changed files / 0 errors**. The worker fix is a general
+nonblocking stream rule: `stream_get_contents()` preserves bytes already read
+when the following native read reports `WouldBlock`, without falsely marking
+the stream as EOF.
+
+The supporting PHP 8.5 surface is implemented as reusable library contracts:
+registered `phar://` reads and directory/stat operations; the observed PCNTL
+constants; `Random\Randomizer` construction and `getBytesFromString()`;
+private-property shadowing; `inet_pton()`/`inet_ntop()`; TCP server, client,
+accept, naming, blocking, shutdown and `stream_select()` operations; and
+process-resource redirection, status and termination. Native polling and
+signal delivery use the existing safe Rustix boundary, so the unsafe inventory
+remains **1,627 blocks / 289 functions**.
+
+The audit of 3,485 Rector vendor files observes 351 unique global functions and
+reports **339 present / 12 missing / 0 call-shape mismatches**. The remaining
+static observations are `socket_strerror()`, `pcntl_signal_get_handler()`,
+`cli_set_process_title()`, `pcntl_sigprocmask()`, `phpinfo()`, `posix_kill()`,
+`socket_get_option()`, `socket_import_stream()`, `stream_set_read_buffer()`,
+`pcntl_signal_dispatch()`, `stream_set_chunk_size()` and
+`stream_socket_enable_crypto()`; none is reached by the proven transformation.
+Presence and Reflection-visible call shape do not by themselves prove function
+behavior.
+
+The complete Cargo matrix is green: default **7,040/0**, no-default
+**6,689/0**, generics-erased **7,111/0**, generics-reified **7,133/0** and
+all-features **7,184/0**, plus all-feature/all-target checking. Composer 2.8.12
+S0, all four Symfony 7.4 S1 fixtures and FrameworkBundle S2/S3 also remain
+green. Performance was intentionally not measured by user direction ahead of
+the planned Rust upgrade.
+
+This checkpoint proves one real parallel Rector rule and the audited bootstrap
+surface. It does not claim every Rector rule/configuration, complete PCNTL,
+socket, stream, process, PHAR or Random behavior, TLS streams, or blanket
+Rector project compatibility.
+
+SHA-256 evidence: release candidate
+`3fe71a63d22da7e6f4338d3a61ac70de75c6d5e75a4ff3491dd772b7f6512412`;
+Cargo matrix
+`1ab476ff550049cb9f825708108adb940d8f04e52d8b7e25b0e0307f0b7495d0`;
+vendor audit summary
+`f8e187c3fb26f24dc469ba216cd78506c7806906f5c6d87fc2821cb86efa5a17`.
+
 ### PHPUnit complete observed runtime surface
 
 The `phpunit-complete-runtime` checkpoint over `43ede4ab` implements the last

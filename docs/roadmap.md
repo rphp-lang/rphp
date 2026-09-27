@@ -24,7 +24,7 @@ microbenchmark improves.
 
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
-| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The PHPUnit 13.2.6 completion checkpoint closes its audited runtime surface: 273/273 observed globals are present with zero call-shape mismatches, a real one-test suite passes, and the stable Zend/lang pass set remains lossless at 5,396. Full PCNTL/Fiber signaling remains explicitly unclaimed. Five Cargo configurations, all-targets, Composer/Symfony S0-S3 and unsafe gates pass; performance is deferred by user direction ahead of the Rust upgrade. |
+| PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The Rector 2.5.9 bootstrap now runs an unmodified real parallel transformation and an idempotent second pass. Its vendor audit finds 339/351 observed globals present with zero call-shape mismatches; twelve conditional observations remain explicit nonclaims. Five Cargo configurations, all-targets, Composer/Symfony S0-S3 and unsafe gates pass; performance is deferred by user direction ahead of the Rust upgrade. |
 | Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

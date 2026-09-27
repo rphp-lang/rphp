@@ -3727,6 +3727,9 @@ fn builtin_ref_args(name: &str) -> u64 {
         "parse_str" | "mb_parse_str" => 0b10,     // arg 1 (&$result)
         "headers_sent" => 0b11,                   // args 0 and 1 (&$filename, &$line)
         "fsockopen" => 0b1100,                    // args 2 and 3 (&$errno, &$errstr)
+        "stream_socket_server" | "stream_socket_client" => 0b110, // args 1 and 2
+        "stream_socket_accept" => 0b100,          // arg 2 (&$peer_name)
+        "stream_select" => 0b111,                 // args 0, 1 and 2
         "getimagesize" | "getimagesizefromstring" => 0b10,
         "flock" => 0b100,                     // arg 2 (&$would_block)
         "sscanf" | "fscanf" => u64::MAX << 2, // variadic arg 2+ (&...$vars)

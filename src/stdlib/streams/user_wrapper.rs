@@ -20,7 +20,7 @@ const DISABLED_PREFIX: &str = "disabled:";
 const OPEN_PREFIX: &str = "open:";
 const USER_READ_SIZE: i64 = 8192;
 
-const BUILTIN_WRAPPERS: &[&str] = &["php", "file"];
+const BUILTIN_WRAPPERS: &[&str] = &["php", "file", "phar"];
 
 #[derive(Clone)]
 pub(crate) struct WrapperDefinition {
@@ -135,7 +135,7 @@ fn definition_for_registered_url(
         .and_then(definition_from_value)
 }
 
-fn is_builtin_enabled(eg: &ExecutorGlobals, protocol: &str) -> bool {
+pub(crate) fn is_builtin_enabled(eg: &ExecutorGlobals, protocol: &str) -> bool {
     BUILTIN_WRAPPERS.contains(&protocol)
         && registry(eg).is_none_or(|state| !state.contains_key(&disabled_key(protocol)))
 }

@@ -1,7 +1,7 @@
 use std::borrow::Cow;
 use std::fs::{File, Metadata, OpenOptions};
 use std::io::{self, Cursor, Read, Seek, SeekFrom, Write};
-use std::net::TcpStream;
+use std::net::{Shutdown, TcpListener, TcpStream};
 #[cfg(test)]
 use std::path::Path;
 use std::path::PathBuf;
@@ -126,6 +126,7 @@ enum StreamBackend {
     Standard(StandardStream),
     ProcessPipe(ProcessPipe),
     Tcp(TcpStream),
+    TcpListener(TcpListener),
 }
 
 struct FileBackend {
@@ -266,7 +267,8 @@ impl PhpStream {
             StreamBackend::Memory(_)
             | StreamBackend::Temp(_)
             | StreamBackend::ProcessPipe(_)
-            | StreamBackend::Tcp(_) => false,
+            | StreamBackend::Tcp(_)
+            | StreamBackend::TcpListener(_) => false,
         }
     }
 
@@ -414,6 +416,98 @@ impl PhpStream {
             #[cfg(feature = "stream-context")]
             context: None,
         }
+    }
+
+    pub(crate) fn tcp_listener(listener: TcpListener, uri: String) -> Self {
+        Self {
+            backend: StreamBackend::TcpListener(listener),
+            mode: StreamMode {
+                read: true,
+                write: false,
+                append: false,
+                create: false,
+                truncate: false,
+                exclusive: false,
+            },
+            reported_mode: Cow::Borrowed("r"),
+            uri: Cow::Owned(uri),
+            eof: false,
+            read_buffer: None,
+            plain_file_io: false,
+            memory_append_after_truncate: false,
+            eager_eof: false,
+            #[cfg(feature = "stream-context")]
+            context: None,
+        }
+    }
+
+    pub(crate) fn set_blocking(&self, enable: bool) -> io::Result<()> {
+        match &self.backend {
+            StreamBackend::Tcp(stream) => stream.set_nonblocking(!enable),
+            StreamBackend::TcpListener(listener) => listener.set_nonblocking(!enable),
+            _ => Ok(()),
+        }
+    }
+
+    pub(crate) fn socket_name(&self, remote: bool) -> io::Result<String> {
+        let address = match &self.backend {
+            StreamBackend::Tcp(stream) if remote => stream.peer_addr()?,
+            StreamBackend::Tcp(stream) => stream.local_addr()?,
+            StreamBackend::TcpListener(listener) if !remote => listener.local_addr()?,
+            StreamBackend::TcpListener(_) => {
+                return Err(io::Error::new(
+                    io::ErrorKind::NotConnected,
+                    "listening stream has no peer",
+                ));
+            }
+            _ => {
+                return Err(io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    "stream is not a socket",
+                ));
+            }
+        };
+        Ok(address.to_string())
+    }
+
+    pub(crate) fn accept(&self) -> io::Result<(Self, String)> {
+        let StreamBackend::TcpListener(listener) = &self.backend else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "stream is not a listening socket",
+            ));
+        };
+        let (stream, peer) = listener.accept()?;
+        Ok((Self::tcp(stream, peer.to_string()), peer.to_string()))
+    }
+
+    pub(crate) fn shutdown(&self, how: Shutdown) -> io::Result<()> {
+        let StreamBackend::Tcp(stream) = &self.backend else {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "stream is not a connected socket",
+            ));
+        };
+        stream.shutdown(how)
+    }
+
+    #[cfg(unix)]
+    pub(crate) fn duplicate_descriptor(&self) -> io::Result<Option<std::os::fd::OwnedFd>> {
+        use std::os::fd::AsFd;
+
+        let descriptor = match &self.backend {
+            StreamBackend::File(file) => Some(file.as_fd()),
+            StreamBackend::ProcessPipe(ProcessPipe::Stdin(pipe)) => Some(pipe.as_fd()),
+            StreamBackend::ProcessPipe(ProcessPipe::Stdout(pipe)) => Some(pipe.as_fd()),
+            StreamBackend::ProcessPipe(ProcessPipe::Stderr(pipe)) => Some(pipe.as_fd()),
+            StreamBackend::Tcp(stream) => Some(stream.as_fd()),
+            StreamBackend::TcpListener(listener) => Some(listener.as_fd()),
+            _ => None,
+        };
+        descriptor
+            .map(rustix::io::dup)
+            .transpose()
+            .map_err(Into::into)
     }
 
     pub(crate) fn process_stdout(stdout: ChildStdout) -> Self {
@@ -635,6 +729,13 @@ impl PhpStream {
         matches!(self.backend, StreamBackend::File(_))
     }
 
+    pub(crate) fn try_clone_file(&self) -> io::Result<Option<File>> {
+        match &self.backend {
+            StreamBackend::File(file) => file.try_clone().map(Some),
+            _ => Ok(None),
+        }
+    }
+
     #[inline]
     pub(crate) fn take_plain_file_io(&mut self) -> bool {
         std::mem::take(&mut self.plain_file_io)
@@ -671,6 +772,10 @@ impl PhpStream {
                     "process stdin is not readable",
                 )),
                 StreamBackend::Tcp(stream) => stream.read(buffer),
+                StreamBackend::TcpListener(_) => Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "listening TCP stream is not readable",
+                )),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -695,6 +800,10 @@ impl PhpStream {
             StreamBackend::Tcp(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "TCP stream does not support seeking",
+            )),
+            StreamBackend::TcpListener(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "TCP listener does not support seeking",
             )),
         }
     }
@@ -721,7 +830,17 @@ impl PhpStream {
         }
         let mut total = 0;
         while total < buffer.len() {
-            let read = self.read_once(&mut buffer[total..])?;
+            let read = match self.read_once(&mut buffer[total..]) {
+                Ok(read) => read,
+                // Non-blocking PHP streams report the bytes currently
+                // available. Exhausting the kernel receive buffer is not an
+                // I/O failure and, unlike a zero-byte read, does not mean EOF.
+                Err(error) if error.kind() == io::ErrorKind::WouldBlock => {
+                    self.eof = false;
+                    break;
+                }
+                Err(error) => return Err(error),
+            };
             self.eof = read == 0;
             total += read;
             if read == 0 || matches!(self.backend, StreamBackend::Standard(_)) {
@@ -1183,6 +1302,10 @@ impl PhpStream {
                     ))
                 }
                 StreamBackend::Tcp(stream) => stream.write(buffer),
+                StreamBackend::TcpListener(_) => Err(io::Error::new(
+                    io::ErrorKind::Unsupported,
+                    "listening TCP stream is not writable",
+                )),
             };
             match result {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
@@ -1226,6 +1349,7 @@ impl PhpStream {
             StreamBackend::ProcessPipe(ProcessPipe::Stdin(pipe)) => pipe.flush(),
             StreamBackend::ProcessPipe(ProcessPipe::Stdout(_) | ProcessPipe::Stderr(_)) => Ok(()),
             StreamBackend::Tcp(stream) => stream.flush(),
+            StreamBackend::TcpListener(_) => Ok(()),
         }
     }
 
@@ -1272,7 +1396,8 @@ impl PhpStream {
             | StreamBackend::Temp(_)
             | StreamBackend::Standard(_)
             | StreamBackend::ProcessPipe(_)
-            | StreamBackend::Tcp(_) => Err(io::Error::new(
+            | StreamBackend::Tcp(_)
+            | StreamBackend::TcpListener(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "exclusive locks require a regular file",
             )),
@@ -1294,7 +1419,8 @@ impl PhpStream {
             | StreamBackend::Temp(_)
             | StreamBackend::Standard(_)
             | StreamBackend::ProcessPipe(_)
-            | StreamBackend::Tcp(_) => Err(io::Error::new(
+            | StreamBackend::Tcp(_)
+            | StreamBackend::TcpListener(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "truncate after locking requires a regular file",
             )),
@@ -1312,9 +1438,10 @@ impl PhpStream {
                 true
             }
             StreamBackend::Temp(temp) => temp.seek(SeekFrom::Start(0)).is_ok(),
-            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) | StreamBackend::Tcp(_) => {
-                false
-            }
+            StreamBackend::Standard(_)
+            | StreamBackend::ProcessPipe(_)
+            | StreamBackend::Tcp(_)
+            | StreamBackend::TcpListener(_) => false,
         };
         if succeeded {
             self.discard_prefetched();
@@ -1345,12 +1472,13 @@ impl PhpStream {
             StreamBackend::File(file) => file.stream_position(),
             StreamBackend::Memory(memory) => Ok(memory.position()),
             StreamBackend::Temp(temp) => temp.position(),
-            StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) | StreamBackend::Tcp(_) => {
-                Err(io::Error::new(
-                    io::ErrorKind::Unsupported,
-                    "stream does not expose a position",
-                ))
-            }
+            StreamBackend::Standard(_)
+            | StreamBackend::ProcessPipe(_)
+            | StreamBackend::Tcp(_)
+            | StreamBackend::TcpListener(_) => Err(io::Error::new(
+                io::ErrorKind::Unsupported,
+                "stream does not expose a position",
+            )),
         }?;
         Ok(position.saturating_sub(self.unread_len() as u64))
     }
@@ -1381,6 +1509,9 @@ impl PhpStream {
                 "",
                 "tcp_socket/ssl",
             ),
+            StreamBackend::TcpListener(_) => {
+                (Some(false), Some(true), Some(false), "", "tcp_socket/ssl")
+            }
         };
         StreamMetadata {
             timed_out,
@@ -1392,7 +1523,10 @@ impl PhpStream {
             unread_bytes: self.unread_len(),
             seekable: !matches!(
                 self.backend,
-                StreamBackend::Standard(_) | StreamBackend::ProcessPipe(_) | StreamBackend::Tcp(_)
+                StreamBackend::Standard(_)
+                    | StreamBackend::ProcessPipe(_)
+                    | StreamBackend::Tcp(_)
+                    | StreamBackend::TcpListener(_)
             ),
             uri: &self.uri,
         }
@@ -1425,7 +1559,7 @@ impl PhpStream {
                 }
             }
             StreamBackend::ProcessPipe(_) => Ok(None),
-            StreamBackend::Tcp(_) => Ok(None),
+            StreamBackend::Tcp(_) | StreamBackend::TcpListener(_) => Ok(None),
         }
     }
 

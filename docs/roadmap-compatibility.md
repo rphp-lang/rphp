@@ -36,6 +36,32 @@ SAPI, or production-readiness claim beyond its exact differential gate.
 
 ## Current measured checkpoint
 
+The `rector-bootstrap` checkpoint over `3e1f2580` runs unmodified Rector 2.5.9
+through its real parallel loopback worker protocol. A `PowToExpRector` fixture
+is discovered and written correctly, and the second run is idempotent with
+zero changes and zero errors. The general supporting slice adds registered
+PHAR reads, observed PCNTL constants, `Random\Randomizer`, private-property
+shadowing, IP conversion, TCP stream/select primitives and process-resource
+redirection/status/termination. Most importantly, a nonblocking stream now
+returns the bytes already read when the next native read would block, rather
+than discarding the complete worker message.
+
+The Rector vendor audit finds **339 present / 12 missing / 0 call-shape
+mismatches** across 351 statically observed global functions in 3,485 files.
+The complete default/no-default/erased/reified/all-features Cargo matrix,
+all-target check, focused library suites, Composer/Symfony S0--S3 and unsafe
+policy are green. Unsafe remains **1,627/289** through the existing safe Rustix
+system-call boundary. Performance remains deferred by user direction. See
+[exact evidence](compatibility.md).
+
+This milestone proves the audited bootstrap and one actual parallel Rector
+transformation, not every Rector rule or complete socket/PCNTL/process/stream
+extension compatibility. The next Rector work should be selected from a real
+project/rule run; the twelve remaining static builtin observations are not
+automatically runtime blockers.
+
+### Preceding PHPUnit complete-runtime checkpoint
+
 The `phpunit-complete-runtime` checkpoint over `43ede4ab` closes the remaining
 PHPUnit 13.2.6 runtime prerequisites. `fsockopen()` now provides its exact
 Reflection and by-reference error outputs over a real TCP stream;
@@ -61,7 +87,7 @@ release; it does not claim the complete PCNTL extension, every TCP wrapper
 mode, all Reflection source semantics or blanket PHPUnit ecosystem
 compatibility.
 
-### Preceding PHPUnit POSIX runtime checkpoint
+### Earlier PHPUnit POSIX runtime checkpoint
 
 The `phpunit-posix-runtime` checkpoint over `55be20cb` adds a coherent
 seven-function POSIX slice containing all three globals actually observed by

@@ -28,7 +28,7 @@ impl PhpStream {
                 io::ErrorKind::Unsupported,
                 "stream does not support truncation",
             )),
-            StreamBackend::Tcp(_) => Err(io::Error::new(
+            StreamBackend::Tcp(_) | StreamBackend::TcpListener(_) => Err(io::Error::new(
                 io::ErrorKind::Unsupported,
                 "TCP stream does not support truncation",
             )),

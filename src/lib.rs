@@ -227,7 +227,23 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     #[cfg(target_os = "linux")]
     "SIGINT",
     #[cfg(target_os = "linux")]
+    "SIGQUIT",
+    #[cfg(target_os = "linux")]
+    "SIGKILL",
+    #[cfg(target_os = "linux")]
+    "SIGUSR1",
+    #[cfg(target_os = "linux")]
+    "SIGUSR2",
+    #[cfg(target_os = "linux")]
     "SIGALRM",
+    #[cfg(target_os = "linux")]
+    "SIGTERM",
+    #[cfg(target_os = "linux")]
+    "SIG_BLOCK",
+    #[cfg(target_os = "linux")]
+    "SIG_UNBLOCK",
+    #[cfg(target_os = "linux")]
+    "SIG_SETMASK",
     "DEBUG_BACKTRACE_PROVIDE_OBJECT",
     "DEBUG_BACKTRACE_IGNORE_ARGS",
     "PATHINFO_DIRNAME",
@@ -522,6 +538,13 @@ pub(crate) const BUILTIN_CONSTANT_NAMES: &[&str] = &[
     "SEEK_SET",
     "SEEK_CUR",
     "SEEK_END",
+    "STREAM_SERVER_BIND",
+    "STREAM_SERVER_LISTEN",
+    "STREAM_CLIENT_CONNECT",
+    "STREAM_CLIENT_ASYNC_CONNECT",
+    "STREAM_SHUT_RD",
+    "STREAM_SHUT_WR",
+    "STREAM_SHUT_RDWR",
     #[cfg(feature = "stream-registry")]
     "STREAM_REPORT_ERRORS",
     #[cfg(feature = "stream-registry")]
@@ -762,7 +785,23 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         #[cfg(target_os = "linux")]
         "SIGINT" => Some(value::Value::long(i64::from(libc::SIGINT))),
         #[cfg(target_os = "linux")]
+        "SIGQUIT" => Some(value::Value::long(i64::from(libc::SIGQUIT))),
+        #[cfg(target_os = "linux")]
+        "SIGKILL" => Some(value::Value::long(i64::from(libc::SIGKILL))),
+        #[cfg(target_os = "linux")]
+        "SIGUSR1" => Some(value::Value::long(i64::from(libc::SIGUSR1))),
+        #[cfg(target_os = "linux")]
+        "SIGUSR2" => Some(value::Value::long(i64::from(libc::SIGUSR2))),
+        #[cfg(target_os = "linux")]
         "SIGALRM" => Some(value::Value::long(i64::from(libc::SIGALRM))),
+        #[cfg(target_os = "linux")]
+        "SIGTERM" => Some(value::Value::long(i64::from(libc::SIGTERM))),
+        #[cfg(target_os = "linux")]
+        "SIG_BLOCK" => Some(value::Value::long(i64::from(libc::SIG_BLOCK))),
+        #[cfg(target_os = "linux")]
+        "SIG_UNBLOCK" => Some(value::Value::long(i64::from(libc::SIG_UNBLOCK))),
+        #[cfg(target_os = "linux")]
+        "SIG_SETMASK" => Some(value::Value::long(i64::from(libc::SIG_SETMASK))),
         "DEBUG_BACKTRACE_PROVIDE_OBJECT" => Some(value::Value::long(1)),
         "DEBUG_BACKTRACE_IGNORE_ARGS" => Some(value::Value::long(2)),
         "PATHINFO_DIRNAME" => Some(value::Value::long(1)),
@@ -1048,6 +1087,13 @@ pub fn builtin_constant(name: &str) -> Option<value::Value> {
         "SEEK_SET" => Some(value::Value::long(0)),
         "SEEK_CUR" => Some(value::Value::long(1)),
         "SEEK_END" => Some(value::Value::long(2)),
+        "STREAM_SERVER_BIND" => Some(value::Value::long(4)),
+        "STREAM_SERVER_LISTEN" => Some(value::Value::long(8)),
+        "STREAM_CLIENT_CONNECT" => Some(value::Value::long(4)),
+        "STREAM_CLIENT_ASYNC_CONNECT" => Some(value::Value::long(2)),
+        "STREAM_SHUT_RD" => Some(value::Value::long(0)),
+        "STREAM_SHUT_WR" => Some(value::Value::long(1)),
+        "STREAM_SHUT_RDWR" => Some(value::Value::long(2)),
         #[cfg(feature = "stream-registry")]
         "STREAM_REPORT_ERRORS" => Some(value::Value::long(8)),
         #[cfg(feature = "stream-registry")]

@@ -7,6 +7,25 @@ const FIXTURE: &str = concat!(
     "/tests/fixtures/phar/hello.phar"
 );
 
+#[test]
+#[cfg(all(feature = "file-contents", feature = "stream-registry"))]
+fn phar_wrapper_is_listed_and_obeys_request_local_unregister_restore() {
+    let source = r#"<?php
+$path = '__FIXTURE__';
+$member = "phar://$path/data.txt";
+echo (int) in_array('phar', stream_get_wrappers(), true), ':';
+echo trim(file_get_contents($member)), '|';
+echo (int) stream_wrapper_unregister('phar'), ':';
+echo (int) in_array('phar', stream_get_wrappers(), true), ':';
+echo (int) (@file_get_contents($member) === false), '|';
+echo (int) stream_wrapper_restore('phar'), ':';
+echo (int) in_array('phar', stream_get_wrappers(), true), ':';
+echo trim(file_get_contents($member));
+"#
+    .replace("__FIXTURE__", FIXTURE);
+    assert_eq!(run_php(&source), "1:plain dataé|1:0:1|1:1:plain dataé");
+}
+
 /// The fixture is built by `tests/fixtures/phar/build.php` with reference PHP
 /// (SHA-256 signed, uncompressed, four members plus an empty directory). The
 /// expected output below is what PHP 8.5 prints for the same script, with the

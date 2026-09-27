@@ -311,6 +311,19 @@ pub(crate) fn is_phar_url(path: &str) -> bool {
     path.len() > 7 && path.as_bytes()[..7].eq_ignore_ascii_case(b"phar://")
 }
 
+#[inline]
+fn wrapper_enabled(eg: &ExecutorGlobals) -> bool {
+    #[cfg(feature = "stream-registry")]
+    {
+        return super::streams::user_wrapper::is_builtin_enabled(eg, "phar");
+    }
+    #[cfg(not(feature = "stream-registry"))]
+    {
+        let _ = eg;
+        true
+    }
+}
+
 fn normalize_internal(path: &str) -> String {
     let mut parts: Vec<&str> = Vec::new();
     for segment in path.split('/') {
@@ -428,6 +441,9 @@ pub(crate) fn read_url(
     eg: &mut ExecutorGlobals,
     url: &str,
 ) -> Option<Result<(Vec<u8>, String), String>> {
+    if !wrapper_enabled(eg) {
+        return None;
+    }
     match resolve(eg, url) {
         PharTarget::NotPhar => None,
         PharTarget::Invalid(reason) => Some(Err(format!("phar error: {reason}"))),
@@ -486,6 +502,9 @@ pub(crate) fn open_or_native(
 /// when `url` is not a phar URL. Members of a read-only archive report
 /// `0444`/`0555` permissions like PHP.
 pub(crate) fn stat_url(eg: &mut ExecutorGlobals, url: &str) -> Option<Value> {
+    if !wrapper_enabled(eg) {
+        return None;
+    }
     let (archive, internal) = match resolve(eg, url) {
         PharTarget::NotPhar => return None,
         PharTarget::Invalid(_) => return Some(Value::bool(false)),
@@ -509,6 +528,9 @@ pub(crate) fn directory_listing(
     eg: &mut ExecutorGlobals,
     url: &str,
 ) -> Option<Result<Vec<String>, String>> {
+    if !wrapper_enabled(eg) {
+        return None;
+    }
     Some(match resolve(eg, url) {
         PharTarget::NotPhar => return None,
         PharTarget::Invalid(reason) => Err(format!(

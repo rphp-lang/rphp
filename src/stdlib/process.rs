@@ -282,15 +282,16 @@ enum ProcessCommand {
     Argv(Vec<Vec<u8>>),
 }
 
-#[derive(Clone, Copy)]
 enum PipeDescriptor {
     Stdin,
     Stdout,
     Stderr,
+    Redirect(i64),
 }
 
 struct ProcessResource {
     child: Child,
+    command: String,
     pipe_ids: Vec<i64>,
 }
 
@@ -391,6 +392,10 @@ fn parse_pipe_descriptors(
             );
             return Ok(None);
         };
+        if let Some(resource) = value.dereferenced().as_resource_id() {
+            descriptors.push((number, PipeDescriptor::Redirect(resource)));
+            continue;
+        }
         let Some(spec) = value.dereferenced().as_array() else {
             super::typed_internal_argument_error(
                 eg,
@@ -564,6 +569,15 @@ fn new_process_command(command: ProcessCommand) -> Command {
     }
 }
 
+fn process_command_display(command: &ProcessCommand) -> String {
+    match command {
+        ProcessCommand::Argv(arguments) => arguments
+            .first()
+            .map_or_else(String::new, |program| bytes_to_php_string(program)),
+        ProcessCommand::Shell(command) => bytes_to_php_string(command),
+    }
+}
+
 fn process_error_message(error: &std::io::Error) -> String {
     let rendered = error.to_string();
     rendered
@@ -579,6 +593,7 @@ pub(super) fn fn_proc_open(
     let Some(command) = parse_process_command(ed, eg)? else {
         return Ok(());
     };
+    let command_display = process_command_display(&command);
     let descriptor_value = super::owned_argument(ed, 1);
     let Some(descriptor_spec) = descriptor_value.dereferenced().as_array() else {
         super::typed_internal_argument_error(
@@ -615,7 +630,7 @@ pub(super) fn fn_proc_open(
     if let Some(environment) = environment.as_ref() {
         configure_process_environment(&mut child, environment);
     }
-    for (_, descriptor) in &descriptors {
+    for (number, descriptor) in &descriptors {
         match descriptor {
             PipeDescriptor::Stdin => {
                 child.stdin(Stdio::piped());
@@ -625,6 +640,40 @@ pub(super) fn fn_proc_open(
             }
             PipeDescriptor::Stderr => {
                 child.stderr(Stdio::piped());
+            }
+            PipeDescriptor::Redirect(resource) => {
+                let redirected =
+                    super::streams::with_stream(eg, *resource, |stream| stream.try_clone_file())
+                        .and_then(Result::ok)
+                        .flatten();
+                let Some(file) = redirected else {
+                    eg.exception = Some(crate::value::make_error_value(
+                        "TypeError",
+                        "proc_open(): supplied resource is not a valid stream resource",
+                    ));
+                    return Ok(());
+                };
+                match *number {
+                    0 => {
+                        child.stdin(Stdio::from(file));
+                    }
+                    1 => {
+                        child.stdout(Stdio::from(file));
+                    }
+                    2 => {
+                        child.stderr(Stdio::from(file));
+                    }
+                    _ => {
+                        report_internal_diagnostic(
+                            eg,
+                            ed,
+                            2,
+                            "Warning",
+                            "proc_open(): descriptor item must be 0, 1, or 2",
+                        )?;
+                        ret!(rv, Value::bool(false));
+                    }
+                }
             }
         }
     }
@@ -655,6 +704,7 @@ pub(super) fn fn_proc_open(
         eg,
         ProcessResource {
             child,
+            command: command_display,
             pipe_ids: Vec::with_capacity(descriptors.len()),
         },
     );
@@ -674,6 +724,7 @@ pub(super) fn fn_proc_open(
             PipeDescriptor::Stderr => {
                 PhpStream::process_stderr(stderr.take().expect("configured child stderr pipe"))
             }
+            PipeDescriptor::Redirect(_) => continue,
         };
         let pipe = insert_process_pipe(eg, stream);
         pipe_ids.push(
@@ -689,6 +740,126 @@ pub(super) fn fn_proc_open(
     );
     arg_mut!(ed, 2, Value::array(pipes));
     ret!(rv, process);
+}
+
+pub(super) fn fn_proc_get_status(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let process = arg!(ed, 0).dereferenced();
+    let Some(resource) = process.as_resource_id() else {
+        super::typed_internal_argument_error(
+            eg,
+            "proc_get_status",
+            process,
+            1,
+            "process",
+            "resource",
+        );
+        return Ok(());
+    };
+    let status =
+        super::resource::with_request_payload_mut::<ProcessResource, _>(eg, resource, |process| {
+            let observed = process.child.try_wait();
+            (process.command.clone(), process.child.id(), observed)
+        });
+    let Some((command, pid, status)) = status else {
+        eg.exception = Some(crate::value::make_error_value(
+            "TypeError",
+            "proc_get_status(): supplied resource is not a valid process resource",
+        ));
+        return Ok(());
+    };
+    let Ok(status) = status else {
+        ret!(rv, Value::bool(false));
+    };
+    let running = status.is_none();
+    let (signaled, exitcode, termsig) = match status {
+        None => (false, -1, 0),
+        Some(status) => {
+            #[cfg(unix)]
+            {
+                use std::os::unix::process::ExitStatusExt as _;
+                (
+                    status.signal().is_some(),
+                    status.code().map_or(-1, i64::from),
+                    status.signal().map_or(0, i64::from),
+                )
+            }
+            #[cfg(not(unix))]
+            {
+                (false, status.code().map_or(-1, i64::from), 0)
+            }
+        }
+    };
+    let mut result = PhpArray::with_hash_capacity(9);
+    result.set_str("command", Value::string(command));
+    result.set_str("pid", Value::long(i64::from(pid)));
+    result.set_str("cached", Value::bool(!running));
+    result.set_str("running", Value::bool(running));
+    result.set_str("signaled", Value::bool(signaled));
+    result.set_str("stopped", Value::bool(false));
+    result.set_str("exitcode", Value::long(exitcode));
+    result.set_str("termsig", Value::long(termsig));
+    result.set_str("stopsig", Value::long(0));
+    ret!(rv, Value::array(result));
+}
+
+pub(super) fn fn_proc_terminate(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let process = arg!(ed, 0).dereferenced();
+    let Some(resource) = process.as_resource_id() else {
+        super::typed_internal_argument_error(
+            eg,
+            "proc_terminate",
+            process,
+            1,
+            "process",
+            "resource",
+        );
+        return Ok(());
+    };
+    #[cfg(unix)]
+    let default_signal = i64::from(rustix::process::Signal::TERM.as_raw());
+    #[cfg(not(unix))]
+    let default_signal = 15_i64;
+    let signal = if arg_opt!(ed, 1).is_some() {
+        let Some(signal) =
+            super::typed_internal_int_argument(ed, eg, "proc_terminate", 1, "signal")?
+        else {
+            return Ok(());
+        };
+        signal
+    } else {
+        default_signal
+    };
+    let terminated =
+        super::resource::with_request_payload_mut::<ProcessResource, _>(eg, resource, |process| {
+            #[cfg(unix)]
+            {
+                i32::try_from(signal)
+                    .ok()
+                    .and_then(rustix::process::Signal::from_named_raw)
+                    .is_some_and(|signal| {
+                        rustix::process::kill_process(
+                            rustix::process::Pid::from_child(&process.child),
+                            signal,
+                        )
+                        .is_ok()
+                    })
+            }
+            #[cfg(not(unix))]
+            {
+                let _ = signal;
+                process.child.kill().is_ok()
+            }
+        })
+        .unwrap_or(false);
+    ret!(rv, Value::bool(terminated));
 }
 
 pub(super) fn fn_proc_close(

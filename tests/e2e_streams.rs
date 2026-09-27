@@ -309,7 +309,7 @@ fn stream_registry_reports_only_integrated_wrappers_transports_and_filters() {
             echo $fresh[0];
             "
         ),
-        "php,file:0:1:php"
+        "php,file,phar:0:1:php"
     );
 }
 

@@ -9,6 +9,7 @@ const ENGINE: &str = "Random\\Engine";
 const CRYPTO: &str = "Random\\CryptoSafeEngine";
 const SECURE: &str = "Random\\Engine\\Secure";
 const XOSHIRO: &str = "Random\\Engine\\Xoshiro256StarStar";
+const RANDOMIZER: &str = "Random\\Randomizer";
 
 #[derive(Clone, Default)]
 struct State([u64; 4]);
@@ -75,6 +76,25 @@ impl State {
             values.push(Value::string(format!("{:016x}", word.swap_bytes())));
         }
         Value::array(values)
+    }
+}
+
+#[derive(Clone, Default)]
+struct RandomizerState {
+    engine: Option<Value>,
+}
+
+impl NativeObjectState for RandomizerState {
+    fn clone_state(&self) -> Box<dyn NativeObjectState> {
+        Box::new(self.clone())
+    }
+
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn as_any_mut(&mut self) -> &mut dyn std::any::Any {
+        self
     }
 }
 
@@ -160,6 +180,86 @@ fn secure(_ed: *mut ExecuteData, rv: *mut Value, eg: &mut ExecutorGlobals) -> Re
         ret!(rv, Value::binary_string(&bytes));
     }
     Ok(())
+}
+
+fn randomizer_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let engine = arg_opt!(ed, 1)
+        .filter(|value| value.value_type() != ValueType::Null)
+        .cloned();
+    arg!(ed, 0)
+        .as_object_mut()
+        .unwrap()
+        .native_object_state_mut::<RandomizerState>()
+        .engine = engine;
+    Ok(())
+}
+
+fn randomizer_word(state: &mut RandomizerState, eg: &mut ExecutorGlobals) -> Option<u64> {
+    let Some(engine) = state.engine.as_mut() else {
+        return entropy::<8>(eg).map(u64::from_le_bytes);
+    };
+    let mut object = engine.as_object_mut()?;
+    match object.class_name.as_ref() {
+        SECURE => entropy::<8>(eg).map(u64::from_le_bytes),
+        XOSHIRO => Some(u64::from_le_bytes(
+            object.native_object_state_mut::<State>().next(),
+        )),
+        _ => {
+            eg.exception = Some(make_error_value(
+                "Error",
+                "Random\\Randomizer currently requires a native Random\\Engine",
+            ));
+            None
+        }
+    }
+}
+
+fn randomizer_bytes_from_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let alphabet = arg!(ed, 1).php_string_bytes().unwrap();
+    if alphabet.is_empty() {
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            "Random\\Randomizer::getBytesFromString(): Argument #1 ($string) must not be empty",
+        ));
+        return Ok(());
+    }
+    let length = arg!(ed, 2).as_long().unwrap();
+    if length < 1 {
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            "Random\\Randomizer::getBytesFromString(): Argument #2 ($length) must be greater than 0",
+        ));
+        return Ok(());
+    }
+    let Ok(capacity) = usize::try_from(length) else {
+        eg.exception = Some(make_error_value(
+            "ValueError",
+            "Random\\Randomizer::getBytesFromString(): Argument #2 ($length) is too large",
+        ));
+        return Ok(());
+    };
+    let alphabet_len = alphabet.len() as u64;
+    let rejection_threshold = alphabet_len.wrapping_neg() % alphabet_len;
+    let mut receiver = arg!(ed, 0).as_object_mut().unwrap();
+    let state = receiver.native_object_state_mut::<RandomizerState>();
+    let mut output = Vec::with_capacity(capacity);
+    while output.len() < capacity {
+        let Some(word) = randomizer_word(state, eg) else {
+            return Ok(());
+        };
+        if word >= rejection_threshold {
+            output.push(alphabet[(word % alphabet_len) as usize]);
+        }
+    }
+    ret!(rv, Value::binary_string(&output));
 }
 fn jump(ed: *mut ExecuteData, _rv: *mut Value, _eg: &mut ExecutorGlobals) -> Result<(), VmError> {
     arg!(ed, 0)
@@ -324,6 +424,22 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             Void,
         ),
         (XOSHIRO, "__debugInfo", debug_info, &[], vec![], Array),
+        (
+            RANDOMIZER,
+            "__construct",
+            randomizer_construct,
+            &["engine"],
+            vec![Nullable(Box::new(ParamTypeHint::ClassName(ENGINE.into())))],
+            ParamTypeHint::None,
+        ),
+        (
+            RANDOMIZER,
+            "getBytesFromString",
+            randomizer_bytes_from_string,
+            &["string", "length"],
+            vec![String, Int],
+            String,
+        ),
     ];
     let mut functions = Vec::new();
     for (owner, name, handler, names, hints, result) in rows {
@@ -351,6 +467,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             names.iter().map(|n| (*n).into()).collect(),
         ));
         function.common.sig.param_type_hints = hints.clone();
+        function.common.sig.return_type_hint = result.clone();
         function.common.plan.call = crate::vm::function::CallStrategy::Full;
         let pointer = &function.common as *const FunctionCommon;
         eg.insert_function_entry(internal_method_lookup_name(owner, name), pointer);
@@ -381,5 +498,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         true,
     ))
     .unwrap();
+    eg.register_class(empty_internal_type(RANDOMIZER, vec![], false, true))
+        .unwrap();
     functions
 }

@@ -2382,7 +2382,8 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 // reporting an inaccessible declaration.
                 let hidden_parent_private = vis == Visibility::Private
                     && !defining_class.eq_ignore_ascii_case(&obj.class_name)
-                    && !own_private;
+                    && !own_private
+                    && !caller_has_own;
                 if hidden_parent_private {
                     key = name.to_string();
                     force_dynamic = true;
@@ -3264,6 +3265,13 @@ fn op_isset_obj<'a>(
     let effective_caller = receiver_in_scope
         .then_some(caller_class.as_deref())
         .flatten();
+    let caller_has_own = receiver_in_scope && caller_class.as_ref().is_some_and(|caller| {
+        eg.find_property_visibility(caller, &name)
+            .is_some_and(|(visibility, defining_class)| {
+                visibility == Visibility::Private
+                    && defining_class.eq_ignore_ascii_case(caller)
+            })
+    });
     let accessible = eg
         .find_property_visibility(&object_ref.class_name, &name)
         .is_none_or(|(visibility, defining_class)| {
@@ -3281,6 +3289,7 @@ fn op_isset_obj<'a>(
         .is_some_and(|(visibility, defining_class)| {
             visibility == Visibility::Private
                 && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
+                && !caller_has_own
                 && !eg.check_visibility(effective_caller, &defining_class, visibility)
         });
     let write_only_property = if accessible && !hidden_parent_private {
@@ -3483,6 +3492,7 @@ fn op_unset_obj<'a>(
         .is_some_and(|(visibility, defining_class)| {
             visibility == Visibility::Private
                 && !defining_class.eq_ignore_ascii_case(&object_ref.class_name)
+                && !caller_has_own
                 && !eg.check_visibility(effective_caller, &defining_class, visibility)
         });
     let key = if hidden_parent_private {
@@ -5260,7 +5270,8 @@ fn op_assign_obj_prop_inner<'a>(
                 let hidden_parent_private = vis == Visibility::Private
                     && !eg.property_has_asymmetric_set_visibility(&php_obj.class_name, &name)
                     && !defining_class.eq_ignore_ascii_case(&php_obj.class_name)
-                    && !own_private;
+                    && !own_private
+                    && !caller_has_own;
                 if hidden_parent_private {
                     property_accessible = false;
                     force_dynamic = true;

@@ -1485,6 +1485,36 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         .find_function("proc_close")
         .expect("proc_close was just registered");
     eg.register_internal_function_reflection_metadata(proc_close, vec![None], "standard");
+    reg_typed!(
+        "proc_get_status",
+        fn_proc_get_status,
+        1,
+        1,
+        ["process"],
+        [ParamTypeHint::None],
+        ParamTypeHint::Array
+    );
+    let proc_get_status = eg
+        .find_function("proc_get_status")
+        .expect("proc_get_status was just registered");
+    eg.register_internal_function_reflection_metadata(proc_get_status, vec![None], "standard");
+    reg_typed!(
+        "proc_terminate",
+        fn_proc_terminate,
+        2,
+        1,
+        ["process", "signal"],
+        [ParamTypeHint::None, ParamTypeHint::Int],
+        ParamTypeHint::Bool
+    );
+    let proc_terminate = eg
+        .find_function("proc_terminate")
+        .expect("proc_terminate was just registered");
+    eg.register_internal_function_reflection_metadata(
+        proc_terminate,
+        vec![None, Some(Value::long(15))],
+        "standard",
+    );
 
     // --- Regex functions ---
     reg_typed_ref!(
