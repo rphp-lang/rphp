@@ -8,7 +8,10 @@ use std::collections::HashMap;
 struct Cursor {
     array: Option<usize>,
     position: usize,
-    copies: Vec<(usize, usize)>,
+    /// Positions remembered for copies of the iterated array, keyed by copy
+    /// identity. Array releases and copies touch every live cursor, so the
+    /// per-cursor lookups must not scan.
+    copies: HashMap<usize, usize>,
 }
 
 thread_local! {
@@ -22,7 +25,7 @@ pub(super) fn register(key: usize, array: usize) {
             Cursor {
                 array: Some(array),
                 position: 0,
-                copies: Vec::new(),
+                copies: HashMap::new(),
             },
         );
     });
@@ -35,11 +38,7 @@ pub(super) fn resolve(key: usize, array: usize, fallback: usize) -> usize {
             .get_mut(&key)
             .expect("live reference foreach cursor");
         if cursor.array != Some(array) {
-            cursor.position = cursor
-                .copies
-                .iter()
-                .find_map(|&(copy, position)| (copy == array).then_some(position))
-                .unwrap_or(fallback);
+            cursor.position = cursor.copies.get(&array).copied().unwrap_or(fallback);
             cursor.array = Some(array);
             cursor.copies.clear();
         }
@@ -61,13 +60,10 @@ pub(super) fn copied(source: usize, target: usize) {
             let position = if cursor.array == Some(source) {
                 Some(cursor.position)
             } else {
-                cursor
-                    .copies
-                    .iter()
-                    .find_map(|&(copy, position)| (copy == source).then_some(position))
+                cursor.copies.get(&source).copied()
             };
             if let Some(position) = position {
-                cursor.copies.push((target, position));
+                cursor.copies.insert(target, position);
             }
         }
     });
@@ -79,7 +75,7 @@ pub(super) fn release_array(array: usize) {
             if cursor.array == Some(array) {
                 cursor.array = None;
             }
-            cursor.copies.retain(|&(copy, _)| copy != array);
+            cursor.copies.remove(&array);
         }
     });
 }
@@ -98,10 +94,8 @@ pub(super) fn splice(array: usize, start: usize, removed: usize, inserted: usize
             if cursor.array == Some(array) {
                 adjust(&mut cursor.position);
             }
-            for (copy, position) in &mut cursor.copies {
-                if *copy == array {
-                    adjust(position);
-                }
+            if let Some(position) = cursor.copies.get_mut(&array) {
+                adjust(position);
             }
         }
     });

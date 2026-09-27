@@ -1359,7 +1359,7 @@ struct CycleRootState {
     indices: HashMap<usize, usize, BuildHasherDefault<IntKeyHasher>>,
     // Startup-disabled GC still leaves objects in the request's object store.
     // Keep weak shutdown visibility without admitting them to userland GC.
-    unadmitted: Option<Box<HashMap<usize, CycleCandidate>>>,
+    unadmitted: Option<Box<HashMap<usize, CycleCandidate, BuildHasherDefault<IntKeyHasher>>>>,
     admission: CycleAdmissionState,
 }
 
@@ -1409,13 +1409,16 @@ fn register_cycle_candidate_with_admission(candidate: CycleCandidate, allow_auto
         if !state.admission.initialized {
             state
                 .unadmitted
-                .get_or_insert_with(|| Box::new(HashMap::new()))
+                .get_or_insert_with(|| Box::new(HashMap::default()))
                 .insert(identity, candidate);
             return;
         }
-        if let Some(unadmitted) = state.unadmitted.as_deref_mut() {
+        if let Some(unadmitted) = state.unadmitted.as_deref_mut()
+            && !unadmitted.is_empty()
+        {
             // A genuine subsequent PHP release can admit an old owner after
             // enablement. Merely enabling GC must not do so retroactively.
+            // Once the startup records are drained this is an empty check.
             unadmitted.remove(&identity);
         }
         if state.collecting {

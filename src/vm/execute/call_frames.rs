@@ -1553,9 +1553,10 @@ pub(crate) fn run_request_cycle_destructors(
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
     // Cyclic garbage without destructors, generators, release-carrying
-    // resources or weak/lazy/fiber state has no PHP code left to run; the
-    // process (or the request teardown) frees it structurally.
-    if !eg.vm_release_possible() {
+    // resources or fibers has no PHP code left to run; the process (or the
+    // request teardown) frees it structurally. Weak-reference and lazy-object
+    // bookkeeping needs no pass here: nothing can observe it afterwards.
+    if !eg.shutdown_release_possible() {
         return Ok(());
     }
     let mut visited = IdentitySet::default();

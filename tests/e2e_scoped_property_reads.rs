@@ -120,3 +120,34 @@ $s = "aXbXcXd"; for ($i = 0; $i < 3; $i++) echo preg_replace('/(X)(.)/', '[$2$1]
         "0:[1,\"v0\",0,1,\"v0A\",\"v0A\"]|1:[1,\"v0\",0,1,\"v0B\",\"B-own\"]|2:[1,\"v0\",0,1,\"v0C\",\"v0C\"]|3:[1,\"v0\",0,1,\"v0D\",\"v0D\"]|4:[1,\"v0\",0,1,\"v0E\",\"v0E\"]|5:[1,\"v0\",0,1,\"v0A\",\"v0A\"]|6:[1,\"v0\",0,1,\"v0B\",\"B-own\"]|\n0:[2,\"v1\",0,2,\"v1A\",\"v1A\"]|1:[2,\"v1\",0,2,\"v1B\",\"B-own\"]|2:[2,\"v1\",0,2,\"v1C\",\"v1C\"]|3:[2,\"v1\",0,2,\"v1D\",\"v1D\"]|4:[3,\"v1\",0,2,\"v1E\",\"v1E\"]|5:[2,\"v1\",0,2,\"v1A\",\"v1A\"]|6:[2,\"v1\",0,2,\"v1B\",\"B-own\"]|\n0:[3,\"v2\",0,3,\"v2A\",\"v2A\"]|1:[3,\"v2\",0,3,\"v2B\",\"B-own\"]|2:[3,\"v2\",0,3,\"v2C\",\"v2C\"]|3:[3,\"v2\",0,3,\"v2D\",\"v2D\"]|4:[7,\"v2\",0,3,\"v2E\",\"v2E\"]|5:[3,\"v2\",0,3,\"v2A\",\"v2A\"]|6:[3,\"v2\",0,3,\"v2B\",\"B-own\"]|\na[bX][cX][dX]<a>X<b>X<c>Xd{a|}X{|b}XcXd\na[bX][cX][dX]<a>X<b>X<c>Xd{a|}X{|b}XcXd\na[bX][cX][dX]<a>X<b>X<c>Xd{a|}X{|b}XcXd\n"
     );
 }
+
+/// Slow constant lookups are memoized per spelling, including misses, and
+/// every define() clears the memo: namespaced fallback, define() after a
+/// failed lookup, defined()/constant() must keep PHP's answers. The tail
+/// covers reference-foreach cursor copies and weak references alive at
+/// shutdown with nothing left to destruct. Verified against reference PHP.
+#[test]
+fn constant_lookup_memo_and_cursor_copies_follow_php() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace App;
+echo PHP_EOL === "\n" ? 'eol|' : 'x|', E_ALL, '|', \PHP_INT_SIZE, '|', defined('LATER') ? 'd' : 'u', '|', defined('App\\LATER') ? 'd' : 'u', '|';
+for ($i = 0; $i < 3; $i++) { echo defined('LATER') ? 'D' : 'U'; }
+define('LATER', 42); echo '|', LATER, '|', \LATER, '|', constant('LATER'), '|', defined('LATER') ? 'D' : 'U', '|', defined('App\\LATER') ? 'D' : 'U', "\n";
+const LOCAL = 7; echo LOCAL, '|', \App\LOCAL, '|', constant('App\\LOCAL'), '|', defined('LOCAL') ? 'D' : 'U', '|';
+try { echo MISSING; } catch (\Error $e) { echo get_class($e), ':', $e->getMessage(), '|'; }
+define('MISSING', 'now'); echo MISSING, '|', \MISSING, "\n";
+define('App\\NS', 'ns'); echo NS, '|', \App\NS, '|', constant('App\\NS'), '|', defined('NS') ? 'D' : 'U', "\n";
+// reference foreach with copies of the iterated array
+$a = [1, 2, 3, 4]; $copies = [];
+foreach ($a as $k => &$v) { $copies[] = $a; $v *= 10; if ($k === 1) { $b = $a; $b[] = 99; } }
+unset($v); echo json_encode($a), json_encode($b), json_encode(array_map('count', $copies)), "\n";
+$m = [[1, 2], [3, 4]]; foreach ($m as &$row) { foreach ($row as &$cell) { $cell += 1; $snapshot = $m; } unset($cell); } unset($row); echo json_encode($m), json_encode($snapshot), "\n";
+// weak refs alive at shutdown, no destructors
+$w = \WeakReference::create($obj = new \stdClass); $map = new \WeakMap; $map[$obj] = 1; echo count($map), "|end\n";
+"#
+        ),
+        "eol|30719|8|u|u|UUU|42|42|42|D|U\n7|7|7|U|Error:Undefined constant \"App\\MISSING\"|now|now\nns|ns|ns|U\n[10,20,30,40][10,20,3,4,99][4,4,4,4]\n[[2,3],[4,5]][[2,3],[4,5]]\n1|end\n"
+    );
+}

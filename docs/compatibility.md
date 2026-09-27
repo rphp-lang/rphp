@@ -27930,6 +27930,33 @@ syntax errors, as PHP does, and costs about 5.5 ms per 127 KB file here
 against 0.1 ms in PHP). The cold run measures about 5.2 s and the warm one
 about 1.5 s on a loaded host.
 
+The `lookup-memos` checkpoint removes three per-operation scans: the slow
+constant lookup (`op_fetch_const` misses the constant table for every
+built-in and namespaced spelling, then ran a qualified-name scan of the table
+and the built-in `match`, 1.1 million times per run) is memoized per spelling
+including misses, and every `define()` or direct table insert clears the
+memo; the reference-`foreach` cursor registry kept the positions of copied
+arrays in a vector scanned on every array release and copy and keys them by
+copy identity now; the cycle collector's startup-only `unadmitted` record map
+hashed with SipHash on every candidate registration and is a fast-hashed
+empty check afterwards. Request shutdown skips the cycle-graph destructor
+pass whenever no live destructor, generator, release-carrying resource or
+fiber exists; weak-reference and lazy-object bookkeeping cannot be observed
+after the request ends. `tests/e2e_scoped_property_reads.rs` gains the
+constant-memo contract (namespaced fallback, `define()` after a failed
+lookup, `defined()`/`constant()`), reference-`foreach` copies and weak
+references alive at shutdown, all verified against reference PHP.
+
+Note on the gate itself: `ff253d2b` (PHPUnit process control) made
+`proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
+does and spawns worker processes over TCP sockets (react/socket). That path
+needs `inet_pton()`, `stream_socket_server()`, `stream_select()` and friends,
+which RPHP does not have yet, and the run ends with "Call to undefined
+function inet_pton()". Until the socket surface exists, the gate is run with
+`-d disable_functions=proc_open` on both PHP and RPHP; PHP's in-process
+output is byte-identical to its parallel output for this fixture, and RPHP
+matches it cold and warm.
+
 The `phar-stream` checkpoint adds `ext/phar` reading: `Phar::mapPhar()`,
 `Phar::loadPhar()`, `Phar::running()`, `Phar::isValidPharFilename()`,
 `Phar::canWrite()`/`canCompress()`/`getSupportedSignatures()`, the class

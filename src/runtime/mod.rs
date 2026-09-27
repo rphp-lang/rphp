@@ -1194,6 +1194,10 @@ pub struct ExecutorGlobals {
     pub(crate) polymorphic_property_cache: std::cell::RefCell<
         HashMap<(usize, usize, u32), (u32, usize), std::hash::BuildHasherDefault<SymbolHasher>>,
     >,
+    /// Results of the slow constant lookup (qualified-name scan and built-in
+    /// table) per requested spelling, including misses. Every `define()`
+    /// clears it, so a later definition is never shadowed by a cached miss.
+    constant_lookup_memo: std::cell::RefCell<SymbolTable<Option<crate::value::Value>>>,
     /// Compile-time constant table shared across included units, keyed by
     /// the constant and class counts it was built from. Declarations are
     /// immutable once registered, so equal counts prove the same contents.
@@ -2380,6 +2384,7 @@ impl ExecutorGlobals {
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
             class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
             polymorphic_property_cache: std::cell::RefCell::new(HashMap::default()),
+            constant_lookup_memo: std::cell::RefCell::new(SymbolTable::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
@@ -2525,6 +2530,7 @@ impl ExecutorGlobals {
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
             class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
             polymorphic_property_cache: std::cell::RefCell::new(HashMap::default()),
+            constant_lookup_memo: std::cell::RefCell::new(SymbolTable::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
             static_property_handles_published: Vec::new(),
@@ -11074,6 +11080,7 @@ impl ExecutorGlobals {
             return Err(constant_redefinition_message(name));
         }
         self.note_request_static_value(&value);
+        self.constant_lookup_memo.borrow_mut().clear();
         let previous_key = self.compilation_constants_key();
         let compiled_value = value.clone();
         let mut table = self.constant_table.borrow_mut();
@@ -11106,6 +11113,14 @@ impl ExecutorGlobals {
                 .as_ref()
                 .is_some_and(|lazy| !lazy.is_empty())
             || self.fiber_runtime.is_some()
+    }
+
+    /// Whether the request-end cycle pass can still run PHP code: only live
+    /// destructor/generator/resource candidates or fibers can; weak and lazy
+    /// bookkeeping has no observer once the request ends.
+    #[inline]
+    pub(crate) fn shutdown_release_possible(&self) -> bool {
+        crate::value::vm_release_tracked_live() || self.fiber_runtime.is_some()
     }
 
     /// Identity of the compile-time constant table: constants and classes are
@@ -11166,7 +11181,23 @@ impl ExecutorGlobals {
     /// request-local exact-hit path used by source constants and `constant()`.
     #[cold]
     #[inline(never)]
+    /// Forget slow-lookup results after a direct constant-table change.
+    pub(crate) fn invalidate_constant_lookups(&self) {
+        self.constant_lookup_memo.borrow_mut().clear();
+    }
+
     fn find_constant_slow(&self, name: &str) -> Option<crate::value::Value> {
+        if let Some(memo) = self.constant_lookup_memo.borrow().get(name) {
+            return memo.clone();
+        }
+        let resolved = self.find_constant_uncached(name);
+        self.constant_lookup_memo
+            .borrow_mut()
+            .insert(name.to_string(), resolved.clone());
+        resolved
+    }
+
+    fn find_constant_uncached(&self, name: &str) -> Option<crate::value::Value> {
         if name.contains('\\')
             && let Some(value) =
                 self.constant_table

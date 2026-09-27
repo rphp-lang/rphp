@@ -184,6 +184,7 @@ fn remember_initial_cwd(eg: &mut ExecutorGlobals) {
         INITIAL_WORKING_DIRECTORY.into(),
         Value::string(initial.to_string_lossy().into_owned()),
     );
+    eg.invalidate_constant_lookups();
 }
 
 pub(super) fn restore_initial_cwd(eg: &ExecutorGlobals) {
