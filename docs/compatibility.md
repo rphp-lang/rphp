@@ -28131,6 +28131,16 @@ strings that cannot spell an integer up front. That scan runs in 1.39 ms
 per file instead of 2.47 ms; cold callgrind 31.8 G to 30.0 G, cold wall
 about 4.5 s (PHP 1.4 s).
 
+The `dispatcher-constant-replay` checkpoint finishes that scan's hot path:
+the cached scalar constant is replayed by the dispatcher itself instead of
+the cold opcode handler, integer/string loose equality is decided before the
+numeric-pair probe (which parsed the string once more per `case`), the
+pending-receiver probe answers before inspecting its stack, registered
+classes answer own-method lookups from a lowercase-name index, and string
+reservation works inside one thread-local borrow. Nette's use-statement scan
+runs in 1.23 ms per file (PHP 0.30 ms, from 2.47 ms at the start of the
+day).
+
 Note on the gate itself: `ff253d2b` (PHPUnit process control) made
 `proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
 does and spawns worker processes over TCP sockets (react/socket). That path
