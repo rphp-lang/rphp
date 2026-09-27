@@ -1,3 +1,9 @@
+/// glibc malloc/free was 16% of a cold PHPStan run; PHP values are many
+/// small short-lived allocations, which mimalloc's thread-local free lists
+/// serve in a fraction of the instructions.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use rphp::compiler::compile::Compiler;
 use rphp::compiler::make_user_function;
 use rphp::lexer::Lexer;

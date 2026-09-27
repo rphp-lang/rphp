@@ -62,6 +62,7 @@ serde_json = { version = "1.0.149", features = ["unbounded_depth"] }
 serde_stacker = "0.1.14"
 stacker = "0.1.25"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+mimalloc = { version = "0.1.52", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 # Owned directory cursors must retain dot entries and rewind the open handle.
