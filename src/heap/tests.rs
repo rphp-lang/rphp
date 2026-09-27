@@ -9,7 +9,48 @@ fn pool_enabled() -> bool {
         let probe = PhpHeap.alloc(layout);
         PhpHeap.dealloc(probe, layout);
     }
-    heap().mode.get() == 1
+    HEAP.with(|heap| heap.mode.get()) == 1
+}
+
+#[test]
+fn heap_remains_usable_during_tls_destruction() {
+    static COMPLETED: AtomicUsize = AtomicUsize::new(0);
+
+    struct LateAllocator;
+    impl Drop for LateAllocator {
+        fn drop(&mut self) {
+            let original = HEAP.with(|heap| heap as *const ThreadHeap);
+            // Model another TLS destructor running after the exit guard.
+            // No pages may be acquired again, but the Rust TLS block must
+            // remain accessible and live allocations must still be freed.
+            let layout = Layout::from_size_align(40, 8).unwrap();
+            // SAFETY: both nonzero layouts are valid; each block is checked
+            // for allocation failure, initialized and freed exactly once.
+            unsafe {
+                let before = PhpHeap.alloc(layout);
+                assert!(!before.is_null());
+                before.write(0xA5);
+                HEAP.with(ThreadHeap::orphan_all);
+                assert_eq!(HEAP.with(|heap| heap as *const ThreadHeap), original);
+                assert_eq!(HEAP.with(|heap| heap.mode.get()), 2);
+                let after = PhpHeap.alloc(layout);
+                assert!(!after.is_null());
+                assert!(!in_pool(after as usize));
+                after.write(0x5A);
+                assert_eq!(before.read(), 0xA5);
+                assert_eq!(after.read(), 0x5A);
+                PhpHeap.dealloc(before, layout);
+                PhpHeap.dealloc(after, layout);
+            }
+            COMPLETED.store(1, Ordering::Release);
+        }
+    }
+
+    thread_local! {
+        static LATE: LateAllocator = const { LateAllocator };
+    }
+    std::thread::spawn(|| LATE.with(|_| ())).join().unwrap();
+    assert_eq!(COMPLETED.load(Ordering::Acquire), 1);
 }
 
 #[test]
@@ -418,7 +459,7 @@ fn full_pages_retire_relist_and_recycle() {
         }
         assert_ne!(
             (*first_page).owner.load(Ordering::Relaxed),
-            heap().addr(),
+            HEAP.with(ThreadHeap::addr),
             "the emptied page left the thread"
         );
         for block in blocks

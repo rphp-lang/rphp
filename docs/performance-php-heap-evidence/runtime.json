@@ -1,0 +1,1126 @@
+{
+  "release": [
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "boot",
+      "wall": 0.965642916,
+      "rss_kib": 312640,
+      "faults": 45592
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "cold",
+      "wall": 3.372905112,
+      "rss_kib": 727036,
+      "faults": 137523
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "warm",
+      "wall": 1.196673592,
+      "rss_kib": 351912,
+      "faults": 47021
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "allocbench",
+      "wall": 0.942800106,
+      "rss_kib": 49524,
+      "faults": 430
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "usestmt",
+      "wall": 0.35665136,
+      "rss_kib": 170720,
+      "faults": 1211
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "boot",
+      "wall": 0.951912996,
+      "rss_kib": 312656,
+      "faults": 45636
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "cold",
+      "wall": 3.353911122,
+      "rss_kib": 730272,
+      "faults": 128219
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "warm",
+      "wall": 1.189073035,
+      "rss_kib": 351384,
+      "faults": 47074
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "allocbench",
+      "wall": 0.982098858,
+      "rss_kib": 48660,
+      "faults": 489
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "usestmt",
+      "wall": 0.333981978,
+      "rss_kib": 170540,
+      "faults": 1288
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "boot",
+      "wall": 0.961540165,
+      "rss_kib": 312384,
+      "faults": 45638
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "cold",
+      "wall": 3.376005413,
+      "rss_kib": 727392,
+      "faults": 127571
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "warm",
+      "wall": 1.210766345,
+      "rss_kib": 351416,
+      "faults": 47074
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "allocbench",
+      "wall": 1.003311025,
+      "rss_kib": 48332,
+      "faults": 486
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "usestmt",
+      "wall": 0.334292617,
+      "rss_kib": 170784,
+      "faults": 1287
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "boot",
+      "wall": 0.964257422,
+      "rss_kib": 312116,
+      "faults": 45624
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "cold",
+      "wall": 3.471021947,
+      "rss_kib": 727844,
+      "faults": 115545
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "warm",
+      "wall": 1.213564547,
+      "rss_kib": 352004,
+      "faults": 47063
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "allocbench",
+      "wall": 0.948178678,
+      "rss_kib": 48776,
+      "faults": 459
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "usestmt",
+      "wall": 0.361577577,
+      "rss_kib": 170340,
+      "faults": 1249
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "boot",
+      "wall": 0.961906939,
+      "rss_kib": 312704,
+      "faults": 45639
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "cold",
+      "wall": 3.368720731,
+      "rss_kib": 731104,
+      "faults": 115008
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "warm",
+      "wall": 1.202044097,
+      "rss_kib": 353008,
+      "faults": 47074
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "allocbench",
+      "wall": 0.967047561,
+      "rss_kib": 48460,
+      "faults": 485
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "usestmt",
+      "wall": 0.326395326,
+      "rss_kib": 170820,
+      "faults": 1288
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "boot",
+      "wall": 0.971185529,
+      "rss_kib": 312288,
+      "faults": 45625
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "cold",
+      "wall": 3.382583383,
+      "rss_kib": 731368,
+      "faults": 114560
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "warm",
+      "wall": 1.206716382,
+      "rss_kib": 352344,
+      "faults": 47058
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "allocbench",
+      "wall": 0.9281984,
+      "rss_kib": 48788,
+      "faults": 456
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "usestmt",
+      "wall": 0.374540941,
+      "rss_kib": 170708,
+      "faults": 1246
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "boot",
+      "wall": 0.967210135,
+      "rss_kib": 312416,
+      "faults": 45638
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "cold",
+      "wall": 3.348772134,
+      "rss_kib": 736468,
+      "faults": 114377
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "warm",
+      "wall": 1.20637473,
+      "rss_kib": 352564,
+      "faults": 47071
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "allocbench",
+      "wall": 0.979243426,
+      "rss_kib": 48580,
+      "faults": 489
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "usestmt",
+      "wall": 0.340516415,
+      "rss_kib": 170316,
+      "faults": 1285
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "boot",
+      "wall": 0.972123445,
+      "rss_kib": 312172,
+      "faults": 45630
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "cold",
+      "wall": 3.354365996,
+      "rss_kib": 734956,
+      "faults": 111595
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "warm",
+      "wall": 1.206771818,
+      "rss_kib": 351692,
+      "faults": 47065
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "allocbench",
+      "wall": 0.949889999,
+      "rss_kib": 48824,
+      "faults": 457
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "usestmt",
+      "wall": 0.3480277,
+      "rss_kib": 170548,
+      "faults": 1246
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "boot",
+      "wall": 0.961404915,
+      "rss_kib": 312548,
+      "faults": 45639
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "cold",
+      "wall": 3.319177947,
+      "rss_kib": 737136,
+      "faults": 111076
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "warm",
+      "wall": 1.209751322,
+      "rss_kib": 350988,
+      "faults": 47072
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "allocbench",
+      "wall": 0.978824249,
+      "rss_kib": 48668,
+      "faults": 489
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "usestmt",
+      "wall": 0.341321124,
+      "rss_kib": 170632,
+      "faults": 1282
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "boot",
+      "wall": 0.962514192,
+      "rss_kib": 312552,
+      "faults": 45625
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "cold",
+      "wall": 3.354788145,
+      "rss_kib": 738392,
+      "faults": 111020
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "warm",
+      "wall": 1.200742495,
+      "rss_kib": 352124,
+      "faults": 47084
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "allocbench",
+      "wall": 0.977624599,
+      "rss_kib": 48708,
+      "faults": 452
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "usestmt",
+      "wall": 0.357886287,
+      "rss_kib": 170332,
+      "faults": 1243
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "boot",
+      "wall": 0.947414304,
+      "rss_kib": 312520,
+      "faults": 45639
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "cold",
+      "wall": 3.305793967,
+      "rss_kib": 739320,
+      "faults": 111028
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "warm",
+      "wall": 1.201316729,
+      "rss_kib": 351444,
+      "faults": 47073
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "allocbench",
+      "wall": 0.969165923,
+      "rss_kib": 48492,
+      "faults": 486
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "usestmt",
+      "wall": 0.343565633,
+      "rss_kib": 170896,
+      "faults": 1286
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "boot",
+      "wall": 0.956952093,
+      "rss_kib": 312576,
+      "faults": 45651
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "cold",
+      "wall": 3.426879575,
+      "rss_kib": 738260,
+      "faults": 111016
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "warm",
+      "wall": 1.265882064,
+      "rss_kib": 351648,
+      "faults": 47063
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "allocbench",
+      "wall": 0.95040914,
+      "rss_kib": 48320,
+      "faults": 478
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "usestmt",
+      "wall": 0.357655091,
+      "rss_kib": 170444,
+      "faults": 1249
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "boot",
+      "wall": 0.996718624,
+      "rss_kib": 312340,
+      "faults": 45624
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "cold",
+      "wall": 3.492645986,
+      "rss_kib": 738064,
+      "faults": 111042
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "warm",
+      "wall": 1.258282158,
+      "rss_kib": 351488,
+      "faults": 47066
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "allocbench",
+      "wall": 0.986557108,
+      "rss_kib": 48372,
+      "faults": 459
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "usestmt",
+      "wall": 0.359328436,
+      "rss_kib": 170540,
+      "faults": 1247
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "boot",
+      "wall": 0.910459602,
+      "rss_kib": 312768,
+      "faults": 45639
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "cold",
+      "wall": 3.057750492,
+      "rss_kib": 739756,
+      "faults": 111047
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "warm",
+      "wall": 1.122586374,
+      "rss_kib": 352160,
+      "faults": 47069
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "allocbench",
+      "wall": 0.976740358,
+      "rss_kib": 48164,
+      "faults": 487
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "usestmt",
+      "wall": 0.323959641,
+      "rss_kib": 170400,
+      "faults": 1288
+    }
+  ],
+  "max-perf": [
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "boot",
+      "wall": 0.887360103,
+      "rss_kib": 309916,
+      "faults": 45640
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "cold",
+      "wall": 2.891802959,
+      "rss_kib": 738064,
+      "faults": 111106
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "warm",
+      "wall": 1.072543436,
+      "rss_kib": 351004,
+      "faults": 47147
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "allocbench",
+      "wall": 0.849876287,
+      "rss_kib": 45704,
+      "faults": 433
+    },
+    {
+      "variant": "rust",
+      "round": 0,
+      "workload": "usestmt",
+      "wall": 0.313651568,
+      "rss_kib": 168176,
+      "faults": 1246
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "boot",
+      "wall": 0.866201284,
+      "rss_kib": 310508,
+      "faults": 45671
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "cold",
+      "wall": 2.90599933,
+      "rss_kib": 737036,
+      "faults": 111076
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "warm",
+      "wall": 1.088589647,
+      "rss_kib": 351008,
+      "faults": 47118
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "allocbench",
+      "wall": 0.926408483,
+      "rss_kib": 45892,
+      "faults": 428
+    },
+    {
+      "variant": "baseline",
+      "round": 0,
+      "workload": "usestmt",
+      "wall": 0.319692945,
+      "rss_kib": 168120,
+      "faults": 1237
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "boot",
+      "wall": 0.860213412,
+      "rss_kib": 312064,
+      "faults": 45675
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "cold",
+      "wall": 2.940661687,
+      "rss_kib": 737912,
+      "faults": 111076
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "warm",
+      "wall": 1.077804049,
+      "rss_kib": 350720,
+      "faults": 47116
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "allocbench",
+      "wall": 0.925896165,
+      "rss_kib": 45852,
+      "faults": 425
+    },
+    {
+      "variant": "baseline",
+      "round": 1,
+      "workload": "usestmt",
+      "wall": 0.323825402,
+      "rss_kib": 168440,
+      "faults": 1238
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "boot",
+      "wall": 0.874804834,
+      "rss_kib": 311736,
+      "faults": 45707
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "cold",
+      "wall": 2.92579179,
+      "rss_kib": 737416,
+      "faults": 111105
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "warm",
+      "wall": 1.084080594,
+      "rss_kib": 351636,
+      "faults": 47152
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "allocbench",
+      "wall": 0.851673704,
+      "rss_kib": 45936,
+      "faults": 436
+    },
+    {
+      "variant": "rust",
+      "round": 1,
+      "workload": "usestmt",
+      "wall": 0.309168279,
+      "rss_kib": 168084,
+      "faults": 1246
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "boot",
+      "wall": 0.863483098,
+      "rss_kib": 311156,
+      "faults": 45678
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "cold",
+      "wall": 2.920740872,
+      "rss_kib": 738120,
+      "faults": 111073
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "warm",
+      "wall": 1.075742066,
+      "rss_kib": 351460,
+      "faults": 47116
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "allocbench",
+      "wall": 0.928933391,
+      "rss_kib": 46096,
+      "faults": 430
+    },
+    {
+      "variant": "baseline",
+      "round": 2,
+      "workload": "usestmt",
+      "wall": 0.320909935,
+      "rss_kib": 168488,
+      "faults": 1239
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "boot",
+      "wall": 0.866234798,
+      "rss_kib": 311404,
+      "faults": 45711
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "cold",
+      "wall": 2.923557021,
+      "rss_kib": 738136,
+      "faults": 111108
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "warm",
+      "wall": 1.081132841,
+      "rss_kib": 351564,
+      "faults": 47148
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "allocbench",
+      "wall": 0.891875141,
+      "rss_kib": 46072,
+      "faults": 437
+    },
+    {
+      "variant": "rust",
+      "round": 2,
+      "workload": "usestmt",
+      "wall": 0.310267005,
+      "rss_kib": 168524,
+      "faults": 1247
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "boot",
+      "wall": 0.857603825,
+      "rss_kib": 311376,
+      "faults": 45671
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "cold",
+      "wall": 2.924819677,
+      "rss_kib": 738496,
+      "faults": 111073
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "warm",
+      "wall": 1.076579941,
+      "rss_kib": 351492,
+      "faults": 47117
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "allocbench",
+      "wall": 0.91779246,
+      "rss_kib": 46108,
+      "faults": 431
+    },
+    {
+      "variant": "baseline",
+      "round": 3,
+      "workload": "usestmt",
+      "wall": 0.320391264,
+      "rss_kib": 168432,
+      "faults": 1239
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "boot",
+      "wall": 0.868252811,
+      "rss_kib": 311000,
+      "faults": 45706
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "cold",
+      "wall": 2.911568036,
+      "rss_kib": 738628,
+      "faults": 111108
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "warm",
+      "wall": 1.069034446,
+      "rss_kib": 351396,
+      "faults": 47149
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "allocbench",
+      "wall": 0.829919724,
+      "rss_kib": 45592,
+      "faults": 433
+    },
+    {
+      "variant": "rust",
+      "round": 3,
+      "workload": "usestmt",
+      "wall": 0.313267647,
+      "rss_kib": 168540,
+      "faults": 1246
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "boot",
+      "wall": 0.874186786,
+      "rss_kib": 311524,
+      "faults": 45674
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "cold",
+      "wall": 2.927361984,
+      "rss_kib": 737144,
+      "faults": 111073
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "warm",
+      "wall": 1.071345332,
+      "rss_kib": 351332,
+      "faults": 47114
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "allocbench",
+      "wall": 0.939360635,
+      "rss_kib": 46188,
+      "faults": 433
+    },
+    {
+      "variant": "baseline",
+      "round": 4,
+      "workload": "usestmt",
+      "wall": 0.320391817,
+      "rss_kib": 168368,
+      "faults": 1236
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "boot",
+      "wall": 0.868851582,
+      "rss_kib": 311388,
+      "faults": 45707
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "cold",
+      "wall": 2.937405528,
+      "rss_kib": 737816,
+      "faults": 111108
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "warm",
+      "wall": 1.092406973,
+      "rss_kib": 351748,
+      "faults": 47148
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "allocbench",
+      "wall": 0.848338656,
+      "rss_kib": 45736,
+      "faults": 437
+    },
+    {
+      "variant": "rust",
+      "round": 4,
+      "workload": "usestmt",
+      "wall": 0.31373771,
+      "rss_kib": 168168,
+      "faults": 1244
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "boot",
+      "wall": 0.858707969,
+      "rss_kib": 311960,
+      "faults": 45678
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "cold",
+      "wall": 2.89728041,
+      "rss_kib": 737500,
+      "faults": 111074
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "warm",
+      "wall": 1.076387621,
+      "rss_kib": 350128,
+      "faults": 47114
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "allocbench",
+      "wall": 0.920432157,
+      "rss_kib": 45868,
+      "faults": 427
+    },
+    {
+      "variant": "baseline",
+      "round": 5,
+      "workload": "usestmt",
+      "wall": 0.321861036,
+      "rss_kib": 168072,
+      "faults": 1236
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "boot",
+      "wall": 0.864738427,
+      "rss_kib": 311008,
+      "faults": 45707
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "cold",
+      "wall": 2.91148359,
+      "rss_kib": 737932,
+      "faults": 111109
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "warm",
+      "wall": 1.084638269,
+      "rss_kib": 351100,
+      "faults": 47148
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "allocbench",
+      "wall": 0.864669158,
+      "rss_kib": 45780,
+      "faults": 438
+    },
+    {
+      "variant": "rust",
+      "round": 5,
+      "workload": "usestmt",
+      "wall": 0.311324696,
+      "rss_kib": 168216,
+      "faults": 1247
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "boot",
+      "wall": 0.86577759,
+      "rss_kib": 310472,
+      "faults": 45707
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "cold",
+      "wall": 2.902109774,
+      "rss_kib": 738076,
+      "faults": 111106
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "warm",
+      "wall": 1.088077924,
+      "rss_kib": 351248,
+      "faults": 47150
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "allocbench",
+      "wall": 0.836212268,
+      "rss_kib": 45844,
+      "faults": 434
+    },
+    {
+      "variant": "rust",
+      "round": 6,
+      "workload": "usestmt",
+      "wall": 0.31384179,
+      "rss_kib": 168664,
+      "faults": 1246
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "boot",
+      "wall": 0.860780838,
+      "rss_kib": 311732,
+      "faults": 45679
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "cold",
+      "wall": 2.925311518,
+      "rss_kib": 738504,
+      "faults": 111072
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "warm",
+      "wall": 1.079242493,
+      "rss_kib": 351060,
+      "faults": 47118
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "allocbench",
+      "wall": 0.932220499,
+      "rss_kib": 46152,
+      "faults": 432
+    },
+    {
+      "variant": "baseline",
+      "round": 6,
+      "workload": "usestmt",
+      "wall": 0.321273484,
+      "rss_kib": 168304,
+      "faults": 1235
+    }
+  ]
+}

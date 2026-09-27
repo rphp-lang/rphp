@@ -1,10 +1,11 @@
 # PHP heap (`rphp::heap`): návrh a stav
 
-Větev `codex/php-heap-v1` (základ main `9439a84a`). Cíl zadaný uživatelem:
-vlastní alokátor přizpůsobený PHP hodnotám, který výkonově překoná obecné
-alokátory (glibc, mimalloc) na skutečných PHP programech, s maximem práce
-v rychlé cestě a s ASM tam, kde prokazatelně pomůže. Alokátor je pro celý
-runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
+Vlastní procesový alokátor přizpůsobený PHP hodnotám, pro CLI, dlouhé běhy
+i více vláken. Po rozhodnutí uživatele z 28. 9. 2026 má jedinou implementaci
+v Rustu: odstraněny jsou naked rychlé cesty, feature `php-heap-asm` i ručně
+vytvořený TLS blok. Historická měření ASM níže slouží k vysvětlení rozhodnutí,
+nepopisují dostupnou variantu. Aktuální checkpoint a nové výsledky jsou v
+[completion reportu](performance-php-heap-finish.md).
 
 ## Měřená východiska (cold PHPStan, 24,6 M alokací)
 
@@ -15,7 +16,7 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
 - Cross-thread free 2,5 % (parser vlákno alokuje AST, hlavní vlákno uvolňuje).
 - glibc malloc/free = 16 % instrukcí a ~20 % času cold běhu.
 
-## Architektura (stav po review, commit `30ab4986`)
+## Architektura
 
 - **Rezervace adresního prostoru**: jeden `mmap(MAP_NORESERVE)` 64 GiB
   (fallback poloviční až 256 MiB), báze zarovnaná na 64 KiB,
@@ -45,18 +46,14 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
   QUEUED | počet pusherů), `remote_free`, `next_queued`, odkazy seznamu
   všech stránek vlastníka, `start`. `used` nese navíc `CURRENT_BIAS` (+1),
   dokud je stránka aktuální, a příznak `RETIRED`, dokud není nikde zařazená.
-- **Thread heap**: na x86-64 Linuxu vlastní TLS blok v `global_asm!`
-  s přístupem local-exec (`mov fs:0` + `lea sym@tpoff`, bez clobberů).
-  `thread_local!` v této knihovně se překládá jako general-dynamic TLS:
-  volání `__tls_get_addr`, které linker až dodatečně přepíše na dvě
-  instrukce, ale překladač už předtím uložil a přeházel registry argumentů.
-  To byly tři push/pop v prologu `__rust_alloc`, které dřívější verze
-  dokumentu mylně připisovala alokaci registrů (týká se všech
-  `thread_local!` v runtime, 15 z 18 objektových souborů knihovny). Jiné
-  platformy používají `thread_local!`. Pro třídu bez stránky ukazuje
-  `current[class]` na read-only sentinel stránku, ze které pop ani bump
-  nikdy neuspěje (žádný test na null). Heap si kešuje bázi a velikost
-  malého regionu (žádný globální load při free).
+- **Thread heap**: konstantně inicializovaný `thread_local!` bez destruktoru
+  na všech platformách. Samostatný `EXIT_GUARD` uvolňuje vlastnictví stránek;
+  samotný heap zůstává dostupný i ostatním TLS destruktorům. Neexistuje ručně
+  kódovaný TLS obraz ani závislost na offsetech v assembleru. Pro třídu bez
+  stránky ukazuje `current[class]` na read-only sentinel, ze kterého pop ani
+  bump nikdy neuspěje (žádný test na null). Heap si kešuje bázi a velikost
+  malého regionu. Náklady přístupu k TLS závisí i na profilu překladače;
+  ověřují se ve výsledné binárce a v měření, nejen počtem instrukcí ve zdroji.
 - **Rychlá cesta alloc** (Rust, inlinovaná do míst volání): align ≤ 8
   a velikost ≤ 1024 → třída z tabulky → aktuální stránka → pop
   z `local_free`, jinak bump; `used += 1`. Při známé velikosti překladač
@@ -90,10 +87,6 @@ runtime (CLI, dlouhé běhy, více vláken), nejen pro PHPStan.
 - **realloc**: ve stejné třídě vrací tentýž blok; velký blok zůstává, dokud
   nová velikost potřebuje velký region a využije víc než polovinu
   kapacity; jinak alloc + copy + free.
-- **`php-heap-asm`** (volitelné, x86-64 Linux): rychlé cesty jako naked
-  funkce; `__rust_alloc`/`__rust_dealloc` na ně skočí, listy čtou heap přes
-  `%fs` a při neúspěchu skočí s nedotčenými registry do stejných Rust
-  studených cest. Viz závěr k ASM níže.
 - **Debug režim** (`php-heap-debug`): bitmapa volných slotů (1 bit na 8 B
   rezervace) místo značky v bloku; double free → abort s popisem bloku,
   jed za odkazovým slovem odhalí zápis po uvolnění, kontrola layoutu
@@ -111,7 +104,7 @@ a jen dokud je jeho; osiřelá či poolovaná stránka má stav 0; odkazová slo
 zásobníků jsou metadata dostupná jen atomicky; alokátor nikdy neunwinduje
 a nealokuje přes sebe.
 
-## Review z 27. 9. 2026 a opravy
+## Historické review z 27. 9. 2026 a opravy
 
 | Nález | Oprava | Test |
 |---|---|---|
@@ -187,19 +180,38 @@ hlavičky).
 - Zbytek faultů proti mimallocu tvoří hlavně systémové alokace nad 4 MiB
   (2 × 29 MB, 2 × 32 MB), které heap posílá do glibc bez huge pages.
 
-## ASM: závěr
+## Historická měření ASM a inlinování
 
-Naked funkce nejde inlinovat (vlastní `ret`, skoky do jiných symbolů),
-takže každá alokace zaplatí `call`, nepřímý skok přes GOT a `ret`. Inline
-`asm!` inlinovat jde, ale je pro optimalizátor neprůhledný (nevidí dovnitř,
-nemůže předpočítat třídu, výsledek testuje znovu). Rust cesta se inlinuje
+Rust nepovoluje inlinování `#[unsafe(naked)]` funkcí. Volání přes
+`__rust_alloc` v samostatném mikrobenchmarku navíc prochází obalovým
+skokem přes GOT; přímá volání z runtime tento skok nemají. Inline `asm!`
+inlinovat jde. Neprůhlednost jeho těla omezuje optimalizaci uvnitř bloku,
+neznamená však, že překladač nemůže optimalizovat okolní Rust. Výběr třídy a větvení tedy zůstávají viditelné optimalizátoru v Rustu.
+Tehdejší Rust cesta se inlinovala
 do ~22 000 míst a u známé velikosti vypustí výběr třídy; stojí to 1,7 MB
 kódu navíc. Výsledek: ASM vykoná méně instrukcí; v čase vyhrává Rust
-v mikrobenchmarku lifo (−12 %) a burst (−3 %), mixed je nerozhodný. Na
-PHPStanu jsou cold a warm nerozhodné a v běhu s workery je ASM asi o 3 %
-rychlejší; sada benchmarků vychází stejně. Jednoznačný vítěz tedy není.
-Výchozí zůstává Rust (přenositelný, s debug kontrolami, bez ručně
-udržovaných offsetů); `php-heap-asm` zůstává volitelný.
+v mikrobenchmarku lifo (−12 %) a burst (−3 %), mixed je nerozhodný.
+PHPStan a sada benchmarků celkově neurčují spolehlivého vítěze; původní
+3% náskok ASM s workery se v dalších kolech nepotvrdil (viz níže).
+Následné rozhodnutí uživatele je odstranit veškerý ručně psaný assembler
+z alokátoru, včetně TLS primitivy. Aktuální implementace proto používá
+standardní Rust TLS a zachovává debug kontroly. Čísla v této historické sekci
+nelze vydávat za výkon nové implementace; ten měří completion report.
+
+**Pokus s politikou inlinování** (dočasné varianty ze stejného commitu,
+nezačleněné): Rust inline (15,40 MB `.text`), hybrid s alokací inline
+a uvolněním mimo řádek (14,12 MB), Rust zcela mimo řádek (13,48 MB) a ASM
+(13,49 MB). PHPStan, 5 kol: všechny do ±1 % (cold 3,19–3,23 s, warm
+1,17–1,18 s, s workery 5,74–5,78 s), poměry po kolech kolem 1,00 oběma
+směry; dřívější náskok ASM s workery se nepotvrdil. Sada 96 benchmarků,
+3 kola: celkem 48,29 / 48,26 / 48,51 s (inline / mimo řádek / ASM),
+geometrický průměr 1,000 / 0,997 / 1,004, ale u jednotlivých skriptů
+rozdíly přes 2 % oběma směry (mimo řádek: 30 rychlejších, 37 pomalejších).
+Krátké skripty ukazují stabilní rozdíly 5–9 % podle binárky (allocbench:
+mimo řádek −5 % ve všech kolech; usestmt: hybrid +9 % ve všech kolech),
+které na PHPStanu mizí. To odpovídá vlivu rozložení kódu interpretu, ne
+rychlé cestě alokátoru. Na skutečné zátěži tedy politika inlinování ani
+ASM měřitelně nerozhodují; výchozí zůstává Rust inline.
 
 ## Co je ještě otevřené
 
@@ -211,9 +223,11 @@ udržovaných offsetů); `php-heap-asm` zůstává volitelný.
 3. **TLS model v celém runtime** (samostatný úkol): stejný prolog platí
    u každého `thread_local!` v knihovně.
 4. **Vlákna a zásobníky parseru** (samostatný úkol).
-5. **Politika inlinování**: inline alloc (skládání konstant) a mimo řádek
-   free (méně kódu) by mohla spojit výhody obou variant; neměřeno.
-6. **`max-perf`** (fat LTO) zatím neměřeno.
+5. **Politika inlinování**: změřeno, na PHPStanu ani na sadě benchmarků
+   nerozhoduje (viz závěr k ASM). Varianta mimo řádek by ušetřila 1,9 MB
+   kódu bez měřitelné ztráty, pokud by na velikosti binárky záleželo.
+6. **`max-perf`** (fat LTO): aktuální srovnání s čistým Rustem je v
+   [completion reportu](performance-php-heap-finish.md).
 7. **Remote free** čeká v `remote_free`, dokud vlastník nerefilluje.
 
 ## Testy
@@ -226,5 +240,6 @@ hlaviček, stress 200 k operací. Integrační testy ve vlastních procesech:
 `heap_concurrency` (8 vláken churn, producenti/konzumenti, generace vláken,
 kontrola obsahu každého bloku), `heap_reclaim` (rozpočet, pokles RSS),
 `heap_debug` (double free a zápis po uvolnění v podprocesu, kopie
-neinicializovaných bajtů bez falešného poplachu). Vše běží pro Rust, ASM
-i debug variantu; celá e2e sada běží pod heapem.
+neinicializovaných bajtů bez falešného poplachu). Nový test navíc ověřuje
+alokaci i uvolnění z TLS destruktoru po osiření stránek. Testy běží pro
+Rust s debug kontrolami i bez nich; celá výchozí e2e sada běží pod heapem.

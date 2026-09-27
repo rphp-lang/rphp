@@ -1,0 +1,1950 @@
+{
+  "release": {
+    "cpu": 0,
+    "seed": 270926,
+    "rounds": 15,
+    "count": 50000000,
+    "warmup_count": 1000000,
+    "outlier_policy": "retain all successful, checksum-validated runs",
+    "binaries": {
+      "baseline": "f9951fbf779e68a0ac24f9bc60571ec0f11c5cd802f12c804ad38cbd7703e314",
+      "rust": "2ad129a339aa1b43b919864fcf94ee9c3044ed501e1bdd5b52f5850e88f7372c"
+    },
+    "samples": [
+      {
+        "round": 0,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 173568532
+      },
+      {
+        "round": 0,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 158527521
+      },
+      {
+        "round": 0,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 212547932
+      },
+      {
+        "round": 0,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 225023568
+      },
+      {
+        "round": 0,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 172000468
+      },
+      {
+        "round": 0,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 179189249
+      },
+      {
+        "round": 0,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147613728
+      },
+      {
+        "round": 0,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 154769516
+      },
+      {
+        "round": 1,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155809307
+      },
+      {
+        "round": 1,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 169881049
+      },
+      {
+        "round": 1,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 208894194
+      },
+      {
+        "round": 1,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 230171569
+      },
+      {
+        "round": 1,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 180725101
+      },
+      {
+        "round": 1,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 171015461
+      },
+      {
+        "round": 1,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 151705235
+      },
+      {
+        "round": 1,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 140687214
+      },
+      {
+        "round": 2,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 171079232
+      },
+      {
+        "round": 2,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 158456958
+      },
+      {
+        "round": 2,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 208830544
+      },
+      {
+        "round": 2,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 229444361
+      },
+      {
+        "round": 2,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 183940348
+      },
+      {
+        "round": 2,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 169526046
+      },
+      {
+        "round": 2,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 149737414
+      },
+      {
+        "round": 2,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 150206504
+      },
+      {
+        "round": 3,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 156022452
+      },
+      {
+        "round": 3,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 168853692
+      },
+      {
+        "round": 3,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 230569795
+      },
+      {
+        "round": 3,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 230374254
+      },
+      {
+        "round": 3,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 189174002
+      },
+      {
+        "round": 3,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 170169737
+      },
+      {
+        "round": 3,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 149406928
+      },
+      {
+        "round": 3,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 150783518
+      },
+      {
+        "round": 4,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155510421
+      },
+      {
+        "round": 4,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 175132187
+      },
+      {
+        "round": 4,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 209555028
+      },
+      {
+        "round": 4,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 225493310
+      },
+      {
+        "round": 4,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 183387109
+      },
+      {
+        "round": 4,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 170869955
+      },
+      {
+        "round": 4,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147662280
+      },
+      {
+        "round": 4,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 149749758
+      },
+      {
+        "round": 5,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 188816064
+      },
+      {
+        "round": 5,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155148945
+      },
+      {
+        "round": 5,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 209095938
+      },
+      {
+        "round": 5,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 224001310
+      },
+      {
+        "round": 5,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 169216961
+      },
+      {
+        "round": 5,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 184388328
+      },
+      {
+        "round": 5,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 146948086
+      },
+      {
+        "round": 5,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 149616546
+      },
+      {
+        "round": 6,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 170727345
+      },
+      {
+        "round": 6,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155367400
+      },
+      {
+        "round": 6,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 224559379
+      },
+      {
+        "round": 6,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 209030654
+      },
+      {
+        "round": 6,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 181560276
+      },
+      {
+        "round": 6,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 169253791
+      },
+      {
+        "round": 6,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 144345161
+      },
+      {
+        "round": 6,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147439197
+      },
+      {
+        "round": 7,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 171227203
+      },
+      {
+        "round": 7,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155375967
+      },
+      {
+        "round": 7,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 225720751
+      },
+      {
+        "round": 7,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 210963550
+      },
+      {
+        "round": 7,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 184077299
+      },
+      {
+        "round": 7,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 170370538
+      },
+      {
+        "round": 7,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 145021142
+      },
+      {
+        "round": 7,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 154422650
+      },
+      {
+        "round": 8,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 175238459
+      },
+      {
+        "round": 8,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155753072
+      },
+      {
+        "round": 8,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 226127122
+      },
+      {
+        "round": 8,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 210267379
+      },
+      {
+        "round": 8,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 181913647
+      },
+      {
+        "round": 8,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 169181605
+      },
+      {
+        "round": 8,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 144664296
+      },
+      {
+        "round": 8,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 151698654
+      },
+      {
+        "round": 9,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 169768187
+      },
+      {
+        "round": 9,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 154822688
+      },
+      {
+        "round": 9,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 208252349
+      },
+      {
+        "round": 9,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 227316668
+      },
+      {
+        "round": 9,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 169054333
+      },
+      {
+        "round": 9,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 181471248
+      },
+      {
+        "round": 9,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 149759768
+      },
+      {
+        "round": 9,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 151026069
+      },
+      {
+        "round": 10,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 169012925
+      },
+      {
+        "round": 10,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155180507
+      },
+      {
+        "round": 10,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 225118790
+      },
+      {
+        "round": 10,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 213341659
+      },
+      {
+        "round": 10,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 193106460
+      },
+      {
+        "round": 10,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 168774804
+      },
+      {
+        "round": 10,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 150818004
+      },
+      {
+        "round": 10,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 148586974
+      },
+      {
+        "round": 11,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 168188652
+      },
+      {
+        "round": 11,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155686877
+      },
+      {
+        "round": 11,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 224913211
+      },
+      {
+        "round": 11,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 208674650
+      },
+      {
+        "round": 11,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 181474634
+      },
+      {
+        "round": 11,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 174930746
+      },
+      {
+        "round": 11,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 137199853
+      },
+      {
+        "round": 11,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 145229127
+      },
+      {
+        "round": 12,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 169118375
+      },
+      {
+        "round": 12,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155456641
+      },
+      {
+        "round": 12,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 228232134
+      },
+      {
+        "round": 12,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 208589128
+      },
+      {
+        "round": 12,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 174391384
+      },
+      {
+        "round": 12,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 181404051
+      },
+      {
+        "round": 12,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 146827759
+      },
+      {
+        "round": 12,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147403461
+      },
+      {
+        "round": 13,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 156683908
+      },
+      {
+        "round": 13,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 169303626
+      },
+      {
+        "round": 13,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 213088069
+      },
+      {
+        "round": 13,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 223715801
+      },
+      {
+        "round": 13,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 178659437
+      },
+      {
+        "round": 13,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 170422969
+      },
+      {
+        "round": 13,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 137976175
+      },
+      {
+        "round": 13,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 142491768
+      },
+      {
+        "round": 14,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 169705018
+      },
+      {
+        "round": 14,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 156029146
+      },
+      {
+        "round": 14,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 225082082
+      },
+      {
+        "round": 14,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 209153990
+      },
+      {
+        "round": 14,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 169202104
+      },
+      {
+        "round": 14,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 184690944
+      },
+      {
+        "round": 14,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147327697
+      },
+      {
+        "round": 14,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 146545614
+      }
+    ]
+  },
+  "max-perf": {
+    "cpu": 0,
+    "seed": 270926,
+    "rounds": 15,
+    "count": 50000000,
+    "warmup_count": 1000000,
+    "outlier_policy": "retain all successful, checksum-validated runs",
+    "binaries": {
+      "baseline": "7e58cff671aa39c15da3b899d5517ce93079421f9f6fd5f208284b6a536d6517",
+      "rust": "bbf735ae57d8544c8ec6531166d24f89fbc55eb25a7acbc2674715616241ace5"
+    },
+    "samples": [
+      {
+        "round": 0,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147049188
+      },
+      {
+        "round": 0,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141804273
+      },
+      {
+        "round": 0,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162370922
+      },
+      {
+        "round": 0,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157920573
+      },
+      {
+        "round": 0,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 118959143
+      },
+      {
+        "round": 0,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 105697937
+      },
+      {
+        "round": 0,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 140224477
+      },
+      {
+        "round": 0,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 155321254
+      },
+      {
+        "round": 1,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 140118646
+      },
+      {
+        "round": 1,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 140976123
+      },
+      {
+        "round": 1,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 164465413
+      },
+      {
+        "round": 1,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160394043
+      },
+      {
+        "round": 1,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 104584877
+      },
+      {
+        "round": 1,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 124157390
+      },
+      {
+        "round": 1,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160075429
+      },
+      {
+        "round": 1,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 145027865
+      },
+      {
+        "round": 2,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 151638511
+      },
+      {
+        "round": 2,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 142040281
+      },
+      {
+        "round": 2,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 164013928
+      },
+      {
+        "round": 2,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160318560
+      },
+      {
+        "round": 2,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 104600966
+      },
+      {
+        "round": 2,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 120107661
+      },
+      {
+        "round": 2,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 145477788
+      },
+      {
+        "round": 2,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160692749
+      },
+      {
+        "round": 3,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 139704160
+      },
+      {
+        "round": 3,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 154859268
+      },
+      {
+        "round": 3,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162250163
+      },
+      {
+        "round": 3,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 163432535
+      },
+      {
+        "round": 3,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 104408332
+      },
+      {
+        "round": 3,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 118653724
+      },
+      {
+        "round": 3,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160868984
+      },
+      {
+        "round": 3,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141355763
+      },
+      {
+        "round": 4,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141051806
+      },
+      {
+        "round": 4,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 159444182
+      },
+      {
+        "round": 4,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162598373
+      },
+      {
+        "round": 4,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157584947
+      },
+      {
+        "round": 4,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 103525057
+      },
+      {
+        "round": 4,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119982935
+      },
+      {
+        "round": 4,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141430625
+      },
+      {
+        "round": 4,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 161461408
+      },
+      {
+        "round": 5,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 153213698
+      },
+      {
+        "round": 5,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 142720270
+      },
+      {
+        "round": 5,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162582844
+      },
+      {
+        "round": 5,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157927927
+      },
+      {
+        "round": 5,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 118531102
+      },
+      {
+        "round": 5,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 106291924
+      },
+      {
+        "round": 5,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 138907711
+      },
+      {
+        "round": 5,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 152099194
+      },
+      {
+        "round": 6,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 147623097
+      },
+      {
+        "round": 6,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141627238
+      },
+      {
+        "round": 6,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 158717374
+      },
+      {
+        "round": 6,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162238842
+      },
+      {
+        "round": 6,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 108139387
+      },
+      {
+        "round": 6,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119850965
+      },
+      {
+        "round": 6,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 142339348
+      },
+      {
+        "round": 6,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157595938
+      },
+      {
+        "round": 7,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 148214659
+      },
+      {
+        "round": 7,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 143106122
+      },
+      {
+        "round": 7,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157891869
+      },
+      {
+        "round": 7,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 164428564
+      },
+      {
+        "round": 7,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 105714569
+      },
+      {
+        "round": 7,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 118595023
+      },
+      {
+        "round": 7,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 145624347
+      },
+      {
+        "round": 7,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 153276667
+      },
+      {
+        "round": 8,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 151880650
+      },
+      {
+        "round": 8,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141861892
+      },
+      {
+        "round": 8,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157600146
+      },
+      {
+        "round": 8,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162337008
+      },
+      {
+        "round": 8,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 106176655
+      },
+      {
+        "round": 8,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119495611
+      },
+      {
+        "round": 8,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157088977
+      },
+      {
+        "round": 8,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141112131
+      },
+      {
+        "round": 9,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 154573757
+      },
+      {
+        "round": 9,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 139756952
+      },
+      {
+        "round": 9,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162183237
+      },
+      {
+        "round": 9,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160287522
+      },
+      {
+        "round": 9,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 118672220
+      },
+      {
+        "round": 9,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 103751256
+      },
+      {
+        "round": 9,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 150129571
+      },
+      {
+        "round": 9,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141045144
+      },
+      {
+        "round": 10,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157249331
+      },
+      {
+        "round": 10,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141658467
+      },
+      {
+        "round": 10,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157570039
+      },
+      {
+        "round": 10,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 164625719
+      },
+      {
+        "round": 10,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 104209225
+      },
+      {
+        "round": 10,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119748250
+      },
+      {
+        "round": 10,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 142977829
+      },
+      {
+        "round": 10,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 142547483
+      },
+      {
+        "round": 11,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 136757984
+      },
+      {
+        "round": 11,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 144366663
+      },
+      {
+        "round": 11,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 160270851
+      },
+      {
+        "round": 11,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 165359700
+      },
+      {
+        "round": 11,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 105023499
+      },
+      {
+        "round": 11,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119745265
+      },
+      {
+        "round": 11,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 157371603
+      },
+      {
+        "round": 11,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 139047286
+      },
+      {
+        "round": 12,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 146176264
+      },
+      {
+        "round": 12,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 138028825
+      },
+      {
+        "round": 12,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 158871828
+      },
+      {
+        "round": 12,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 163853234
+      },
+      {
+        "round": 12,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119635126
+      },
+      {
+        "round": 12,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 108667609
+      },
+      {
+        "round": 12,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 141529663
+      },
+      {
+        "round": 12,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 153844094
+      },
+      {
+        "round": 13,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 138925716
+      },
+      {
+        "round": 13,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 144143510
+      },
+      {
+        "round": 13,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 162284859
+      },
+      {
+        "round": 13,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 159385702
+      },
+      {
+        "round": 13,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 115113181
+      },
+      {
+        "round": 13,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119683809
+      },
+      {
+        "round": 13,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 153634467
+      },
+      {
+        "round": 13,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 139368706
+      },
+      {
+        "round": 14,
+        "case": "lifo",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 144684886
+      },
+      {
+        "round": 14,
+        "case": "lifo",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 135910548
+      },
+      {
+        "round": 14,
+        "case": "mixed",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 159448201
+      },
+      {
+        "round": 14,
+        "case": "mixed",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 164753020
+      },
+      {
+        "round": 14,
+        "case": "burst",
+        "variant": "baseline",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 119273039
+      },
+      {
+        "round": 14,
+        "case": "burst",
+        "variant": "rust",
+        "count": 50000128,
+        "checksum": 6375016320,
+        "ns": 105119431
+      },
+      {
+        "round": 14,
+        "case": "specialized",
+        "variant": "rust",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 149948548
+      },
+      {
+        "round": 14,
+        "case": "specialized",
+        "variant": "baseline",
+        "count": 50000000,
+        "checksum": 6374991808,
+        "ns": 138307915
+      }
+    ]
+  }
+}
