@@ -960,6 +960,18 @@ impl Parser {
 
     /// Unary: -expr, (int)expr, (string)expr, etc.
     fn parse_unary(&mut self) -> Result<Expr, String> {
+        if !matches!(
+            self.peek_ref(),
+            Token::Bang
+                | Token::Minus
+                | Token::Plus
+                | Token::At
+                | Token::Tilde(_)
+                | Token::Clone(_)
+                | Token::LParen(_)
+        ) {
+            return self.parse_power();
+        }
         match self.peek() {
             Token::Bang => {
                 self.skip();
@@ -1209,8 +1221,9 @@ impl Parser {
     /// applied by `parse_power`, so every atom gets the same chaining grammar.
     fn parse_primary_atom(&mut self) -> Result<Expr, String> {
         self.last_primary_line = None;
-        match self.peek() {
-            Token::ParseError(message, line) => {
+        match *self.peek_ref() {
+            Token::ParseError(ref message, line) => {
+                let message = message.clone();
                 self.skip();
                 Err(self.source_error(&message, line))
             }
@@ -2073,7 +2086,7 @@ impl Parser {
                 "syntax error, unexpected token \"&\"",
                 line,
             )),
-            other => Err(format!("Expected expression, got {:?}", other)),
+            ref other => Err(format!("Expected expression, got {:?}", other)),
         }
     }
 

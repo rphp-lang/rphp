@@ -701,11 +701,15 @@ fn declared_method_facts(
     class_defs: &[ClassDef],
 ) -> HashMap<(String, String), DeclaredMethodFacts> {
     let mut result = HashMap::new();
-    for class in class_defs {
+    let mut owner_methods: HashMap<String, Vec<String>> = HashMap::new();
+    let mut class_index: HashMap<String, usize> = HashMap::new();
+    for (index, class) in class_defs.iter().enumerate() {
         let class_name = class.name.to_ascii_lowercase();
+        let methods = owner_methods.entry(class_name.clone()).or_default();
         for (method_name, _, _, _, method) in &class.methods {
+            let method_name = method_name.to_ascii_lowercase();
             result.insert(
-                (class_name.clone(), method_name.to_ascii_lowercase()),
+                (class_name.clone(), method_name.clone()),
                 DeclaredMethodFacts {
                     return_type: exact_declared_scalar_type(&method.common.sig.return_type_hint),
                     parameter_types: method.common.sig.param_type_hints.clone(),
@@ -713,30 +717,76 @@ fn declared_method_facts(
                     is_variadic: method.common.sig.is_variadic,
                 },
             );
+            methods.push(method_name);
         }
+        class_index.entry(class_name).or_insert(index);
     }
 
-    loop {
-        let snapshot = result.clone();
-        let mut changed = false;
-        for class in class_defs {
-            let Some(parent) = class.parent.as_ref() else {
-                continue;
-            };
-            let class_name = class.name.to_ascii_lowercase();
+    // Inherit facts parents-first: a child gains every parent method it does
+    // not declare itself, transitively through parents declared in this unit.
+    // This is the fixed point the former snapshot loop converged to, without
+    // cloning the table per round.
+    #[derive(Clone, Copy, PartialEq)]
+    enum Visit {
+        Pending,
+        Active,
+        Done,
+    }
+    fn inherit(
+        index: usize,
+        class_defs: &[ClassDef],
+        class_index: &HashMap<String, usize>,
+        owner_methods: &mut HashMap<String, Vec<String>>,
+        result: &mut HashMap<(String, String), DeclaredMethodFacts>,
+        state: &mut [Visit],
+    ) {
+        if state[index] != Visit::Pending {
+            return;
+        }
+        state[index] = Visit::Active;
+        let class = &class_defs[index];
+        if let Some(parent) = class.parent.as_ref() {
             let parent_name = parent.to_ascii_lowercase();
-            for ((owner, method_name), facts) in &snapshot {
-                if owner == &parent_name
-                    && !result.contains_key(&(class_name.clone(), method_name.clone()))
-                {
-                    result.insert((class_name.clone(), method_name.clone()), facts.clone());
-                    changed = true;
+            if let Some(&parent_index) = class_index.get(&parent_name) {
+                inherit(
+                    parent_index,
+                    class_defs,
+                    class_index,
+                    owner_methods,
+                    result,
+                    state,
+                );
+                let class_name = class.name.to_ascii_lowercase();
+                let inherited = owner_methods
+                    .get(&parent_name)
+                    .map(|methods| methods.clone())
+                    .unwrap_or_default();
+                for method_name in inherited {
+                    let key = (class_name.clone(), method_name);
+                    if result.contains_key(&key) {
+                        continue;
+                    }
+                    let facts = result[&(parent_name.clone(), key.1.clone())].clone();
+                    owner_methods
+                        .entry(class_name.clone())
+                        .or_default()
+                        .push(key.1.clone());
+                    result.insert(key, facts);
                 }
             }
         }
-        if !changed {
-            break;
-        }
+        state[index] = Visit::Done;
+    }
+    let mut state = vec![Visit::Pending; class_defs.len()];
+    for index in 0..class_defs.len() {
+        inherit(
+            index,
+            class_defs,
+            &class_index,
+            &mut owner_methods,
+            &mut result,
+            &mut state,
+        );
     }
 
     result

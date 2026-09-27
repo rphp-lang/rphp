@@ -466,6 +466,18 @@ impl Parser {
     fn parse_postfix_chain(&mut self, mut expr: Expr) -> Result<Expr, String> {
         let expression_line = self.last_primary_line;
         loop {
+            if !matches!(
+                self.peek_ref(),
+                Token::LBracket(_)
+                    | Token::LParen(_)
+                    | Token::DoubleColon
+                    | Token::Arrow
+                    | Token::NullSafe
+                    | Token::PlusPlus
+                    | Token::MinusMinus
+            ) {
+                break;
+            }
             match self.peek() {
                 Token::LBracket(line) => {
                     // An empty dimension is only valid as a write target. Leave

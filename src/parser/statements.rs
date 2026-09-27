@@ -29,16 +29,22 @@ impl Parser {
     }
 
     pub fn new(tokens: Vec<Token>) -> Self {
-        let mut syntax_tokens = Vec::with_capacity(tokens.len());
+        // Doc comments leave the syntax stream in place; moving every other
+        // token into a fresh vector was a measurable share of parsing.
+        let mut syntax_tokens = tokens;
         let mut doc_comments = Vec::new();
-        for token in tokens {
-            match token {
-                Token::DocComment(comment) => {
-                    doc_comments.push((syntax_tokens.len(), comment));
+        let mut kept = 0usize;
+        syntax_tokens.retain_mut(|token| {
+            if matches!(token, Token::DocComment(_)) {
+                if let Token::DocComment(comment) = std::mem::replace(token, Token::Eof) {
+                    doc_comments.push((kept, comment));
                 }
-                token => syntax_tokens.push(token),
+                false
+            } else {
+                kept += 1;
+                true
             }
-        }
+        });
         Self {
             tokens: syntax_tokens,
             pos: 0,
@@ -247,20 +253,21 @@ impl Parser {
         if !matches!(self.peek_ref(), Token::Declare | Token::Semicolon(_)) {
             self.strict_types_allowed = false;
         }
-        if let Token::Identifier(name, _) | Token::Enum { name, .. } = self.peek() {
-            if *self.peek_at_ref(1) == Token::Colon {
-                let line = self.current_token_source_line();
-                self.skip();
-                self.skip();
-                return Ok(Stmt::Label { name, line });
-            }
+        if let Token::Identifier(name, _) | Token::Enum { name, .. } = self.peek_ref()
+            && *self.peek_at_ref(1) == Token::Colon
+        {
+            let name = name.clone();
+            let line = self.current_token_source_line();
+            self.skip();
+            self.skip();
+            return Ok(Stmt::Label { name, line });
         }
-        if let Token::Exit { line, .. } = self.peek()
+        if let Token::Exit { line, .. } = *self.peek_ref()
             && *self.peek_at_ref(1) == Token::Colon
         {
             return Err(self.source_error("syntax error, unexpected token \":\"", line));
         }
-        if let Token::Goto { line, .. } = self.peek() {
+        if let Token::Goto { line, .. } = *self.peek_ref() {
             self.skip();
             let name = match self.advance() {
                 Token::Identifier(label, _) | Token::Enum { name: label, .. } => label,

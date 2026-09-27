@@ -550,46 +550,42 @@ impl<'a> Lexer<'a> {
     pub(super) fn source_line_at(&self, position: usize) -> usize {
         let position = position.min(self.src.len());
         let (cached_position, cached_line) = self.line_cache.get();
-        let (mut start, base_line) = if position >= cached_position {
-            (cached_position, cached_line)
+        // Line numbers are additive over logical breaks, so an earlier
+        // position is answered by counting back from the cached one instead
+        // of rescanning the source from its start.
+        let line = if position >= cached_position {
+            cached_line + Self::logical_line_breaks_between(self.src, cached_position, position)
         } else {
-            (0, 1)
-        };
-        // The cache may sit between the bytes of one `\r\n` break, which the
-        // previous answer already counted.
-        if start > 0
-            && start < self.src.len()
-            && self.src[start - 1] == b'\r'
-            && self.src[start] == b'\n'
-        {
-            start += 1;
-        }
-        let line = if position <= start {
-            base_line
-        } else {
-            base_line + Self::count_logical_line_breaks(&self.src[start..position])
+            cached_line - Self::logical_line_breaks_between(self.src, position, cached_position)
         };
         self.line_cache.set((position, line));
         line
     }
 
-    pub(super) fn count_logical_line_breaks(content: &[u8]) -> usize {
-        let mut count = 0;
-        let mut cursor = 0;
-        while cursor < content.len() {
-            match content[cursor] {
-                b'\r' => {
-                    count += 1;
-                    cursor += usize::from(content.get(cursor + 1) == Some(&b'\n')) + 1;
-                }
-                b'\n' => {
-                    count += 1;
-                    cursor += 1;
-                }
-                _ => cursor += 1,
-            }
+    /// Logical line breaks (`\n`, `\r`, `\r\n`) whose first byte lies in
+    /// `src[start..end]`. A `\r\n` pair split by `start` was counted by the
+    /// range that holds its `\r`, so its `\n` is not counted again.
+    fn logical_line_breaks_between(src: &[u8], start: usize, end: usize) -> usize {
+        if start >= end {
+            return 0;
         }
-        count
+        let content = &src[start..end];
+        let mut breaks = Self::count_logical_line_breaks(content);
+        if start > 0 && src[start - 1] == b'\r' && content[0] == b'\n' {
+            breaks -= 1;
+        }
+        breaks
+    }
+
+    pub(super) fn count_logical_line_breaks(content: &[u8]) -> usize {
+        // Byte-equality counts vectorize; the per-byte state machine did not.
+        let newlines = content.iter().filter(|&&byte| byte == b'\n').count();
+        let carriage_returns = content.iter().filter(|&&byte| byte == b'\r').count();
+        if carriage_returns == 0 {
+            return newlines;
+        }
+        let pairs = content.windows(2).filter(|pair| *pair == b"\r\n").count();
+        newlines + carriage_returns - pairs
     }
 
     pub(super) fn document_start_display(&self) -> String {
