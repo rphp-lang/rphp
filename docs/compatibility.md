@@ -28115,6 +28115,22 @@ function is remembered after its first reverse scan of the function table.
 shadowed closure scopes, trait closures and readonly/asymmetric errors
 against reference PHP. Cold callgrind: 33.6 G to 31.8 G.
 
+The `constant-site-cache` checkpoint follows a wall-clock breakdown of the
+cold run: Nette's `DependencyChecker` tokenizes every class file with
+`TOKEN_PARSE` (1.04 s against PHP's 0.09 s), so sources the request already
+parsed cleanly are remembered by fingerprint and skip the redundant syntax
+check; its use-statement scan then showed two interpreter costs, a constant
+fetch that probed the constant table (and the slow-lookup memo for built-ins
+such as `T_STRING`) on every execution, and `switch`/`==` between an
+integer token id and a string token that formatted the integer into a fresh
+string per case. Constant fetch sites now keep scalar constants in their
+cache word and, for other constants, the spelling that first resolved,
+which pins the global fallback exactly like PHP's run-time cache (a
+previously observable deviation); integer/string loose equality rejects
+strings that cannot spell an integer up front. That scan runs in 1.39 ms
+per file instead of 2.47 ms; cold callgrind 31.8 G to 30.0 G, cold wall
+about 4.5 s (PHP 1.4 s).
+
 Note on the gate itself: `ff253d2b` (PHPUnit process control) made
 `proc_open()` exist, so PHPStan now takes its parallel path exactly like PHP
 does and spawns worker processes over TCP sockets (react/socket). That path
