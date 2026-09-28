@@ -191,16 +191,33 @@ Both new PHP fixtures match reference PHP, unchanged baseline and candidate.
 Formatting and the unsafe-policy check pass. No broad compatibility matrix or
 ARM64 runtime benchmark is claimed for this bounded checkpoint.
 
-Two separate exploratory fixtures expose existing baseline mismatches after a
-destructor throws: a later array member's destructor can be omitted during frame
-unwind, and a shared argument can remain retained until shutdown after explicit
-array retirement. The candidate reproduces both baseline results unchanged;
-neither fixture is counted as a pass. Their reduced sources and exact outputs
-are retained with the diagnostic evidence for a compatibility repair.
+One exploratory fixture exposes an existing baseline mismatch: a later array
+member's destructor can be omitted when an earlier destructor throws during
+function return. The candidate reproduces that baseline result unchanged; this
+fixture was not counted as a pass.
+
+A second suspected mismatch, where a shared argument survived explicit array
+retirement until shutdown, was a comparison-configuration error. Rechecking both
+runtimes with the same `zend.exception_ignore_args` value gives identical
+behavior: with `0`, the exception trace retains the argument; with `1`, it does
+not. This is not a runtime ownership leak. The initial classification as a
+second baseline bug is withdrawn.
 
 The large structural cost remains eager whole-frame release planning. Removing
 that cost requires changing how VM ownership retirement dispatches PHP cleanup,
-with explicit treatment of aliases, exceptions and re-entry. The two baseline
-exception failures above must remain visible when evaluating such a change.
+with explicit treatment of aliases, exceptions and re-entry. The confirmed return
+exception failure above must remain visible when evaluating such a change.
 Adding another admission shortcut would not satisfy this checkpoint's user
 constraint.
+
+The [reusable retirement workspace experiment](performance-release-workspace.md)
+measures removal of repeated planner allocations and exercises return/callback
+repairs. Its confirmed control regressions prevent acceptance; its runtime
+changes have been removed.
+
+The subsequent [ordered frame-retirement experiment](performance-frame-retirement.md)
+replaces eager planning at committed returns and records its independent
+correctness and performance gates. It is also rejected: a large target-loop
+gain does not override its scalar regression or shutdown ordering mismatch.
+The independently confirmed wide-frame owned-reference leak is isolated in a
+[separate correction](performance-owned-reference-cleanup.md).

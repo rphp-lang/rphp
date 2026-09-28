@@ -161,25 +161,12 @@ pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
     stats::inc_cleanup_frame(total, false);
     for i in 0..total {
         let ptr = base.add(i);
-        #[cfg(not(feature = "resource-lifetime"))]
-        match (*ptr).value_type() {
-            ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure => {
-                std::ptr::drop_in_place(ptr);
-                std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
-            }
-            _ => {}
-        }
-        #[cfg(feature = "resource-lifetime")]
-        match (*ptr).value_type() {
-            ValueType::String
-            | ValueType::Array
-            | ValueType::Object
-            | ValueType::Resource
-            | ValueType::Closure => {
-                std::ptr::drop_in_place(ptr);
-                std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
-            }
-            _ => {}
+        // Use the same ownership predicate as slot publication. Owned
+        // reference cells own their referent even though their tag is not an
+        // object/array tag; borrowed reference pointers own nothing.
+        if (*ptr).needs_cleanup() {
+            std::ptr::drop_in_place(ptr);
+            std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
         }
     }
 }
@@ -3357,6 +3344,45 @@ mod sparse_vm_frame_pop_tests {
         _: &mut ExecutorGlobals,
     ) -> Result<(), VmError> {
         Ok(())
+    }
+
+    #[test]
+    fn frame_cleanup_releases_owned_reference_cells_without_dropping_borrowed_references() {
+        for slots in [2, 80] {
+            let function =
+                crate::compiler::make_internal_function(empty_internal, slots, slots, vec![]);
+            let mut eg = ExecutorGlobals::new();
+            let mut retained = Value::object(crate::value::PhpObject::dynamic(
+                "RetainedFrameOwner".to_string(),
+                0,
+                std::collections::HashMap::new(),
+            ));
+            let frame = eg.vm_stack.push_call_frame(
+                &function.common, slots, slots, null_mut(), null_mut(),
+            );
+            // SAFETY: this test owns the fresh activation and initializes every
+            // reserved slot once. The borrowed reference targets `retained`,
+            // whose storage remains live until after the frame is popped.
+            unsafe {
+                assert_eq!((*frame).num_cvs, slots);
+                for index in 0..slots {
+                    let value = match index {
+                        0 => Value::owned_reference(retained.clone()),
+                        1 => Value::reference(&mut retained),
+                        _ => Value::undef(),
+                    };
+                    super::callback_arg_init(frame, index as usize, value);
+                }
+                assert_eq!(retained.object_strong_count(), Some(2));
+                super::cleanup_frame_slots(frame);
+            }
+            assert_eq!(
+                retained.object_strong_count(), Some(1),
+                "{slots} slots must relinquish the owned cell",
+            );
+            pop_vm_call_frame(&mut eg, frame);
+            assert!(retained.as_object().is_some(), "borrowed target must survive");
+        }
     }
 
     #[test]
