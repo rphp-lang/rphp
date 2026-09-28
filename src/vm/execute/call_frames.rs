@@ -1348,12 +1348,40 @@ fn run_request_surviving_global_destructors(
     }
 }
 
+/// Ownership and identity metadata travel together from collection to dispatch.
+/// The collection index becomes the reference-count table in place; no second
+/// hash allocation or rehash of the same identities is needed at the boundary.
+struct CollectedDestructors {
+    candidates: Vec<(usize, usize, Value)>,
+    references: IdentityMap,
+}
+
+impl CollectedDestructors {
+    fn new(candidates: Vec<(usize, usize, Value)>, mut indices: IdentityMap) -> Self {
+        for index in indices.values_mut() {
+            *index = candidates[*index].1;
+        }
+        Self { candidates, references: indices }
+    }
+
+    fn retain_live_generators(&mut self) {
+        self.candidates.retain(|(identity, _, value)| {
+            if value_is_live_generator_release(value) {
+                true
+            } else {
+                self.references.remove(identity);
+                false
+            }
+        });
+    }
+}
+
 #[cold]
 fn collect_retiring_root_destructors(
     eg: &ExecutorGlobals,
     visit_roots: impl Fn(&mut dyn FnMut(&Value)),
     canonical_direct_roots_retained: bool,
-) -> Vec<(usize, usize, Value)> {
+) -> CollectedDestructors {
     let mut candidates = Vec::<(usize, usize, Value)>::new();
     // Replacing a final outer container does not retire a shared or cyclic
     // descendant. Use the same ownership proof as statement and property
@@ -1398,56 +1426,65 @@ fn collect_retiring_root_destructors(
             }
         });
     }
-    candidates
+    CollectedDestructors::new(candidates, child_index)
 }
 
 #[cold]
 fn run_collected_value_destructors(
     eg: &mut ExecutorGlobals,
-    candidates: Vec<(usize, usize, Value)>,
+    collected: CollectedDestructors,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
 ) -> Result<bool, VmError> {
-    if candidates.is_empty() {
+    let CollectedDestructors { candidates: mut pending, references } = collected;
+    if pending.is_empty() {
         return Ok(false);
     }
 
-    let release_references = candidates
-        .iter()
-        .map(|(identity, references, _)| (*identity, *references))
-        .collect::<IdentityMap>();
-    let mut pending = candidates;
     let mut any_progress = false;
     loop {
-        let mut deferred = Vec::new();
+        let mut deferred = 0;
         let mut progressed = false;
-        for (identity, references, owner) in pending {
-            if owner.vm_release_strong_count() != Some(references + 1) {
-                deferred.push((identity, references, owner));
+        for current in 0..pending.len() {
+            // Consume each owner exactly once, compacting deferred entries
+            // into the already allocated prefix. Cleared slots own nothing.
+            let candidate = std::mem::replace(
+                &mut pending[current], (0, 0, Value::undef()),
+            );
+            let (_, count, owner) = &candidate;
+            if owner.vm_release_strong_count() != Some(count + 1) {
+                pending[deferred] = candidate;
+                deferred += 1;
                 continue;
             }
-            progressed |= run_final_object_destructor_tree(
+            let result = run_final_object_destructor_tree(
                 eg,
-                owner,
-                references + 1,
-                Some(&release_references),
+                candidate.2,
+                candidate.1 + 1,
+                Some(&references),
                 false,
                 logical_caller,
                 internal_trace_origin,
                 logical_caller_at_current_site,
                 live_internal_caller,
-            )?;
-            if eg.exception.is_some() {
-                return Ok(true);
+            );
+            if result.is_err() || eg.exception.is_some() {
+                // Match the consuming iterator's early-exit drop order:
+                // unvisited owners first, then the deferred prefix. Rust
+                // drops can still affect GC registration and native owners.
+                drop(pending.drain(current + 1..));
+                pending.truncate(deferred);
+                return result.map(|_| true);
             }
+            progressed |= result?;
         }
+        pending.truncate(deferred);
         any_progress |= progressed;
         if !progressed {
             return Ok(any_progress);
         }
-        pending = deferred;
     }
 }
 
@@ -1741,8 +1778,9 @@ fn run_frame_destructors_filtered(
                 &mut array_encounters,
                 );
             });
+            let mut candidates = CollectedDestructors::new(candidates, child_index);
             if live_generators_only {
-                candidates.retain(|(_, _, value)| value_is_live_generator_release(value));
+                candidates.retain_live_generators();
             }
             let logical_caller = if detached_caller_at_current_site {
                 frame
@@ -3028,7 +3066,7 @@ fn release_statement_temps(
             }
             let _ = run_collected_value_destructors(
                 eg,
-                candidates,
+                CollectedDestructors::new(candidates, child_index),
                 frame,
                 false,
                 logical_caller_at_current_site,

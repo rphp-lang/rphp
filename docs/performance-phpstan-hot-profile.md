@@ -256,3 +256,12 @@ into native seconds. Both completed new diagnostic services record zero OOM,
 zero swap and no memory-limit pressure; their measured aggregate peaks are
 about 1.19 GB for scaling and 0.29 GB for the PHP reference profile. Cleanup
 hooks run after both. Raw profiles and local paths remain private evidence.
+
+## Follow-up: ordinary value flow
+
+The [ordinary-call checkpoint](performance-ordinary-value-flow.md) breaks down
+its 5,694 instructions per iteration and removes duplicated release metadata
+without another admission shortcut. The reproduction improves, while balanced
+PHPStan measurements remain effectively unchanged. The report preserves the
+remaining instruction budget and the baseline exception failures found during
+focused validation; it does not claim to solve the application gap.
