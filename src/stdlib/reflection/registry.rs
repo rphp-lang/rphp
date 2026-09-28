@@ -39,12 +39,16 @@ use super::{
     constant_construct, constant_get_value, constant_to_string, deprecated_construct,
     enum_backed_case_construct, enum_case_get_backing_value, enum_case_get_enum,
     enum_case_get_value, enum_construct, enum_get_backing_type, enum_get_case, enum_get_cases,
-    enum_has_case, enum_is_backed_reflection, enum_unit_case_construct, function_construct,
-    function_file_name, function_get_closure, function_get_closure_called_class,
-    function_get_closure_scope_class, function_get_closure_this, function_get_extension_name,
-    function_get_namespace_name, function_get_number_of_parameters,
-    function_get_number_of_required_parameters, function_get_parameters, function_get_return_type,
-    function_get_short_name, function_get_tentative_return_type, function_has_return_type,
+    enum_has_case, enum_is_backed_reflection, enum_unit_case_construct, extension_clone,
+    extension_construct, extension_get_class_names, extension_get_classes, extension_get_constants,
+    extension_get_dependencies, extension_get_functions, extension_get_ini_entries,
+    extension_get_name, extension_get_version, extension_info, extension_is_persistent,
+    extension_is_temporary, extension_to_string, function_construct, function_file_name,
+    function_get_closure, function_get_closure_called_class, function_get_closure_scope_class,
+    function_get_closure_this, function_get_extension_name, function_get_namespace_name,
+    function_get_number_of_parameters, function_get_number_of_required_parameters,
+    function_get_parameters, function_get_return_type, function_get_short_name,
+    function_get_tentative_return_type, function_has_return_type,
     function_has_tentative_return_type, function_in_namespace, function_invoke,
     function_invoke_args, function_is_anonymous, function_is_closure, function_is_deprecated,
     function_is_generator, function_is_internal, function_is_user_defined, function_is_variadic,
@@ -185,7 +189,19 @@ fn register_reflection_class_kind(
         uses: vec![],
         trait_aliases: vec![],
         trait_precedences: vec![],
-        properties: vec![],
+        properties: if name == "ReflectionExtension" {
+            vec![PropertyDefinition::declared(
+                "name".to_string(),
+                None,
+                Visibility::Public,
+                name.to_string(),
+                ParamTypeHint::String,
+                false,
+                false,
+            )]
+        } else {
+            vec![]
+        },
         static_properties: vec![],
         constants: if name == "ReflectionMethod" {
             [
@@ -1191,6 +1207,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
     );
     register_reflection_class_with_interfaces(
         eg,
+        "ReflectionExtension",
+        None,
+        false,
+        false,
+        &["Reflector"],
+    );
+    register_reflection_class_with_interfaces(
+        eg,
         "ReflectionParameter",
         None,
         false,
@@ -1214,6 +1238,57 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         false,
         false,
     );
+
+    register_method!(
+        "ReflectionExtension",
+        "__construct",
+        extension_construct,
+        2,
+        1,
+        ["name"]
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionExtension constructor was just registered")
+        .common
+        .sig
+        .param_type_hints = vec![ParamTypeHint::String];
+    register_method!("ReflectionExtension", "__clone", extension_clone, 1, 0, []);
+    functions
+        .last_mut()
+        .expect("ReflectionExtension clone was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::Void;
+    register_method!(
+        "ReflectionExtension",
+        "__tostring",
+        extension_to_string,
+        1,
+        0,
+        []
+    );
+    functions
+        .last_mut()
+        .expect("ReflectionExtension string conversion was just registered")
+        .common
+        .sig
+        .return_type_hint = ParamTypeHint::String;
+    for (name, handler) in [
+        ("getname", extension_get_name as InternalFunctionHandler),
+        ("getversion", extension_get_version),
+        ("getfunctions", extension_get_functions),
+        ("getconstants", extension_get_constants),
+        ("getinientries", extension_get_ini_entries),
+        ("getclasses", extension_get_classes),
+        ("getclassnames", extension_get_class_names),
+        ("getdependencies", extension_get_dependencies),
+        ("info", extension_info),
+        ("ispersistent", extension_is_persistent),
+        ("istemporary", extension_is_temporary),
+    ] {
+        register_method!("ReflectionExtension", name, handler, 1, 0, []);
+    }
     register_reflection_class(
         eg,
         "ReflectionEnumBackedCase",

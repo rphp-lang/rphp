@@ -540,6 +540,10 @@ pub const UNSET_DIM_NESTED: u16 = 1;
 /// handle owns the shared cell for execution lifetime but is not a PHP-visible
 /// alias and must not affect reference-wrapper observation.
 pub const REFERENCE_RESULT_INTERNAL: u16 = 1;
+/// `BindCvRef` source is the active method receiver. PHP lets a local acquire
+/// a reference-shaped alias for `$this`, but rebinding that local must never
+/// replace the method's immutable receiver CV.
+pub const BIND_CV_REF_THIS_SOURCE: u16 = 1 << 1;
 /// `BindArrayAppendRef` prepares an anonymous dimension for compound
 /// assignment. Its paired writeback invokes `offsetSet(null, value)`, so a
 /// by-value `offsetGet(null)` result must not emit the indirect-write notice.

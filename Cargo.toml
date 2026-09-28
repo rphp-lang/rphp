@@ -51,10 +51,13 @@ include-path = ["stream-context", "file-contents", "file-write", "file-lines"]
 formatted-io = []
 
 [dependencies]
+curl = "0.4.50"
+curl-sys = "0.4.90"
 fs2 = "0.4.3"
 libloading = "0.9.0"
 memchr = "2.8.0"
 md5crypt = "1.0.0"
+openssl = "0.10.81"
 pwhash = "1.0.0"
 sha-crypt = { version = "0.6.0", default-features = false }
 # Already in the tree through sha-crypt; its SHA-512 core replaces the
@@ -65,6 +68,7 @@ serde_json = { version = "1.0.149", features = ["unbounded_depth"] }
 serde_stacker = "0.1.14"
 stacker = "0.1.25"
 xxhash-rust = { version = "0.8", features = ["xxh3"] }
+zip = { version = "4.6.1", default-features = false, features = ["deflate"] }
 
 [target.'cfg(unix)'.dependencies]
 # Owned directory cursors must retain dot entries and rewind the open handle.

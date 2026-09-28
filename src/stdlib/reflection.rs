@@ -316,6 +316,301 @@ fn reflection_exception(eg: &mut ExecutorGlobals, message: impl AsRef<str>) {
     eg.exception = Some(make_error_value("ReflectionException", message.as_ref()));
 }
 
+fn reflected_extension_name(ed: *mut ExecuteData) -> Option<String> {
+    reflected_property(ed, "name")?.as_str().map(str::to_owned)
+}
+
+fn extension_construct(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let supplied = argument_string(ed, 1);
+    let Some(name) = super::extension_canonical_name(&supplied) else {
+        reflection_exception(eg, format!("Extension \"{supplied}\" does not exist"));
+        return Ok(());
+    };
+    with_argument(ed, 0, |value| {
+        if let Some(mut object) = value.as_object_mut() {
+            object.set_property("name", Value::string(name));
+        }
+    });
+    Ok(())
+}
+
+fn extension_clone(
+    _ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    eg.exception = Some(make_error_value(
+        "Error",
+        "Trying to clone an uncloneable object of class ReflectionExtension",
+    ));
+    Ok(())
+}
+
+fn extension_get_name(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(
+        rv,
+        reflected_extension_name(ed).map_or_else(Value::null, Value::string),
+    )
+}
+
+fn extension_get_version(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::string(crate::PHP_COMPAT_VERSION))
+}
+
+fn extension_is_persistent(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::bool(true))
+}
+
+fn extension_is_temporary(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::bool(false))
+}
+
+fn extension_get_functions(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(extension) = reflected_extension_name(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let names = super::extension_function_names(eg, &extension).unwrap_or_default();
+    let mut functions = PhpArray::with_hash_capacity(names.len());
+    for name in names {
+        let reflection = function_reflection_record(&Value::string(&name), eg)?;
+        functions.set_str(&name, Value::object(reflection));
+    }
+    return_value(rv, Value::array(functions))
+}
+
+fn extension_owns_constant(extension: &str, name: &str) -> bool {
+    let extension = extension.to_ascii_lowercase();
+    match extension.as_str() {
+        "calendar" => name.starts_with("CAL_"),
+        "curl" => name.starts_with("CURL"),
+        "date" => name.starts_with("DATE_") || name.starts_with("SUNFUNCS_"),
+        "dom" => name.starts_with("DOM_") || name == "DOMSTRING_SIZE_ERR",
+        "filter" => name.starts_with("FILTER_") || name.starts_with("INPUT_"),
+        "iconv" => name.starts_with("ICONV_"),
+        "json" => name.starts_with("JSON_"),
+        "libxml" => name.starts_with("LIBXML_"),
+        "mbstring" => name.starts_with("MB_"),
+        "openssl" => name.starts_with("OPENSSL_"),
+        "pcre" => name.starts_with("PREG_") || name.starts_with("PCRE_"),
+        "pcntl" => name.starts_with("SIG") || name.starts_with("W"),
+        _ => false,
+    }
+}
+
+fn extension_get_constants(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(extension) = reflected_extension_name(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let mut constants = PhpArray::new();
+    for name in crate::BUILTIN_CONSTANT_NAMES {
+        if extension_owns_constant(&extension, name)
+            && let Some(value) = crate::builtin_constant(name)
+        {
+            constants.set_str(name, value);
+        }
+    }
+    return_value(rv, Value::array(constants))
+}
+
+fn extension_get_ini_entries(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(extension) = reflected_extension_name(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let mut entries = PhpArray::new();
+    for entry in super::INI_ENTRY_METADATA {
+        if entry
+            .extension
+            .is_some_and(|owner| owner.eq_ignore_ascii_case(&extension))
+        {
+            entries.set_str(entry.name, super::ini_registered_value(eg, *entry, false));
+        }
+    }
+    return_value(rv, Value::array(entries))
+}
+
+fn internal_class_extension_name(name: &str) -> &'static str {
+    let lowered = name.to_ascii_lowercase();
+    if lowered.starts_with("reflection") || lowered == "reflector" {
+        "Reflection"
+    } else if lowered.starts_with("date") {
+        "date"
+    } else if lowered.starts_with("curl") {
+        "curl"
+    } else if lowered == "jsonexception" {
+        "json"
+    } else if lowered == "libxmlerror" {
+        "libxml"
+    } else if lowered.starts_with("openssl") {
+        "openssl"
+    } else if lowered.starts_with("dom") {
+        "dom"
+    } else if lowered == "xmlwriter" {
+        "xmlwriter"
+    } else if lowered == "ziparchive" {
+        "zip"
+    } else if lowered == "phar" || lowered == "pharexception" {
+        "Phar"
+    } else if lowered == "phptoken" {
+        "tokenizer"
+    } else if lowered.starts_with("spl")
+        || lowered.starts_with("array")
+        || lowered.ends_with("iterator")
+        || lowered == "countable"
+        || lowered.ends_with("exception") && lowered != "exception" && lowered != "errorexception"
+    {
+        "SPL"
+    } else {
+        "Core"
+    }
+}
+
+fn extension_class_names(eg: &ExecutorGlobals, extension: &str) -> Vec<String> {
+    let mut names = eg
+        .declared_class_names()
+        .into_iter()
+        .chain(eg.declared_interface_names())
+        .filter(|name| {
+            eg.class_is_internal(name)
+                && internal_class_extension_name(name).eq_ignore_ascii_case(extension)
+        })
+        .collect::<Vec<_>>();
+    names.sort_unstable();
+    names
+}
+
+fn extension_get_class_names(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(extension) = reflected_extension_name(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let names = extension_class_names(eg, &extension);
+    let mut result = PhpArray::with_packed_capacity(names.len());
+    for name in names {
+        result.push(Value::string(name));
+    }
+    return_value(rv, Value::array(result))
+}
+
+fn extension_get_classes(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(extension) = reflected_extension_name(ed) else {
+        return return_value(rv, Value::array(PhpArray::new()));
+    };
+    let names = extension_class_names(eg, &extension);
+    let mut result = PhpArray::with_hash_capacity(names.len());
+    for name in names {
+        result.set_str(
+            &name,
+            object_value(
+                "ReflectionClass",
+                [
+                    ("__generic_kind", Value::string("class")),
+                    ("__generic_owner", Value::string(&name)),
+                    ("name", Value::string(&name)),
+                ],
+            ),
+        );
+    }
+    return_value(rv, Value::array(result))
+}
+
+fn extension_get_dependencies(
+    _ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    return_value(rv, Value::array(PhpArray::new()))
+}
+
+fn extension_info_text(name: &str) -> String {
+    let mut output = format!("\n{name}\n\n{name} support => enabled\n");
+    match name.to_ascii_lowercase().as_str() {
+        "date" => {
+            output.push_str("\"Olson\" Timezone Database Version => 2026a\n");
+            output.push_str("Timezone Database => internal\n");
+            output.push_str("Default timezone => UTC\n");
+        }
+        "openssl" => {
+            output.push_str("OpenSSL support => enabled\n");
+            output.push_str("OpenSSL Library Version => ");
+            output.push_str(super::openssl::version_text());
+            output.push('\n');
+        }
+        "pcre" => {
+            output.push_str("PCRE Library Version => 10.42 2022-12-11\n");
+            output.push_str("PCRE JIT Support => disabled\n");
+        }
+        _ => {}
+    }
+    output
+}
+
+fn extension_info(
+    ed: *mut ExecuteData,
+    _rv: *mut Value,
+    eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    if let Some(name) = reflected_extension_name(ed) {
+        eg.write_output(extension_info_text(&name).as_bytes())?;
+    }
+    Ok(())
+}
+
+fn extension_to_string(
+    ed: *mut ExecuteData,
+    rv: *mut Value,
+    _eg: &mut ExecutorGlobals,
+) -> Result<(), VmError> {
+    let Some(name) = reflected_extension_name(ed) else {
+        return return_value(rv, Value::string(""));
+    };
+    return_value(
+        rv,
+        Value::string(format!(
+            "Extension [ <persistent> extension {name} version {} ] {{\n}}\n",
+            crate::PHP_COMPAT_VERSION
+        )),
+    )
+}
+
 fn set_target(ed: *mut ExecuteData, kind: &str, owner: String) {
     with_argument(ed, 0, |value| {
         if let Some(mut object) = value.as_object_mut() {
@@ -10825,33 +11120,7 @@ fn class_get_extension_name(
     if !eg.class_is_internal(&owner) {
         return return_value(rv, Value::bool(false));
     }
-    let lowered = owner.to_ascii_lowercase();
-    let extension = if lowered.starts_with("reflection") || lowered == "reflector" {
-        "Reflection"
-    } else if lowered.starts_with("date") {
-        "date"
-    } else if lowered == "jsonexception" {
-        "json"
-    } else if lowered == "libxmlerror" {
-        "libxml"
-    } else if lowered.starts_with("dom") {
-        "dom"
-    } else if lowered == "xmlwriter" {
-        "xmlwriter"
-    } else if lowered == "phar" || lowered == "pharexception" {
-        "Phar"
-    } else if lowered == "phptoken" {
-        "tokenizer"
-    } else if lowered.starts_with("spl")
-        || lowered.starts_with("array")
-        || lowered.ends_with("iterator")
-        || lowered == "countable"
-        || lowered.ends_with("exception") && lowered != "exception" && lowered != "errorexception"
-    {
-        "SPL"
-    } else {
-        "Core"
-    };
+    let extension = internal_class_extension_name(&owner);
     return_value(rv, Value::string(extension))
 }
 

@@ -2935,7 +2935,13 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 "Only variables should be assigned by reference",
                             )?;
                         }
-                        let mut binding = materialize_reference_alias(eg, frame, source);
+                        let mut binding = if opline._pad & BIND_CV_REF_THIS_SOURCE != 0 {
+                            Value::owned_reference(reference_initial_value(
+                                (&*source).dereferenced().clone(),
+                            ))
+                        } else {
+                            materialize_reference_alias(eg, frame, source)
+                        };
                         if opline._pad & REFERENCE_RESULT_INTERNAL != 0 {
                             binding.mark_internal_reference_alias();
                         }

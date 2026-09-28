@@ -1648,6 +1648,7 @@ impl Compiler {
                 array_type: OpType,
                 writeback: ForeachArrayWriteback,
                 deferred_fetches: Vec<Instruction>,
+                deferred_start: usize,
             },
             DeferredObjectAppend {
                 object: u16,
@@ -1812,11 +1813,13 @@ impl Compiler {
                         );
                     }
                     deferred_fetches.reverse();
+                    let deferred_start = self.instructions.len();
                     WriteTarget::Append {
                         array,
                         array_type,
                         writeback,
                         deferred_fetches,
+                        deferred_start,
                     }
                 }
             },
@@ -1923,10 +1926,18 @@ impl Compiler {
             WriteTarget::Append {
                 array,
                 array_type,
-                writeback,
+                mut writeback,
                 deferred_fetches,
+                deferred_start,
             } => {
                 let deferred_dimension = !deferred_fetches.is_empty();
+                let relocated_start = self.instructions.len();
+                Self::relocate_deferred_mutable_fetches(
+                    &mut writeback,
+                    deferred_start,
+                    deferred_fetches.len(),
+                    relocated_start,
+                );
                 self.instructions.extend(deferred_fetches);
                 if deferred_dimension {
                     self.record_last_instruction_source_line(expression_source_line(target));
@@ -2816,10 +2827,37 @@ impl Compiler {
     fn patch_mutable_fetch_abort_targets(&mut self, path: &MutableArrayPath) {
         let target = self.instructions.len() as u32;
         for &instruction in &path.mutable_fetches {
+            debug_assert_eq!(
+                self.instructions[instruction].opcode,
+                OpCode::FetchDimR,
+                "mutable dimension abort metadata must address FetchDimR"
+            );
             self.instructions[instruction].extended_value = target;
         }
         if let Some((_, instruction)) = path.diagnostic_snapshot {
+            debug_assert_eq!(
+                self.instructions[instruction].opcode,
+                OpCode::SnapshotDiagnosticWrite,
+                "diagnostic abort metadata must address its snapshot"
+            );
             self.instructions[instruction].extended_value = target;
+        }
+    }
+
+    fn relocate_deferred_mutable_fetches(
+        writeback: &mut ForeachArrayWriteback,
+        deferred_start: usize,
+        deferred_len: usize,
+        relocated_start: usize,
+    ) {
+        let ForeachArrayWriteback::Array(path) = writeback else {
+            return;
+        };
+        for instruction in &mut path.mutable_fetches {
+            if *instruction >= deferred_start {
+                debug_assert!(*instruction < deferred_start + deferred_len);
+                *instruction = relocated_start + (*instruction - deferred_start);
+            }
         }
     }
 
@@ -4359,7 +4397,7 @@ impl Compiler {
                     writeback._pad |= ASSIGN_OBJ_MODIFY;
                     self.push_instruction_at_line(writeback, line);
                 } else {
-                    let (array, array_type, writeback) =
+                    let (array, array_type, mut writeback) =
                         self.compile_array_append_source(target, true, false)?;
                     let mut deferred_fetches = Vec::new();
                     while self
@@ -4372,8 +4410,15 @@ impl Compiler {
                         );
                     }
                     deferred_fetches.reverse();
+                    let deferred_start = self.instructions.len();
                     let (value, value_type) = self.compile_expr(expr);
                     let deferred_dimension = !deferred_fetches.is_empty();
+                    Self::relocate_deferred_mutable_fetches(
+                        &mut writeback,
+                        deferred_start,
+                        deferred_fetches.len(),
+                        self.instructions.len(),
+                    );
                     self.instructions.extend(deferred_fetches);
                     if deferred_dimension {
                         self.record_last_instruction_source_line(expression_source_line(target));

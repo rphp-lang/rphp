@@ -1063,6 +1063,9 @@ pub struct ExecutorGlobals {
     /// `@` or the current reporting mask. Allocated strings stay on this cold
     /// observability path and do not enlarge call frames or values.
     pub(crate) last_error: Option<PhpErrorRecord>,
+    /// Response headers published by the most recent HTTP stream operation.
+    /// The sidecar stays absent until an HTTP wrapper actually reports them.
+    pub(crate) http_last_response_headers: Option<Box<Vec<String>>>,
     pub(crate) terminal_diagnostic: Option<Box<PhpTerminalDiagnostic>>,
     pub(crate) exception_handler: Option<crate::value::Value>,
     pub(crate) exception_handler_stack: Vec<Option<crate::value::Value>>,
@@ -2401,6 +2404,7 @@ impl ExecutorGlobals {
             error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
+            http_last_response_headers: None,
             terminal_diagnostic: None,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
@@ -2550,6 +2554,7 @@ impl ExecutorGlobals {
             error_handler_levels: crate::PHP_E_ALL,
             error_handler_stack: Vec::new(),
             last_error: None,
+            http_last_response_headers: None,
             terminal_diagnostic: None,
             exception_handler: None,
             exception_handler_stack: Vec::new(),
