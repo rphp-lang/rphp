@@ -1,0 +1,536 @@
+{
+  "complete": true,
+  "total_instructions": 154894701811,
+  "binary_sha256": "3ee100c7507c8c682f04cf01701f161d3ea2e90470e11f3b42b0cf93f35b6e61",
+  "call_counts_note": "Observed call edges in this optimized executable; inlined operations are not separately counted. Inclusive call-edge costs overlap and must not be summed.",
+  "functions": [
+    {
+      "function": "rphp::value::register_cycle_candidate_with_admission",
+      "observed_out_of_line_calls": 83911984,
+      "self_instructions": 7331708474,
+      "top_callers": [
+        {
+          "function": "core::ptr::drop_glue::<rphp::value::Value>",
+          "calls": 50033301,
+          "inclusive_instructions": 4589659064
+        },
+        {
+          "function": "rphp::vm::execute::release_statement_temps",
+          "calls": 16510463,
+          "inclusive_instructions": 2058820914
+        },
+        {
+          "function": "rphp::vm::execute::execute_ex_inner'2",
+          "calls": 8080859,
+          "inclusive_instructions": 961006281
+        },
+        {
+          "function": "rphp::vm::execute::bitmap_drop_and_update",
+          "calls": 4055531,
+          "inclusive_instructions": 467560346
+        },
+        {
+          "function": "rphp::vm::execute::execute_full_call",
+          "calls": 2145056,
+          "inclusive_instructions": 281780876
+        },
+        {
+          "function": "core::ptr::drop_glue::<rphp::value::Value>'2",
+          "calls": 1996500,
+          "inclusive_instructions": 222408340
+        },
+        {
+          "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>'2",
+          "calls": 418243,
+          "inclusive_instructions": 46217255
+        },
+        {
+          "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+          "calls": 213323,
+          "inclusive_instructions": 23764206
+        },
+        {
+          "function": "rphp::vm::execute::bitmap_drop_scalar",
+          "calls": 82278,
+          "inclusive_instructions": 8570604
+        },
+        {
+          "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>, false>",
+          "calls": 81219,
+          "inclusive_instructions": 8335965
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_class",
+      "observed_out_of_line_calls": 50375557,
+      "self_instructions": 5710614028,
+      "top_callers": [
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::class_is_a",
+          "calls": 36580760,
+          "inclusive_instructions": 5284844792
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::find_method_info",
+          "calls": 3260153,
+          "inclusive_instructions": 478117953
+        },
+        {
+          "function": "rphp::vm::execute::op_fetch_class_const",
+          "calls": 3066584,
+          "inclusive_instructions": 408842123
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::find_method_info'2",
+          "calls": 1465623,
+          "inclusive_instructions": 214707055
+        },
+        {
+          "function": "rphp::runtime::resolve_property_key",
+          "calls": 1091849,
+          "inclusive_instructions": 157896166
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::trait_composition_scope",
+          "calls": 981950,
+          "inclusive_instructions": 138073801
+        },
+        {
+          "function": "rphp::vm::execute::execute_full_call",
+          "calls": 930642,
+          "inclusive_instructions": 128974708
+        },
+        {
+          "function": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>",
+          "calls": 618940,
+          "inclusive_instructions": 87657636
+        },
+        {
+          "function": "<core::option::Option<&alloc::string::String>>::map_or::<bool, rphp::vm::execute::op_fetch_obj_r_slow_inner<false>::{closure#11}>",
+          "calls": 459265,
+          "inclusive_instructions": 64315855
+        },
+        {
+          "function": "rphp::vm::execute::displayed_class_name",
+          "calls": 380222,
+          "inclusive_instructions": 56164072
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps",
+      "observed_out_of_line_calls": 18104155,
+      "self_instructions": 5579939848,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::execute_ex_inner'2",
+          "calls": 17831685,
+          "inclusive_instructions": 13850017991
+        },
+        {
+          "function": "rphp::vm::execute::release_temporary_foreach_source",
+          "calls": 263833,
+          "inclusive_instructions": 101086169
+        },
+        {
+          "function": "rphp::vm::execute::release_return_foreach_sources",
+          "calls": 7285,
+          "inclusive_instructions": 976845
+        },
+        {
+          "function": "rphp::vm::execute::release_failed_expression_temps",
+          "calls": 1347,
+          "inclusive_instructions": 543603
+        },
+        {
+          "function": "rphp::vm::execute::force_close_generator_activation",
+          "calls": 5,
+          "inclusive_instructions": 204886
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered",
+      "observed_out_of_line_calls": 9205265,
+      "self_instructions": 3515998522,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::execute_ex_inner'2",
+          "calls": 9198193,
+          "inclusive_instructions": 14984154012
+        },
+        {
+          "function": "rphp::vm::execute::complete_finally_marker",
+          "calls": 7065,
+          "inclusive_instructions": 69356302
+        },
+        {
+          "function": "rphp::vm::execute::force_close_generator_activation",
+          "calls": 5,
+          "inclusive_instructions": 9325
+        },
+        {
+          "function": "rphp::vm::execute::execute_ex_inner",
+          "calls": 1,
+          "inclusive_instructions": 30
+        },
+        {
+          "function": "rphp::vm::execute::run_shutdown_frame_destructors",
+          "calls": 1,
+          "inclusive_instructions": 127
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a",
+      "observed_out_of_line_calls": 18289217,
+      "self_instructions": 1751051581,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::check_type_hint_in_scopes",
+          "calls": 8714931,
+          "inclusive_instructions": 3868133799
+        },
+        {
+          "function": "rphp::vm::execute::op_instanceof",
+          "calls": 6814354,
+          "inclusive_instructions": 2794318217
+        },
+        {
+          "function": "rphp::vm::execute::op_init_method_call",
+          "calls": 1211351,
+          "inclusive_instructions": 463195862
+        },
+        {
+          "function": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>",
+          "calls": 617030,
+          "inclusive_instructions": 251982240
+        },
+        {
+          "function": "rphp::vm::execute::op_assign_obj_prop_inner",
+          "calls": 372586,
+          "inclusive_instructions": 149316207
+        },
+        {
+          "function": "rphp::vm::execute::op_bind_obj_prop_ref",
+          "calls": 81462,
+          "inclusive_instructions": 35381022
+        },
+        {
+          "function": "rphp::vm::execute::op_init_dynamic_call",
+          "calls": 57900,
+          "inclusive_instructions": 21615400
+        },
+        {
+          "function": "rphp::vm::execute::op_init_static_call",
+          "calls": 57340,
+          "inclusive_instructions": 26231923
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::check_visibility",
+          "calls": 50240,
+          "inclusive_instructions": 21199602
+        },
+        {
+          "function": "rphp::stdlib::resolve_legacy_scoped_method",
+          "calls": 40915,
+          "inclusive_instructions": 17241665
+        }
+      ]
+    },
+    {
+      "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+      "observed_out_of_line_calls": 20223085,
+      "self_instructions": 1724941981,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::release_statement_temps::{closure#3}",
+          "calls": 20223085,
+          "inclusive_instructions": 2253154825
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_method_info",
+      "observed_out_of_line_calls": 3260153,
+      "self_instructions": 1377597497,
+      "top_callers": [
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::private_method_dispatch_class",
+          "calls": 1383932,
+          "inclusive_instructions": 1436659294
+        },
+        {
+          "function": "rphp::vm::execute::op_init_method_call",
+          "calls": 1211351,
+          "inclusive_instructions": 1352651083
+        },
+        {
+          "function": "rphp::vm::execute::run_final_object_destructor_tree_inner",
+          "calls": 283153,
+          "inclusive_instructions": 571806409
+        },
+        {
+          "function": "rphp::vm::execute::run_final_object_destructor_tree_inner'2",
+          "calls": 138775,
+          "inclusive_instructions": 316657961
+        },
+        {
+          "function": "rphp::vm::execute::op_new_obj_resolved",
+          "calls": 73474,
+          "inclusive_instructions": 120857935
+        },
+        {
+          "function": "rphp::vm::execute::op_invoke_prepared_constructor",
+          "calls": 71604,
+          "inclusive_instructions": 114290037
+        },
+        {
+          "function": "rphp::stdlib::collect_debug_backtrace",
+          "calls": 53492,
+          "inclusive_instructions": 32978862
+        },
+        {
+          "function": "rphp::vm::execute::constructor_visibility_for_new",
+          "calls": 36917,
+          "inclusive_instructions": 24610026
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::resolve_class_destructor_flag",
+          "calls": 2768,
+          "inclusive_instructions": 11453518
+        },
+        {
+          "function": "rphp::vm::execute::resolve_static_call_target",
+          "calls": 2317,
+          "inclusive_instructions": 1440642
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#8}",
+      "observed_out_of_line_calls": 46078871,
+      "self_instructions": 1177503925,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::run_frame_destructors_filtered",
+          "calls": 46078871,
+          "inclusive_instructions": 1177503925
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::<rphp::vm::execute::run_frame_destructors_filtered::{closure#2}>",
+      "observed_out_of_line_calls": 1086921,
+      "self_instructions": 836307124,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::run_frame_destructors_filtered",
+          "calls": 1086921,
+          "inclusive_instructions": 3059403611
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps::{closure#3}",
+      "observed_out_of_line_calls": 18097157,
+      "self_instructions": 726766476,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::release_statement_temps",
+          "calls": 18097157,
+          "inclusive_instructions": 2981351305
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_method_info'2",
+      "observed_out_of_line_calls": 1465623,
+      "self_instructions": 612603266,
+      "top_callers": [
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::find_method_info",
+          "calls": 1034787,
+          "inclusive_instructions": 1212506264
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::find_method_info'2",
+          "calls": 430836,
+          "inclusive_instructions": 298177211
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#2}",
+      "observed_out_of_line_calls": 1086921,
+      "self_instructions": 497295366,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::run_frame_destructors_filtered",
+          "calls": 1086921,
+          "inclusive_instructions": 2674624327
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#3}",
+      "observed_out_of_line_calls": 5264692,
+      "self_instructions": 268499292,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#2}",
+          "calls": 5264692,
+          "inclusive_instructions": 2177328961
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::<rphp::vm::execute::release_statement_temps::{closure#6}>",
+      "observed_out_of_line_calls": 187963,
+      "self_instructions": 122803297,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::release_statement_temps",
+          "calls": 187963,
+          "inclusive_instructions": 892069173
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}::{closure#0}",
+      "observed_out_of_line_calls": 3589859,
+      "self_instructions": 51914194,
+      "top_callers": [
+        {
+          "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+          "calls": 3589859,
+          "inclusive_instructions": 51914194
+        }
+      ]
+    },
+    {
+      "function": "<rphp::vm::execute::statement_temp_is_live_read_snapshot<rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}::{closure#0}>::{closure#0} as core::ops::function::FnOnce<(&rphp::value::Value,)>>::call_once",
+      "observed_out_of_line_calls": 1605909,
+      "self_instructions": 25694544,
+      "top_callers": [
+        {
+          "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+          "calls": 1605909,
+          "inclusive_instructions": 25694544
+        }
+      ]
+    },
+    {
+      "function": "<core::cell::once::OnceCell<alloc::boxed::Box<[u32]>>>::try_init::<<core::cell::once::OnceCell<alloc::boxed::Box<[u32]>>>::get_or_init<rphp::vm::execute::statement_temp_is_live_read_snapshot<rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}::{closure#0}>::{closure#1}>::{closure#0}, !>",
+      "observed_out_of_line_calls": 3429,
+      "self_instructions": 3982079,
+      "top_callers": [
+        {
+          "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+          "calls": 3429,
+          "inclusive_instructions": 4098480
+        }
+      ]
+    },
+    {
+      "function": "<rphp::generics::GenericMetadata>::find_class_like_index",
+      "observed_out_of_line_calls": 125288,
+      "self_instructions": 2505760,
+      "top_callers": [
+        {
+          "function": "<rphp::generics::GenericMetadata>::method_has_parametric_signature",
+          "calls": 116223,
+          "inclusive_instructions": 2324460
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::register_class_mode",
+          "calls": 9065,
+          "inclusive_instructions": 181300
+        }
+      ]
+    },
+    {
+      "function": "rphp::vm::execute::statement_temp_is_live_read_snapshot::<rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}::{closure#0}>::{closure#2}",
+      "observed_out_of_line_calls": 11367,
+      "self_instructions": 159138,
+      "top_callers": [
+        {
+          "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+          "calls": 11367,
+          "inclusive_instructions": 1769952
+        }
+      ]
+    },
+    {
+      "function": "rphp::stdlib::reflection::class_is_abstract",
+      "observed_out_of_line_calls": 1950,
+      "self_instructions": 156000,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::execute_full_call",
+          "calls": 1950,
+          "inclusive_instructions": 1478207
+        }
+      ]
+    },
+    {
+      "function": "rphp::stdlib::reflection::class_is_anonymous",
+      "observed_out_of_line_calls": 984,
+      "self_instructions": 85599,
+      "top_callers": [
+        {
+          "function": "rphp::vm::execute::execute_full_call",
+          "calls": 984,
+          "inclusive_instructions": 752525
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a_while_linking_inner",
+      "observed_out_of_line_calls": 226,
+      "self_instructions": 46019,
+      "top_callers": [
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::variance_class_is_a",
+          "calls": 196,
+          "inclusive_instructions": 431599
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::class_is_a_while_linking",
+          "calls": 30,
+          "inclusive_instructions": 67010
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a_while_linking_inner'2",
+      "observed_out_of_line_calls": 264,
+      "self_instructions": 19154,
+      "top_callers": [
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::class_is_a_while_linking_inner",
+          "calls": 230,
+          "inclusive_instructions": 132676
+        },
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::class_is_a_while_linking_inner'2",
+          "calls": 34,
+          "inclusive_instructions": 14092
+        }
+      ]
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a_while_linking",
+      "observed_out_of_line_calls": 30,
+      "self_instructions": 1020,
+      "top_callers": [
+        {
+          "function": "<rphp::runtime::ExecutorGlobals>::is_return_type_compatible_mode",
+          "calls": 30,
+          "inclusive_instructions": 70852
+        }
+      ]
+    }
+  ]
+}

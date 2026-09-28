@@ -1,0 +1,17 @@
+{
+  "local_time": "2026-09-28T10:03:51+02:00",
+  "diagnostic": "AddressSanitizer error-path validation after VM-stack page repair",
+  "binary": "runtime-asan-fixed",
+  "status": "incomplete: killed by global OOM",
+  "kernel_reported_anon_rss_kib": 26809588,
+  "aggregate_memory_limit_present": false,
+  "concurrent_task_build": false,
+  "application_termination_directly_proven": false,
+  "remediation": "All subsequent diagnostic, build, test and benchmark jobs run sequentially in a separate user-systemd service with aggregate MemoryMax=6G, MemorySwapMax=0, OOMPolicy=kill and KillMode=control-group. Verify inherited cgroup limits before any expensive work.",
+  "confirmed_growth_cause": "The diagnostic source deliberately restored the old interface lookup. Hoa Event::register then recursively constructed Hoa Exception objects, whose constructors called Event::register again. A bounded native diagnostic captured 64 distinct frames with alternating calls.",
+  "repeated_frame_pointer_cycle_found": false,
+  "candidate_already_contains_interface_fix": true,
+  "follow_up_validation": "Use runtime sources byte-for-byte equal to the candidate, compare full PHPStan output with PHP, and retain the independent ASan cross-page stack reproduction.",
+  "enclosing_desktop_scope_failed_with_oom_kill": true,
+  "application_scope_evidence": "The user-service journal records the enclosing desktop application scope failing with result oom-kill immediately after the kernel killed the diagnostic process."
+}

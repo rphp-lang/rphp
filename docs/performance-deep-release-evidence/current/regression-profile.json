@@ -1,0 +1,62 @@
+[
+  {
+    "case": "benches/bench_binary_assign_loop.php",
+    "variant": "baseline",
+    "binary_sha256": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "fixture_sha256": "a70758f6fab4d5a2266988b91ab67b8492f0df933550bf5021679137bab7b818",
+    "iteration_replacement": [
+      "$n = 10000000;",
+      "$n = 100000;"
+    ],
+    "output_equal": true,
+    "totals": [
+      "summary: 170182024",
+      "totals: 170182024"
+    ]
+  },
+  {
+    "case": "benches/bench_binary_assign_loop.php",
+    "variant": "candidate",
+    "binary_sha256": "e922e13dfbe4c441e6f4d2282e9b5878d6e1ac804aadaf3a5afd11f39dd033ca",
+    "fixture_sha256": "a70758f6fab4d5a2266988b91ab67b8492f0df933550bf5021679137bab7b818",
+    "iteration_replacement": [
+      "$n = 10000000;",
+      "$n = 100000;"
+    ],
+    "output_equal": true,
+    "totals": [
+      "summary: 170181740",
+      "totals: 170181740"
+    ]
+  },
+  {
+    "case": "benches/bench_type_function_strict.php",
+    "variant": "baseline",
+    "binary_sha256": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "fixture_sha256": "f367134886aff4bb6f53d382905bda49e4e14dc9eb95287b1a59f4f5a570c811",
+    "iteration_replacement": [
+      "$i < 5000000;",
+      "$i < 50000;"
+    ],
+    "output_equal": true,
+    "totals": [
+      "summary: 39818705",
+      "totals: 39818705"
+    ]
+  },
+  {
+    "case": "benches/bench_type_function_strict.php",
+    "variant": "candidate",
+    "binary_sha256": "e922e13dfbe4c441e6f4d2282e9b5878d6e1ac804aadaf3a5afd11f39dd033ca",
+    "fixture_sha256": "f367134886aff4bb6f53d382905bda49e4e14dc9eb95287b1a59f4f5a570c811",
+    "iteration_replacement": [
+      "$i < 5000000;",
+      "$i < 50000;"
+    ],
+    "output_equal": true,
+    "totals": [
+      "summary: 39819313",
+      "totals: 39819313"
+    ]
+  }
+]

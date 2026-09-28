@@ -1,6 +1,37 @@
 use std::process::Command;
 
 #[test]
+fn shutdown_cycle_destructors_keep_a_live_internal_trace_origin() {
+    // The CLI supplies source metadata, which Throwable creation snapshots
+    // require. A bounded live trace additionally makes a stale caller visible
+    // without letting the diagnostic itself allocate indefinitely.
+    for ending in [
+        "echo 'body|';",
+        "echo 'body|'; exit(0);",
+        "function quitNow() { echo 'body|'; exit(0); } call_user_func('quitNow');",
+        "register_shutdown_function(function () { echo 'body|'; exit(0); });",
+    ] {
+        let source = format!(
+            r#"
+gc_disable();
+class ShutdownTraceOwner {{
+    public $cycle;
+    function __construct() {{ $this->cycle = $this; }}
+    function __destruct() {{
+        echo implode(',', array_column(debug_backtrace(DEBUG_BACKTRACE_IGNORE_ARGS, 12), 'function')), '|';
+        echo implode(',', array_column((new Exception)->getTrace(), 'function')), '|';
+    }}
+}}
+$owner = new ShutdownTraceOwner;
+unset($owner);
+{ending}
+"#,
+        );
+        assert_shutdown_contract(&source, "body|__destruct|__destruct|");
+    }
+}
+
+#[test]
 fn error_string() {
     assert_shutdown_contract(
         r###"$saved='visible';function source(){try{yield 3;}finally{echo $GLOBALS['saved'],'|';}}$it=source();$it->current();set_error_handler(function()use($it){});echo 'end|';"###,

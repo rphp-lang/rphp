@@ -1,0 +1,3074 @@
+{
+  "rounds": 11,
+  "seed": 281019,
+  "affinity": [
+    0
+  ],
+  "selection_rule": "initial candidate median >1% slower and candidate p10 > baseline p90; plus five fixed controls",
+  "initial_suspects": [
+    "benches/bench_binary_assign_loop.php",
+    "benches/bench_carried_condition_recurrence_loop.php",
+    "benches/bench_conditional_composed_recurrence_loop.php",
+    "benches/bench_foreach_stdclass_hash_property_reads.php",
+    "benches/bench_foreach_stdclass_linear8_property_reads.php",
+    "benches/bench_foreach_stdclass_property_reads.php",
+    "benches/bench_generics_pseudo_scope_manual.php",
+    "benches/bench_generics_reified_variadic_manual.php",
+    "benches/bench_json_decode_object_width12.php",
+    "benches/bench_json_decode_object_width20.php",
+    "benches/bench_property.php",
+    "benches/bench_scalar_call_branch_standalone.php",
+    "benches/bench_scalar_recurrence_loop.php",
+    "benches/bench_type_function_params.php",
+    "benches/bench_type_function_strict.php",
+    "benches/bench_type_scalar_function_typed.php",
+    "benches/bench_type_scalar_function_untyped.php",
+    "benches/bench_x86_straight_equivalent.php"
+  ],
+  "initial_sha256": "9c02327f149a87e95acc4e391730ef39fe63d4e17defc9e13c2761bfb26729db",
+  "warmup": "three validated runs per runtime and case",
+  "outlier_policy": "retain every validated sample",
+  "binaries": {
+    "baseline": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "candidate": "77b2dfdbe1ddf34021ebfeba5bba81369436b3617fa85e1caf34036fb1ab6ac0"
+  },
+  "samples": [
+    {
+      "round": 0,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.573617553
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.558629155
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.34014263
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.346267175
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.285765666
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.269082728
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.007222334
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.008112631
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.327752757
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.340084382
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.646887789
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.63286424
+    },
+    {
+      "round": 0,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007839242
+    },
+    {
+      "round": 0,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.007086777
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.497212978
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.505905658
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.658071812
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.662982897
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.318748835
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.34150285
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.406529859
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.400108914
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.434051574
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.415014446
+    },
+    {
+      "round": 0,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.015179951
+    },
+    {
+      "round": 0,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014626332
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.181531703
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.186573396
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.324292067
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.322468794
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.01683692
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.016808536
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.269493974
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.272429856
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.385083237
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.381348232
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.006207091
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.00776362
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.382541393
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.383768919
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.525992857
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.526828362
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.108530711
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.108966868
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.10622888
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.106241173
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.633147184
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.650579212
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.016401435
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.015887421
+    },
+    {
+      "round": 1,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.014219632
+    },
+    {
+      "round": 1,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014632494
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.346330317
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.342280504
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.521263722
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.529367005
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007290063
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.007502515
+    },
+    {
+      "round": 1,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.006249541
+    },
+    {
+      "round": 1,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007430348
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.268965706
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.266890875
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.409784956
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.416649984
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.558981829
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.593445247
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.327629648
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.319599714
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.373616829
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.36328144
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.180916223
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.183060426
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.107241541
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.111059435
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.271917002
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.274219745
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.006784795
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.00629625
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.450750902
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.452580668
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.376647287
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.382448318
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.107017146
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.105630168
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.406280133
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.421116764
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.665308838
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.630846293
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.324825171
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.323907042
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.380382417
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.389995851
+    },
+    {
+      "round": 2,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014114493
+    },
+    {
+      "round": 2,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.014412738
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.635862019
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.67348747
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.330301821
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.337231695
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.275143702
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.270016918
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.529863217
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.527808424
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.472030681
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.464912634
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.34148323
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.342122641
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.418144683
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.405507128
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.107460629
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.10481129
+    },
+    {
+      "round": 2,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007533974
+    },
+    {
+      "round": 2,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.007068403
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.107335332
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.104360345
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.33205169
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.337504582
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.008107812
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007101987
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.384135416
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.377533016
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.38660712
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.377102672
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.615278513
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.626572213
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.409354391
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.406982097
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.006808711
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.005935957
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.571851974
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.559772658
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.267863584
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.26699625
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.177979026
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.189107401
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.341440935
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.325421242
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.01802342
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.016108642
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.110396133
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.105758406
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.106313527
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.103927868
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.339064593
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.355610985
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.626842683
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.647989351
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.008372795
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.006867663
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.325646701
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.329384383
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.476630139
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.465856195
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.334095371
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.326805047
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.410037133
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.445525154
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.581826063
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.565675212
+    },
+    {
+      "round": 3,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.006726034
+    },
+    {
+      "round": 3,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.006652215
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.404318729
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.408816792
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.537594446
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.534176561
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.016512758
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.017445214
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.277003698
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.265153054
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.399378922
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.388259082
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.181507465
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.182893782
+    },
+    {
+      "round": 3,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014981045
+    },
+    {
+      "round": 3,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.015274942
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.007001245
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.005764964
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.284864784
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.274424041
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.624680378
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.649908501
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.359739364
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.358036672
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.372971881
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.373642983
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.409875616
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.406103449
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.571609277
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.549142328
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.525694259
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.524855711
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.179388152
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.182425137
+    },
+    {
+      "round": 4,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.014297721
+    },
+    {
+      "round": 4,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014345592
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.006098746
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.006748717
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.381880324
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.385265799
+    },
+    {
+      "round": 4,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.00682953
+    },
+    {
+      "round": 4,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.006170242
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.411405167
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.406658264
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.323715695
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.324785593
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007875292
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.007715139
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.104686259
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.109400462
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.272213108
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.267590028
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.699358714
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.643576999
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.105231843
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.112346635
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.341651011
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.342283789
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.469940554
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.460268809
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.26764778
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.278595083
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.387083859
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.371079073
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.334338485
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.33299364
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.016536623
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.017022725
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.640441637
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.672919828
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.326629242
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.320396843
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.107887487
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.106014538
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.015956134
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.01683535
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.375711053
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.382457527
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.667471407
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.630846971
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.526855236
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.538073684
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.332239274
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.328298327
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.348986268
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.342805536
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.269900664
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.284724844
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.181709758
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.1851409
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.008057999
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.006481771
+    },
+    {
+      "round": 5,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.007719097
+    },
+    {
+      "round": 5,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007334618
+    },
+    {
+      "round": 5,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.014762202
+    },
+    {
+      "round": 5,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014724571
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.392315039
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.403832353
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.491730765
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.488265881
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.108144225
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.109276941
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.408040367
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.414047561
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007169555
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.007976444
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.624948984
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.609294842
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.409508952
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.409876409
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.266399504
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.268031556
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.319398198
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.337251587
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.370487165
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.305984276
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.627770798
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.636072059
+    },
+    {
+      "round": 6,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014745821
+    },
+    {
+      "round": 6,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.01368474
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.272207962
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.270726546
+    },
+    {
+      "round": 6,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007078783
+    },
+    {
+      "round": 6,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.006938167
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.179144211
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.20456552
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.016219303
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.015933932
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.388612723
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.38112778
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.268697702
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.276154231
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.405104974
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.406994444
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.329546693
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.345221354
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.10858382
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.104918996
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.570628549
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.609572693
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.409831312
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.407334281
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.343406597
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.339467583
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.006181283
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.006390869
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.322775905
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.325132551
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.112022076
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.10849907
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.544140592
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.537840965
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.372607916
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.378198855
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.386152158
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.397090815
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007700151
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.00858131
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.481297788
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.475723626
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.651957437
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.645306465
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.636166576
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.636610639
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.408539042
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.409199553
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.0076466
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.005827572
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.40612074
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.408424185
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.53714735
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.529384962
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.281718393
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.267391105
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.016244862
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.01601655
+    },
+    {
+      "round": 7,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.014510616
+    },
+    {
+      "round": 7,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014703651
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.474727193
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.461924674
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.354892551
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.323882861
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.346556055
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.343961558
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.178868796
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.181531993
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.3848935
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.370898512
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.62975683
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.661956115
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.104620424
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.108790416
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.10536738
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.107473201
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.280769659
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.268133114
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.334554642
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.317711058
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.008386391
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007024651
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.377098133
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.391337596
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.331137183
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.346093874
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.584770422
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.587860178
+    },
+    {
+      "round": 7,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007895822
+    },
+    {
+      "round": 7,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.007461007
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.63889744
+    },
+    {
+      "round": 7,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.68690458
+    },
+    {
+      "round": 8,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.008171645
+    },
+    {
+      "round": 8,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.006972883
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.323950566
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.324937326
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.108120208
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.105347274
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.613684917
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.646974699
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.107099404
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.105654697
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.34307175
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.33739286
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.351595697
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.34898378
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.283868387
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.308913737
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.281845454
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.271073533
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.539832259
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.530614983
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.016057228
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.015851237
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.181240416
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.183280812
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.643446431
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.629658044
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.42811222
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.417881394
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.006832396
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.00702387
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.382862496
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.404813813
+    },
+    {
+      "round": 8,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014499516
+    },
+    {
+      "round": 8,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.014507821
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.008402803
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007721952
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.377942123
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.378846657
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.548916417
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.561652462
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.330361893
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.317716471
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.401886237
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.406695571
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.497569221
+    },
+    {
+      "round": 8,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.462134615
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.667733893
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.628621087
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.627301698
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.631801836
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.382843415
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.38271437
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.381397085
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.379900299
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.108837851
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.103798282
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.344310769
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.342173419
+    },
+    {
+      "round": 9,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.015343576
+    },
+    {
+      "round": 9,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.015509379
+    },
+    {
+      "round": 9,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.007961587
+    },
+    {
+      "round": 9,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007004854
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.410785766
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.412715503
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.55953043
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.594627587
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.285260092
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.266565118
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.00735652
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.007817223
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.485569609
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.466363475
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.534329408
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.523943176
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.017504149
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.016468377
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.408494648
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.404863447
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.331308058
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.338855994
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.109414516
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.103877183
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.329960843
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.328815923
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.178009651
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.181749027
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.326730231
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.30989582
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.006180312
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.005596906
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.284685217
+    },
+    {
+      "round": 9,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.270325246
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "baseline",
+      "wall": 0.007566838
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_declared_object_lifecycle.php",
+      "variant": "candidate",
+      "wall": 0.007578511
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.621327141
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_conditional_composed_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.619455064
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.486432874
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_scalar_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.464982486
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "baseline",
+      "wall": 0.280562396
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_scalar_function_untyped.php",
+      "variant": "candidate",
+      "wall": 0.284942567
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "baseline",
+      "wall": 0.27706526
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_scalar_function_typed.php",
+      "variant": "candidate",
+      "wall": 0.27953501
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.40987517
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.410046536
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "candidate",
+      "wall": 0.18253565
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_generics_reified_variadic_manual.php",
+      "variant": "baseline",
+      "wall": 0.177385761
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_property.php",
+      "variant": "candidate",
+      "wall": 0.324862935
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_property.php",
+      "variant": "baseline",
+      "wall": 0.323739948
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "baseline",
+      "wall": 0.330643901
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_x86_straight_equivalent.php",
+      "variant": "candidate",
+      "wall": 0.327281218
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.416031589
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.408782732
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "baseline",
+      "wall": 0.562710843
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_carried_condition_recurrence_loop.php",
+      "variant": "candidate",
+      "wall": 0.580903668
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "baseline",
+      "wall": 0.620796665
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_binary_assign_loop.php",
+      "variant": "candidate",
+      "wall": 0.639210089
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "candidate",
+      "wall": 0.397417718
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_scalar_call_branch_standalone.php",
+      "variant": "baseline",
+      "wall": 0.387900904
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "baseline",
+      "wall": 0.105699949
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_function_strict.php",
+      "variant": "candidate",
+      "wall": 0.110684595
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_array.php",
+      "variant": "candidate",
+      "wall": 0.017079035
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_array.php",
+      "variant": "baseline",
+      "wall": 0.015962739
+    },
+    {
+      "round": 10,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.007128198
+    },
+    {
+      "round": 10,
+      "script": "benches/holdout_closure_service_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.00664942
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "baseline",
+      "wall": 0.376081647
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_foreach_stdclass_property_reads.php",
+      "variant": "candidate",
+      "wall": 0.381687932
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "candidate",
+      "wall": 1.357523553
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_generics_pseudo_scope_manual.php",
+      "variant": "baseline",
+      "wall": 1.350572584
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "candidate",
+      "wall": 0.534841958
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_json_decode_object_width20.php",
+      "variant": "baseline",
+      "wall": 0.538015492
+    },
+    {
+      "round": 10,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "baseline",
+      "wall": 0.0142271
+    },
+    {
+      "round": 10,
+      "script": "benches/holdout_routing_pipeline.php",
+      "variant": "candidate",
+      "wall": 0.014630695
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "candidate",
+      "wall": 0.108417049
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_type_function_params.php",
+      "variant": "baseline",
+      "wall": 0.109843893
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_json.php",
+      "variant": "baseline",
+      "wall": 0.007302217
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_json.php",
+      "variant": "candidate",
+      "wall": 0.008652437
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "candidate",
+      "wall": 0.348554837
+    },
+    {
+      "round": 10,
+      "script": "benches/bench_json_decode_object_width12.php",
+      "variant": "baseline",
+      "wall": 0.345280312
+    }
+  ],
+  "complete": true
+}

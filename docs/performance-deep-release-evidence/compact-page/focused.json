@@ -1,0 +1,17 @@
+[
+  {
+    "gate": "format",
+    "exit": 0,
+    "seconds": 2.4526529429713264
+  },
+  {
+    "gate": "stack",
+    "exit": 0,
+    "seconds": 62.81051890301751
+  },
+  {
+    "gate": "frame",
+    "exit": 0,
+    "seconds": 60.71675350301666
+  }
+]

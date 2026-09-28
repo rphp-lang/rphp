@@ -1,0 +1,26 @@
+{
+  "source_sha256": "b7965c1c1dfad4299f3b03e074e03490640d41af1a6969ecf6c7a2736f78f940",
+  "gates": [
+    {
+      "name": "default",
+      "exit": 0,
+      "elapsed": 168.3063229410327,
+      "tests": 7089,
+      "ignored": 15,
+      "log_sha256": "b186c3015a2370f84178cdb1cbce2f4c00b6cab18063cce4e68593d30812e2b5"
+    }
+  ],
+  "complete": false,
+  "status": "interrupted_by_user",
+  "interrupted_configuration": "no-default",
+  "reason": "User requested a checkpoint and shutdown for a RAM and CPU-cooler change.",
+  "pending": [
+    "no-default",
+    "erased",
+    "reified",
+    "all-features",
+    "all-targets",
+    "exact-current-source ASan",
+    "independent final corpus confirmation"
+  ]
+}

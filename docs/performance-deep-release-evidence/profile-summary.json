@@ -1,0 +1,516 @@
+{
+  "binary_sha256": "3ee100c7507c8c682f04cf01701f161d3ea2e90470e11f3b42b0cf93f35b6e61",
+  "exit": 1,
+  "timed_out": false,
+  "instrumented_wall": 16.737194787012413,
+  "requested_interval_ms": 10,
+  "profiler_banner_removed": true,
+  "reference_stdout_equal": true,
+  "reference_stderr_equal": true,
+  "collector_warning": "Collection interval timer period was changed (10000 -> 0); profile data may be unreliable",
+  "requires_independent_instruction_profile": true,
+  "profile_sha256": "675f13772b8d2ad40b6d4cfba8f58158e56ae18e23d6b3ed4b01ec032ef94b06",
+  "interpretation": "Qualitative complete-request sample weights only. Displayed CPU weights are not calibrated to process wall time; no phase duration is inferred.",
+  "functions": [
+    {
+      "function": "<Total>",
+      "exclusive_weight": 1.64,
+      "inclusive_weight": 1.64
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex_inner",
+      "exclusive_weight": 0.27,
+      "inclusive_weight": 1.37
+    },
+    {
+      "function": "rphp::value::register_cycle_candidate_with_admission",
+      "exclusive_weight": 0.19,
+      "inclusive_weight": 0.22
+    },
+    {
+      "function": "<static>@0x188341 (<libc.so.6>)",
+      "exclusive_weight": 0.08,
+      "inclusive_weight": 0.08
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "exclusive_weight": 0.06,
+      "inclusive_weight": 0.06
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_class",
+      "exclusive_weight": 0.05,
+      "inclusive_weight": 0.06
+    },
+    {
+      "function": "<rphp::request_memory::Budget>::collect_strings",
+      "exclusive_weight": 0.04,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "rphp::request_memory::reserve_string",
+      "exclusive_weight": 0.04,
+      "inclusive_weight": 0.09
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::add",
+      "exclusive_weight": 0.04,
+      "inclusive_weight": 0.05
+    },
+    {
+      "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+      "exclusive_weight": 0.03,
+      "inclusive_weight": 0.05
+    },
+    {
+      "function": "<hashbrown::map::HashMap<rphp::value::SharedStringKey, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "exclusive_weight": 0.03,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "munmap",
+      "exclusive_weight": 0.03,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "<[u8]>::eq_ignore_ascii_case_chunks::<16>",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_method_info",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::live_identities",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "rphp::regex::chars_equal",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "rphp::stdlib::fn_key",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::execute_full_call",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.24
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_class_const",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::op_instanceof",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::plain_generator_children",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered",
+      "exclusive_weight": 0.02,
+      "inclusive_weight": 0.07
+    },
+    {
+      "function": "<alloc::raw_vec::RawVec<alloc::rc::Rc<str>>>::grow_one",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<alloc::raw_vec::RawVecInner>::finish_grow",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<alloc::vec::Vec<rphp::parser::CallArg> as core::clone::Clone>::clone",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<core::str::pattern::StrSearcher as core::str::pattern::ReverseSearcher>::next_match_back",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<hashbrown::map::HashMap<alloc::string::String, *const rphp::vm::function::FunctionCommon, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<hashbrown::map::HashMap<alloc::string::String, alloc::rc::Rc<rphp::compiler::compile::ClassDef>, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::get::<str>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<hashbrown::map::HashMap<alloc::string::String, alloc::vec::Vec<alloc::string::String>, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::rustc_entry",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(rphp::value::SharedStringKey, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<rphp::value::SharedStringKey, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>::{closure#0}>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<rphp::compiler::compile::ClassConstantDefinition as core::clone::Clone>::clone",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile_stmt_inner",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<rphp::lexer::Lexer>::tokenize",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_interface",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_null_coalesce",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::regex::Regex>::captures_with_limits",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::request_memory::Budget>::usage",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.08
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::add_node",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::expand_value_edges",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "<rphp::value::CycleRootState>::prune_dead_candidates",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::value::PhpArray>::set_str",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<rphp::value::PhpArray>::with_packed_capacity",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::value::PhpObject>::get_property",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::value::Value>::as_array_mut",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::value::Value>::cycle_child_handles",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::value::Value>::string::<&str>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&usize>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::regex::Node>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::Value>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.08
+    },
+    {
+      "function": "core::str::converts::from_utf8",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "pthread_create",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "readlink",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::regex::match_seq_from_with_group",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "rphp::runtime::cycle::propagate",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::stdlib::fn_array_splice",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::stdlib::fn_sprintf",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::stdlib::redact_trace_argument",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::assign_foreach_cv",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_drop_and_update",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_drop_scalar",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named_from<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::check_type_hint_in_scopes",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.06
+    },
+    {
+      "function": "rphp::vm::execute::clone_heap_static_property_value",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::collect_destructor_children_inner",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex_inner::{closure#55}",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::object_string_conversion_target",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::op_runtime_call_property_argument",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::pop_vm_call_frame",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::prepare_return_type_value",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.15
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::<rphp::vm::execute::run_frame_destructors_filtered::{closure#2}>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::return_type_callee_class",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#8}",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::run_request_cycle_destructors",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::try_memoized_fetch_obj_r::<false>",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "rphp::vm::execute::value_tree_requires_vm_release::queue_cycle_child",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "rust_psm_stack_pointer",
+      "exclusive_weight": 0.01,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<alloc::boxed::Box<rphp::parser::Expr> as core::clone::Clone>::clone",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<alloc::raw_vec::RawVec<usize>>::grow_one",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<alloc::raw_vec::RawVecInner>::finish_grow",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<alloc::rc::Rc<rphp::value::PhpArray>>::drop_slow",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>>::insert",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, (alloc::rc::Weak<alloc::string::String>, usize))>>::reserve_rehash::<hashbrown::map::make_hasher<usize, (alloc::rc::Weak<alloc::string::String>, usize), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile_inner",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.03
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile_stmt",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::ClassMethod as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::ClassMethod as core::clone::Clone>::clone",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Expr as core::clone::Clone>::clone",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.02
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_additive",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_array_elements",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_bitwise_and",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_bitwise_or",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_bitwise_xor",
+      "exclusive_weight": 0.0,
+      "inclusive_weight": 0.01
+    }
+  ]
+}

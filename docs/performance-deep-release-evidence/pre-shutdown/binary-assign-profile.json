@@ -1,0 +1,18 @@
+[
+  {
+    "variant": "baseline",
+    "binary_sha256": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "totals": [
+      "summary: 170179767",
+      "totals: 170179767"
+    ]
+  },
+  {
+    "variant": "candidate",
+    "binary_sha256": "f443d75c557f5ebb5515a29bc4a028d4554bbbc9f22f317afdafd66e3d4f1648",
+    "totals": [
+      "summary: 170181075",
+      "totals: 170181075"
+    ]
+  }
+]

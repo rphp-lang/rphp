@@ -1,0 +1,1763 @@
+{
+  "binary_sha256": "3ee100c7507c8c682f04cf01701f161d3ea2e90470e11f3b42b0cf93f35b6e61",
+  "complete": true,
+  "timeout_seconds": 900,
+  "exit": 1,
+  "timed_out": false,
+  "instrumented_wall": 650.3184471510467,
+  "reference_stdout_equal": true,
+  "totals": [
+    "summary: 154894701811",
+    "totals: 154894701811"
+  ],
+  "profile_sha256": "732ae25f1cbda10902a264315e23da0f56538dde06884c126af9ac3c4b1e7923",
+  "inclusive_functions": [
+    {
+      "function": "rphp::vm::execute::execute_ex'2",
+      "instructions": 198741105039,
+      "percent": 128.3
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex_inner'2",
+      "instructions": 198726545193,
+      "percent": 128.3
+    },
+    {
+      "function": "0x000000000001f540",
+      "instructions": 154114515811,
+      "percent": 99.5
+    },
+    {
+      "function": "(below main)",
+      "instructions": 154112757754,
+      "percent": 99.5
+    },
+    {
+      "function": "__libc_start_main@@GLIBC_2.34",
+      "instructions": 154112757742,
+      "percent": 99.5
+    },
+    {
+      "function": "(below main)",
+      "instructions": 154110298282,
+      "percent": 99.49
+    },
+    {
+      "function": "main",
+      "instructions": 154110298218,
+      "percent": 99.49
+    },
+    {
+      "function": "std::sys::backtrace::__rust_begin_short_backtrace::<fn(), ()>",
+      "instructions": 154110142347,
+      "percent": 99.49
+    },
+    {
+      "function": "rphp::main",
+      "instructions": 154110142345,
+      "percent": 99.49
+    },
+    {
+      "function": "rphp::vm::execute::execute_request",
+      "instructions": 154100687898,
+      "percent": 99.49
+    },
+    {
+      "function": "rphp::vm::execute::execute_request_inner",
+      "instructions": 154100686882,
+      "percent": 99.49
+    },
+    {
+      "function": "start_thread'2",
+      "instructions": 150545023076,
+      "percent": 97.19
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex",
+      "instructions": 150333880460,
+      "percent": 97.06
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex_inner",
+      "instructions": 150333880376,
+      "percent": 97.06
+    },
+    {
+      "function": "start_thread'2",
+      "instructions": 149803073908,
+      "percent": 96.71
+    },
+    {
+      "function": "rphp::vm::execute::op_include",
+      "instructions": 149333548778,
+      "percent": 96.41
+    },
+    {
+      "function": "rphp::vm::execute::op_include_inner",
+      "instructions": 149333548749,
+      "percent": 96.41
+    },
+    {
+      "function": "rphp::vm::execute::execute_included_user_source",
+      "instructions": 149333541419,
+      "percent": 96.41
+    },
+    {
+      "function": "rphp::vm::execute::execute_source_unit",
+      "instructions": 149333538186,
+      "percent": 96.41
+    },
+    {
+      "function": "rphp::vm::execute::execute_source_unit_inner",
+      "instructions": 149333538117,
+      "percent": 96.41
+    },
+    {
+      "function": "rphp::stdlib::call_resolved_with_source_unpack",
+      "instructions": 31286285483,
+      "percent": 20.2
+    },
+    {
+      "function": "rphp::vm::execute::call_function_owned_iter_with_context_and_named::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>>",
+      "instructions": 29966056863,
+      "percent": 19.35
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+      "instructions": 29962818213,
+      "percent": 19.34
+    },
+    {
+      "function": "rphp::regex::match_seq_from'2",
+      "instructions": 26588847787,
+      "percent": 17.17
+    },
+    {
+      "function": "rphp::stdlib::invoke_resolved_source_unpacked_call",
+      "instructions": 26066578830,
+      "percent": 16.83
+    },
+    {
+      "function": "rphp::vm::execute::execute_full_call",
+      "instructions": 22004625086,
+      "percent": 14.21
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered",
+      "instructions": 15053519796,
+      "percent": 9.72
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps",
+      "instructions": 13952829494,
+      "percent": 9.01
+    },
+    {
+      "function": "rphp::stdlib::call_resolved_with_source_unpack'2",
+      "instructions": 11809106864,
+      "percent": 7.62
+    },
+    {
+      "function": "rphp::vm::execute::op_include'2",
+      "instructions": 10384556176,
+      "percent": 6.7
+    },
+    {
+      "function": "rphp::vm::execute::op_include_inner'2",
+      "instructions": 10384475669,
+      "percent": 6.7
+    },
+    {
+      "function": "rphp::vm::execute::execute_source_unit'2",
+      "instructions": 10319812294,
+      "percent": 6.66
+    },
+    {
+      "function": "rphp::vm::execute::execute_source_unit_inner'2",
+      "instructions": 10319341432,
+      "percent": 6.66
+    },
+    {
+      "function": "rphp::vm::execute::execute_included_user_source'2",
+      "instructions": 10225651354,
+      "percent": 6.6
+    },
+    {
+      "function": "rphp::vm::execute::call_function_owned_iter_with_context_and_named::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>>'2",
+      "instructions": 10210150088,
+      "percent": 6.59
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>'2",
+      "instructions": 10203676688,
+      "percent": 6.59
+    },
+    {
+      "function": "rphp::value::register_cycle_candidate_with_admission",
+      "instructions": 8702564407,
+      "percent": 5.62
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::Value>",
+      "instructions": 8370474256,
+      "percent": 5.4
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a",
+      "instructions": 7760615026,
+      "percent": 5.01
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_class",
+      "instructions": 7315061917,
+      "percent": 4.72
+    }
+  ],
+  "self_functions": [
+    {
+      "function": "rphp::vm::execute::execute_ex_inner'2",
+      "instructions": 30076256038,
+      "percent": 19.42
+    },
+    {
+      "function": "rphp::value::register_cycle_candidate_with_admission",
+      "instructions": 7331708474,
+      "percent": 4.73
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_class",
+      "instructions": 5710614028,
+      "percent": 3.69
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps",
+      "instructions": 5579939848,
+      "percent": 3.6
+    },
+    {
+      "function": "__memcpy_avx_unaligned_erms",
+      "instructions": 3626236696,
+      "percent": 2.34
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered",
+      "instructions": 3515998522,
+      "percent": 2.27
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::Value>",
+      "instructions": 2972666355,
+      "percent": 1.92
+    },
+    {
+      "function": "rphp::vm::execute::execute_full_call",
+      "instructions": 2859614769,
+      "percent": 1.85
+    },
+    {
+      "function": "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&usize>",
+      "instructions": 1818770863,
+      "percent": 1.17
+    },
+    {
+      "function": "__memcmp_avx2_movbe",
+      "instructions": 1756064663,
+      "percent": 1.13
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_is_a",
+      "instructions": 1751051581,
+      "percent": 1.13
+    },
+    {
+      "function": "<core::iter::adapters::filter::Filter<core::ops::range::Range<usize>, rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}> as core::iter::traits::iterator::Iterator>::next",
+      "instructions": 1724941981,
+      "percent": 1.11
+    },
+    {
+      "function": "rphp::regex::match_seq_from'2",
+      "instructions": 1645762208,
+      "percent": 1.06
+    },
+    {
+      "function": "rphp::vm::execute::caller_scope",
+      "instructions": 1587906572,
+      "percent": 1.03
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "instructions": 1505652711,
+      "percent": 0.97
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_drop_and_update",
+      "instructions": 1471164125,
+      "percent": 0.95
+    },
+    {
+      "function": "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write",
+      "instructions": 1409663331,
+      "percent": 0.91
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_method_info",
+      "instructions": 1377597497,
+      "percent": 0.89
+    },
+    {
+      "function": "rphp::request_memory::reserve_string",
+      "instructions": 1349261085,
+      "percent": 0.87
+    },
+    {
+      "function": "rphp::vm::execute::value_tree_requires_vm_release",
+      "instructions": 1283407261,
+      "percent": 0.83
+    },
+    {
+      "function": "__memset_avx2_unaligned_erms",
+      "instructions": 1240383917,
+      "percent": 0.8
+    },
+    {
+      "function": "<alloc::raw_vec::RawVecInner>::finish_grow",
+      "instructions": 1211097916,
+      "percent": 0.78
+    },
+    {
+      "function": "<rphp::value::Value>::clone_for_array_cow",
+      "instructions": 1196965231,
+      "percent": 0.77
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#8}",
+      "instructions": 1177503925,
+      "percent": 0.76
+    },
+    {
+      "function": "<rphp::request_memory::Budget>::usage",
+      "instructions": 1167983053,
+      "percent": 0.75
+    },
+    {
+      "function": "<hashbrown::raw::RawTableInner>::fallible_with_capacity::<alloc::alloc::Global>",
+      "instructions": 1113122307,
+      "percent": 0.72
+    },
+    {
+      "function": "<rphp::value::PhpArray as core::clone::Clone>::clone",
+      "instructions": 1090154500,
+      "percent": 0.7
+    },
+    {
+      "function": "<[u8]>::eq_ignore_ascii_case_chunks::<16>",
+      "instructions": 1067379325,
+      "percent": 0.69
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "instructions": 1011997053,
+      "percent": 0.65
+    },
+    {
+      "function": "rphp::vm::execute::collect_destructor_children_inner",
+      "instructions": 975540822,
+      "percent": 0.63
+    },
+    {
+      "function": "sha2::sha512::x86_avx2::compress",
+      "instructions": 968415697,
+      "percent": 0.63
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::add",
+      "instructions": 894838660,
+      "percent": 0.58
+    },
+    {
+      "function": "rphp::vm::execute::op_instanceof",
+      "instructions": 859547878,
+      "percent": 0.55
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::CycleCandidate>",
+      "instructions": 836819756,
+      "percent": 0.54
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::<rphp::vm::execute::run_frame_destructors_filtered::{closure#2}>",
+      "instructions": 836307124,
+      "percent": 0.54
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::ArrayStorage>",
+      "instructions": 766848576,
+      "percent": 0.5
+    },
+    {
+      "function": "rphp::vm::execute::take_pending_invoke_this",
+      "instructions": 743898314,
+      "percent": 0.48
+    },
+    {
+      "function": "rphp::vm::execute::pop_vm_call_frame",
+      "instructions": 741382619,
+      "percent": 0.48
+    },
+    {
+      "function": "rphp::runtime::method_names_equal",
+      "instructions": 727460340,
+      "percent": 0.47
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps::{closure#3}",
+      "instructions": 726766476,
+      "percent": 0.47
+    },
+    {
+      "function": "<rphp::value::PhpArray>::try_push",
+      "instructions": 721117151,
+      "percent": 0.47
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::has_weak_object_release_work",
+      "instructions": 676666985,
+      "percent": 0.44
+    },
+    {
+      "function": "rphp::vm::execute::check_type_hint_in_scopes",
+      "instructions": 627126711,
+      "percent": 0.4
+    },
+    {
+      "function": "rphp::vm::execute::value_tree_requires_vm_release::queue_cycle_child",
+      "instructions": 622815877,
+      "percent": 0.4
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_method_info'2",
+      "instructions": 612603266,
+      "percent": 0.4
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_class_const",
+      "instructions": 605594347,
+      "percent": 0.39
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "instructions": 598683404,
+      "percent": 0.39
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::live_identities",
+      "instructions": 597462012,
+      "percent": 0.39
+    },
+    {
+      "function": "core::str::converts::from_utf8",
+      "instructions": 574441703,
+      "percent": 0.37
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::discard_dynamic_scope",
+      "instructions": 572756153,
+      "percent": 0.37
+    },
+    {
+      "function": "rphp::vm::execute::op_foreach_next::<false, false>",
+      "instructions": 565096849,
+      "percent": 0.36
+    },
+    {
+      "function": "rphp::vm::execute::value_may_require_vm_release_tree",
+      "instructions": 563128853,
+      "percent": 0.36
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>",
+      "instructions": 561962497,
+      "percent": 0.36
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::expand_value_edges",
+      "instructions": 550628712,
+      "percent": 0.36
+    },
+    {
+      "function": "rphp::vm::execute::op_init_method_call",
+      "instructions": 543608177,
+      "percent": 0.35
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, ())>>::reserve_rehash::<hashbrown::map::make_hasher<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "instructions": 542237492,
+      "percent": 0.35
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::discard_active_closure_owner",
+      "instructions": 536009644,
+      "percent": 0.35
+    },
+    {
+      "function": "rphp::vm::execute::values_identical_checked",
+      "instructions": 497660325,
+      "percent": 0.32
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#2}",
+      "instructions": 497295366,
+      "percent": 0.32
+    },
+    {
+      "function": "rphp::vm::execute::op_init_static_call",
+      "instructions": 486726072,
+      "percent": 0.31
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_drop_scalar",
+      "instructions": 484498663,
+      "percent": 0.31
+    },
+    {
+      "function": "<hashbrown::map::HashMap<rphp::value::SharedStringKey, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "instructions": 483618975,
+      "percent": 0.31
+    },
+    {
+      "function": "rphp::regex::match_seq_from",
+      "instructions": 475831767,
+      "percent": 0.31
+    },
+    {
+      "function": "<rphp::value::PhpObject>::get_property",
+      "instructions": 475194432,
+      "percent": 0.31
+    },
+    {
+      "function": "<rphp::value::Value>::as_array_mut",
+      "instructions": 458021471,
+      "percent": 0.3
+    },
+    {
+      "function": "<rphp::lexer::Lexer>::tokenize",
+      "instructions": 452039609,
+      "percent": 0.29
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::add_node",
+      "instructions": 436028976,
+      "percent": 0.28
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>>::insert",
+      "instructions": 429467444,
+      "percent": 0.28
+    },
+    {
+      "function": "rphp::vm::execute::collect_destructor_children_inner'2",
+      "instructions": 425077072,
+      "percent": 0.27
+    },
+    {
+      "function": "<rphp::request_memory::Budget>::collect_strings",
+      "instructions": 408684993,
+      "percent": 0.26
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::discard_late_static_scope",
+      "instructions": 399225766,
+      "percent": 0.26
+    },
+    {
+      "function": "rphp::regex::chars_equal",
+      "instructions": 397417761,
+      "percent": 0.26
+    },
+    {
+      "function": "<core::str::pattern::StrSearcher>::new",
+      "instructions": 395797036,
+      "percent": 0.26
+    },
+    {
+      "function": "rphp::vm::execute::value_to_array_key_ref",
+      "instructions": 385294568,
+      "percent": 0.25
+    },
+    {
+      "function": "<rphp::request_memory::Budget>::check",
+      "instructions": 384287856,
+      "percent": 0.25
+    },
+    {
+      "function": "rphp::stdlib::native_process::invoke_native",
+      "instructions": 377909584,
+      "percent": 0.24
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_function",
+      "instructions": 374236263,
+      "percent": 0.24
+    },
+    {
+      "function": "rphp::regex::match_quantifier",
+      "instructions": 371989197,
+      "percent": 0.24
+    },
+    {
+      "function": "<rphp::value::Value>::clone_cycle_handle",
+      "instructions": 365787098,
+      "percent": 0.24
+    },
+    {
+      "function": "rphp::vm::execute::value_requires_vm_release",
+      "instructions": 362620341,
+      "percent": 0.23
+    },
+    {
+      "function": "rphp::vm::execute::plain_generator_children",
+      "instructions": 356400889,
+      "percent": 0.23
+    },
+    {
+      "function": "<rphp::request_memory::Allocation>::new",
+      "instructions": 353082264,
+      "percent": 0.23
+    },
+    {
+      "function": "core::fmt::write",
+      "instructions": 347387304,
+      "percent": 0.22
+    },
+    {
+      "function": "rphp::vm::execute::prepare_return_type_value",
+      "instructions": 344772348,
+      "percent": 0.22
+    },
+    {
+      "function": "rphp::heap::realloc_copy",
+      "instructions": 343939551,
+      "percent": 0.22
+    },
+    {
+      "function": "rphp::heap::alloc_other",
+      "instructions": 340224050,
+      "percent": 0.22
+    },
+    {
+      "function": "rphp::vm::execute::compact_explicit_closure_method_arguments",
+      "instructions": 337590425,
+      "percent": 0.22
+    },
+    {
+      "function": "<rphp::regex::Regex>::replace_limit_with_limits",
+      "instructions": 337137698,
+      "percent": 0.22
+    },
+    {
+      "function": "alloc::fmt::format::format_inner",
+      "instructions": 334966550,
+      "percent": 0.22
+    },
+    {
+      "function": "<rphp::regex::Node as core::clone::Clone>::clone'2",
+      "instructions": 333142381,
+      "percent": 0.22
+    },
+    {
+      "function": "<core::str::pattern::CharSearcher as core::str::pattern::Searcher>::next_match",
+      "instructions": 331291878,
+      "percent": 0.21
+    },
+    {
+      "function": "<alloc::string::String as core::fmt::Write>::write_str",
+      "instructions": 323710567,
+      "percent": 0.21
+    },
+    {
+      "function": "rphp::vm::execute::return_type_callee_class",
+      "instructions": 323407247,
+      "percent": 0.21
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::regex::Node>'2",
+      "instructions": 308488028,
+      "percent": 0.2
+    },
+    {
+      "function": "<rphp::value::PhpArrayIter as core::iter::traits::iterator::Iterator>::next",
+      "instructions": 308030434,
+      "percent": 0.2
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>::{closure#0}>",
+      "instructions": 298555175,
+      "percent": 0.19
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::normalize_missing_function_name",
+      "instructions": 278489220,
+      "percent": 0.18
+    },
+    {
+      "function": "<rphp::value::PhpArray>::get_int",
+      "instructions": 278118393,
+      "percent": 0.18
+    },
+    {
+      "function": "rphp::vm::execute::op_foreach_init",
+      "instructions": 275709389,
+      "percent": 0.18
+    },
+    {
+      "function": "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>",
+      "instructions": 269665177,
+      "percent": 0.17
+    },
+    {
+      "function": "rphp::vm::execute::run_frame_destructors_filtered::{closure#3}",
+      "instructions": 268499292,
+      "percent": 0.17
+    },
+    {
+      "function": "rphp::vm::execute::exact_call_argument_matches_in_scopes",
+      "instructions": 268343575,
+      "percent": 0.17
+    },
+    {
+      "function": "<hashbrown::map::HashMap<alloc::string::String, alloc::rc::Rc<rphp::compiler::compile::ClassDef>, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::get::<str>",
+      "instructions": 266621318,
+      "percent": 0.17
+    },
+    {
+      "function": "rphp::regex::match_class_item",
+      "instructions": 262176580,
+      "percent": 0.17
+    },
+    {
+      "function": "<rphp::value::PhpArray>::get_str",
+      "instructions": 258012317,
+      "percent": 0.17
+    },
+    {
+      "function": "rphp::vm::execute::run_request_cycle_destructors",
+      "instructions": 246278198,
+      "percent": 0.16
+    },
+    {
+      "function": "<rphp::value::Value>::cycle_child_handles",
+      "instructions": 243687858,
+      "percent": 0.16
+    },
+    {
+      "function": "rphp::stdlib::md5_digest",
+      "instructions": 243558223,
+      "percent": 0.16
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>'2",
+      "instructions": 241831126,
+      "percent": 0.16
+    },
+    {
+      "function": "<rphp::value::PhpArray>::with_packed_capacity",
+      "instructions": 230293331,
+      "percent": 0.15
+    },
+    {
+      "function": "rphp::regex::match_quantifier'2",
+      "instructions": 227918165,
+      "percent": 0.15
+    },
+    {
+      "function": "<rphp::value::PhpArray>::set_str",
+      "instructions": 227253402,
+      "percent": 0.15
+    },
+    {
+      "function": "<alloc::rc::Rc<rphp::value::PhpArray>>::drop_slow",
+      "instructions": 224304507,
+      "percent": 0.14
+    },
+    {
+      "function": "rphp::vm::execute::run_collected_value_destructors",
+      "instructions": 210562135,
+      "percent": 0.14
+    },
+    {
+      "function": "rphp::vm::execute::value_is_shallow_plain_drop",
+      "instructions": 205634131,
+      "percent": 0.13
+    },
+    {
+      "function": "rphp::vm::execute::op_runtime_call_property_argument",
+      "instructions": 203177974,
+      "percent": 0.13
+    },
+    {
+      "function": "rphp::vm::execute::release_return_foreach_sources",
+      "instructions": 201850026,
+      "percent": 0.13
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::discard_closure_static_vars",
+      "instructions": 199957422,
+      "percent": 0.13
+    },
+    {
+      "function": "<rphp::value::Value>::reference_property_constraints",
+      "instructions": 196478037,
+      "percent": 0.13
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::Vec<rphp::value::ReferencePropertyConstraint>>",
+      "instructions": 193851515,
+      "percent": 0.13
+    },
+    {
+      "function": "rphp::vm::execute::try_assign_cached_typed_instance_property::{closure#2}",
+      "instructions": 181266401,
+      "percent": 0.12
+    },
+    {
+      "function": "<rphp::stdlib::tokenizer::Scanner>::run",
+      "instructions": 178395915,
+      "percent": 0.12
+    },
+    {
+      "function": "rphp::vm::execute::init_resolved_user_call_mode",
+      "instructions": 170566436,
+      "percent": 0.11
+    },
+    {
+      "function": "rphp::vm::execute::prepare_replaced_value_destructor_with_references",
+      "instructions": 168378868,
+      "percent": 0.11
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::<rphp::vm::execute::collect_final_destructor_children::{closure#0}>",
+      "instructions": 166105807,
+      "percent": 0.11
+    },
+    {
+      "function": "<rphp::value::PhpArray>::set_str_value",
+      "instructions": 164206989,
+      "percent": 0.11
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+      "instructions": 163283843,
+      "percent": 0.11
+    },
+    {
+      "function": "<core::slice::iter::Iter<rphp::value::Value> as core::iter::traits::iterator::Iterator>::any::<&mut rphp::vm::execute::value_may_require_vm_release_tree::{closure#0}::{closure#0}>",
+      "instructions": 162697134,
+      "percent": 0.11
+    },
+    {
+      "function": "rphp::runtime::resolve_property_key",
+      "instructions": 160676239,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::vm::execute::op_init_dynamic_call",
+      "instructions": 158874992,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::vm::execute::op_assign_obj_prop_inner",
+      "instructions": 157965485,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::request_memory::check",
+      "instructions": 157942347,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::vm::execute::initialize_trait_class_scope",
+      "instructions": 156099287,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::vm::execute::finish_foreach_step",
+      "instructions": 155291194,
+      "percent": 0.1
+    },
+    {
+      "function": "<core::fmt::Formatter>::pad",
+      "instructions": 155182875,
+      "percent": 0.1
+    },
+    {
+      "function": "<alloc::vec::into_iter::IntoIter<rphp::value::Value> as core::ops::drop::Drop>::drop",
+      "instructions": 154404174,
+      "percent": 0.1
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::Value>'2",
+      "instructions": 153818831,
+      "percent": 0.1
+    },
+    {
+      "function": "<alloc::vec::Vec<char>>::extend_desugared::<core::str::iter::Chars>",
+      "instructions": 153260955,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::vm::execute::collect_final_destructor_children",
+      "instructions": 151056086,
+      "percent": 0.1
+    },
+    {
+      "function": "<rphp::regex::Node as core::clone::Clone>::clone",
+      "instructions": 149784519,
+      "percent": 0.1
+    },
+    {
+      "function": "<rphp::lexer::Lexer>::skip_whitespace",
+      "instructions": 148415819,
+      "percent": 0.1
+    },
+    {
+      "function": "rphp::vm::execute::op_new_obj",
+      "instructions": 148214657,
+      "percent": 0.1
+    },
+    {
+      "function": "<rphp::lexer::Lexer>::logical_line_breaks_between",
+      "instructions": 145935453,
+      "percent": 0.09
+    },
+    {
+      "function": "<alloc::raw_vec::RawVec<usize>>::grow_one",
+      "instructions": 144360672,
+      "percent": 0.09
+    },
+    {
+      "function": "rphp::compiler::compile::propagate_declared_scalar_types",
+      "instructions": 142851959,
+      "percent": 0.09
+    },
+    {
+      "function": "<core::str::pattern::StrSearcher as core::str::pattern::ReverseSearcher>::next_match_back",
+      "instructions": 138941777,
+      "percent": 0.09
+    },
+    {
+      "function": "<alloc::string::String as core::clone::Clone>::clone",
+      "instructions": 136075606,
+      "percent": 0.09
+    },
+    {
+      "function": "core::ptr::drop_glue::<hashbrown::raw::RawTable<(rphp::value::SharedStringKey, usize)>>",
+      "instructions": 135783352,
+      "percent": 0.09
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named_from<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+      "instructions": 135651693,
+      "percent": 0.09
+    },
+    {
+      "function": "tolower",
+      "instructions": 132514195,
+      "percent": 0.09
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex_inner::{closure#55}",
+      "instructions": 130790779,
+      "percent": 0.08
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::regex::Node>",
+      "instructions": 130384371,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::execute_full_call'2",
+      "instructions": 128635992,
+      "percent": 0.08
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::string::String>",
+      "instructions": 128523163,
+      "percent": 0.08
+    },
+    {
+      "function": "<alloc::rc::Rc<alloc::string::String>>::drop_slow",
+      "instructions": 128171546,
+      "percent": 0.08
+    },
+    {
+      "function": "<rphp::stdlib::tokenizer::Scanner>::emit",
+      "instructions": 126953024,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_class_const_impl::<false>::{closure#0}",
+      "instructions": 126845119,
+      "percent": 0.08
+    },
+    {
+      "function": "<rphp::lexer::Lexer>::brace_source_line",
+      "instructions": 126252319,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::prepare_cached_instance_reference_write",
+      "instructions": 125859744,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::regex::match_seq_from_with_group",
+      "instructions": 125323701,
+      "percent": 0.08
+    },
+    {
+      "function": "<alloc::raw_vec::RawVec<core::option::Option<(alloc::string::String, bool)>>>::grow_one",
+      "instructions": 125218896,
+      "percent": 0.08
+    },
+    {
+      "function": "<core::str::pattern::StrSearcher as core::str::pattern::Searcher>::next_match",
+      "instructions": 123552052,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::assign_foreach_cv",
+      "instructions": 123313763,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::retained_temp_containers::<rphp::vm::execute::release_statement_temps::{closure#6}>",
+      "instructions": 122803297,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::finally_jump_state",
+      "instructions": 122397715,
+      "percent": 0.08
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::Vec<rphp::vm::execute::retained_temp_containers::Container>>",
+      "instructions": 120578432,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_static_prop",
+      "instructions": 119596383,
+      "percent": 0.08
+    },
+    {
+      "function": "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&alloc::string::String>",
+      "instructions": 118875078,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::stdlib::source_unpack_argument",
+      "instructions": 117048150,
+      "percent": 0.08
+    },
+    {
+      "function": "<rphp::value::PhpArray as core::ops::drop::Drop>::drop",
+      "instructions": 116401122,
+      "percent": 0.08
+    },
+    {
+      "function": "rphp::vm::execute::bind_foreach_value_cv",
+      "instructions": 115541005,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::vm::execute::publish_detached_scope_globals",
+      "instructions": 114733354,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::vm::frame::ExecuteData>::get_op_ptr",
+      "instructions": 112812507,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::vm::execute::op_invoke_prepared_constructor",
+      "instructions": 112531520,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::regex::Regex>::captures_with_limits",
+      "instructions": 112368001,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::regex::collect_match_states_from'2",
+      "instructions": 111098372,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::vm::frame::ExecuteData>::get_op_mut",
+      "instructions": 110268720,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::regex::Node as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>'2",
+      "instructions": 109911866,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::runtime::cycle::propagate",
+      "instructions": 107193038,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::value::Value>::string::<alloc::string::String>",
+      "instructions": 106294121,
+      "percent": 0.07
+    },
+    {
+      "function": "<alloc::vec::Vec<usize> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<usize, core::ops::range::Range<usize>>>::from_iter",
+      "instructions": 105971225,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::regex::branch_may_start_at",
+      "instructions": 105945671,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::value::PhpObject>::with_layout_from_defaults",
+      "instructions": 105389481,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::vm::execute::op_new_obj_resolved",
+      "instructions": 104571962,
+      "percent": 0.07
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(rphp::value::SharedStringKey, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<rphp::value::SharedStringKey, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "instructions": 104550306,
+      "percent": 0.07
+    },
+    {
+      "function": "<std::hash::random::RandomState as core::hash::BuildHasher>::hash_one::<&str>",
+      "instructions": 104218296,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::stdlib::fn_in_array",
+      "instructions": 101488012,
+      "percent": 0.07
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::register_class_mode",
+      "instructions": 100750990,
+      "percent": 0.07
+    },
+    {
+      "function": "rphp::vm::execute::move_heap_source_to_primitive_cv",
+      "instructions": 99752993,
+      "percent": 0.06
+    },
+    {
+      "function": "<rphp::stdlib::tokenizer::TextValues>::value",
+      "instructions": 99519858,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::vm::execute::op_foreach_next::<true, false>",
+      "instructions": 99033366,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::vm::execute::op_concat",
+      "instructions": 98905815,
+      "percent": 0.06
+    },
+    {
+      "function": "<rphp::vm::function::FunctionCommon>::supports_fast_long_signature",
+      "instructions": 98851446,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::vm::execute::param_hint_mentions_callable",
+      "instructions": 97643585,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::vm::execute::prepare_reference_assignment_scalar",
+      "instructions": 96072154,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::stdlib::call_resolved_with_source_unpack'2",
+      "instructions": 95421929,
+      "percent": 0.06
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::lexer::Token>",
+      "instructions": 94686428,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::stdlib::find_method_in_class_hierarchy",
+      "instructions": 90856116,
+      "percent": 0.06
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_property_set_visibility",
+      "instructions": 89307200,
+      "percent": 0.06
+    },
+    {
+      "function": "rphp::stdlib::resolve_callback",
+      "instructions": 85122203,
+      "percent": 0.05
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::PhpObject>",
+      "instructions": 84473087,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::quick::detect_long_ops_region_inner",
+      "instructions": 83774364,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::run_final_object_destructor_tree_inner",
+      "instructions": 83437916,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::stdlib::sha256::compress",
+      "instructions": 83374800,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::value::PhpArray>::get_str_with_position",
+      "instructions": 83292426,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::value::CycleRootState>::prune_dead_candidates",
+      "instructions": 82601676,
+      "percent": 0.05
+    },
+    {
+      "function": "<&str as core::str::pattern::Pattern>::is_contained_in",
+      "instructions": 82060514,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::known_scalar_satisfies_type_hint",
+      "instructions": 82051303,
+      "percent": 0.05
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, (alloc::rc::Weak<alloc::string::String>, usize))>>::reserve_rehash::<hashbrown::map::make_hasher<usize, (alloc::rc::Weak<alloc::string::String>, usize), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "instructions": 81995067,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::class_magic_set",
+      "instructions": 81357354,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_effective_method'2",
+      "instructions": 80042503,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::regex::Node as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>",
+      "instructions": 79611092,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::try_memoized_fetch_obj_r::<false>",
+      "instructions": 79522659,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::sync_dirty_globals_to_frame",
+      "instructions": 79326504,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::vm::function::ParamTypeHint>::uses_late_static",
+      "instructions": 78035786,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::lexer::Token as core::cmp::PartialEq>::eq",
+      "instructions": 77869996,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_mark_heap",
+      "instructions": 77821218,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::value::PhpArray>::is_empty",
+      "instructions": 77094376,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::trait_composition_scope_from_definition::uses_trait",
+      "instructions": 75581578,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::scan_php_numeric_prefix",
+      "instructions": 73925931,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::run_prepared_value_destructor_with_context",
+      "instructions": 72238649,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::vm::execute::op_add_call_unpack::{closure#0}",
+      "instructions": 71341789,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::regex::collect_match_states_from",
+      "instructions": 70385926,
+      "percent": 0.05
+    },
+    {
+      "function": "rphp::regex::contains_control_verb'2",
+      "instructions": 70245303,
+      "percent": 0.05
+    },
+    {
+      "function": "<rphp::compiler::OpArray>::specialize_foreach_target_writes",
+      "instructions": 70225699,
+      "percent": 0.05
+    },
+    {
+      "function": "<alloc::raw_vec::RawVec<alloc::rc::Rc<str>>>::grow_one",
+      "instructions": 69857472,
+      "percent": 0.05
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::Vec<(usize, usize, rphp::value::Value)>>",
+      "instructions": 69668442,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::regex::match_quantifier_preferred_path",
+      "instructions": 69082221,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::lexer::Token as core::clone::Clone>::clone",
+      "instructions": 68591359,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::php_string_values_cmp",
+      "instructions": 68178967,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::stdlib::fn_array_merge",
+      "instructions": 67918492,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::value::Value>::object",
+      "instructions": 66805795,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::value::PhpArray>::packed_from_values",
+      "instructions": 66362429,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::stdlib::tokenizer::token_get_all",
+      "instructions": 66277877,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::compiler::OpArray>::prepare_quick_loops",
+      "instructions": 66231358,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::value_to_array_key",
+      "instructions": 66165923,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>::{closure#17}",
+      "instructions": 65882542,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::set_foreach_iteration_state",
+      "instructions": 64854053,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::value::PhpArray>::prepare_string_key_for_write",
+      "instructions": 64677250,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::op_bind_obj_prop_ref",
+      "instructions": 63229628,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::complete_object_construction",
+      "instructions": 63173702,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::method_declaration",
+      "instructions": 62022937,
+      "percent": 0.04
+    },
+    {
+      "function": "core::ptr::drop_glue::<std::collections::hash::set::HashSet<usize>>",
+      "instructions": 60753184,
+      "percent": 0.04
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::into_iter::IntoIter<(usize, usize, rphp::value::Value)>>",
+      "instructions": 60128432,
+      "percent": 0.04
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::Vec<rphp::regex::Node>>",
+      "instructions": 58846426,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::check_fast_scalar_return_type_hint",
+      "instructions": 58614132,
+      "percent": 0.04
+    },
+    {
+      "function": "core::ptr::drop_glue::<std::collections::hash::map::HashMap<usize, usize>>",
+      "instructions": 58292700,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::stdlib::typed_internal_string_value_argument_with_null_expected",
+      "instructions": 58203277,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile_stmt_inner'2",
+      "instructions": 58066495,
+      "percent": 0.04
+    },
+    {
+      "function": "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+      "instructions": 57425538,
+      "percent": 0.04
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::drain::Drain<rphp::value::Value>>",
+      "instructions": 56616428,
+      "percent": 0.04
+    },
+    {
+      "function": "core::ptr::drop_glue::<core::option::Option<alloc::string::String>>",
+      "instructions": 55315964,
+      "percent": 0.04
+    },
+    {
+      "function": "<core::option::Option<&alloc::string::String>>::map_or::<bool, rphp::vm::execute::op_fetch_obj_r_slow_inner<false>::{closure#11}>",
+      "instructions": 55108179,
+      "percent": 0.04
+    },
+    {
+      "function": "rphp::vm::execute::registered_function_name",
+      "instructions": 54479132,
+      "percent": 0.04
+    },
+    {
+      "function": "<str>::to_lowercase",
+      "instructions": 54460688,
+      "percent": 0.04
+    },
+    {
+      "function": "<rphp::regex::BacktrackState>::install",
+      "instructions": 54091710,
+      "percent": 0.03
+    },
+    {
+      "function": "<core::fmt::Formatter>::pad_integral",
+      "instructions": 53969354,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::find_effective_method",
+      "instructions": 53938485,
+      "percent": 0.03
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::ArrayStorage>'2",
+      "instructions": 53734820,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::SharedStringKey>::new",
+      "instructions": 53708637,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::private_method_dispatch_class",
+      "instructions": 53697488,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::displayed_function_name",
+      "instructions": 53467716,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::op_add_call_unpack",
+      "instructions": 52779392,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::value::verified_int_position",
+      "instructions": 52413455,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::Value>::set_reference_foreach_position",
+      "instructions": 51979705,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}::{closure#0}",
+      "instructions": 51914194,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpArray>::take_with_position",
+      "instructions": 51873758,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::declaring_class_of",
+      "instructions": 51259627,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::parser::Parser>::finish_assignment_tail",
+      "instructions": 50246731,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::prepare_replaced_value_release",
+      "instructions": 49564257,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::regex::linear::ascii::match_terminal_class",
+      "instructions": 49513533,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::resolve_static_call_class",
+      "instructions": 49497073,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::lexer::decode_php_source",
+      "instructions": 49431311,
+      "percent": 0.03
+    },
+    {
+      "function": "<alloc::vec::Vec<rphp::regex::Node>>::extend_trusted::<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::regex::Node>>>",
+      "instructions": 48900882,
+      "percent": 0.03
+    },
+    {
+      "function": "core::ptr::drop_glue::<core::option::Option<alloc::vec::Vec<u8>>>",
+      "instructions": 48702108,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::property_type_matches_exact",
+      "instructions": 47411306,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpArray>::promote_small_hash",
+      "instructions": 47186440,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::Value>::string::<&str>",
+      "instructions": 47032420,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::convert_object_property_name",
+      "instructions": 46835535,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::stdlib::collect_debug_backtrace",
+      "instructions": 45999218,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile_expr'2",
+      "instructions": 45919459,
+      "percent": 0.03
+    },
+    {
+      "function": "<alloc::vec::Vec<rphp::value::Value> as alloc::vec::spec_extend::SpecExtend<rphp::value::Value, alloc::vec::into_iter::IntoIter<rphp::value::Value>>>::spec_extend",
+      "instructions": 45899736,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::regex::contains_control_verb",
+      "instructions": 45650027,
+      "percent": 0.03
+    },
+    {
+      "function": "<core::iter::adapters::GenericShunt<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<alloc::vec::into_iter::IntoIter<rphp::value::ArrayKey>>, rphp::vm::execute::op_add_call_unpack::{closure#0}::{closure#1}>, core::result::Result<core::convert::Infallible, rphp::vm::execute::VmError>> as core::iter::traits::iterator::Iterator>::next",
+      "instructions": 45436584,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpObject>::with_layout",
+      "instructions": 44668504,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::run_final_object_destructor_tree_inner'2",
+      "instructions": 44537255,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::SharedStringKey>::from_owned",
+      "instructions": 44203879,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpArray>::get_at",
+      "instructions": 43539855,
+      "percent": 0.03
+    },
+    {
+      "function": "<alloc::vec::Vec<rphp::value::Value> as alloc::vec::spec_from_iter_nested::SpecFromIterNested<rphp::value::Value, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::from_iter",
+      "instructions": 43127097,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::execute_ex_inner::{closure#2}",
+      "instructions": 42820525,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::regex::Regex>::try_visit_captures_with_limits::<rphp::stdlib::fn_preg_match_all::{closure#3}>",
+      "instructions": 42730135,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::pending_call_argument_is_ref",
+      "instructions": 42640298,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::regex::unicode::simple_case_fold",
+      "instructions": 41568156,
+      "percent": 0.03
+    },
+    {
+      "function": "rust_psm_stack_pointer",
+      "instructions": 41519578,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpArray>::set_int",
+      "instructions": 40969827,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpArray>::argument_unpack_reference_at",
+      "instructions": 40961522,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::value::PhpArray>::iter",
+      "instructions": 40880705,
+      "percent": 0.03
+    },
+    {
+      "function": "<rphp::parser::Parser>::parse_postfix_chain",
+      "instructions": 40394361,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::compiler::make_user_function_typed_with_return_mode",
+      "instructions": 39213975,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::stdlib::array_lookup_values_match",
+      "instructions": 38914685,
+      "percent": 0.03
+    },
+    {
+      "function": "rphp::vm::execute::op_bind_obj_prop_ref::{closure#9}",
+      "instructions": 38609365,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::prepare_property_assignment_with_diagnostic",
+      "instructions": 38539270,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::stdlib::owned_argument",
+      "instructions": 38301803,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::regex::match_shorthand",
+      "instructions": 38276934,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::op_create_closure",
+      "instructions": 38181408,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>, false>",
+      "instructions": 37694121,
+      "percent": 0.02
+    },
+    {
+      "function": "<rphp::compiler::compile::Compiler>::compile_concat_chain",
+      "instructions": 37692647,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::regex::newline_len_at",
+      "instructions": 37496706,
+      "percent": 0.02
+    },
+    {
+      "function": "rphp::vm::execute::prepare_call_argument_in_scopes",
+      "instructions": 36968178,
+      "percent": 0.02
+    }
+  ]
+}

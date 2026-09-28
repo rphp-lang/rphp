@@ -1,0 +1,1475 @@
+{
+  "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+  "complete": true,
+  "timeout_seconds": 480,
+  "restart_disabled": true,
+  "disabled_functions": [
+    "proc_open",
+    "pcntl_signal",
+    "pcntl_exec",
+    "pcntl_fork"
+  ],
+  "exit": 1,
+  "timed_out": false,
+  "instrumented_wall": 62.87717827997403,
+  "reference_stdout_equal": true,
+  "totals": [
+    "summary: 15582023381",
+    "totals: 15582023381"
+  ],
+  "profile_sha256": "132ba232070ca0ae91647fa0f2409a49c74501f59a6d2c23fb9c732f3b27ae36",
+  "inclusive_functions": [
+    {
+      "function": "(below main)",
+      "instructions": 15576050013,
+      "percent": 99.96
+    },
+    {
+      "function": "__libc_start_main@@GLIBC_2.34",
+      "instructions": 15576050001,
+      "percent": 99.96
+    },
+    {
+      "function": "(below main)",
+      "instructions": 15576049812,
+      "percent": 99.96
+    },
+    {
+      "function": "0x0000000000194d00",
+      "instructions": 15576049748,
+      "percent": 99.96
+    },
+    {
+      "function": "0x000000000060d330",
+      "instructions": 15553237104,
+      "percent": 99.82
+    },
+    {
+      "function": "php_execute_script",
+      "instructions": 15546003021,
+      "percent": 99.77
+    },
+    {
+      "function": "php_execute_script_ex",
+      "instructions": 15546003018,
+      "percent": 99.77
+    },
+    {
+      "function": "zend_execute_script",
+      "instructions": 15546000606,
+      "percent": 99.77
+    },
+    {
+      "function": "execute_ex",
+      "instructions": 14292502901,
+      "percent": 91.72
+    },
+    {
+      "function": "zend_execute",
+      "instructions": 14292287551,
+      "percent": 91.72
+    },
+    {
+      "function": "0x0000000000022040",
+      "instructions": 2849082719,
+      "percent": 18.28
+    },
+    {
+      "function": "0x000000000052fda0'2",
+      "instructions": 1660931246,
+      "percent": 10.66
+    },
+    {
+      "function": "0x0000000000565ea0",
+      "instructions": 1633710834,
+      "percent": 10.48
+    },
+    {
+      "function": "zendparse",
+      "instructions": 1624966263,
+      "percent": 10.43
+    },
+    {
+      "function": "compile_file",
+      "instructions": 1594494717,
+      "percent": 10.23
+    },
+    {
+      "function": "0x00000000005d5ad0",
+      "instructions": 1582829056,
+      "percent": 10.16
+    },
+    {
+      "function": "0x0000000000021a70",
+      "instructions": 1257913384,
+      "percent": 8.07
+    },
+    {
+      "function": "0x000000000001e7d0",
+      "instructions": 1253681031,
+      "percent": 8.05
+    },
+    {
+      "function": "0x000000000002dfa0",
+      "instructions": 1240928986,
+      "percent": 7.96
+    },
+    {
+      "function": "0x0000000007764e70",
+      "instructions": 1235040605,
+      "percent": 7.93
+    },
+    {
+      "function": "PHP_SHA512Update",
+      "instructions": 1234989694,
+      "percent": 7.93
+    },
+    {
+      "function": "0x0000000000570100",
+      "instructions": 1234363268,
+      "percent": 7.92
+    },
+    {
+      "function": "0x0000000000218a90",
+      "instructions": 1230411922,
+      "percent": 7.9
+    },
+    {
+      "function": "lex_scan",
+      "instructions": 1037162353,
+      "percent": 6.66
+    },
+    {
+      "function": "0x000000000052d5e0",
+      "instructions": 994193391,
+      "percent": 6.38
+    },
+    {
+      "function": "execute_ex'2",
+      "instructions": 783806983,
+      "percent": 5.03
+    },
+    {
+      "function": "rc_dtor_func'2",
+      "instructions": 734729553,
+      "percent": 4.72
+    }
+  ],
+  "self_functions": [
+    {
+      "function": "execute_ex",
+      "instructions": 3322950104,
+      "percent": 21.33
+    },
+    {
+      "function": "0x0000000000218a90",
+      "instructions": 1222952140,
+      "percent": 7.85
+    },
+    {
+      "function": "lex_scan",
+      "instructions": 607245951,
+      "percent": 3.9
+    },
+    {
+      "function": "zendparse",
+      "instructions": 538445869,
+      "percent": 3.46
+    },
+    {
+      "function": "0x000000000057cea0",
+      "instructions": 312115569,
+      "percent": 2.0
+    },
+    {
+      "function": "0x00000000005721b0",
+      "instructions": 287226800,
+      "percent": 1.84
+    },
+    {
+      "function": "zend_std_write_property",
+      "instructions": 278007747,
+      "percent": 1.78
+    },
+    {
+      "function": "_efree",
+      "instructions": 244779604,
+      "percent": 1.57
+    },
+    {
+      "function": "_emalloc",
+      "instructions": 211700850,
+      "percent": 1.36
+    },
+    {
+      "function": "0x0000000000559340",
+      "instructions": 201988797,
+      "percent": 1.3
+    },
+    {
+      "function": "instanceof_function_slow",
+      "instructions": 177635802,
+      "percent": 1.14
+    },
+    {
+      "function": "__memcpy_avx_unaligned_erms",
+      "instructions": 161414225,
+      "percent": 1.04
+    },
+    {
+      "function": "0x0000000000595680",
+      "instructions": 158926229,
+      "percent": 1.02
+    },
+    {
+      "function": "0x000000000058e6d0",
+      "instructions": 143249283,
+      "percent": 0.92
+    },
+    {
+      "function": "zend_hash_find",
+      "instructions": 141385783,
+      "percent": 0.91
+    },
+    {
+      "function": "0x000000000057d4d0",
+      "instructions": 141224647,
+      "percent": 0.91
+    },
+    {
+      "function": "zend_hash_func",
+      "instructions": 136079511,
+      "percent": 0.87
+    },
+    {
+      "function": "0x00000000005748c0",
+      "instructions": 130940312,
+      "percent": 0.84
+    },
+    {
+      "function": "0x000000000057cc30",
+      "instructions": 123051431,
+      "percent": 0.79
+    },
+    {
+      "function": "execute_ex'2",
+      "instructions": 121338262,
+      "percent": 0.78
+    },
+    {
+      "function": "0x0000000000562540",
+      "instructions": 115843619,
+      "percent": 0.74
+    },
+    {
+      "function": "zend_array_destroy",
+      "instructions": 114531401,
+      "percent": 0.74
+    },
+    {
+      "function": "zend_is_identical",
+      "instructions": 111330576,
+      "percent": 0.71
+    },
+    {
+      "function": "0x00000000005768b0",
+      "instructions": 107690018,
+      "percent": 0.69
+    },
+    {
+      "function": "zend_hash_next_index_insert",
+      "instructions": 106068577,
+      "percent": 0.68
+    },
+    {
+      "function": "0x0000000000574b80",
+      "instructions": 93721944,
+      "percent": 0.6
+    },
+    {
+      "function": "0x00000000005573e0",
+      "instructions": 90996348,
+      "percent": 0.58
+    },
+    {
+      "function": "0x0000000000596df0",
+      "instructions": 87288563,
+      "percent": 0.56
+    },
+    {
+      "function": "0x0000000000595760",
+      "instructions": 82988072,
+      "percent": 0.53
+    },
+    {
+      "function": "0x0000000000002b70",
+      "instructions": 82293531,
+      "percent": 0.53
+    },
+    {
+      "function": "0x0000000000561da0",
+      "instructions": 80984771,
+      "percent": 0.52
+    },
+    {
+      "function": "0x00000000004303d0",
+      "instructions": 78321282,
+      "percent": 0.5
+    },
+    {
+      "function": "0x000000000057d810",
+      "instructions": 75784375,
+      "percent": 0.49
+    },
+    {
+      "function": "_emalloc_56",
+      "instructions": 72210974,
+      "percent": 0.46
+    },
+    {
+      "function": "concat_function",
+      "instructions": 71942875,
+      "percent": 0.46
+    },
+    {
+      "function": "zend_array_destroy'2",
+      "instructions": 71539450,
+      "percent": 0.46
+    },
+    {
+      "function": "object_init_ex",
+      "instructions": 70703405,
+      "percent": 0.45
+    },
+    {
+      "function": "zend_objects_store_del",
+      "instructions": 69008077,
+      "percent": 0.44
+    },
+    {
+      "function": "zend_hash_next_index_insert_new",
+      "instructions": 66493197,
+      "percent": 0.43
+    },
+    {
+      "function": "zend_hash_update",
+      "instructions": 65645742,
+      "percent": 0.42
+    },
+    {
+      "function": "0x00000000003e08c0",
+      "instructions": 62051844,
+      "percent": 0.4
+    },
+    {
+      "function": "zend_string_tolower_ex",
+      "instructions": 60135988,
+      "percent": 0.39
+    },
+    {
+      "function": "0x0000000000558fb0",
+      "instructions": 59968188,
+      "percent": 0.38
+    },
+    {
+      "function": "0x00000000005785d0",
+      "instructions": 58487326,
+      "percent": 0.38
+    },
+    {
+      "function": "zend_std_get_method",
+      "instructions": 56727319,
+      "percent": 0.36
+    },
+    {
+      "function": "0x0000000000217880",
+      "instructions": 56528640,
+      "percent": 0.36
+    },
+    {
+      "function": "0x00000000005189a0",
+      "instructions": 56186486,
+      "percent": 0.36
+    },
+    {
+      "function": "zend_verify_property_type",
+      "instructions": 55771226,
+      "percent": 0.36
+    },
+    {
+      "function": "0x0000000000550610",
+      "instructions": 55202441,
+      "percent": 0.35
+    },
+    {
+      "function": "zend_array_dup",
+      "instructions": 54937035,
+      "percent": 0.35
+    },
+    {
+      "function": "_emalloc_160",
+      "instructions": 54567178,
+      "percent": 0.35
+    },
+    {
+      "function": "0x0000000000556fd0",
+      "instructions": 54311409,
+      "percent": 0.35
+    },
+    {
+      "function": "zend_long_to_str",
+      "instructions": 53788034,
+      "percent": 0.35
+    },
+    {
+      "function": "0x0000000000591c40",
+      "instructions": 53302208,
+      "percent": 0.34
+    },
+    {
+      "function": "0x000000000059b600",
+      "instructions": 52718711,
+      "percent": 0.34
+    },
+    {
+      "function": "0x00000000005725f0",
+      "instructions": 50900094,
+      "percent": 0.33
+    },
+    {
+      "function": "0x00000000005923f0",
+      "instructions": 49288150,
+      "percent": 0.32
+    },
+    {
+      "function": "0x0000000000559680",
+      "instructions": 48711010,
+      "percent": 0.31
+    },
+    {
+      "function": "0x000000000055ab50",
+      "instructions": 48344026,
+      "percent": 0.31
+    },
+    {
+      "function": "zend_ast_destroy'2",
+      "instructions": 47286113,
+      "percent": 0.3
+    },
+    {
+      "function": "zend_object_std_dtor",
+      "instructions": 46801152,
+      "percent": 0.3
+    },
+    {
+      "function": "0x000000000878ec70",
+      "instructions": 46398370,
+      "percent": 0.3
+    },
+    {
+      "function": "gc_possible_root",
+      "instructions": 46188546,
+      "percent": 0.3
+    },
+    {
+      "function": "0x00000000005542d0",
+      "instructions": 45941511,
+      "percent": 0.29
+    },
+    {
+      "function": "php_pcre_match_impl",
+      "instructions": 45237076,
+      "percent": 0.29
+    },
+    {
+      "function": "pcre2_jit_match_8",
+      "instructions": 45209000,
+      "percent": 0.29
+    },
+    {
+      "function": "__memcmp_avx2_movbe",
+      "instructions": 44783094,
+      "percent": 0.29
+    },
+    {
+      "function": "_erealloc",
+      "instructions": 44664536,
+      "percent": 0.29
+    },
+    {
+      "function": "_efree_56",
+      "instructions": 44517645,
+      "percent": 0.29
+    },
+    {
+      "function": "0x00000000005627c0",
+      "instructions": 44071208,
+      "percent": 0.28
+    },
+    {
+      "function": "0x0000000000002db0",
+      "instructions": 43424005,
+      "percent": 0.28
+    },
+    {
+      "function": "0x000000000057ca40",
+      "instructions": 43196932,
+      "percent": 0.28
+    },
+    {
+      "function": "0x000000000057eac0",
+      "instructions": 42856634,
+      "percent": 0.28
+    },
+    {
+      "function": "0x0000000000002a20",
+      "instructions": 42633572,
+      "percent": 0.27
+    },
+    {
+      "function": "0x000000000052d5e0",
+      "instructions": 42461781,
+      "percent": 0.27
+    },
+    {
+      "function": "0x0000000000596b40",
+      "instructions": 39606167,
+      "percent": 0.25
+    },
+    {
+      "function": "0x000000000056f020",
+      "instructions": 39100245,
+      "percent": 0.25
+    },
+    {
+      "function": "pass_two",
+      "instructions": 38853308,
+      "percent": 0.25
+    },
+    {
+      "function": "0x000000000056f7c0",
+      "instructions": 37775776,
+      "percent": 0.24
+    },
+    {
+      "function": "0x000000000055cee0",
+      "instructions": 36797659,
+      "percent": 0.24
+    },
+    {
+      "function": "zend_std_read_property",
+      "instructions": 36004077,
+      "percent": 0.23
+    },
+    {
+      "function": "0x000000000057ee80",
+      "instructions": 35903157,
+      "percent": 0.23
+    },
+    {
+      "function": "zend_fetch_class",
+      "instructions": 35781314,
+      "percent": 0.23
+    },
+    {
+      "function": "0x000000000056f3d0",
+      "instructions": 35051944,
+      "percent": 0.22
+    },
+    {
+      "function": "0x000000000056f9b0",
+      "instructions": 34880201,
+      "percent": 0.22
+    },
+    {
+      "function": "0x0000000000561c40",
+      "instructions": 34524072,
+      "percent": 0.22
+    },
+    {
+      "function": "zend_objects_new",
+      "instructions": 33234418,
+      "percent": 0.21
+    },
+    {
+      "function": "zend_hash_merge",
+      "instructions": 32728776,
+      "percent": 0.21
+    },
+    {
+      "function": "0x000000000057be10",
+      "instructions": 32007407,
+      "percent": 0.21
+    },
+    {
+      "function": "_is_numeric_string_ex",
+      "instructions": 31651174,
+      "percent": 0.2
+    },
+    {
+      "function": "0x000000000056e930",
+      "instructions": 30815910,
+      "percent": 0.2
+    },
+    {
+      "function": "0x0000000000579830",
+      "instructions": 30713370,
+      "percent": 0.2
+    },
+    {
+      "function": "0x00000000005ff770",
+      "instructions": 30708305,
+      "percent": 0.2
+    },
+    {
+      "function": "0x0000000000595590",
+      "instructions": 29668267,
+      "percent": 0.19
+    },
+    {
+      "function": "_zend_new_array",
+      "instructions": 28833558,
+      "percent": 0.19
+    },
+    {
+      "function": "0x0000000000574f10",
+      "instructions": 28705690,
+      "percent": 0.18
+    },
+    {
+      "function": "0x0000000000557380",
+      "instructions": 28039741,
+      "percent": 0.18
+    },
+    {
+      "function": "0x0000000000594cc0",
+      "instructions": 27823560,
+      "percent": 0.18
+    },
+    {
+      "function": "gc_remove_from_buffer",
+      "instructions": 27758715,
+      "percent": 0.18
+    },
+    {
+      "function": "zend_create_closure",
+      "instructions": 27255083,
+      "percent": 0.17
+    },
+    {
+      "function": "zend_hash_str_find",
+      "instructions": 25559819,
+      "percent": 0.16
+    },
+    {
+      "function": "php_addcslashes_str",
+      "instructions": 25002363,
+      "percent": 0.16
+    },
+    {
+      "function": "0x00000000005372c0'2",
+      "instructions": 24343043,
+      "percent": 0.16
+    },
+    {
+      "function": "zend_call_function",
+      "instructions": 23942433,
+      "percent": 0.15
+    },
+    {
+      "function": "zend_is_callable_at_frame",
+      "instructions": 23229429,
+      "percent": 0.15
+    },
+    {
+      "function": "zend_get_executed_scope",
+      "instructions": 23055050,
+      "percent": 0.15
+    },
+    {
+      "function": "zend_hash_real_init_packed",
+      "instructions": 22835182,
+      "percent": 0.15
+    },
+    {
+      "function": "0x00000000005597f0",
+      "instructions": 22792196,
+      "percent": 0.15
+    },
+    {
+      "function": "php_printf_to_smart_string",
+      "instructions": 22134448,
+      "percent": 0.14
+    },
+    {
+      "function": "zend_std_get_property_ptr_ptr",
+      "instructions": 21413717,
+      "percent": 0.14
+    },
+    {
+      "function": "zend_objects_store_put",
+      "instructions": 21327404,
+      "percent": 0.14
+    },
+    {
+      "function": "0x0000000000559e20",
+      "instructions": 21148617,
+      "percent": 0.14
+    },
+    {
+      "function": "zend_string_equal_val",
+      "instructions": 20830865,
+      "percent": 0.13
+    },
+    {
+      "function": "0x0000000008785400",
+      "instructions": 20671854,
+      "percent": 0.13
+    },
+    {
+      "function": "0x00000000005667b0",
+      "instructions": 20496998,
+      "percent": 0.13
+    },
+    {
+      "function": "0x00000000003e4df0",
+      "instructions": 20247510,
+      "percent": 0.13
+    },
+    {
+      "function": "0x0000000008799770",
+      "instructions": 19807346,
+      "percent": 0.13
+    },
+    {
+      "function": "0x0000000000585380",
+      "instructions": 19701752,
+      "percent": 0.13
+    },
+    {
+      "function": "0x000000000056cd00",
+      "instructions": 19579149,
+      "percent": 0.13
+    },
+    {
+      "function": "0x000000000056de50",
+      "instructions": 19074725,
+      "percent": 0.12
+    },
+    {
+      "function": "rc_dtor_func",
+      "instructions": 18211570,
+      "percent": 0.12
+    },
+    {
+      "function": "zend_string_hash_func",
+      "instructions": 17738344,
+      "percent": 0.11
+    },
+    {
+      "function": "zend_ast_create_zval_with_lineno",
+      "instructions": 17716420,
+      "percent": 0.11
+    },
+    {
+      "function": "0x00000000005669a0",
+      "instructions": 17019937,
+      "percent": 0.11
+    },
+    {
+      "function": "pcre2_match_8",
+      "instructions": 16668480,
+      "percent": 0.11
+    },
+    {
+      "function": "zend_hash_lookup",
+      "instructions": 16369673,
+      "percent": 0.11
+    },
+    {
+      "function": "0x0000000000571350",
+      "instructions": 15977323,
+      "percent": 0.1
+    },
+    {
+      "function": "zend_stack_push",
+      "instructions": 15896300,
+      "percent": 0.1
+    },
+    {
+      "function": "0x00000000003eb070",
+      "instructions": 15772761,
+      "percent": 0.1
+    },
+    {
+      "function": "0x0000000000525c00",
+      "instructions": 15721940,
+      "percent": 0.1
+    },
+    {
+      "function": "zend_hash_rehash",
+      "instructions": 15715963,
+      "percent": 0.1
+    },
+    {
+      "function": "0x000000000057b180",
+      "instructions": 15667478,
+      "percent": 0.1
+    },
+    {
+      "function": "zend_std_get_constructor",
+      "instructions": 15398238,
+      "percent": 0.1
+    },
+    {
+      "function": "php_var_export_ex'2",
+      "instructions": 15384401,
+      "percent": 0.1
+    },
+    {
+      "function": "0x000000000054e190",
+      "instructions": 15241087,
+      "percent": 0.1
+    },
+    {
+      "function": "0x0000000000527d20",
+      "instructions": 15186680,
+      "percent": 0.1
+    },
+    {
+      "function": "0x000000000057b0a0",
+      "instructions": 15152687,
+      "percent": 0.1
+    },
+    {
+      "function": "0x00000000001832f3",
+      "instructions": 14969967,
+      "percent": 0.1
+    },
+    {
+      "function": "0x000000000058de80",
+      "instructions": 14641209,
+      "percent": 0.09
+    },
+    {
+      "function": "0x00000000005ee360",
+      "instructions": 14390685,
+      "percent": 0.09
+    },
+    {
+      "function": "_zend_new_array_0",
+      "instructions": 14356768,
+      "percent": 0.09
+    },
+    {
+      "function": "0x00000000005887e0",
+      "instructions": 14331000,
+      "percent": 0.09
+    },
+    {
+      "function": "zend_objects_store_del'2",
+      "instructions": 14091545,
+      "percent": 0.09
+    },
+    {
+      "function": "0x000000000058b5e0",
+      "instructions": 14059562,
+      "percent": 0.09
+    },
+    {
+      "function": "0x000000000055b4b0",
+      "instructions": 13981298,
+      "percent": 0.09
+    },
+    {
+      "function": "zend_ast_create_2",
+      "instructions": 13940756,
+      "percent": 0.09
+    },
+    {
+      "function": "rc_dtor_func'2",
+      "instructions": 13938769,
+      "percent": 0.09
+    },
+    {
+      "function": "0x000000000057d0f0",
+      "instructions": 13632626,
+      "percent": 0.09
+    },
+    {
+      "function": "zend_hash_real_init_mixed",
+      "instructions": 13585155,
+      "percent": 0.09
+    },
+    {
+      "function": "zend_object_std_dtor'2",
+      "instructions": 13490393,
+      "percent": 0.09
+    },
+    {
+      "function": "php_pcre_replace_impl",
+      "instructions": 13450463,
+      "percent": 0.09
+    },
+    {
+      "function": "0x000000000058bd50",
+      "instructions": 13413755,
+      "percent": 0.09
+    },
+    {
+      "function": "0x0000000000589180",
+      "instructions": 13161405,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000578520",
+      "instructions": 13116935,
+      "percent": 0.08
+    },
+    {
+      "function": "0x000000000057c560",
+      "instructions": 13040871,
+      "percent": 0.08
+    },
+    {
+      "function": "0x000000000058f300",
+      "instructions": 12756364,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000568280",
+      "instructions": 12724403,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000550410",
+      "instructions": 12356835,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000250bc0",
+      "instructions": 12163292,
+      "percent": 0.08
+    },
+    {
+      "function": "_emalloc_320",
+      "instructions": 12115700,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000529770",
+      "instructions": 12005418,
+      "percent": 0.08
+    },
+    {
+      "function": "zend_hash_index_add_new",
+      "instructions": 11842003,
+      "percent": 0.08
+    },
+    {
+      "function": "zend_fetch_debug_backtrace",
+      "instructions": 11840146,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000529230",
+      "instructions": 11784170,
+      "percent": 0.08
+    },
+    {
+      "function": "0x000000000052fda0'2",
+      "instructions": 11778399,
+      "percent": 0.08
+    },
+    {
+      "function": "0x0000000000527f50",
+      "instructions": 11591235,
+      "percent": 0.07
+    },
+    {
+      "function": "0x000000000056fea0",
+      "instructions": 11494389,
+      "percent": 0.07
+    },
+    {
+      "function": "zend_hash_index_find",
+      "instructions": 11448823,
+      "percent": 0.07
+    },
+    {
+      "function": "zend_vm_set_opcode_handler",
+      "instructions": 11410815,
+      "percent": 0.07
+    },
+    {
+      "function": "0x00000000005d5cb0",
+      "instructions": 11297154,
+      "percent": 0.07
+    },
+    {
+      "function": "0x00000000005f6fa0",
+      "instructions": 11265632,
+      "percent": 0.07
+    },
+    {
+      "function": "zend_compare",
+      "instructions": 11263244,
+      "percent": 0.07
+    },
+    {
+      "function": "__memchr_avx2",
+      "instructions": 11069854,
+      "percent": 0.07
+    },
+    {
+      "function": "0x0000000000588260",
+      "instructions": 10980716,
+      "percent": 0.07
+    },
+    {
+      "function": "0x000000000053d480",
+      "instructions": 10896858,
+      "percent": 0.07
+    },
+    {
+      "function": "0x000000000877efa0",
+      "instructions": 10650015,
+      "percent": 0.07
+    },
+    {
+      "function": "0x000000000054e070",
+      "instructions": 10620427,
+      "percent": 0.07
+    },
+    {
+      "function": "0x00000000005889d0",
+      "instructions": 10545527,
+      "percent": 0.07
+    },
+    {
+      "function": "0x00000000005501c0",
+      "instructions": 10503107,
+      "percent": 0.07
+    },
+    {
+      "function": "0x0000000000064e00",
+      "instructions": 10368803,
+      "percent": 0.07
+    },
+    {
+      "function": "zend_is_callable_ex",
+      "instructions": 10258431,
+      "percent": 0.07
+    },
+    {
+      "function": "0x00000000005ee360'2",
+      "instructions": 10121127,
+      "percent": 0.06
+    },
+    {
+      "function": "zend_ast_list_add",
+      "instructions": 10070606,
+      "percent": 0.06
+    },
+    {
+      "function": "0x000000000058b6e0",
+      "instructions": 9975729,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000564100",
+      "instructions": 9961565,
+      "percent": 0.06
+    },
+    {
+      "function": "zend_hash_get_current_key_zval_ex",
+      "instructions": 9594480,
+      "percent": 0.06
+    },
+    {
+      "function": "zval_get_long_func",
+      "instructions": 9539340,
+      "percent": 0.06
+    },
+    {
+      "function": "0x000000000058e250",
+      "instructions": 9369846,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000051a00",
+      "instructions": 9269592,
+      "percent": 0.06
+    },
+    {
+      "function": "____strtol_l_internal",
+      "instructions": 9232657,
+      "percent": 0.06
+    },
+    {
+      "function": "0x000000000058ef00",
+      "instructions": 9198262,
+      "percent": 0.06
+    },
+    {
+      "function": "0x000000000052ebc0'2",
+      "instructions": 9174238,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000580c90",
+      "instructions": 9104028,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000594580",
+      "instructions": 9008061,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000557a40",
+      "instructions": 8997838,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000582320",
+      "instructions": 8939366,
+      "percent": 0.06
+    },
+    {
+      "function": "__memset_avx2_unaligned_erms",
+      "instructions": 8890605,
+      "percent": 0.06
+    },
+    {
+      "function": "0x0000000000533040",
+      "instructions": 8795409,
+      "percent": 0.06
+    },
+    {
+      "function": "zval_try_get_string_func",
+      "instructions": 8753370,
+      "percent": 0.06
+    },
+    {
+      "function": "zend_init_func_execute_data",
+      "instructions": 8658540,
+      "percent": 0.06
+    },
+    {
+      "function": "0x000000000056d750",
+      "instructions": 8640257,
+      "percent": 0.06
+    },
+    {
+      "function": "0x00000000005577b0",
+      "instructions": 8600990,
+      "percent": 0.06
+    },
+    {
+      "function": "0x000000000056d1e0",
+      "instructions": 8518552,
+      "percent": 0.05
+    },
+    {
+      "function": "zend_ast_create_1",
+      "instructions": 8484282,
+      "percent": 0.05
+    },
+    {
+      "function": "0x0000000000541ef0",
+      "instructions": 8471271,
+      "percent": 0.05
+    },
+    {
+      "function": "0x00000000005590f0",
+      "instructions": 8401882,
+      "percent": 0.05
+    },
+    {
+      "function": "0x000000000053d480'2",
+      "instructions": 8401865,
+      "percent": 0.05
+    },
+    {
+      "function": "0x00000000005372c0",
+      "instructions": 8381141,
+      "percent": 0.05
+    },
+    {
+      "function": "0x0000000000003160",
+      "instructions": 8168942,
+      "percent": 0.05
+    },
+    {
+      "function": "0x000000000057c440",
+      "instructions": 7984500,
+      "percent": 0.05
+    },
+    {
+      "function": "0x00000000005252e0",
+      "instructions": 7891170,
+      "percent": 0.05
+    },
+    {
+      "function": "0x000000000044d010",
+      "instructions": 7733407,
+      "percent": 0.05
+    },
+    {
+      "function": "php_strspn",
+      "instructions": 7692324,
+      "percent": 0.05
+    },
+    {
+      "function": "0x00000000003e3d20",
+      "instructions": 7322408,
+      "percent": 0.05
+    },
+    {
+      "function": "_zend_hash_index_find",
+      "instructions": 7319455,
+      "percent": 0.05
+    },
+    {
+      "function": "zend_ast_create_list_1",
+      "instructions": 7318894,
+      "percent": 0.05
+    },
+    {
+      "function": "0x0000000000568c00",
+      "instructions": 7311473,
+      "percent": 0.05
+    },
+    {
+      "function": "0x00000000003dd6d0",
+      "instructions": 7264396,
+      "percent": 0.05
+    },
+    {
+      "function": "__strlen_avx2",
+      "instructions": 7252024,
+      "percent": 0.05
+    },
+    {
+      "function": "0x0000000000469750'2",
+      "instructions": 7238030,
+      "percent": 0.05
+    },
+    {
+      "function": "0x000000000058b850",
+      "instructions": 6971741,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000564870",
+      "instructions": 6868125,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000580a20",
+      "instructions": 6867465,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000008873800",
+      "instructions": 6815170,
+      "percent": 0.04
+    },
+    {
+      "function": "destroy_op_array",
+      "instructions": 6726065,
+      "percent": 0.04
+    },
+    {
+      "function": "0x00000000004673e0'2",
+      "instructions": 6713298,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000505ea0",
+      "instructions": 6573460,
+      "percent": 0.04
+    },
+    {
+      "function": "zend_lookup_class_ex",
+      "instructions": 6517275,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000554cc0",
+      "instructions": 6471423,
+      "percent": 0.04
+    },
+    {
+      "function": "zend_stack_top",
+      "instructions": 6449188,
+      "percent": 0.04
+    },
+    {
+      "function": "make_digest_ex",
+      "instructions": 6286496,
+      "percent": 0.04
+    },
+    {
+      "function": "zval_add_ref",
+      "instructions": 6203656,
+      "percent": 0.04
+    },
+    {
+      "function": "0x000000000058a130",
+      "instructions": 6182145,
+      "percent": 0.04
+    },
+    {
+      "function": "0x000000000052d310",
+      "instructions": 6159878,
+      "percent": 0.04
+    },
+    {
+      "function": "_emalloc_384",
+      "instructions": 6023729,
+      "percent": 0.04
+    },
+    {
+      "function": "0x000000000057feb0",
+      "instructions": 5964348,
+      "percent": 0.04
+    },
+    {
+      "function": "sub_function",
+      "instructions": 5916740,
+      "percent": 0.04
+    },
+    {
+      "function": "0x00000000005ee490",
+      "instructions": 5891729,
+      "percent": 0.04
+    },
+    {
+      "function": "0x00000000003e8e60",
+      "instructions": 5843913,
+      "percent": 0.04
+    },
+    {
+      "function": "_zend_handle_numeric_str_ex",
+      "instructions": 5823976,
+      "percent": 0.04
+    },
+    {
+      "function": "zend_str_tolower_copy",
+      "instructions": 5819118,
+      "percent": 0.04
+    },
+    {
+      "function": "zend_object_std_init",
+      "instructions": 5818382,
+      "percent": 0.04
+    },
+    {
+      "function": "zend_hash_get_current_data_ex",
+      "instructions": 5790851,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000559980",
+      "instructions": 5790559,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000008873380",
+      "instructions": 5729296,
+      "percent": 0.04
+    },
+    {
+      "function": "0x000000000055b330",
+      "instructions": 5720951,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000569c90",
+      "instructions": 5717292,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000528730",
+      "instructions": 5649798,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000580d80",
+      "instructions": 5616081,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000525b60",
+      "instructions": 5614890,
+      "percent": 0.04
+    },
+    {
+      "function": "0x0000000000566230",
+      "instructions": 5588684,
+      "percent": 0.04
+    },
+    {
+      "function": "0x00000000003e39a0",
+      "instructions": 5547082,
+      "percent": 0.04
+    },
+    {
+      "function": "0x000000000057ab20",
+      "instructions": 5398115,
+      "percent": 0.03
+    },
+    {
+      "function": "0x000000000054f210",
+      "instructions": 5365203,
+      "percent": 0.03
+    },
+    {
+      "function": "0x00000000005857c0",
+      "instructions": 5236523,
+      "percent": 0.03
+    },
+    {
+      "function": "zend_binary_strcasecmp",
+      "instructions": 5220815,
+      "percent": 0.03
+    },
+    {
+      "function": "0x000000000058eb00",
+      "instructions": 5203499,
+      "percent": 0.03
+    },
+    {
+      "function": "zend_hash_add_new",
+      "instructions": 5135198,
+      "percent": 0.03
+    },
+    {
+      "function": "0x0000000000569a70",
+      "instructions": 5107592,
+      "percent": 0.03
+    },
+    {
+      "function": "pcre_get_compiled_regex_cache_ex",
+      "instructions": 5005224,
+      "percent": 0.03
+    },
+    {
+      "function": "zend_hash_add",
+      "instructions": 4977990,
+      "percent": 0.03
+    },
+    {
+      "function": "0x000000000052c1a0",
+      "instructions": 4977788,
+      "percent": 0.03
+    },
+    {
+      "function": "zend_hash_packed_del_val",
+      "instructions": 4936846,
+      "percent": 0.03
+    }
+  ]
+}

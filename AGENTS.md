@@ -49,6 +49,14 @@
 
 ## Test environment hygiene
 
+- Run sanitizer diagnostics, release benchmark cycles and full build/test
+  matrices in a separate aggregate memory boundary too. On a 32 GiB desktop,
+  use a user-systemd service with `MemoryMax=6G`, `MemorySwapMax=0`,
+  `OOMPolicy=kill` and `KillMode=control-group`, and verify the effective limits
+  before starting expensive work. All descendants must inherit the boundary;
+  never run an unbounded diagnostic in the desktop application's cgroup. Keep
+  OOM and timeout results visible as failures, and inspect surviving processes
+  before replacing an interrupted job.
 - Run local PHPT packets inside an aggregate memory boundary (for example a
   user-systemd service with `MemoryMax=6G`, `MemorySwapMax=0`) and at most four
   workers on a 32 GiB development machine. The Linux runner additionally

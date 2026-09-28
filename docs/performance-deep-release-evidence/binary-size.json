@@ -1,0 +1,16 @@
+[
+  {
+    "variant": "baseline",
+    "file_bytes": 21444264,
+    "text_bytes": 19417449,
+    "data_bytes": 272736,
+    "bss_bytes": 14208
+  },
+  {
+    "variant": "candidate",
+    "file_bytes": 21458440,
+    "text_bytes": 19430474,
+    "data_bytes": 272896,
+    "bss_bytes": 13216
+  }
+]

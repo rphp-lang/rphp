@@ -20,6 +20,25 @@ Every published result must include:
 
 ## Comparison procedure
 
+On a development desktop, run the entire build/test/benchmark job in a separate
+memory-limited service, including the driver and all descendants. For a 32 GiB
+host, the default boundary is 6 GiB with swap disabled. For example:
+
+```sh
+systemd-run --user --wait --pipe --collect --service-type=exec \
+  --property=MemoryMax=6G --property=MemorySwapMax=0 \
+  --property=OOMPolicy=kill --property=KillMode=control-group \
+  --property=RuntimeMaxSec=3600 /absolute/path/to/checkpoint-driver
+```
+
+Verify `memory.max`, `memory.swap.max` and `memory.oom.group` in the driver's
+cgroup before launching expensive work. A virtual-address-space limit is not
+an adequate substitute for the aggregate resident-memory boundary, especially
+with AddressSanitizer's shadow mappings. Record a limit hit as a failed run;
+never remove the boundary to retry. Use the same boundary for both sides of a
+timing comparison and record whether it was reached. Retain the exclusive
+benchmark lock and perform cleanup even when a diagnostic fails.
+
 1. Start from clean, named baseline and candidate commits.
 2. Run `scripts/cleanup-builds.sh`, then build disposable release candidates in
    task-scoped `/tmp/rphp-candidate-*` target directories.
@@ -38,6 +57,24 @@ Wall-clock timing should use a monotonic, sufficiently precise clock. Keep
 compilation, startup, parsing, and execution costs separate when the claim
 depends on that distinction. Do not silently compare a warmed RPHP runtime
 with a cold PHP process, or one JIT configuration with an unnamed alternative.
+
+## Application restarts and PHPStan
+
+A configuration probe before launch does not establish the configuration after
+an application re-executes its interpreter. The measured PHPStan PHAR can use
+`pcntl_exec()` to enable CLI OPcache; its replacement command does not preserve
+the caller's disabled-function flags. Disabling only `proc_open` and
+`pcntl_signal` therefore does not establish serial analysis or unchanged INI
+settings. An instruction profiler must follow such execs or explicitly prevent
+them; an empty profile from the replaced process is not valid evidence.
+
+`scripts/bench-phpstan.py` disables `proc_open`, `pcntl_signal`, `pcntl_exec` and
+`pcntl_fork`. It checks that all four functions are unavailable before timing
+and records the flags and startup OPcache/JIT configuration for each runtime.
+Each cold run gets a fresh result-cache directory; a validated cold run creates
+the cache used by its subsequent warm run. OS filesystem caches remain warm.
+This protocol measures serial execution without PHPStan's process restart,
+not its unconstrained default worker configuration.
 
 ## Workload selection
 

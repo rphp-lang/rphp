@@ -1,0 +1,14 @@
+{
+  "profile": "max-perf",
+  "features": [
+    "default"
+  ],
+  "source_sha256": "9a62367648b7cb0aa474c1eaca7edcba7307ad1283889f320cd2599689241305",
+  "binary_sha256": "3ee100c7507c8c682f04cf01701f161d3ea2e90470e11f3b42b0cf93f35b6e61",
+  "build_seconds": 166.47403395798756,
+  "build_log_sha256": "22c77d23c16e20fa3cb00f494b6ae854dec4cd90432ec01d7e555afc25415155",
+  "baseline": "ceddd97b",
+  "dirty": true,
+  "aggregate_memory_peak_bytes": 2909372416,
+  "service_result": "success"
+}

@@ -854,13 +854,6 @@ fn run_final_object_destructor_tree_inner(
         return owner.run_vm_resource_release(eg);
     }
 
-    // Once final ownership is proved, install monotonic stack checkpoints on
-    // the complete retained graph before user callbacks or structural Rust
-    // drop can expose a deep alias as a new root. Keeping this work behind the
-    // reference-count proof avoids rescanning non-final cyclic objects on each
-    // statement-temp release.
-    owner.mark_final_drop_tree_checkpoints(&mut crate::value::CycleNodeSet::default());
-
     // An initialized lazy proxy owns its real instance through the sparse
     // sidecar. Retain a temporary view of that edge while deciding whether the
     // real instance is itself final. Keeping the mapping through user code is
@@ -1575,7 +1568,9 @@ pub(crate) fn run_request_cycle_destructors(
             if eg.has_fiber_context(identity) {
                 eg.force_close_fiber_object(identity, logical_caller)?;
             }
-            run_cycle_object_destructor(eg, &owner)?;
+            // Publish the still-live request root so both live and stored
+            // Throwable traces retain PHP's internal destructor boundary.
+            run_cycle_object_destructor_from(eg, &owner, Some(logical_caller))?;
             let Some(replacement) = eg.exception.take() else {
                 continue;
             };
@@ -2106,7 +2101,6 @@ impl NativeRelease {
                         if eg.exception.is_some() { return Ok(None); }
                         continue;
                     }
-                    node.owner.mark_final_drop_tree_checkpoints(&mut crate::value::CycleNodeSet::default());
                     node.phase = NativeReleasePhase::WeakValues;
                     if let Some(callback) = crate::stdlib::resolve_object_public_method(eg, &node.owner, "__destruct")
                         && callback.common().fn_type == FunctionType::User

@@ -1358,11 +1358,17 @@ struct CycleRootState {
     free_time: std::time::Duration,
     candidates: Vec<CycleCandidate>,
     indices: HashMap<usize, usize, BuildHasherDefault<IntKeyHasher>>,
+    // Disabling PHP's cycle collector does not require retaining the Rc
+    // allocations of already-dead values. Space sweeps never run callbacks
+    // or collect live cycles; doubling past live roots amortizes each scan.
+    disabled_sweep_at: usize,
     // Startup-disabled GC still leaves objects in the request's object store.
     // Keep weak shutdown visibility without admitting them to userland GC.
     unadmitted: Option<Box<HashMap<usize, CycleCandidate, BuildHasherDefault<IntKeyHasher>>>>,
     admission: CycleAdmissionState,
 }
+
+const DISABLED_CYCLE_STORAGE_SWEEP_FLOOR: usize = 4096;
 
 impl CycleRootState {
     fn reindex(&mut self) {
@@ -1390,6 +1396,11 @@ impl CycleRootState {
             self.admission.pending_start = Some(retained_prefix);
         }
         self.reindex();
+        self.disabled_sweep_at = self
+            .candidates
+            .len()
+            .saturating_mul(2)
+            .max(DISABLED_CYCLE_STORAGE_SWEEP_FLOOR);
     }
 }
 
@@ -1456,6 +1467,17 @@ fn register_cycle_candidate_with_admission(candidate: CycleCandidate, allow_auto
                 state.admission.pending_start = Some(state.candidates.len());
                 AUTOMATIC_CYCLE_PENDING.with(|pending| pending.set(true));
             }
+        } else if !state.admission.enabled
+            && !state.collecting
+            && state.candidates.len()
+                >= state
+                    .disabled_sweep_at
+                    .max(DISABLED_CYCLE_STORAGE_SWEEP_FLOOR)
+        {
+            // Weak entries pin their allocation even after the PHP value is
+            // gone. Reclaim only those dead entries, preserving every live
+            // root and its order while automatic collection stays disabled.
+            state.prune_dead_candidates();
         }
         let index = state.candidates.len();
         state.indices.insert(identity, index);
@@ -1743,6 +1765,37 @@ mod repeated_cycle_root_tests {
             register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&third)));
             assert_eq!(cycle_collection_status().roots, 1);
             CYCLE_ROOTS.with_borrow_mut(|state| *state = CycleRootState::default());
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn disabled_collection_reclaims_dead_storage_without_losing_live_roots() {
+        std::thread::spawn(|| {
+            begin_object_handle_request();
+            set_automatic_cycle_collection_enabled(false);
+            let first = Rc::new(PhpArray::new());
+            let second = Rc::new(PhpArray::new());
+            for owner in [&first, &second] {
+                register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(owner)));
+            }
+            for _ in 0..100_000 {
+                let transient = Rc::new(PhpArray::new());
+                register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&transient)));
+            }
+            CYCLE_ROOTS.with_borrow(|state| {
+                assert!(state.candidates.len() <= DISABLED_CYCLE_STORAGE_SWEEP_FLOOR + 2);
+                assert_eq!(state.candidates.len(), state.indices.len());
+                assert_eq!(state.candidates[0].identity(), Rc::as_ptr(&first) as usize);
+                assert_eq!(state.candidates[1].identity(), Rc::as_ptr(&second) as usize);
+            });
+            let status = cycle_collection_status();
+            assert_eq!(status.roots, 2);
+            assert_eq!(status.runs, 0);
+            assert_eq!(status.collected, 0);
+            assert!(!automatic_cycle_collection_pending());
+            end_object_handle_request();
         })
         .join()
         .unwrap();
@@ -2316,7 +2369,10 @@ fn release_object_handle(identity: usize, handle: u32) {
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
 fn release_final_object(owner: Rc<RefCell<PhpObject>>, handle: u32) {
     let identity = Rc::as_ptr(&owner) as usize;
-    drop(owner);
+    // Protect actual recursive storage retirement, including properties added
+    // by a destructor. Walking the reachable graph before every PHP callback
+    // repeats work for each ancestor and cannot predict callback mutations.
+    stacker::maybe_grow(64 * 1024, 1024 * 1024, || drop(owner));
     release_object_handle(identity, handle);
 }
 
@@ -2327,7 +2383,11 @@ fn release_final_object(owner: Rc<RefCell<PhpObject>>, handle: u32) {
 fn release_final_closure(owner: Rc<PhpClosure>) {
     let identity = Rc::as_ptr(&owner) as usize;
     let handle = owner.object_handle;
-    drop(owner);
+    if owner.final_drop_may_release_cycle_child() {
+        stacker::maybe_grow(64 * 1024, 1024 * 1024, || drop(owner));
+    } else {
+        drop(owner);
+    }
     release_object_handle(identity, handle);
 }
 
@@ -2353,6 +2413,7 @@ pub(crate) fn begin_object_handle_request() {
         state.free_time = std::time::Duration::ZERO;
         state.candidates.clear();
         state.indices.clear();
+        state.disabled_sweep_at = 0;
         state.unadmitted = None;
     });
 }
@@ -2379,6 +2440,7 @@ pub(crate) fn end_object_handle_request() {
         // and destructor metadata belonged to an already-finished request.
         state.candidates.clear();
         state.indices.clear();
+        state.disabled_sweep_at = 0;
         state.unadmitted = None;
     });
 }
@@ -3333,6 +3395,21 @@ pub struct PhpArray {
     storage: ArrayStorage,
     next_int_key: i64,
     cursor: Cell<usize>,
+}
+
+impl Drop for PhpArray {
+    #[inline(never)]
+    #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
+    fn drop(&mut self) {
+        // Leave the inlined Value/Rc decrement unchanged. Only the actual
+        // container destructor needs to protect recursive child storage.
+        // With enough stack, ordinary field drop keeps its existing order
+        // and does not move the storage into a callback.
+        if stacker::remaining_stack().is_none_or(|remaining| remaining < 64 * 1024) {
+            let storage = std::mem::replace(&mut self.storage, ArrayStorage::Packed(Vec::new()));
+            stacker::grow(1024 * 1024, || drop(storage));
+        }
+    }
 }
 
 // A live array cannot have enough entries to use the address-width high bit as
@@ -4520,7 +4597,7 @@ impl PhpArray {
     /// one storage accounting, one nested-release scan, no per-push
     /// bookkeeping. Native producers of large lists (the tokenizer) use it.
     pub(crate) fn packed_from_values(values: Vec<Value>) -> Self {
-        let array = Self {
+        let mut array = Self {
             allocation: Self::storage_allocation(values.len(), false),
             storage: ArrayStorage::Packed(Vec::new()),
             next_int_key: values.len() as i64,
@@ -4533,10 +4610,8 @@ impl PhpArray {
         for value in &values {
             array.track_nested_release_value(value);
         }
-        Self {
-            storage: ArrayStorage::Packed(values),
-            ..array
-        }
+        array.storage = ArrayStorage::Packed(values);
+        array
     }
 
     /// Create packed storage with capacity known from an array literal.
@@ -6624,6 +6699,42 @@ mod closure_ownership_tests {
     }
 
     #[test]
+    fn final_storage_release_is_stack_safe_without_a_graph_prepass() {
+        // Construct directly so neither the VM planner nor JSON can install
+        // checkpoints. Include pure chains and closure transitions, which an
+        // array/object-only iterative walker cannot consume on its own.
+        std::thread::Builder::new()
+            .stack_size(128 * 1024)
+            .spawn(|| {
+                for kind in 0..4 {
+                    let mut value = Value::null();
+                    for index in 0..4096 {
+                        value = match if kind == 3 { index % 3 } else { kind } {
+                            0 => {
+                                let mut array = super::PhpArray::new();
+                                array.push(value);
+                                Value::array(array)
+                            }
+                            1 => Value::object(PhpObject::dynamic(
+                                "NativeDrop".into(),
+                                0,
+                                HashMap::from([("child".into(), value)]),
+                            )),
+                            _ => closure_with_capture(value),
+                        };
+                        if kind == 3 {
+                            value = Value::owned_reference(value);
+                        }
+                    }
+                    drop(value);
+                }
+            })
+            .unwrap()
+            .join()
+            .unwrap();
+    }
+
+    #[test]
     fn duplicate_captures_count_all_owned_edges_before_final_release() {
         let captured = Value::object(PhpObject::dynamic(
             "Captured".to_string(),
@@ -6875,7 +6986,7 @@ impl PhpClosure {
             if let Some(value) = sole_child {
                 // One edge cannot alias another capture. Avoid allocating the
                 // duplicate-edge table while retaining the same final-owner
-                // proof and deep-tree checkpoint for its eventual release.
+                // proof for the native stack guard at its eventual release.
                 return value.cycle_node().is_some()
                     && value
                         .cycle_strong_count()
@@ -6916,28 +7027,6 @@ impl PhpClosure {
         children
             .into_iter()
             .any(|(_, direct_edges, strong_count)| strong_count <= direct_edges)
-    }
-}
-
-impl Drop for PhpClosure {
-    fn drop(&mut self) {
-        if !self.final_drop_may_release_cycle_child() {
-            return;
-        }
-        let mut seen = CycleNodeSet::default();
-        if let Some(bound_this) = &self.bound_this {
-            bound_this.mark_final_drop_tree_checkpoints(&mut seen);
-        }
-        for capture in &self.captures {
-            capture.mark_final_drop_tree_checkpoints(&mut seen);
-        }
-        if let Some(static_vars) = &self.static_vars
-            && let Ok(static_vars) = static_vars.as_ref().try_borrow()
-        {
-            for value in static_vars.values() {
-                value.mark_final_drop_tree_checkpoints(&mut seen);
-            }
-        }
     }
 }
 
@@ -7232,22 +7321,14 @@ impl Value {
         }
     }
 
-    /// Mark sparse reachable array/object checkpoints after an exceptional or
-    /// final-owner traversal so a later last alias cannot recurse through an
+    /// Mark sparse reachable array/object checkpoints after an exceptional
+    /// traversal so a later last alias cannot recurse through an
     /// unbounded native Drop chain. Shallow graphs retain their ordinary fast
     /// release path. One traversal-scoped identity set keeps cyclic graphs
     /// linear, and temporary handles are suppressed from GC root statistics.
     #[cold]
     pub(crate) fn mark_deep_drop_tree_checkpoints(&self, seen: &mut CycleNodeSet) {
         self.mark_deep_drop_tree_checkpoints_with_root_policy(seen, true);
-    }
-
-    /// Final-owner release needs checkpoints only when the graph is already
-    /// deep. Unlike an exceptional JSON root, it cannot later be cloned and
-    /// mutated after this proof, so shallow objects keep their ordinary Drop.
-    #[cold]
-    pub(crate) fn mark_final_drop_tree_checkpoints(&self, seen: &mut CycleNodeSet) {
-        self.mark_deep_drop_tree_checkpoints_with_root_policy(seen, false);
     }
 
     fn mark_deep_drop_tree_checkpoints_with_root_policy(

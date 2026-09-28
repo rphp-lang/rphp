@@ -1,0 +1,66 @@
+{
+  "source_sha256": "9a62367648b7cb0aa474c1eaca7edcba7307ad1283889f320cd2599689241305",
+  "gates": [
+    {
+      "name": "default",
+      "exit": 0,
+      "elapsed": 154.4999975360115,
+      "tests": 7087,
+      "ignored": 15,
+      "log_sha256": "6bb3a3cae37a7d53df07e4d406c3eb37a14eebce789ee58a31119338aca35e4b"
+    },
+    {
+      "name": "no-default",
+      "exit": 0,
+      "elapsed": 143.65690696396632,
+      "tests": 6736,
+      "ignored": 15,
+      "log_sha256": "9272981ba7372a73f43e410800bbd1348b582a25555a7b721fbbe8a64d77a0f9"
+    },
+    {
+      "name": "erased",
+      "exit": 0,
+      "elapsed": 159.01062671496766,
+      "tests": 7158,
+      "ignored": 15,
+      "log_sha256": "8b941282eee505a28950036a63cc305f43d2e1f38583ed08f0b6fa670c57fd7d"
+    },
+    {
+      "name": "reified",
+      "exit": 0,
+      "elapsed": 158.82407471595798,
+      "tests": 7180,
+      "ignored": 15,
+      "log_sha256": "ffaed36954ced945206f223d26600e022dda44a0047cd7ec7a8c31ea2d9b8b51"
+    },
+    {
+      "name": "all-features",
+      "exit": 0,
+      "elapsed": 165.32964027900016,
+      "tests": 7234,
+      "ignored": 18,
+      "log_sha256": "c018ed9d404024bb634ba85c30898676bc3dd6c64598ddd6ab07a54515f837c3"
+    },
+    {
+      "name": "all-targets",
+      "exit": 0,
+      "elapsed": 21.58122330601327,
+      "tests": 0,
+      "ignored": 0,
+      "log_sha256": "5e08d8a19de0916fb85173d8752c3e89b2734b0fd9614395c20c4f9484c93941"
+    }
+  ],
+  "complete": true,
+  "profile": "test-fast",
+  "locked": true,
+  "offline": true,
+  "build_jobs": 4,
+  "test_threads": 4,
+  "debug_assertions": true,
+  "overflow_checks": true,
+  "environment": "ordinary host under separate user-systemd service; aggregate 6 GiB RAM, zero swap",
+  "aggregate_memory_peak_bytes": 6442450944,
+  "aggregate_memory_max_reached": true,
+  "service_result": "success",
+  "memory_event_counters_recorded": false
+}

@@ -10318,8 +10318,7 @@ impl ExecutorGlobals {
     /// Cold metadata query used by Reflection to distinguish an ancestor
     /// interface from a parent class with the same reachability relation.
     pub fn class_is_interface(&self, class_name: &str) -> bool {
-        self.class_table
-            .get(class_name)
+        self.find_class(class_name)
             .is_some_and(|class| class.is_interface)
     }
 

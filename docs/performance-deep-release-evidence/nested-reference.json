@@ -1,0 +1,46 @@
+[
+  {
+    "kind": "normal",
+    "source": "tests/e2e_nested_foreach_mutation.rs",
+    "generated_source_sha256": "327be31fa6244464caf115984e85b914a5fa4255b1d9d87be7aa3a21f5693a47",
+    "runs": {
+      "php": {
+        "exit": 0,
+        "stdout": "3:6:33:33|done|6:12:75:75|done|12:24:186:186|done|",
+        "stderr": ""
+      },
+      "baseline": {
+        "exit": 0,
+        "stdout": "repeated||repeated||repeated||",
+        "stderr": ""
+      },
+      "candidate": {
+        "exit": 0,
+        "stdout": "3:6:33:33|done|6:12:75:75|done|12:24:186:186|done|",
+        "stderr": ""
+      }
+    }
+  },
+  {
+    "kind": "generator",
+    "source": "tests/e2e_nested_foreach_mutation.rs",
+    "generated_source_sha256": "79135acbcaabaab8e3ce08575d48f9616b0662fa0b1a19922f623f7885f25ef8",
+    "runs": {
+      "php": {
+        "exit": 0,
+        "stdout": "3:6:33:33|done|6:12:75:75|done|12:24:186:186|done|",
+        "stderr": ""
+      },
+      "baseline": {
+        "exit": 0,
+        "stdout": "repeated||repeated||repeated||",
+        "stderr": ""
+      },
+      "candidate": {
+        "exit": 0,
+        "stdout": "3:6:33:33|done|6:12:75:75|done|12:24:186:186|done|",
+        "stderr": ""
+      }
+    }
+  }
+]

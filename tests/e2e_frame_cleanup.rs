@@ -4,6 +4,25 @@
 mod common;
 use common::run_php;
 
+#[test]
+fn wide_frame_after_cross_page_exception_unwind() {
+    // Each recursive activation has about 16 KiB of CVs, so the exception
+    // unwinds across the ordinary 256 KiB page boundary. The next function's
+    // frame exceeds a page by itself and must not use another page's bounds.
+    let mut source = String::from("<?php function descend($depth) {");
+    for index in 0..1000 {
+        source.push_str(&format!("$v{index} = {index};"));
+    }
+    source.push_str(
+        "if ($depth) { descend($depth - 1); } throw new Exception('done'); } function wide() {",
+    );
+    for index in 0..17000 {
+        source.push_str(&format!("$v{index} = {index};"));
+    }
+    source.push_str("return $v16999; } try { descend(30); } catch (Exception $e) { echo 'caught'; } for ($i = 0; $i < 3; $i++) { echo '|', wide(); }");
+    assert_eq!(run_php(&source), "caught|16999|16999|16999");
+}
+
 // === Scalar-only frames: cleanup should be a no-op ===
 
 #[test]

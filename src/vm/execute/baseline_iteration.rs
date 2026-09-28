@@ -1018,9 +1018,16 @@ fn adjust_live_foreach_reference_positions(
                         }
                         let iteration_state =
                             &*(*frame).get_op_ptr(next.op1 as u32, next.op1_type, op_array);
-                        if iteration_state.reference_identity() != target_reference
-                            && iteration_state.dereferenced().array_identity() != target_array
-                        {
+                        // Missing reference identities do not establish an
+                        // alias. Detached by-reference loops have no reference
+                        // cell; an unset in an unrelated inner value loop must
+                        // not rewind their outer cursor merely because both
+                        // reference identities are None.
+                        let same_reference = target_reference.is_some()
+                            && iteration_state.reference_identity() == target_reference;
+                        let same_array = target_array.is_some()
+                            && iteration_state.dereferenced().array_identity() == target_array;
+                        if !same_reference && !same_array {
                             continue;
                         }
                         let position =

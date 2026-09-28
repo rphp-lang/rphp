@@ -1,0 +1,26 @@
+[
+  {
+    "label": "candidate-callback-512",
+    "count": 512,
+    "output_validated": true,
+    "profile_sha256": "88eb15082c80a957e030822fbb20525749ef956e47f946d0cb518f0c0d4494ab",
+    "totals": [
+      "summary: 26701816",
+      "totals: 26701816"
+    ],
+    "final_checkpoint_marker_present": false,
+    "deep_checkpoint_traversal_present": false
+  },
+  {
+    "label": "candidate-callback-1024",
+    "count": 1024,
+    "output_validated": true,
+    "profile_sha256": "33fcf0823d53e052f90e52291d1f5234683306c43be6155539baed85a949af12",
+    "totals": [
+      "summary: 38697150",
+      "totals: 38697150"
+    ],
+    "final_checkpoint_marker_present": false,
+    "deep_checkpoint_traversal_present": false
+  }
+]

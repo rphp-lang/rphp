@@ -1,0 +1,32 @@
+[
+  {
+    "variant": "baseline",
+    "binary_sha256": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "file_bytes": 21444264,
+    "text_bytes": 19417449,
+    "data_bytes": 272736,
+    "bss_bytes": 14208,
+    "dispatch": [
+      {
+        "symbol": "rphp::vm::execute::execute_ex_inner",
+        "address": "00000000006d0cc0",
+        "bytes": 336687
+      }
+    ]
+  },
+  {
+    "variant": "candidate",
+    "binary_sha256": "e922e13dfbe4c441e6f4d2282e9b5878d6e1ac804aadaf3a5afd11f39dd033ca",
+    "file_bytes": 21452616,
+    "text_bytes": 19424709,
+    "data_bytes": 272896,
+    "bss_bytes": 10856,
+    "dispatch": [
+      {
+        "symbol": "rphp::vm::execute::execute_ex_inner",
+        "address": "00000000006ce740",
+        "bytes": 336589
+      }
+    ]
+  }
+]

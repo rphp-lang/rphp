@@ -1,0 +1,12 @@
+{
+  "profile": "max-perf",
+  "features": [
+    "default"
+  ],
+  "source_sha256": "da2dca4d39c19e7cc3998e2d7493e1dc3cd0475b779e43edf5cc5ded7dd84251",
+  "binary_sha256": "77b2dfdbe1ddf34021ebfeba5bba81369436b3617fa85e1caf34036fb1ab6ac0",
+  "build_seconds": 182.08532638900215,
+  "build_log_sha256": "38ad8a9a703538c96e851060bcf35858b0f89242dab0fff284c261909fbf94ee",
+  "baseline": "ceddd97b",
+  "dirty": true
+}

@@ -1,0 +1,54 @@
+{
+  "source_sha256": "9a62367648b7cb0aa474c1eaca7edcba7307ad1283889f320cd2599689241305",
+  "binary_sha256": "3ee100c7507c8c682f04cf01701f161d3ea2e90470e11f3b42b0cf93f35b6e61",
+  "steps": [
+    {
+      "stage": "quick-check",
+      "exit": 0,
+      "seconds": 6.523882632958703
+    },
+    {
+      "stage": "confirm-revised",
+      "exit": 0,
+      "seconds": 137.36829735600622
+    },
+    {
+      "stage": "phpstan",
+      "exit": 0,
+      "seconds": 301.9415926330257
+    },
+    {
+      "stage": "corpus",
+      "exit": 0,
+      "seconds": 609.6262165830121
+    },
+    {
+      "stage": "callgrind",
+      "exit": 0,
+      "seconds": 2.5864648240385577
+    },
+    {
+      "stage": "profile-final",
+      "exit": 0,
+      "seconds": 16.88976134796394
+    },
+    {
+      "stage": "summarize",
+      "exit": 0,
+      "seconds": 0.02819298196118325
+    }
+  ],
+  "complete": true,
+  "memory_peak_bytes": 1716965376,
+  "memory_events": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0,
+    "sock_throttled": 0
+  },
+  "memory_limit_bytes": 6442450944,
+  "swap_limit_bytes": 0
+}

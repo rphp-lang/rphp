@@ -1,0 +1,18 @@
+[
+  {
+    "label": "baseline",
+    "sha256": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "file_bytes": 21444264,
+    "text_bytes": 19417449,
+    "data_bytes": 272736,
+    "bss_bytes": 14208
+  },
+  {
+    "label": "candidate",
+    "sha256": "ca49510661a98dba80cc132ae8cf4ef55144549bf5497ccb9824daff5926b302",
+    "file_bytes": 21464528,
+    "text_bytes": 19437037,
+    "data_bytes": 272864,
+    "bss_bytes": 10880
+  }
+]

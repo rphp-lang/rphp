@@ -1,0 +1,15 @@
+[
+  {
+    "runtime": "php",
+    "exit": 0,
+    "timed_out": false,
+    "seconds": 0.06991160602774471
+  },
+  {
+    "runtime": "asan-fixed",
+    "exit": 0,
+    "timed_out": false,
+    "seconds": 2.2086349410237744,
+    "binary_sha256": "2f39cc379abfe28b38ea91e9161f0405b86883e157f604626787206dbd7ea5c1"
+  }
+]

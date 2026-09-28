@@ -1,0 +1,28 @@
+{
+  "observations": [
+    {
+      "variant": "baseline",
+      "normalized_sha256": "d5238c84b91adeb81f1316be96800f5ab9c036eebb69b22f1ef38ad3407a18fc",
+      "allocation_calls": 4,
+      "extension_calls": 0,
+      "native_stack_bytes": 5848
+    },
+    {
+      "variant": "direct-bounds",
+      "normalized_sha256": "22a2a01c1e5bc7aa3d36fd9aa420aec29b3087e38005f8ac751347ac51f5f02a",
+      "allocation_calls": 1,
+      "extension_calls": 3,
+      "native_stack_bytes": 5864
+    },
+    {
+      "variant": "range-pop",
+      "normalized_sha256": "22a2a01c1e5bc7aa3d36fd9aa420aec29b3087e38005f8ac751347ac51f5f02a",
+      "allocation_calls": 1,
+      "extension_calls": 3,
+      "native_stack_bytes": 5864
+    }
+  ],
+  "normalization": "Remove instruction addresses and relocations; retain mnemonics, registers and stack displacements. Local branch destinations collapsed to LOCAL; this is a diagnostic comparison, not proof of full semantic identity.",
+  "finding": "New page extension emits three out-of-line calls and hoists two stack receiver addresses into dispatcher storage. Its native stack allocation grows by 16 bytes. The range predicate revision leaves the normalized dispatcher unchanged.",
+  "caveat": "Neither static differences nor equal dynamic instruction totals establish the cause of native timing regressions. Cold growth annotation and compact page layout require independent measured validation."
+}

@@ -1,0 +1,268 @@
+[
+  {
+    "script": "benches/bench_json.php",
+    "variants": {
+      "baseline": {
+        "median": 0.006020952,
+        "p10": 0.005515474,
+        "p90": 0.00620412,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.006016193,
+        "p10": 0.00555538,
+        "p90": 0.006461287,
+        "n": 11
+      }
+    },
+    "change_percent": -0.07904065669349647,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_declared_object_lifecycle.php",
+    "variants": {
+      "baseline": {
+        "median": 0.006878347,
+        "p10": 0.006581054,
+        "p90": 0.007061725,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.007154571,
+        "p10": 0.006620979,
+        "p90": 0.007312049,
+        "n": 11
+      }
+    },
+    "change_percent": 4.01584857524635,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_projection_double.php",
+    "variants": {
+      "baseline": {
+        "median": 0.535330639,
+        "p10": 0.527431985,
+        "p90": 0.567322854,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.541792894,
+        "p10": 0.519523658,
+        "p90": 0.547499009,
+        "n": 11
+      }
+    },
+    "change_percent": 1.2071520905419408,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_reverse_dependent_recurrence_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.453569818,
+        "p10": 0.434310583,
+        "p90": 0.463084674,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.450487753,
+        "p10": 0.444353959,
+        "p90": 0.473209848,
+        "n": 11
+      }
+    },
+    "change_percent": -0.6795128065598122,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_constant_int_array_materialized_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.761226912,
+        "p10": 0.755694957,
+        "p90": 0.774668348,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.754326947,
+        "p10": 0.747784319,
+        "p90": 0.758625663,
+        "n": 11
+      }
+    },
+    "change_percent": -0.9064268342630522,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_string_array_materialized_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.811624967,
+        "p10": 0.805534223,
+        "p90": 0.820279639,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.810622068,
+        "p10": 0.797675858,
+        "p90": 0.854756764,
+        "n": 11
+      }
+    },
+    "change_percent": -0.12356680003412501,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/holdout_routing_pipeline.php",
+    "variants": {
+      "baseline": {
+        "median": 0.013641606,
+        "p10": 0.013252399,
+        "p90": 0.013747898,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.013580431,
+        "p10": 0.013236088,
+        "p90": 0.014115585,
+        "n": 11
+      }
+    },
+    "change_percent": -0.4484442667527566,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_expression_chain_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.645211419,
+        "p10": 0.627364028,
+        "p90": 0.659649179,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.651460989,
+        "p10": 0.644753267,
+        "p90": 0.671326493,
+        "n": 11
+      }
+    },
+    "change_percent": 0.9686080896841753,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_instance_property_constructor_typed.php",
+    "variants": {
+      "baseline": {
+        "median": 0.106968733,
+        "p10": 0.106634768,
+        "p90": 0.108210814,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.108536422,
+        "p10": 0.107165936,
+        "p90": 0.110526085,
+        "n": 11
+      }
+    },
+    "change_percent": 1.4655581645526272,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_array.php",
+    "variants": {
+      "baseline": {
+        "median": 0.01574301,
+        "p10": 0.015342882,
+        "p90": 0.015998274,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.015456857,
+        "p10": 0.015230929,
+        "p90": 0.015608605,
+        "n": 11
+      }
+    },
+    "change_percent": -1.817651135329279,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_generics_method_diamond_manual.php",
+    "variants": {
+      "baseline": {
+        "median": 0.549776185,
+        "p10": 0.547932234,
+        "p90": 0.556318523,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.517945484,
+        "p10": 0.509251879,
+        "p90": 0.529380769,
+        "n": 11
+      }
+    },
+    "change_percent": -5.78975624417054,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_binary_assign_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.623021649,
+        "p10": 0.602325225,
+        "p90": 0.633982724,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.669699343,
+        "p10": 0.658811299,
+        "p90": 0.683205501,
+        "n": 11
+      }
+    },
+    "change_percent": 7.492146392492383,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_json_decode_assoc_width12.php",
+    "variants": {
+      "baseline": {
+        "median": 0.274290956,
+        "p10": 0.269663994,
+        "p90": 0.277051053,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.273425642,
+        "p10": 0.270385332,
+        "p90": 0.292344177,
+        "n": 11
+      }
+    },
+    "change_percent": -0.31547303367885915,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/holdout_closure_service_pipeline.php",
+    "variants": {
+      "baseline": {
+        "median": 0.006527502,
+        "p10": 0.006079092,
+        "p90": 0.006843942,
+        "n": 11
+      },
+      "candidate": {
+        "median": 0.006579511,
+        "p10": 0.00612001,
+        "p90": 0.006808706,
+        "n": 11
+      }
+    },
+    "change_percent": 0.7967672778958823,
+    "outside_p10_p90": false
+  }
+]

@@ -8,13 +8,20 @@ use crate::vm::stats;
 const DEFAULT_STACK_PAGE_SIZE: usize = 256 * 1024; // 256 KB
 const PENDING_STACK_PAGE_SIZE: usize = 16 * 1024;
 
-/// VM stack page — linked list of pages
+/// VM stack page. Later pages remain available for reuse after an unwind.
+#[repr(C, align(16))]
 struct VmStackPage {
     prev: *mut VmStackPage,
-    allocation_size: usize,
+    next: *mut VmStackPage,
+    // The charge already owns the immutable page size, including before a
+    // request budget is installed. Avoid duplicating it in the page header.
     allocation: crate::request_memory::Allocation,
     // data follows after header
 }
+
+// Both the first frame and the page end must lie on the Value-slot grid for
+// the inlined capacity calculation below.
+const _: () = assert!(size_of::<VmStackPage>().is_multiple_of(size_of::<Value>()));
 
 /// VM stack — bump allocator for call frames.
 /// Grows by allocating new pages when needed.
@@ -32,9 +39,12 @@ impl VmStack {
         let mut page = self.current_page;
         // SAFETY: this stack exclusively owns its live, acyclic page chain.
         unsafe {
+            while !(*page).prev.is_null() {
+                page = (*page).prev;
+            }
             while let Some(header) = page.as_mut() {
-                header.allocation.grow_to(header.allocation_size);
-                page = header.prev;
+                header.allocation.grow_to(header.allocation.bytes());
+                page = header.next;
             }
         }
     }
@@ -195,29 +205,69 @@ impl VmStack {
         frame
     }
 
-    /// Pop call frame — reset stack top to frame start
+    /// Pop a call frame, restoring its page bounds before the next push.
     #[inline(always)]
     pub fn pop_call_frame(&mut self, frame: *mut ExecuteData) {
+        // One unsigned range test handles addresses below and above this
+        // allocation. A preceding page wraps past page_len; ordinary returns
+        // keep a single conditional branch before resetting the bump pointer.
+        let page_base = self.current_page as usize;
+        let page_len = self.end as usize - page_base;
+        if (frame as usize).wrapping_sub(page_base) >= page_len {
+            self.rewind_to_page(frame);
+        }
         self.top = frame as *mut Value;
     }
 
-    fn extend(&mut self, needed: usize) {
-        let allocation_size = self.page_size.max(
-            needed
-                .checked_add(size_of::<VmStackPage>())
-                .expect("VM stack page size overflow"),
-        );
-        let page = Self::alloc_page(allocation_size);
-        // SAFETY: alloc_page returns an initialized page header owned by this
-        // stack. Linking it preserves the acyclic current-to-previous chain.
+    #[cold]
+    #[inline(never)]
+    fn rewind_to_page(&mut self, frame: *mut ExecuteData) {
+        // SAFETY: callers retire a frame belonging to this stack in LIFO
+        // order. Every preceding page remains allocated; compare addresses
+        // before deriving top/end pointers from the matching allocation.
         unsafe {
-            (*(page)).prev = self.current_page;
+            let mut page = (*self.current_page).prev;
+            while let Some(header) = page.as_ref() {
+                let start = page as usize + size_of::<VmStackPage>();
+                let end = page as usize + header.allocation.bytes();
+                if (start..end).contains(&(frame as usize)) {
+                    self.current_page = page;
+                    self.end = (page as *mut u8).add(header.allocation.bytes()).cast();
+                    return;
+                }
+                page = header.prev;
+            }
         }
-        self.current_page = page;
-        // SAFETY: allocation_size includes the page header plus every byte
-        // requested by the caller, so top..end is valid frame storage.
-        self.top = unsafe { (page as *mut u8).add(size_of::<VmStackPage>()) as *mut Value };
-        self.end = unsafe { (page as *mut u8).add(allocation_size) as *mut Value };
+        panic!("call frame does not belong to a preceding VM stack page");
+    }
+
+    // Page growth is rare even for call-heavy programs. Keep selection and
+    // allocation outside the inlined frame push and the main VM dispatcher.
+    #[cold]
+    #[inline(never)]
+    fn extend(&mut self, needed: usize) {
+        let required = needed
+            .checked_add(size_of::<VmStackPage>())
+            .expect("VM stack page size overflow");
+        // SAFETY: pages after current_page contain only retired frames.
+        // Reuse a sufficiently large page, or append one initialized by
+        // alloc_page. Both links stay within this stack's acyclic chain.
+        unsafe {
+            let mut previous = self.current_page;
+            let mut page = (*previous).next;
+            while !page.is_null() && (*page).allocation.bytes() < required {
+                previous = page;
+                page = (*page).next;
+            }
+            if page.is_null() {
+                page = Self::alloc_page(self.page_size.max(required));
+                (*page).prev = previous;
+                (*previous).next = page;
+            }
+            self.current_page = page;
+            self.top = (page as *mut u8).add(size_of::<VmStackPage>()).cast();
+            self.end = (page as *mut u8).add((*page).allocation.bytes()).cast();
+        }
     }
 
     fn alloc_page(size: usize) -> *mut VmStackPage {
@@ -230,7 +280,7 @@ impl VmStack {
         unsafe {
             (ptr as *mut VmStackPage).write(VmStackPage {
                 prev: std::ptr::null_mut(),
-                allocation_size: size,
+                next: std::ptr::null_mut(),
                 allocation,
             });
         }
@@ -241,17 +291,120 @@ impl VmStack {
 impl Drop for VmStack {
     fn drop(&mut self) {
         let mut page = self.current_page;
-        while !page.is_null() {
-            // SAFETY: every linked page was allocated by alloc_page, and its
-            // header remains live until this iteration deallocates that page.
-            let prev = unsafe { (*page).prev };
-            let allocation_size = unsafe { (*page).allocation_size };
-            let layout = std::alloc::Layout::from_size_align(allocation_size, 4096).unwrap();
-            unsafe {
+        // SAFETY: the entire bidirectional chain is exclusively owned by this
+        // stack, including reusable pages after current_page. Read each next
+        // link while its header is live and release every allocation once.
+        unsafe {
+            while !(*page).prev.is_null() {
+                page = (*page).prev;
+            }
+            while !page.is_null() {
+                let next = (*page).next;
+                let allocation_size = (*page).allocation.bytes();
+                let layout = std::alloc::Layout::from_size_align(allocation_size, 4096).unwrap();
                 std::ptr::drop_in_place(page);
                 std::alloc::dealloc(page as *mut u8, layout);
+                page = next;
             }
-            page = prev;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtime::ExecutorGlobals;
+    use crate::vm::execute::VmError;
+    use std::ptr::null_mut;
+
+    fn empty(_: *mut ExecuteData, _: *mut Value, _: &mut ExecutorGlobals) -> Result<(), VmError> {
+        Ok(())
+    }
+
+    #[test]
+    fn cross_page_pop_restores_bounds_and_reuses_full_and_pending_pages() {
+        let function = crate::compiler::make_internal_function(empty, 0, 0, vec![]);
+        for deferred in [false, true] {
+            let mut stack = VmStack::with_page_size(256);
+            let first_page = stack.current_page;
+            let first_end = stack.end;
+            let mut retained_child = null_mut();
+            for round in 0..20 {
+                let mut push = |args, parent| {
+                    if deferred {
+                        stack.push_deferred_scalar_call(
+                            &function.common,
+                            args,
+                            args,
+                            parent,
+                            null_mut(),
+                        )
+                    } else {
+                        stack.push_call_frame(&function.common, args, args, parent, null_mut())
+                    }
+                };
+                let outer = push(0, null_mut());
+                let child = push(64, outer);
+                assert_ne!(stack.current_page, first_page);
+                if round == 0 {
+                    retained_child = child;
+                }
+                assert_eq!(child, retained_child, "retired pages must be reused");
+                stack.pop_call_frame(child);
+                stack.pop_call_frame(outer);
+                assert_eq!(stack.current_page, first_page);
+                assert_eq!(stack.end, first_end);
+                assert_eq!(stack.top, outer.cast());
+            }
+        }
+    }
+
+    #[test]
+    fn oversized_reuse_skips_small_pages_and_can_rewind_past_them() {
+        let function = crate::compiler::make_internal_function(empty, 0, 0, vec![]);
+        let mut stack = VmStack::with_page_size(256);
+        let first_page = stack.current_page;
+        let outer = stack.push_call_frame(&function.common, 0, 0, null_mut(), null_mut());
+        let middle = stack.push_call_frame(&function.common, 64, 64, outer, null_mut());
+        let large = stack.push_call_frame(&function.common, 256, 256, middle, null_mut());
+        stack.pop_call_frame(large);
+        stack.pop_call_frame(middle);
+        stack.pop_call_frame(outer);
+        let outer = stack.push_call_frame(&function.common, 0, 0, null_mut(), null_mut());
+        let reused = stack.push_call_frame(&function.common, 256, 256, outer, null_mut());
+        assert_eq!(reused, large);
+        stack.pop_call_frame(reused);
+        stack.pop_call_frame(outer);
+        assert_eq!(stack.current_page, first_page);
+    }
+
+    #[test]
+    fn retained_pages_keep_their_size_when_adopting_a_request_budget() {
+        let function = crate::compiler::make_internal_function(empty, 0, 0, vec![]);
+        let mut stack = VmStack::with_page_size(256);
+        let outer = stack.push_call_frame(&function.common, 0, 0, null_mut(), null_mut());
+        let child = stack.push_call_frame(&function.common, 64, 64, outer, null_mut());
+        let expected =
+            256 + size_of::<VmStackPage>() + (CALL_FRAME_SLOTS + 64) * size_of::<Value>();
+        stack.pop_call_frame(child);
+        stack.pop_call_frame(outer);
+
+        let budget = crate::request_memory::Budget::default();
+        let _scope = budget.enter();
+        stack.account_request();
+        assert_eq!(budget.usage(), expected);
+        let outer = stack.push_call_frame(&function.common, 0, 0, null_mut(), null_mut());
+        let reused = stack.push_call_frame(&function.common, 64, 64, outer, null_mut());
+        assert_eq!(child, reused);
+        stack.account_request();
+        assert_eq!(budget.usage(), expected, "page adoption must be idempotent");
+        stack.pop_call_frame(reused);
+        stack.pop_call_frame(outer);
+        drop(stack);
+        assert_eq!(
+            budget.usage(),
+            0,
+            "release retained pages as well as active ones"
+        );
     }
 }

@@ -1,0 +1,12 @@
+[
+  {
+    "variant": "baseline",
+    "execute_ex_inner_address": "0x6d0cc0",
+    "execute_ex_inner_text_bytes": 336687
+  },
+  {
+    "variant": "candidate",
+    "execute_ex_inner_address": "0x6cec80",
+    "execute_ex_inner_text_bytes": 336734
+  }
+]

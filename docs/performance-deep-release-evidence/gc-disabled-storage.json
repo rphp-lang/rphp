@@ -1,0 +1,172 @@
+{
+  "complete": true,
+  "rounds": 3,
+  "warmup_round": 0,
+  "retained_rounds": [
+    1,
+    2,
+    3
+  ],
+  "iterations": 300000,
+  "sweep_interval": 4096,
+  "binaries": {
+    "candidate": "77b2dfdbe1ddf34021ebfeba5bba81369436b3617fa85e1caf34036fb1ab6ac0",
+    "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "fixtures": {
+    "plain": "149ecea3ee88653193b4de9bbd62e963b8daf1503e28ef8dca615cdd6808ae1b",
+    "sweep": "102dea4bc6168a5b8feada4fcc59ad75d681474157bdcbb6cb1d8e9db286796b"
+  },
+  "samples": [
+    {
+      "round": 0,
+      "variant": "candidate",
+      "mode": "plain",
+      "wall": 0.3088219870114699,
+      "rss_kib": 105788,
+      "user_seconds": 0.28,
+      "system_seconds": 0.02
+    },
+    {
+      "round": 0,
+      "variant": "php",
+      "mode": "sweep",
+      "wall": 0.028135559987276793,
+      "rss_kib": 19708,
+      "user_seconds": 0.01,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 0,
+      "variant": "candidate",
+      "mode": "sweep",
+      "wall": 0.2838360359892249,
+      "rss_kib": 49748,
+      "user_seconds": 0.27,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 0,
+      "variant": "php",
+      "mode": "plain",
+      "wall": 0.025467324012424797,
+      "rss_kib": 19688,
+      "user_seconds": 0.01,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 1,
+      "variant": "php",
+      "mode": "plain",
+      "wall": 0.026883637998253107,
+      "rss_kib": 19652,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 1,
+      "variant": "php",
+      "mode": "sweep",
+      "wall": 0.030110482999589294,
+      "rss_kib": 19508,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 1,
+      "variant": "candidate",
+      "mode": "plain",
+      "wall": 0.29901552299270406,
+      "rss_kib": 106212,
+      "user_seconds": 0.28,
+      "system_seconds": 0.01
+    },
+    {
+      "round": 1,
+      "variant": "candidate",
+      "mode": "sweep",
+      "wall": 0.27676831203280017,
+      "rss_kib": 49732,
+      "user_seconds": 0.27,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 2,
+      "variant": "candidate",
+      "mode": "plain",
+      "wall": 0.2960481700138189,
+      "rss_kib": 104716,
+      "user_seconds": 0.28,
+      "system_seconds": 0.01
+    },
+    {
+      "round": 2,
+      "variant": "php",
+      "mode": "plain",
+      "wall": 0.025848846998997033,
+      "rss_kib": 19292,
+      "user_seconds": 0.01,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 2,
+      "variant": "candidate",
+      "mode": "sweep",
+      "wall": 0.27173581498209387,
+      "rss_kib": 50008,
+      "user_seconds": 0.26,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 2,
+      "variant": "php",
+      "mode": "sweep",
+      "wall": 0.026950614992529154,
+      "rss_kib": 19784,
+      "user_seconds": 0.01,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 3,
+      "variant": "php",
+      "mode": "plain",
+      "wall": 0.026041753008030355,
+      "rss_kib": 19460,
+      "user_seconds": 0.01,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 3,
+      "variant": "php",
+      "mode": "sweep",
+      "wall": 0.027941763983108103,
+      "rss_kib": 19508,
+      "user_seconds": 0.02,
+      "system_seconds": 0.0
+    },
+    {
+      "round": 3,
+      "variant": "candidate",
+      "mode": "plain",
+      "wall": 0.298161894956138,
+      "rss_kib": 105228,
+      "user_seconds": 0.28,
+      "system_seconds": 0.01
+    },
+    {
+      "round": 3,
+      "variant": "candidate",
+      "mode": "sweep",
+      "wall": 0.27827479800907895,
+      "rss_kib": 49664,
+      "user_seconds": 0.27,
+      "system_seconds": 0.0
+    }
+  ],
+  "note": "Diagnostic explicitly calls memory_get_usage only in the sweep arm. This is a general dead-object lifetime reproduction, not a patched PHPStan timing or a GC semantic change.",
+  "published_source_note": "Published plain.php removes whitespace on one blank line; recorded measured source hash still identifies the original input.",
+  "published_source_sha256": {
+    "plain.php": "fafe5de07cc34128dd8663b277a64b7c3c916b69ffc605ec2dbf006b46783c72",
+    "sweep.php": "102dea4bc6168a5b8feada4fcc59ad75d681474157bdcbb6cb1d8e9db286796b"
+  }
+}

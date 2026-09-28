@@ -1,0 +1,1959 @@
+[
+  {
+    "script": "benches/bench_array.php",
+    "variants": {
+      "candidate": {
+        "median": 0.016812277,
+        "p10": 0.016003533400000002,
+        "p90": 0.0171548726,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.015908479,
+        "p10": 0.015562333,
+        "p90": 0.0161747034,
+        "n": 5
+      }
+    },
+    "change_percent": 5.681234516511613,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_array_multisort_long.php",
+    "variants": {
+      "candidate": {
+        "median": 0.064925872,
+        "p10": 0.0620328188,
+        "p90": 0.0725756124,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.061174631,
+        "p10": 0.0583971004,
+        "p90": 0.0635905982,
+        "n": 5
+      }
+    },
+    "change_percent": 6.132020641039904,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_binary_assign_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.610689114,
+        "p10": 0.5928475204,
+        "p90": 0.6461309956,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.651192475,
+        "p10": 0.6180520726,
+        "p90": 0.6721158112,
+        "n": 5
+      }
+    },
+    "change_percent": 6.632402653242631,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_branch_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.399166351,
+        "p10": 0.3858258096,
+        "p90": 0.407677253,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.390802938,
+        "p10": 0.3761605006,
+        "p90": 0.3951978392,
+        "n": 5
+      }
+    },
+    "change_percent": 2.1400588856371305,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_call_user_func.php",
+    "variants": {
+      "baseline": {
+        "median": 0.523892982,
+        "p10": 0.5232048512,
+        "p90": 0.5320873004,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.557140591,
+        "p10": 0.5558365564000001,
+        "p90": 0.6026057788,
+        "n": 5
+      }
+    },
+    "change_percent": 6.346259664154075,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_calls.php",
+    "variants": {
+      "candidate": {
+        "median": 0.254785434,
+        "p10": 0.2529352512,
+        "p90": 0.260861947,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.256495751,
+        "p10": 0.254178568,
+        "p90": 0.258846871,
+        "n": 5
+      }
+    },
+    "change_percent": -0.6668012991763006,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_carried_condition_recurrence_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.573433227,
+        "p10": 0.5584865092,
+        "p90": 0.5859757348,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.556582017,
+        "p10": 0.5382337806,
+        "p90": 0.5652205616,
+        "n": 5
+      }
+    },
+    "change_percent": 3.0276238694934454,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_composed_recurrence_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.454151303,
+        "p10": 0.44801346,
+        "p90": 0.4755283534,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.457016764,
+        "p10": 0.4346414662,
+        "p90": 0.5013734934,
+        "n": 5
+      }
+    },
+    "change_percent": -0.6269925363175499,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_conditional_composed_recurrence_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.617417042,
+        "p10": 0.6004394892,
+        "p90": 0.6353556894,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.657869835,
+        "p10": 0.6437781784,
+        "p90": 0.6636840838,
+        "n": 5
+      }
+    },
+    "change_percent": 6.551939815098251,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_conditional_recurrence_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.56703823,
+        "p10": 0.5556504548,
+        "p90": 0.6066870074,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.539079266,
+        "p10": 0.52741525,
+        "p90": 0.5493303896,
+        "n": 5
+      }
+    },
+    "change_percent": 5.18642911411844,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_declared_object_lifecycle.php",
+    "variants": {
+      "candidate": {
+        "median": 0.007671974,
+        "p10": 0.0071469886,
+        "p90": 0.008066892400000001,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.006797643,
+        "p10": 0.006680639,
+        "p90": 0.0079035638,
+        "n": 5
+      }
+    },
+    "change_percent": 12.862267112291725,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_declared_property_reads.php",
+    "variants": {
+      "baseline": {
+        "median": 0.697783359,
+        "p10": 0.6937870134,
+        "p90": 0.7016033184,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.697737581,
+        "p10": 0.6893190258,
+        "p90": 0.7010745975999999,
+        "n": 5
+      }
+    },
+    "change_percent": -0.006560488926754537,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_dependent_recurrence_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.464692431,
+        "p10": 0.433517515,
+        "p90": 0.4730079772,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.467559609,
+        "p10": 0.4584798202,
+        "p90": 0.4763875172,
+        "n": 5
+      }
+    },
+    "change_percent": -0.6132219175501885,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_fib39.php",
+    "variants": {
+      "baseline": {
+        "median": 0.388456108,
+        "p10": 0.3810189364,
+        "p90": 0.3895703514,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.383915562,
+        "p10": 0.3784402346,
+        "p90": 0.3877414274,
+        "n": 5
+      }
+    },
+    "change_percent": -1.1688697658475355,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_foreach_declared_property_reads.php",
+    "variants": {
+      "candidate": {
+        "median": 0.29947835,
+        "p10": 0.2967631422,
+        "p90": 0.3056358406,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.296988022,
+        "p10": 0.29366956180000003,
+        "p90": 0.3002983844,
+        "n": 5
+      }
+    },
+    "change_percent": 0.8385280939040562,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+    "variants": {
+      "baseline": {
+        "median": 0.411577278,
+        "p10": 0.4082347878,
+        "p90": 0.4125874884,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.40993933,
+        "p10": 0.4070059286,
+        "p90": 0.4134055686,
+        "n": 5
+      }
+    },
+    "change_percent": -0.39796851953523005,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+    "variants": {
+      "baseline": {
+        "median": 0.406544611,
+        "p10": 0.399973221,
+        "p90": 0.4087175494,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.410673582,
+        "p10": 0.4039387364,
+        "p90": 0.412721552,
+        "n": 5
+      }
+    },
+    "change_percent": 1.0156255643983814,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_linear_property_reads.php",
+    "variants": {
+      "candidate": {
+        "median": 0.391671376,
+        "p10": 0.3889057174,
+        "p90": 0.3949555586,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.391734125,
+        "p10": 0.3886478604,
+        "p90": 0.4018141722,
+        "n": 5
+      }
+    },
+    "change_percent": -0.016018262386507942,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_property_reads.php",
+    "variants": {
+      "candidate": {
+        "median": 0.380031593,
+        "p10": 0.3753152732,
+        "p90": 0.3909074798,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.378265765,
+        "p10": 0.3765366308,
+        "p90": 0.3837028184,
+        "n": 5
+      }
+    },
+    "change_percent": 0.46682205036452373,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_general_trace_guard_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.632081481,
+        "p10": 0.6070888688,
+        "p90": 0.644003358,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.584654324,
+        "p10": 0.578362792,
+        "p90": 0.5939037478,
+        "n": 5
+      }
+    },
+    "change_percent": 8.111999698474825,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_generics_method_diamond_manual.php",
+    "variants": {
+      "baseline": {
+        "median": 0.556724574,
+        "p10": 0.5521000338,
+        "p90": 0.5694770808,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.537854167,
+        "p10": 0.5324621874,
+        "p90": 0.5427045784,
+        "n": 5
+      }
+    },
+    "change_percent": -3.3895408755568956,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_generics_method_manual.php",
+    "variants": {
+      "baseline": {
+        "median": 0.364600257,
+        "p10": 0.35991164319999996,
+        "p90": 0.36939345279999997,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.365402201,
+        "p10": 0.3603707378,
+        "p90": 0.3731931634,
+        "n": 5
+      }
+    },
+    "change_percent": 0.21995157288108302,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_generics_pseudo_scope_manual.php",
+    "variants": {
+      "baseline": {
+        "median": 1.326390003,
+        "p10": 1.3171599148,
+        "p90": 1.332291931,
+        "n": 5
+      },
+      "candidate": {
+        "median": 1.361122979,
+        "p10": 1.3570933862,
+        "p90": 1.3764482824,
+        "n": 5
+      }
+    },
+    "change_percent": 2.618609603618971,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_generics_reified_variadic_manual.php",
+    "variants": {
+      "candidate": {
+        "median": 0.183792135,
+        "p10": 0.181157851,
+        "p90": 0.189209274,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.178739542,
+        "p10": 0.1778515846,
+        "p90": 0.18675371799999999,
+        "n": 5
+      }
+    },
+    "change_percent": 2.826790839600557,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_constant_int_array_materialized_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.770236781,
+        "p10": 0.7637025758,
+        "p90": 0.7712230254,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.76392702,
+        "p10": 0.7627037221999999,
+        "p90": 0.7739043984,
+        "n": 5
+      }
+    },
+    "change_percent": 0.825963846651212,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_irregular_int_array_permuted_read.php",
+    "variants": {
+      "candidate": {
+        "median": 0.367747702,
+        "p10": 0.3614217736,
+        "p90": 0.3686138442,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.378780208,
+        "p10": 0.3603726108,
+        "p90": 0.3857714826,
+        "n": 5
+      }
+    },
+    "change_percent": -2.912640567534619,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_irregular_int_array_permuted_read_dominant.php",
+    "variants": {
+      "candidate": {
+        "median": 2.222384897,
+        "p10": 2.1516048538,
+        "p90": 2.252893244,
+        "n": 5
+      },
+      "baseline": {
+        "median": 2.171052914,
+        "p10": 2.1584231628,
+        "p90": 2.4425130252000002,
+        "n": 5
+      }
+    },
+    "change_percent": 2.3643819397024535,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_irregular_int_array_read.php",
+    "variants": {
+      "baseline": {
+        "median": 0.323642435,
+        "p10": 0.318849353,
+        "p90": 0.3298779678,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.32514613,
+        "p10": 0.3126875862,
+        "p90": 0.33036173900000004,
+        "n": 5
+      }
+    },
+    "change_percent": 0.4646161434300078,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_irregular_prefix_int_array_transform.php",
+    "variants": {
+      "baseline": {
+        "median": 0.335211315,
+        "p10": 0.3276328726,
+        "p90": 0.345369632,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.33456179,
+        "p10": 0.319636411,
+        "p90": 0.3411421728,
+        "n": 5
+      }
+    },
+    "change_percent": -0.19376583394864477,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_irregular_wide_long_array_permuted_read.php",
+    "variants": {
+      "baseline": {
+        "median": 0.366334404,
+        "p10": 0.3552118286,
+        "p90": 0.375703724,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.364301451,
+        "p10": 0.3557350964,
+        "p90": 0.36655157,
+        "n": 5
+      }
+    },
+    "change_percent": -0.5549446019271542,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_string_array_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.781415365,
+        "p10": 0.7780872364,
+        "p90": 0.7843070778,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.784648328,
+        "p10": 0.778655491,
+        "p90": 0.819757706,
+        "n": 5
+      }
+    },
+    "change_percent": 0.41373169057150605,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_string_array_materialized_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.817496933,
+        "p10": 0.8154183460000001,
+        "p90": 0.8262776248,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.833203664,
+        "p10": 0.8193996066,
+        "p90": 0.8468452328,
+        "n": 5
+      }
+    },
+    "change_percent": 1.9213198687315414,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_hash_string_cv_array_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.866467651,
+        "p10": 0.8572713984,
+        "p90": 0.980042285,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.856871375,
+        "p10": 0.852855097,
+        "p90": 0.8748594738000001,
+        "n": 5
+      }
+    },
+    "change_percent": 1.119920244739192,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_instance_property_constructor_typed.php",
+    "variants": {
+      "baseline": {
+        "median": 0.108909662,
+        "p10": 0.10796509779999999,
+        "p90": 0.10901609079999999,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.11232942,
+        "p10": 0.1099673956,
+        "p90": 0.1148539556,
+        "n": 5
+      }
+    },
+    "change_percent": 3.1399950538823607,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_instance_property_read.php",
+    "variants": {
+      "baseline": {
+        "median": 0.294579414,
+        "p10": 0.2924619374,
+        "p90": 0.295999988,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.294969627,
+        "p10": 0.29157358980000003,
+        "p90": 0.3106971718,
+        "n": 5
+      }
+    },
+    "change_percent": 0.13246444980707928,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_instance_property_read_typed.php",
+    "variants": {
+      "candidate": {
+        "median": 0.297581311,
+        "p10": 0.2952827286,
+        "p90": 0.32161564779999996,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.292767028,
+        "p10": 0.292053353,
+        "p90": 0.2952504546,
+        "n": 5
+      }
+    },
+    "change_percent": 1.6444075116273105,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_instance_property_write.php",
+    "variants": {
+      "candidate": {
+        "median": 0.285555001,
+        "p10": 0.284292013,
+        "p90": 0.308761624,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.286923378,
+        "p10": 0.28484356759999996,
+        "p90": 0.2955359586,
+        "n": 5
+      }
+    },
+    "change_percent": -0.4769137354851738,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_instance_property_write_typed.php",
+    "variants": {
+      "candidate": {
+        "median": 0.261518892,
+        "p10": 0.25918472,
+        "p90": 0.2654011604,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.260135577,
+        "p10": 0.2578113192,
+        "p90": 0.2636629546,
+        "n": 5
+      }
+    },
+    "change_percent": 0.5317669408978931,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_jit_mixed_string_hash_update.php",
+    "variants": {
+      "candidate": {
+        "median": 0.508513237,
+        "p10": 0.4923063092,
+        "p90": 0.50961802,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.489669529,
+        "p10": 0.4829810746,
+        "p90": 0.4957604956,
+        "n": 5
+      }
+    },
+    "change_percent": 3.8482500715293577,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json.php",
+    "variants": {
+      "baseline": {
+        "median": 0.005970957,
+        "p10": 0.0056089918,
+        "p90": 0.0071563832,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.005439909,
+        "p10": 0.0052835266,
+        "p90": 0.0061464052,
+        "n": 5
+      }
+    },
+    "change_percent": -8.893850684237048,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_decode_assoc_width12.php",
+    "variants": {
+      "candidate": {
+        "median": 0.2822286,
+        "p10": 0.2798598684,
+        "p90": 0.284496197,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.279339832,
+        "p10": 0.2772458954,
+        "p90": 0.280039994,
+        "n": 5
+      }
+    },
+    "change_percent": 1.0341410959250563,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_decode_object_width12.php",
+    "variants": {
+      "candidate": {
+        "median": 0.345008125,
+        "p10": 0.3415898202,
+        "p90": 0.34860412700000004,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.343330639,
+        "p10": 0.3407546736,
+        "p90": 0.3453983472,
+        "n": 5
+      }
+    },
+    "change_percent": 0.48859198960102823,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_decode_object_width20.php",
+    "variants": {
+      "candidate": {
+        "median": 0.530882373,
+        "p10": 0.5300861482,
+        "p90": 0.5406451298,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.531348344,
+        "p10": 0.5277804504,
+        "p90": 0.5780184218,
+        "n": 5
+      }
+    },
+    "change_percent": -0.08769595412534414,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_decode_object_width8.php",
+    "variants": {
+      "candidate": {
+        "median": 0.174382702,
+        "p10": 0.172884076,
+        "p90": 0.176349261,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.178238795,
+        "p10": 0.1747428528,
+        "p90": 0.179842894,
+        "n": 5
+      }
+    },
+    "change_percent": -2.1634420273094923,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_projection.php",
+    "variants": {
+      "candidate": {
+        "median": 2.374321803,
+        "p10": 2.3393590116,
+        "p90": 2.3902867876,
+        "n": 5
+      },
+      "baseline": {
+        "median": 2.390244206,
+        "p10": 2.3422944712000002,
+        "p90": 2.4576217582,
+        "n": 5
+      }
+    },
+    "change_percent": -0.6661412654000665,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_json_projection_double.php",
+    "variants": {
+      "baseline": {
+        "median": 0.54438632,
+        "p10": 0.5357926404,
+        "p90": 0.5492465546,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.567276271,
+        "p10": 0.5641379168,
+        "p90": 0.5919972532,
+        "n": 5
+      }
+    },
+    "change_percent": 4.204725607359139,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_json_projection_string.php",
+    "variants": {
+      "baseline": {
+        "median": 0.601082081,
+        "p10": 0.5974545656,
+        "p90": 0.6052561746,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.620165509,
+        "p10": 0.6060815802,
+        "p90": 0.6536265396000001,
+        "n": 5
+      }
+    },
+    "change_percent": 3.174845599830811,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_method_chain.php",
+    "variants": {
+      "candidate": {
+        "median": 0.738368081,
+        "p10": 0.7291164073999999,
+        "p90": 0.8423062146,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.751257541,
+        "p10": 0.7470671456,
+        "p90": 0.7724469746,
+        "n": 5
+      }
+    },
+    "change_percent": -1.715717885885426,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_mixed_trace_guard_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.502824964,
+        "p10": 0.4951766386,
+        "p90": 0.507216236,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.52158846,
+        "p10": 0.5126478458,
+        "p90": 0.5327688972,
+        "n": 5
+      }
+    },
+    "change_percent": 3.731615839184954,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_modulo_branch_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.472954016,
+        "p10": 0.45834022739999997,
+        "p90": 0.476752782,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.481238621,
+        "p10": 0.4763821636,
+        "p90": 0.490952284,
+        "n": 5
+      }
+    },
+    "change_percent": 1.7516724078308732,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_obj_dispatch.php",
+    "variants": {
+      "candidate": {
+        "median": 0.561901998,
+        "p10": 0.5550775962,
+        "p90": 0.5665922132,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.555455489,
+        "p10": 0.553172656,
+        "p90": 0.5621215196,
+        "n": 5
+      }
+    },
+    "change_percent": 1.1605806635569982,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_property.php",
+    "variants": {
+      "baseline": {
+        "median": 0.322556003,
+        "p10": 0.3202124852,
+        "p90": 0.3244016778,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.3259046,
+        "p10": 0.323552182,
+        "p90": 0.32893990559999997,
+        "n": 5
+      }
+    },
+    "change_percent": 1.0381443745754781,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_property_typed.php",
+    "variants": {
+      "candidate": {
+        "median": 0.331617467,
+        "p10": 0.3251614666,
+        "p90": 0.33404338860000005,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.330960232,
+        "p10": 0.3261514882,
+        "p90": 0.3321101708,
+        "n": 5
+      }
+    },
+    "change_percent": 0.19858428187227162,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_regex_repeated_callback_retains.php",
+    "variants": {
+      "candidate": {
+        "median": 0.009206479,
+        "p10": 0.0082447648,
+        "p90": 0.009571729000000001,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.008719258,
+        "p10": 0.0079287744,
+        "p90": 0.0095606254,
+        "n": 5
+      }
+    },
+    "change_percent": 5.587872270782679,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_reverse_dependent_recurrence_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.460599242,
+        "p10": 0.4535195862,
+        "p90": 0.4716572562,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.435492406,
+        "p10": 0.4304846328,
+        "p90": 0.4504610348,
+        "n": 5
+      }
+    },
+    "change_percent": 5.7651604606855145,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_reversed_commutative_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.739526068,
+        "p10": 0.714099312,
+        "p90": 0.7537826552,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.695435133,
+        "p10": 0.6842883434,
+        "p90": 0.6967447644,
+        "n": 5
+      }
+    },
+    "change_percent": 6.340049978464335,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_scalar_call_branch_standalone.php",
+    "variants": {
+      "candidate": {
+        "median": 0.370770269,
+        "p10": 0.3652206834,
+        "p90": 0.3755328862,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.369805451,
+        "p10": 0.365750122,
+        "p90": 0.376010546,
+        "n": 5
+      }
+    },
+    "change_percent": 0.26089880432833557,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_expression_chain_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.633607717,
+        "p10": 0.6139088793999999,
+        "p90": 0.6511473384,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.630066384,
+        "p10": 0.6233898971999999,
+        "p90": 0.6814787886,
+        "n": 5
+      }
+    },
+    "change_percent": -0.5589156989386779,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 1.603923538,
+        "p10": 1.5639522986,
+        "p90": 1.6410006552,
+        "n": 5
+      },
+      "baseline": {
+        "median": 1.537509063,
+        "p10": 1.4974762228,
+        "p90": 1.6451738212,
+        "n": 5
+      }
+    },
+    "change_percent": 4.31961518785533,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_method.php",
+    "variants": {
+      "baseline": {
+        "median": 0.807224395,
+        "p10": 0.8000483252,
+        "p90": 0.8343357528,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.763070933,
+        "p10": 0.7552060412,
+        "p90": 0.770480265,
+        "n": 5
+      }
+    },
+    "change_percent": -5.469787864872444,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_method_branch.php",
+    "variants": {
+      "candidate": {
+        "median": 0.816193092,
+        "p10": 0.811539919,
+        "p90": 0.8170328476000001,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.814723967,
+        "p10": 0.8114673616,
+        "p90": 0.8200082404,
+        "n": 5
+      }
+    },
+    "change_percent": 0.18032180953380106,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_method_native_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.826010083,
+        "p10": 0.8162291683999999,
+        "p90": 0.9076433892,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.807711961,
+        "p10": 0.7988667878,
+        "p90": 0.810313872,
+        "n": 5
+      }
+    },
+    "change_percent": -2.2152419657569755,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_overlapping_lifetimes_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.55925448,
+        "p10": 0.545484898,
+        "p90": 0.6231729142,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.554969609,
+        "p10": 0.535148064,
+        "p90": 0.5817318238,
+        "n": 5
+      }
+    },
+    "change_percent": 0.7720911074249326,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scalar_recurrence_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.468859371,
+        "p10": 0.4588494218,
+        "p90": 0.4836317764,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.450411018,
+        "p10": 0.445539798,
+        "p90": 0.4631645296,
+        "n": 5
+      }
+    },
+    "change_percent": 4.0958929206301065,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_scoped_static_callback.php",
+    "variants": {
+      "candidate": {
+        "median": 0.70123127,
+        "p10": 0.6852689978,
+        "p90": 0.7148271788,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.693968675,
+        "p10": 0.6834169246,
+        "p90": 0.7004220644,
+        "n": 5
+      }
+    },
+    "change_percent": 1.0465306665318863,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_skewed_branch_layout_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.737318238,
+        "p10": 0.712117919,
+        "p90": 0.7432048612,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.707119944,
+        "p10": 0.6682340318,
+        "p90": 0.7365377244,
+        "n": 5
+      }
+    },
+    "change_percent": 4.270604196110739,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_static_late_property.php",
+    "variants": {
+      "candidate": {
+        "median": 0.328649399,
+        "p10": 0.3258676128,
+        "p90": 0.3332316626,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.327236152,
+        "p10": 0.3261044124,
+        "p90": 0.3296963396,
+        "n": 5
+      }
+    },
+    "change_percent": 0.4318737374713999,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_static_method.php",
+    "variants": {
+      "baseline": {
+        "median": 0.455114412,
+        "p10": 0.450059806,
+        "p90": 0.4582512834,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.455780747,
+        "p10": 0.4508830268,
+        "p90": 0.4579123242,
+        "n": 5
+      }
+    },
+    "change_percent": 0.14641043711882684,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_static_self_call.php",
+    "variants": {
+      "baseline": {
+        "median": 0.269436513,
+        "p10": 0.2691116978,
+        "p90": 0.2744697114,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.268689998,
+        "p10": 0.266390198,
+        "p90": 0.2736070008,
+        "n": 5
+      }
+    },
+    "change_percent": -0.27706526917530283,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_static_self_property.php",
+    "variants": {
+      "baseline": {
+        "median": 0.13267345,
+        "p10": 0.12900699100000002,
+        "p90": 0.13813375619999999,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.137234443,
+        "p10": 0.1333692804,
+        "p90": 0.15149941220000002,
+        "n": 5
+      }
+    },
+    "change_percent": 3.4377586472651656,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_static_self_property_write.php",
+    "variants": {
+      "candidate": {
+        "median": 0.279611021,
+        "p10": 0.27594568740000003,
+        "p90": 0.28040711679999997,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.278362622,
+        "p10": 0.27544102179999996,
+        "p90": 0.2801592198,
+        "n": 5
+      }
+    },
+    "change_percent": 0.44847939390368907,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_static_self_property_write_typed.php",
+    "variants": {
+      "candidate": {
+        "median": 0.271536057,
+        "p10": 0.2703711484,
+        "p90": 0.28165900460000004,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.275754474,
+        "p10": 0.2702690786,
+        "p90": 0.2799764086,
+        "n": 5
+      }
+    },
+    "change_percent": -1.529772822471065,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_stdclass_long_property_reads.php",
+    "variants": {
+      "baseline": {
+        "median": 0.722428648,
+        "p10": 0.71780469,
+        "p90": 0.737078213,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.720323878,
+        "p10": 0.7124637378,
+        "p90": 0.7591932082,
+        "n": 5
+      }
+    },
+    "change_percent": -0.291346419584404,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_stdclass_property_reads.php",
+    "variants": {
+      "baseline": {
+        "median": 0.751602287,
+        "p10": 0.744329975,
+        "p90": 0.7680608,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.748095976,
+        "p10": 0.7434333112,
+        "p90": 0.7487270352000001,
+        "n": 5
+      }
+    },
+    "change_percent": -0.4665114862802411,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_stdclass_string_property_strlen.php",
+    "variants": {
+      "candidate": {
+        "median": 0.793289115,
+        "p10": 0.7885916568,
+        "p90": 0.7993482434,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.808022959,
+        "p10": 0.7843519144,
+        "p90": 0.9223482399999999,
+        "n": 5
+      }
+    },
+    "change_percent": -1.8234437321229646,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_straight_branch_expression_loop.php",
+    "variants": {
+      "candidate": {
+        "median": 0.702810415,
+        "p10": 0.6863063572,
+        "p90": 0.7105416554,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.696703996,
+        "p10": 0.677916501,
+        "p90": 0.7053921326,
+        "n": 5
+      }
+    },
+    "change_percent": 0.8764725098548087,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_string.php",
+    "variants": {
+      "baseline": {
+        "median": 0.006615643,
+        "p10": 0.0056447852,
+        "p90": 0.0073896512,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.007199135,
+        "p10": 0.0064603304,
+        "p90": 0.0075069592,
+        "n": 5
+      }
+    },
+    "change_percent": 8.819883418739494,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_three_recurrence_invariant_loop.php",
+    "variants": {
+      "baseline": {
+        "median": 0.584073017,
+        "p10": 0.557958346,
+        "p90": 0.6438790862,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.583413744,
+        "p10": 0.5807952154,
+        "p90": 0.5979776172,
+        "n": 5
+      }
+    },
+    "change_percent": -0.11287509965556275,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_chain_int_typed.php",
+    "variants": {
+      "baseline": {
+        "median": 0.204198169,
+        "p10": 0.20036118,
+        "p90": 0.2054217654,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.202444161,
+        "p10": 0.20103080280000002,
+        "p90": 0.203802078,
+        "n": 5
+      }
+    },
+    "change_percent": -0.8589734220388667,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_chain_int_untyped.php",
+    "variants": {
+      "candidate": {
+        "median": 0.201933302,
+        "p10": 0.201138642,
+        "p90": 0.2056307348,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.19900792,
+        "p10": 0.19840663620000001,
+        "p90": 0.2008623554,
+        "n": 5
+      }
+    },
+    "change_percent": 1.4699827021959821,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_type_chain_string_typed.php",
+    "variants": {
+      "baseline": {
+        "median": 0.166833287,
+        "p10": 0.164982668,
+        "p90": 0.1695488338,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.16913472,
+        "p10": 0.1673586344,
+        "p90": 0.171924486,
+        "n": 5
+      }
+    },
+    "change_percent": 1.3794807027928346,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_chain_string_untyped.php",
+    "variants": {
+      "baseline": {
+        "median": 0.158467256,
+        "p10": 0.1555031304,
+        "p90": 0.1614056404,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.157665713,
+        "p10": 0.15510812100000002,
+        "p90": 0.1651516076,
+        "n": 5
+      }
+    },
+    "change_percent": -0.5058098563907709,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_function_params.php",
+    "variants": {
+      "baseline": {
+        "median": 0.10398147,
+        "p10": 0.103707007,
+        "p90": 0.104513748,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.106146928,
+        "p10": 0.1045589456,
+        "p90": 0.1074289984,
+        "n": 5
+      }
+    },
+    "change_percent": 2.082542206798954,
+    "outside_p10_p90": true
+  },
+  {
+    "script": "benches/bench_type_function_strict.php",
+    "variants": {
+      "baseline": {
+        "median": 0.103630187,
+        "p10": 0.10296032399999999,
+        "p90": 0.1057598342,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.104987413,
+        "p10": 0.1043735988,
+        "p90": 0.1079401448,
+        "n": 5
+      }
+    },
+    "change_percent": 1.309682090991493,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_method_return_fanout_typed.php",
+    "variants": {
+      "baseline": {
+        "median": 0.361429881,
+        "p10": 0.3562067244,
+        "p90": 0.3730036996,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.347915182,
+        "p10": 0.3409012884,
+        "p90": 0.3604019554,
+        "n": 5
+      }
+    },
+    "change_percent": -3.7392312341767986,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_method_return_fanout_untyped.php",
+    "variants": {
+      "baseline": {
+        "median": 0.357429657,
+        "p10": 0.3483573518,
+        "p90": 0.3618665258,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.33076062,
+        "p10": 0.323823017,
+        "p90": 0.3365337518,
+        "n": 5
+      }
+    },
+    "change_percent": -7.461338609627466,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_method_typed.php",
+    "variants": {
+      "candidate": {
+        "median": 0.409246407,
+        "p10": 0.4077224558,
+        "p90": 0.4221943186,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.413296711,
+        "p10": 0.40736242840000003,
+        "p90": 0.4139786318,
+        "n": 5
+      }
+    },
+    "change_percent": -0.9799990883547105,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_method_untyped.php",
+    "variants": {
+      "baseline": {
+        "median": 0.381628031,
+        "p10": 0.37031522,
+        "p90": 0.4007931172,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.372963997,
+        "p10": 0.3724072004,
+        "p90": 0.3752478248,
+        "n": 5
+      }
+    },
+    "change_percent": -2.270282394429246,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_scalar_function_typed.php",
+    "variants": {
+      "baseline": {
+        "median": 0.268009343,
+        "p10": 0.2646691666,
+        "p90": 0.2731335482,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.276796009,
+        "p10": 0.2715891414,
+        "p90": 0.2795638906,
+        "n": 5
+      }
+    },
+    "change_percent": 3.2784924218108413,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_scalar_function_untyped.php",
+    "variants": {
+      "candidate": {
+        "median": 0.267145582,
+        "p10": 0.26253038,
+        "p90": 0.270507312,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.265658598,
+        "p10": 0.26259334900000003,
+        "p90": 0.26717951440000004,
+        "n": 5
+      }
+    },
+    "change_percent": 0.559734942213308,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_scalar_method_typed.php",
+    "variants": {
+      "candidate": {
+        "median": 0.395105796,
+        "p10": 0.393525315,
+        "p90": 0.4026688202,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.402753844,
+        "p10": 0.3961289586,
+        "p90": 0.5534230396,
+        "n": 5
+      }
+    },
+    "change_percent": -1.898938548678386,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_type_scalar_method_untyped.php",
+    "variants": {
+      "baseline": {
+        "median": 0.374718314,
+        "p10": 0.3711188,
+        "p90": 0.37975331500000004,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.372745631,
+        "p10": 0.3716310714,
+        "p90": 0.3787060498,
+        "n": 5
+      }
+    },
+    "change_percent": -0.5264442452631135,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_argument_expr.php",
+    "variants": {
+      "baseline": {
+        "median": 0.435375002,
+        "p10": 0.43341082200000003,
+        "p90": 0.436080739,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.432290984,
+        "p10": 0.4300415286,
+        "p90": 0.439981243,
+        "n": 5
+      }
+    },
+    "change_percent": -0.7083589976073168,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_composed_conditional.php",
+    "variants": {
+      "candidate": {
+        "median": 0.500723491,
+        "p10": 0.4961495044,
+        "p90": 0.5148563528000001,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.534883434,
+        "p10": 0.5305077322,
+        "p90": 0.5406213425999999,
+        "n": 5
+      }
+    },
+    "change_percent": -6.386427551988838,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_composed_tree.php",
+    "variants": {
+      "baseline": {
+        "median": 1.649997822,
+        "p10": 1.6020508328,
+        "p90": 1.6789100364,
+        "n": 5
+      },
+      "candidate": {
+        "median": 1.630397031,
+        "p10": 1.601733173,
+        "p90": 1.6408046418,
+        "n": 5
+      }
+    },
+    "change_percent": -1.187928295338081,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_conditional.php",
+    "variants": {
+      "baseline": {
+        "median": 0.252144069,
+        "p10": 0.2501537852,
+        "p90": 0.2540531058,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.240245309,
+        "p10": 0.2384078164,
+        "p90": 0.2445995252,
+        "n": 5
+      }
+    },
+    "change_percent": -4.719032276741764,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_method_accumulate.php",
+    "variants": {
+      "baseline": {
+        "median": 0.373331178,
+        "p10": 0.37053970880000003,
+        "p90": 0.4099709702,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.371616224,
+        "p10": 0.3681102138,
+        "p90": 0.3746332528,
+        "n": 5
+      }
+    },
+    "change_percent": -0.45936533058591467,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_nested_leaf.php",
+    "variants": {
+      "baseline": {
+        "median": 0.53081751,
+        "p10": 0.527910084,
+        "p90": 0.5345750338,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.499554634,
+        "p10": 0.4954595938,
+        "p90": 0.5015445018,
+        "n": 5
+      }
+    },
+    "change_percent": -5.889571351932233,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_typed_float_nested_method.php",
+    "variants": {
+      "baseline": {
+        "median": 1.655402467,
+        "p10": 1.6102042616,
+        "p90": 1.711782142,
+        "n": 5
+      },
+      "candidate": {
+        "median": 1.569037786,
+        "p10": 1.5619991312,
+        "p90": 1.5902326116,
+        "n": 5
+      }
+    },
+    "change_percent": -5.217141010821025,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_x86_linear_equivalent.php",
+    "variants": {
+      "baseline": {
+        "median": 0.325876197,
+        "p10": 0.3239051226,
+        "p90": 0.40483308500000004,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.328066566,
+        "p10": 0.32382277119999997,
+        "p90": 0.3414279728,
+        "n": 5
+      }
+    },
+    "change_percent": 0.6721475886132477,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/bench_x86_straight_equivalent.php",
+    "variants": {
+      "candidate": {
+        "median": 0.318235856,
+        "p10": 0.3124939964,
+        "p90": 0.32868036840000003,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.317012688,
+        "p10": 0.30991762300000003,
+        "p90": 0.3320622782,
+        "n": 5
+      }
+    },
+    "change_percent": 0.3858419698330895,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/holdout_closure_service_pipeline.php",
+    "variants": {
+      "baseline": {
+        "median": 0.006501752,
+        "p10": 0.0057677454,
+        "p90": 0.006755811,
+        "n": 5
+      },
+      "candidate": {
+        "median": 0.006814256,
+        "p10": 0.0063688486,
+        "p90": 0.0071086752,
+        "n": 5
+      }
+    },
+    "change_percent": 4.806458320772622,
+    "outside_p10_p90": false
+  },
+  {
+    "script": "benches/holdout_routing_pipeline.php",
+    "variants": {
+      "candidate": {
+        "median": 0.013915676,
+        "p10": 0.0138826074,
+        "p90": 0.0151700656,
+        "n": 5
+      },
+      "baseline": {
+        "median": 0.013406463,
+        "p10": 0.0131982456,
+        "p90": 0.014075754800000001,
+        "n": 5
+      }
+    },
+    "change_percent": 3.7982650606651402,
+    "outside_p10_p90": false
+  }
+]

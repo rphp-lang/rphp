@@ -4,6 +4,16 @@ Status: Rust heap integration accepted. Fresh control measurements and root-caus
 diagnostics are complete; the larger-project validation timed out and remains
 an explicit failed gate for that workload.
 
+**Later measurement correction:** the historical reference-PHP timings below
+allowed PHPStan to restart itself, enabling CLI OPcache and dropping the
+original disabled-function flags. The initial configuration probe did not
+describe that restarted process, so the same-configuration/serial PHP claim
+and the table's "CLI OPcache off" label are withdrawn. The RPHP-to-RPHP allocator
+comparison is separate. See the [bounded-release follow-up](performance-deep-release.md)
+for a corrected protocol that blocks restart and workers, verifies all four
+disabled functions, and reports new measurements. The small 234-byte control
+and the five-file project must not be compared as if they were the same input.
+
 ## Contract
 
 The user approved merging the Rust-only allocator checkpoint on 2026-09-28

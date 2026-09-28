@@ -1,0 +1,17 @@
+[
+  {
+    "check": "format",
+    "exit": 0,
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  {
+    "check": "unsafe",
+    "exit": 0,
+    "output_sha256": "0ae2678ec40910396db29171dc02bc648fe6497249da00126e2707e15d8961fc"
+  },
+  {
+    "check": "whitespace",
+    "exit": 0,
+    "output_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  }
+]

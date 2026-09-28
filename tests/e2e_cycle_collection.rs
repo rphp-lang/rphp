@@ -20,6 +20,14 @@ $left->peer = $right;
 $right->peer = $left;
 $weak = WeakReference::create($left);
 unset($left, $right);
+// Dead weak bookkeeping may be swept while GC is disabled. Surviving cycles
+// and their destructor order must remain available to explicit collection.
+for ($i = 0; $i < 12000; $i++) {
+    $temporary = [$i];
+    $alias = $temporary;
+    unset($alias, $temporary);
+}
+if ($weak->get() === null) { echo "premature collection\n"; }
 $collected = gc_collect_cycles();
 echo 'enabled:', gc_enabled() ? 1 : 0, "\n";
 echo "count:$collected\n";

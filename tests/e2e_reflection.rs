@@ -140,6 +140,31 @@ fn reflection_class_implements_interface_includes_inherited_and_interface_identi
 }
 
 #[test]
+fn reflection_interface_checks_resolve_qualified_case_insensitive_names_and_aliases() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+namespace InterfaceLookup;
+interface RootContract {}
+interface ChildContract extends RootContract {}
+interface OtherContract {}
+class ParentClass implements ChildContract {}
+class ChildClass extends ParentClass {}
+class_alias(RootContract::class, 'InterfaceLookup\\AliasContract');
+$reflection = new \ReflectionClass(new ChildClass);
+foreach (['InterfaceLookup\\RootContract', '\\InterfaceLookup\\RootContract',
+    '\\interfacelookup\\rootcontract', 'INTERFACELOOKUP\\CHILDCONTRACT',
+    '\\InterfaceLookup\\AliasContract', 'InterfaceLookup\\OtherContract'] as $name) {
+    echo (int) $reflection->implementsInterface($name);
+}
+echo ':', (int) (new \ReflectionClass(ChildContract::class))->implementsInterface('\\interfacelookup\\rootcontract');
+"#,
+        ),
+        "111110:1"
+    );
+}
+
+#[test]
 fn reflection_class_get_interfaces_and_traits_return_named_reflections() {
     assert_eq!(
         run_php(

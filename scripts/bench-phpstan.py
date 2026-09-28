@@ -47,7 +47,26 @@ def main():
     variants["php"] = (Path(php).resolve(strict=True), False)
     phar = args.phar.resolve(strict=True)
     project = args.project.resolve(strict=True)
-    flags = ["-d", "disable_functions=proc_open,pcntl_signal"]
+    # PHPStan can pcntl_exec() itself to enable CLI OPcache, losing the
+    # original -d flags in the process. Block both restart and worker creation
+    # so every measured process keeps the declared serial configuration.
+    disabled_functions = ("proc_open", "pcntl_signal", "pcntl_exec", "pcntl_fork")
+    flags = ["-d", "disable_functions=" + ",".join(disabled_functions)]
+    probe = (
+        "echo json_encode(['functions' => ["
+        + ",".join(f"'{name}' => function_exists('{name}')" for name in disabled_functions)
+        + "], 'opcache_cli' => ini_get('opcache.enable_cli'),"
+        " 'jit' => ini_get('opcache.jit'), 'jit_buffer' => ini_get('opcache.jit_buffer_size')]);"
+    )
+    runtime_config = {}
+    for label, (binary, _) in variants.items():
+        check = subprocess.run(
+            [str(binary), *flags, "-r", probe], capture_output=True, timeout=15, check=True,
+        )
+        config = json.loads(check.stdout)
+        if check.stderr or config["functions"] != dict.fromkeys(disabled_functions, False):
+            raise RuntimeError(f"PHPStan process-isolation preflight failed: {label}")
+        runtime_config[label] = config
     references = {}
     report = {
         "rounds": args.rounds, "seed": args.seed,
@@ -55,6 +74,8 @@ def main():
         "cold_cache": "fresh TMPDIR; filesystem caches warm",
         "warm_cache": "same TMPDIR after cold; resultCache.php existence checked",
         "affinity": "inherited", "timeout_seconds": 120,
+        "runtime_flags": flags, "runtime_config": runtime_config,
+        "process_policy": "serial; pcntl_exec restart and fork/spawn workers disabled",
         "outlier_policy": "retain all successful output-validated samples",
         "phar_sha256": sha(phar.read_bytes()),
         "binaries": {name: {"sha256": sha(path.read_bytes()), "system_fallback": system}
