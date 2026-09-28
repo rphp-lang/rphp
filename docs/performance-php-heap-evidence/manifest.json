@@ -1,0 +1,151 @@
+{
+  "baseline_commit": "17c6d9e31f700406274f3020b01df6a5924fb816",
+  "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+  "architecture": "x86_64",
+  "kernel": "7.0.0-34-generic",
+  "memory": "31933592 kB",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)\nbinary: rustc\ncommit-hash: 48a229ceaefd4985c50990b14116b6d856af0985\ncommit-date: 2026-09-01\nhost: x86_64-unknown-linux-gnu\nrelease: 1.98.1\nLLVM version: 22.1.8",
+  "rustflags": "-C llvm-args=--align-all-functions=6",
+  "php_reference": {
+    "version": "8.5.11",
+    "zts": false,
+    "debug": false,
+    "extensions": [
+      "Core",
+      "date",
+      "lexbor",
+      "openssl",
+      "pcre",
+      "zlib",
+      "filter",
+      "hash",
+      "json",
+      "uri",
+      "Zend OPcache",
+      "pcntl",
+      "random",
+      "Reflection",
+      "SPL",
+      "session",
+      "standard",
+      "sodium",
+      "libxml",
+      "PDO",
+      "calendar",
+      "ctype",
+      "exif",
+      "FFI",
+      "fileinfo",
+      "ftp",
+      "gettext",
+      "iconv",
+      "Phar",
+      "posix",
+      "readline",
+      "shmop",
+      "sockets",
+      "sysvmsg",
+      "sysvsem",
+      "sysvshm",
+      "tokenizer"
+    ],
+    "opcache_cli": "0",
+    "jit": "disable",
+    "jit_buffer": "64M"
+  },
+  "affinity_micro": 0,
+  "runtime_affinity": "inherited; no pinning",
+  "outlier_policy": "none; retain all valid measured runs",
+  "scaling_governor": "performance",
+  "energy_performance_preference": "performance",
+  "candidate_state": "Final direct Rust TLS getter; measured working tree based on baseline commit; this report commit carries the recorded source fingerprint",
+  "source": {
+    "fingerprint": "91188b5b3a34036032d0d1aedf5c150bcba3012b12efc2961ab25831ebaa56dc",
+    "files": {
+      "src/heap/debug.rs": "64aebbc683f1d64c380695c99147e3ffc05cfe7d6feff011375c69542f6b7c91",
+      "src/heap/layout.rs": "e1a7e8b36d1f9db66dc25e51fab33536d430c4e88e1f6175c69bb9f9005496d7",
+      "src/heap/mod.rs": "61f5c7f5336d437a9071c90f14c5e4e098d0d6e5a37c2568a46404a4c33ec260",
+      "src/heap/pages.rs": "485a378c142351678b5bc19c6de9e442175bdfa9b22c8e7f7b129f9c4f092d89",
+      "src/heap/region.rs": "fc8f70f71db9fe5049f39362529c5dce4bc36939885c8fc6b6a1c0a6db545ef6",
+      "src/heap/remote.rs": "9e2f6a2741d4c5ad863cac5036503b09d8d52a263713a25a6b8478df08928573",
+      "src/heap/slow.rs": "5cb4977dc027a4a8e8351e1f9e9a4125e8db79bb0bcdeffa3f373244eb6724bc",
+      "src/heap/tests.rs": "41cf41a620828d3335a74421aacbe69e7d2a45f55a0b44ead52e09523dee0930",
+      "src/heap/thread.rs": "cae479e96c461d2146029a7860202d1e48f838ef91931e945f748fdd99e5ed1a"
+    }
+  },
+  "profiles": {
+    "release": "Cargo default release",
+    "max-perf": "inherits release, fat LTO, codegen-units=1"
+  },
+  "features": "default on every measured executable; baseline additionally defines the unused php-heap-asm feature",
+  "binaries": {
+    "runtime-baseline-rust": {
+      "sha256": "cbf181ea7e71765a9dd5b79492f4b990eed3ce8495d554f14e04374647f5d76e",
+      "bytes": 23668536,
+      "text_bytes": 15400862,
+      "allocator_entry_bytes": {
+        "alloc": 108,
+        "dealloc": 120
+      }
+    },
+    "runtime-rustonly-release": {
+      "sha256": "411f5fd7e6863062dbb9c0548233255204c47c9329ec1dce78b675c2a8a67075",
+      "bytes": 22980888,
+      "text_bytes": 14778014,
+      "allocator_entry_bytes": {
+        "alloc": 156,
+        "dealloc": 129
+      }
+    },
+    "runtime-baseline-maxperf": {
+      "sha256": "8910d762cd005e7f16748ef605d59ef969c3ef21f3847ce73f9c868290a5ae90",
+      "bytes": 19791248,
+      "text_bytes": 13523374,
+      "allocator_entry_bytes": {
+        "alloc": 100,
+        "dealloc": 108
+      }
+    },
+    "runtime-rustonly-maxperf": {
+      "sha256": "2891ec8c70a6b9850cfa7b439a565428cb4a2518adc03046a3ccee06eee76a1b",
+      "bytes": 20217880,
+      "text_bytes": 13921262,
+      "allocator_entry_bytes": {
+        "alloc": 130,
+        "dealloc": 145
+      }
+    }
+  },
+  "source_fingerprint_method": "SHA-256 of sorted repository-relative path bytes followed by file bytes for src/**/*.rs, tests/**/*.rs, examples/**/*.rs, Cargo.toml and Cargo.lock",
+  "build_commands": {
+    "release": "CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo build --offline --locked --profile release --bin rphp --example heap_alloc",
+    "max-perf": "CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 cargo build --offline --locked --profile max-perf --bin rphp --example heap_alloc"
+  },
+  "build_timing_note": "Final runtime/example rebuilds with existing dependencies: release 80 s, max-perf 178 s. These are not clean-build comparisons.",
+  "binary_identity_control": {
+    "runtime-rustonly-release": {
+      "previous": "runtime-native-rust",
+      "sha256": "411f5fd7e6863062dbb9c0548233255204c47c9329ec1dce78b675c2a8a67075",
+      "previous_sha256": "9bace8f6be91b75d327916dc5d38b0e51871a4e0ca537e0edd5de8c8ed16f55c",
+      "identical": false
+    },
+    "runtime-rustonly-maxperf": {
+      "previous": "runtime-native-maxperf",
+      "sha256": "2891ec8c70a6b9850cfa7b439a565428cb4a2518adc03046a3ccee06eee76a1b",
+      "previous_sha256": "2891ec8c70a6b9850cfa7b439a565428cb4a2518adc03046a3ccee06eee76a1b",
+      "identical": true
+    },
+    "example-rustonly-release": {
+      "previous": "example-native-rust",
+      "sha256": "2ad129a339aa1b43b919864fcf94ee9c3044ed501e1bdd5b52f5850e88f7372c",
+      "previous_sha256": "339969b7dbaa26d5b3bd2d3c443567228371084cc24fc31b7c480ffa9a75497a",
+      "identical": false
+    },
+    "example-rustonly-maxperf": {
+      "previous": "example-native-maxperf",
+      "sha256": "bbf735ae57d8544c8ec6531166d24f89fbc55eb25a7acbc2674715616241ace5",
+      "previous_sha256": "bbf735ae57d8544c8ec6531166d24f89fbc55eb25a7acbc2674715616241ace5",
+      "identical": true
+    }
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "corpus": {
+    "count": 96,
+    "baseline_sum_medians": 52.145716289,
+    "candidate_sum_medians": 50.688068633,
+    "ratio": 0.9720466462111388,
+    "geomean_ratio": 0.9698592360281363
+  },
+  "holdout": {
+    "count": 5,
+    "baseline_sum_medians": 0.042422747999999996,
+    "candidate_sum_medians": 0.043070218,
+    "ratio": 1.015262330483636,
+    "geomean_ratio": 1.0171665199116777
+  }
+}

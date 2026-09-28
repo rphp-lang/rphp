@@ -6,6 +6,7 @@ pub mod builtin_metadata;
 mod class_names;
 pub mod compiler;
 pub mod generics;
+pub mod heap;
 #[cfg(feature = "jit-prototype")]
 pub mod jit;
 pub mod lexer;
@@ -23,6 +24,13 @@ pub mod string_byte_utilities;
 pub mod uuencode;
 pub mod value;
 pub mod vm;
+
+/// The PHP-tailored small-object heap serves every allocation of the process
+/// (see `heap`); `RPHP_HEAP=system` in the environment falls back to the
+/// system allocator for A/B comparisons.
+#[cfg(feature = "php-heap")]
+#[global_allocator]
+static GLOBAL_HEAP: heap::PhpHeap = heap::PhpHeap;
 
 /// Public compatibility identity used by PHP constants, phpversion(), and
 /// dependency platform checks. Newer experimental syntax does not change this

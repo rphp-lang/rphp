@@ -1,0 +1,507 @@
+[
+  {
+    "script": "benches/bench_array_multisort_long.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_binary_assign_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_branch_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_call_user_func.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_calls.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_carried_condition_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_composed_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_conditional_composed_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_conditional_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_declared_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_dependent_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_fib39.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_foreach_declared_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_hash_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_linear8_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_linear_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_foreach_stdclass_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_general_trace_guard_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_generics_method_diamond_manual.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_generics_method_manual.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_generics_pseudo_scope_manual.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_generics_reified_variadic_manual.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_constant_int_array_materialized_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_irregular_int_array_permuted_read.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_irregular_int_array_permuted_read_dominant.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_irregular_int_array_read.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_irregular_prefix_int_array_transform.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_irregular_wide_long_array_permuted_read.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_string_array_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_string_array_materialized_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_hash_string_cv_array_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_instance_property_constructor_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_instance_property_read.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_instance_property_read_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_instance_property_write.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_instance_property_write_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_jit_mixed_string_hash_update.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_decode_assoc_width12.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_decode_object_width12.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_decode_object_width20.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_decode_object_width8.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_projection.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_projection_double.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json_projection_string.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_method_chain.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_mixed_trace_guard_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_modulo_branch_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_obj_dispatch.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_property.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_property_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_reverse_dependent_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_reversed_commutative_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_call_branch_standalone.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_expression_chain_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_method.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_method_branch.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_method_native_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_overlapping_lifetimes_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scalar_recurrence_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_scoped_static_callback.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_skewed_branch_layout_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_static_late_property.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_static_method.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_static_self_call.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_static_self_property.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_static_self_property_write.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_static_self_property_write_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_stdclass_long_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_stdclass_property_reads.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_stdclass_string_property_strlen.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_straight_branch_expression_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_three_recurrence_invariant_loop.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_chain_int_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_chain_int_untyped.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_chain_string_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_chain_string_untyped.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_function_params.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_function_strict.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_method_return_fanout_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_method_return_fanout_untyped.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_method_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_method_untyped.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_scalar_function_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_scalar_function_untyped.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_scalar_method_typed.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_type_scalar_method_untyped.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_argument_expr.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_composed_conditional.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_composed_tree.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_conditional.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_method_accumulate.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_nested_leaf.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_typed_float_nested_method.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_x86_linear_equivalent.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_x86_straight_equivalent.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_string.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_array.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_json.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_declared_object_lifecycle.php",
+    "php_equal": true,
+    "php_exit": 0
+  },
+  {
+    "script": "benches/bench_regex_repeated_callback_retains.php",
+    "php_equal": true,
+    "php_exit": 0
+  }
+]

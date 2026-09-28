@@ -1,0 +1,136 @@
+{
+  "source_sha256": "91188b5b3a34036032d0d1aedf5c150bcba3012b12efc2961ab25831ebaa56dc",
+  "gates": [
+    {
+      "name": "default",
+      "exit": 0,
+      "elapsed": 148.07216830999823,
+      "tests": 7063,
+      "ignored": 15,
+      "log_sha256": "45ccaf250fe075e6d3360ca1779162d0f6c7700504e1a7fbfd4421e5c029da30"
+    },
+    {
+      "name": "no-default",
+      "exit": 0,
+      "elapsed": 147.51999341399642,
+      "tests": 6712,
+      "ignored": 15,
+      "log_sha256": "f5010b56ab70916ea36f60de2d02e73618f0d2ef13ceb033cf3689798f64d122"
+    },
+    {
+      "name": "erased",
+      "exit": 0,
+      "elapsed": 159.43190881604096,
+      "tests": 7134,
+      "ignored": 15,
+      "log_sha256": "be4e4c8c36eb87449401beba7cdff41a94e40efeca0bf530f2c7c4c5e7c94b80"
+    },
+    {
+      "name": "reified",
+      "exit": 0,
+      "elapsed": 160.07207146903966,
+      "tests": 7156,
+      "ignored": 15,
+      "log_sha256": "a5d745a8bcfe2441089b950499b9a6e707328dd87702c927404acb4883d8425e"
+    },
+    {
+      "name": "all-features",
+      "exit": 0,
+      "elapsed": 155.75363211199874,
+      "tests": 7210,
+      "ignored": 18,
+      "log_sha256": "a1928d0190f0d7f355466593a192f652e414c24976104c14434d775c4ba9bf9b"
+    },
+    {
+      "name": "all-targets",
+      "exit": 0,
+      "elapsed": 18.2685258059646,
+      "tests": 0,
+      "ignored": 0,
+      "log_sha256": "b1e59f1deb38f7623e0708cd646c4afc0b3591eedb659406f11db443f39c0112"
+    }
+  ],
+  "complete": true,
+  "commands": {
+    "tests": "CARGO_BUILD_JOBS=4 CARGO_INCREMENTAL=0 RUST_TEST_THREADS=4 CARGO_PROFILE_TEST_FAST_DEBUG_ASSERTIONS=true CARGO_PROFILE_TEST_FAST_OVERFLOW_CHECKS=true cargo test --offline --locked --profile test-fast --no-fail-fast [feature options]",
+    "feature_options": [
+      "",
+      "--no-default-features",
+      "--features php-generics-erased",
+      "--features php-generics-reified",
+      "--all-features"
+    ],
+    "check": "cargo check --offline --locked --profile test-fast --all-features --all-targets",
+    "cleanup": "scripts/cleanup-builds.sh --stale-days 36500 before/after cycles and between configurations; source snapshots excluded from cleanup"
+  },
+  "host_environment": true,
+  "phpt_packet_run": false,
+  "static_checks": [
+    {
+      "name": "cargo-fmt",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "included-rustfmt",
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2024",
+        "--check",
+        "src/heap/debug.rs",
+        "src/heap/layout.rs",
+        "src/heap/mod.rs",
+        "src/heap/pages.rs",
+        "src/heap/region.rs",
+        "src/heap/remote.rs",
+        "src/heap/slow.rs",
+        "src/heap/tests.rs",
+        "src/heap/thread.rs"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "unsafe-policy",
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "17c6d9e31f700406274f3020b01df6a5924fb816"
+      ],
+      "exit": 0,
+      "log_sha256": "0eccda081ebfbdcce92b53a83caaa104baf10b0c6bc32135dda2a0f289dfa7d3"
+    },
+    {
+      "name": "diff-whitespace",
+      "command": [
+        "git",
+        "diff",
+        "HEAD",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "cleanup": {
+    "removed_build_directories": [
+      "rphp-candidate-heap-finish-baseline-maxperf",
+      "rphp-candidate-heap-finish-final-tests",
+      "rphp-candidate-heap-finish-native-rust",
+      "rphp-candidate-heap-finish-probe",
+      "rphp-candidate-heap-finish-refactor",
+      "rphp-candidate-heap-finish-release-rust",
+      "rphp-candidate-heap-finish-runtime"
+    ],
+    "retained": "source snapshots, immutable baseline/current executables and evidence",
+    "private_benchmark_host_configured": false
+  }
+}
