@@ -1,0 +1,12 @@
+{
+  "complete": true,
+  "removed_cargo_targets": [
+    "main",
+    "merged",
+    "stats"
+  ],
+  "completed_matrix_target_removed": true,
+  "standalone_binary_hashes_verified": true,
+  "source_snapshots_preserved": true,
+  "private_benchmark_host_configured": false
+}

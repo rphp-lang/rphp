@@ -1,0 +1,59 @@
+[
+  {
+    "label": "main-callback-512",
+    "variant": "main",
+    "kind": "callback",
+    "n": 512,
+    "output_validated": true,
+    "profile_sha256": "483103fa59ec800523111b7fd827432eb441060dd7c78097c97fd6cc0ace6eaf",
+    "checkpoint_inclusive_instructions": 51577548,
+    "checkpoint_calls": 512,
+    "checkpoint_clone_handle_calls": 263676,
+    "total_instructions": 88016199
+  },
+  {
+    "label": "main-callback-1024",
+    "variant": "main",
+    "kind": "callback",
+    "n": 1024,
+    "output_validated": true,
+    "profile_sha256": "0b0db7bd02f2b3ada8bf464c8764e451902aeda3da27471c52ada34f7bbcc0df",
+    "checkpoint_inclusive_instructions": 203684334,
+    "checkpoint_calls": 1024,
+    "checkpoint_clone_handle_calls": 1051644,
+    "total_instructions": 254539587
+  },
+  {
+    "label": "merged-callback-512",
+    "variant": "merged",
+    "kind": "callback",
+    "n": 512,
+    "output_validated": true,
+    "profile_sha256": "000bd0bf50e405c568a23049f96dd0decef91cfcc446546b50940b53f3af0b78",
+    "checkpoint_inclusive_instructions": 50441812,
+    "checkpoint_calls": 512,
+    "checkpoint_clone_handle_calls": 263676,
+    "total_instructions": 77147441
+  },
+  {
+    "label": "merged-callback-1024",
+    "variant": "merged",
+    "kind": "callback",
+    "n": 1024,
+    "output_validated": true,
+    "profile_sha256": "6bfe77ae605e743931d2c1f80b6b8cedabb9eca34900899dc1229af929589acf",
+    "checkpoint_inclusive_instructions": 201827739,
+    "checkpoint_calls": 1024,
+    "checkpoint_clone_handle_calls": 1051644,
+    "total_instructions": 240547798
+  },
+  {
+    "label": "merged-plain-1024",
+    "variant": "merged",
+    "kind": "plain",
+    "n": 1024,
+    "output_validated": true,
+    "profile_sha256": "ba016b318183857302b8ec2b176e79223638ec119fed9eeef825c0c71f33aea2",
+    "total_instructions": 23132732
+  }
+]

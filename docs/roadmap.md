@@ -1,6 +1,6 @@
 # RPHP engineering roadmap
 
-Status: active coordination map, 2026-09-17
+Status: active coordination map, 2026-09-28
 
 This document coordinates two independent engineering workstreams. It stays
 short and current; detailed plans live in the workstream roadmaps, while the
@@ -25,11 +25,18 @@ microbenchmark improves.
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
 | PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The Rector 2.5.9 bootstrap now runs an unmodified real parallel transformation and an idempotent second pass. Its vendor audit finds 339/351 observed globals present with zero call-shape mismatches; twelve conditional observations remain explicit nonclaims. Five Cargo configurations, all-targets, Composer/Symfony S0-S3 and unsafe gates pass; performance is deferred by user direction ahead of the Rust upgrade. |
-| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | Bisect the lost file-entry dynamic String-key array admission, restore the common typed/ARM64/x86-64 contract only when semantically valid, then rerun the full dual-host scorecard. |
+| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | The Rust-only heap is integrated with 35,345 successful joint test executions. A fresh PHPStan control improves about 20%, while a larger input exposes repeated deep-release graph scans. The next measured M1 candidate is to remove those scans with destructor semantics intact; the earlier dynamic String-key admission and dual-host scorecard remain pending. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
 diagnostic observation or favorable but unverified benchmark remains work in
 progress.
+
+The [heap integration checkpoint](performance-php-heap-integration.md) records
+the accepted assembly-removal tradeoff, fresh same-profile comparisons and the
+failed 120-second larger-project gate. Subprocess tracing rules out a stuck
+child wait in that serial failure. Native reproduction and Callgrind establish
+quadratic graph marking during nested PHP destructor release; no speculative
+release-path fix is included in the allocator merge.
 
 ## Coordination rules
 

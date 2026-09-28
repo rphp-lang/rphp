@@ -1,0 +1,63 @@
+[
+  {
+    "label": "main-release",
+    "profile": "release",
+    "features": [
+      "default"
+    ],
+    "source_sha256": "bcf9be194fb7bd2fe43516f25af8196f546f4c95aaa1005cbd6b845864885600",
+    "binary_sha256": "604883b67f31df90b45187bc7a94966608351f26904d463b250850ab7eaeea05",
+    "binary_bytes": 22754000,
+    "build_seconds": 84.4366470919922,
+    "build_log_sha256": "420820a0fe7d6472c5625864f24261381bc32ce6c502703695c96fa9dc3df835"
+  },
+  {
+    "label": "main-max-perf",
+    "profile": "max-perf",
+    "features": [
+      "default"
+    ],
+    "source_sha256": "bcf9be194fb7bd2fe43516f25af8196f546f4c95aaa1005cbd6b845864885600",
+    "binary_sha256": "2a86b3d9b6ca6610802844464521b3dffc662ee9049025cb6a4369714956d3ad",
+    "binary_bytes": 19156680,
+    "build_seconds": 168.41849511803593,
+    "build_log_sha256": "ce83920c56e7b72e6584fda45d83be99256a6c39a12b35aa22685e9a730f14e0"
+  },
+  {
+    "label": "merged-release",
+    "profile": "release",
+    "features": [
+      "default"
+    ],
+    "source_sha256": "1d084092e90caf488b99958d34763b394a86c28768fbfbc9f45f5ea7101005f5",
+    "binary_sha256": "9bc903ec5aab13ad69bdeb5038b046ecdc6967b275e5c6d6548af8e5d410c292",
+    "binary_bytes": 24319880,
+    "build_seconds": 86.65620407898678,
+    "build_log_sha256": "b84fc981a1a6900bbb819cb510f37cb1dba5fe38d0005a53af29a2109445b1e8"
+  },
+  {
+    "label": "merged-max-perf",
+    "profile": "max-perf",
+    "features": [
+      "default"
+    ],
+    "source_sha256": "1d084092e90caf488b99958d34763b394a86c28768fbfbc9f45f5ea7101005f5",
+    "binary_sha256": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "binary_bytes": 21444264,
+    "build_seconds": 180.42635457997676,
+    "build_log_sha256": "512f1095f8f28d72ca60158fa56d0741d9dfa4ee6c328127ac155d544ce57450"
+  },
+  {
+    "label": "stats-release",
+    "profile": "release",
+    "features": [
+      "--features",
+      "vm-stats"
+    ],
+    "source_sha256": "1d084092e90caf488b99958d34763b394a86c28768fbfbc9f45f5ea7101005f5",
+    "binary_sha256": "05026df2bfaa93adb47564c8f82a4823eb876687f4968e260c56ac1a41bdfd6c",
+    "binary_bytes": 24353216,
+    "build_seconds": 91.45833268598653,
+    "build_log_sha256": "4adc1a32ada3cdd8734b2d4569f0bdf14f8ce1c192e5eff77f3bc231b86281ce"
+  }
+]

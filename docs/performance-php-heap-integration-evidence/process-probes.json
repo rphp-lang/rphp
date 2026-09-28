@@ -1,0 +1,482 @@
+[
+  {
+    "label": "serial",
+    "limit_seconds": 30,
+    "timed_out": true,
+    "exit": -9,
+    "remaining_processes_after_cleanup": 0,
+    "snapshots": [
+      {
+        "at_seconds": 5,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 84,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 84
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 408,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 374
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 10,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 88,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 88
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 904,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 870
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 15,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 90,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 90
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 1402,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 1368
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 20,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 90,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 90
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 1901,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 1867
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 25,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 90,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 90
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 2401,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 2367
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 30,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 90,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 90
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 2900,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 2866
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "execve_calls": 1,
+    "wait4_calls": 0,
+    "trace_sha256": "3aab7a2fc2bccdad290653d5cf73f753dca3360c4f90a613621c7b0e48551baa"
+  },
+  {
+    "label": "proc-enabled",
+    "limit_seconds": 30,
+    "timed_out": true,
+    "exit": -9,
+    "remaining_processes_after_cleanup": 0,
+    "snapshots": [
+      {
+        "at_seconds": 5,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 87,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 87
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "S",
+            "cpu_ticks": 393,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 359
+              }
+            ]
+          },
+          {
+            "name": "sh",
+            "state": "S",
+            "cpu_ticks": 0,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 0
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 12,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 12
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 10,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 172,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 172
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "S",
+            "cpu_ticks": 394,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 361
+              }
+            ]
+          },
+          {
+            "name": "sh",
+            "state": "S",
+            "cpu_ticks": 0,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 0
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 420,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 387
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 15,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 176,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 176
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "S",
+            "cpu_ticks": 395,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 361
+              }
+            ]
+          },
+          {
+            "name": "sh",
+            "state": "S",
+            "cpu_ticks": 0,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 0
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 915,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 882
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 20,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 179,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 179
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "S",
+            "cpu_ticks": 396,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 362
+              }
+            ]
+          },
+          {
+            "name": "sh",
+            "state": "S",
+            "cpu_ticks": 0,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 0
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 1413,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 1380
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 25,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 180,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 180
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "S",
+            "cpu_ticks": 396,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 363
+              }
+            ]
+          },
+          {
+            "name": "sh",
+            "state": "S",
+            "cpu_ticks": 0,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 0
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 1915,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 1881
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "at_seconds": 30,
+        "processes": [
+          {
+            "name": "strace",
+            "state": "S",
+            "cpu_ticks": 180,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 180
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "S",
+            "cpu_ticks": 397,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 364
+              }
+            ]
+          },
+          {
+            "name": "sh",
+            "state": "S",
+            "cpu_ticks": 0,
+            "threads": [
+              {
+                "state": "S",
+                "cpu_ticks": 0
+              }
+            ]
+          },
+          {
+            "name": "runtime-main-ma",
+            "state": "R",
+            "cpu_ticks": 2413,
+            "threads": [
+              {
+                "state": "R",
+                "cpu_ticks": 2379
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "execve_calls": 9,
+    "wait4_calls": 261,
+    "trace_sha256": "ba1ec1b22ce9b22d93b76d6379628d087a78cf1e809fd5de4b637671cbd9626e"
+  }
+]

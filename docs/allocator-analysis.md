@@ -1,5 +1,12 @@
 # Vlastní alokátor pro RPHP: analýza (2026-09-27)
 
+> Historical hypothesis, superseded by the implemented heap and its measurements.
+> In particular, the blanket claim that Rust global allocation cannot inline
+> was disproved by inspection of the generated runtime. Instruction ceilings
+> and time estimates below are historical estimates, not current guarantees.
+> See [the Rust heap checkpoint](performance-php-heap-finish.md) and
+> [the integration/PHPStan comparison](performance-php-heap-integration.md).
+
 Otázka: dá se napsat vlastní alokátor (ideálně s částmi v assembleru), který
 výkonově překoná stávající alokátory (glibc malloc, mimalloc) na zátěži
 RPHP, konkrétně na PHPStanu?

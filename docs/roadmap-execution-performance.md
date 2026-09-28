@@ -7,6 +7,26 @@ See the [project coordination map](roadmap.md), the
 and the shared [goal contract](agent-goal-contract.md) for assignment and
 integration rules.
 
+## Accepted heap integration and next measured cost
+
+The Rust-only allocator checkpoint is integrated at `0a0099fe` after the joint
+five-configuration matrix (35,345 passes), all-target compilation, formatting
+and unsafe-policy checks. Fresh same-profile PHPStan control medians improve
+21.1% cold and 19.8% warm against the premerge system allocator, with higher RSS.
+The earlier localized TLS-removal tradeoff remains an explicit accepted limit.
+See the [integration report](performance-php-heap-integration.md) for all samples
+and the distinction between release and max-perf builds.
+
+The larger PHP-tool project fails a 120-second validation timeout on premerge
+main. Process tracing shows active CPU work, not an uncollected child process.
+Acyclic chains with PHP destructors expose repeated complete graph marking:
+doubling 512 objects to 1,024 multiplies marker instructions by 4.00. The same
+functions dominate late samples from the larger PHPStan input. This admits an
+M1 investigation of traversal reuse or a unified release walk, with callbacks,
+mutation, resurrection, aliases, cycles and deep-stack safety as required gates.
+No release algorithm has been changed or accepted by this measurement checkpoint.
+The previous typed-admission and ARM64/x86-64 scorecard work remains pending.
+
 ## Mission
 
 Make supported PHP execute through one increasingly complete, measurable

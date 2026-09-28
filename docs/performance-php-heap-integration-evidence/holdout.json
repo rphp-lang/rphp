@@ -1,0 +1,864 @@
+{
+  "rounds": 7,
+  "seed": 281004,
+  "warmup": "one full validated run per case and runtime",
+  "outlier_policy": "retain all successful output-validated runs",
+  "affinity": "inherited",
+  "timeout_seconds": 120,
+  "binaries": {
+    "main-maxperf": "2a86b3d9b6ca6610802844464521b3dffc662ee9049025cb6a4369714956d3ad",
+    "merged-maxperf": "9360810eb8da9151d28befa8c7c054e08d69c57a90ac554be365ed407033fa4a",
+    "previous-rust-maxperf": "2891ec8c70a6b9850cfa7b439a565428cb4a2518adc03046a3ccee06eee76a1b",
+    "previous-hybrid-maxperf": "8910d762cd005e7f16748ef605d59ef969c3ef21f3847ce73f9c868290a5ae90",
+    "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "cases": {
+    "benches/bench_generics_method_diamond_manual.php": "6611f06763c279350833b84c4fa0b592bba95918cba55bc80f25df370758d0d7",
+    "benches/bench_call_user_func.php": "83955d8733325df49f8172c220aa8d5c4234620b05672210de2a03093f8d79d2",
+    "benches/bench_stdclass_string_property_strlen.php": "abec5a0f6164baa8909a32b2d9ba87986670bccf479c35a3f240c4ddf523541e",
+    "benches/bench_array.php": "982a5b4f080ea9b3025066056aeb6a6b963c8ea0c2b46b0767115c6f5b643ea2"
+  },
+  "samples": [
+    {
+      "round": 0,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.535385877
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.079277044
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.561547959
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.572517684
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.571758636
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.569577102
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.548780577
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.55802858
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.650177193
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.062365159
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.835563552
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.818562268
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.807540003
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.797107546
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.104521066
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.016401408
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.017112575
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.016344729
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.021057881
+    },
+    {
+      "round": 0,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.016976658
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.569290609
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.610333858
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.080317676
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.598965317
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.586503445
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.52826759
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.53250592
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.063513415
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.556449418
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.574052683
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.797702023
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.102991959
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.822397986
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.780772926
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.804760447
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.015076006
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.014709031
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.018323029
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.021000021
+    },
+    {
+      "round": 1,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.016837123
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.563040697
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.572180496
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.582444744
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.079814974
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.540165824
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.063529195
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.528227223
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.558113662
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.561820315
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.650171733
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.815838498
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.801744373
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.10226961
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.785926781
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.817429071
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.017289009
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.016255611
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.015529766
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.021561524
+    },
+    {
+      "round": 2,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.01710481
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.536453239
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.574948921
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.574160217
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.572596764
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.078965053
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.532454373
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.521462536
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.558650659
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.556085098
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.06246584
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.809155495
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.799935545
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.798237968
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.800555661
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.104316067
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.018078775
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.016493712
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.021556004
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.01684598
+    },
+    {
+      "round": 3,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.015699558
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.554247336
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.58815818
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.55796514
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.598072927
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.0796338
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.571850942
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.541561179
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.556869575
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.563699917
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.063306894
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.105408457
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.81067807
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.79311946
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.801247982
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.786699416
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.017093318
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.017464442
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.01637641
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.017332832
+    },
+    {
+      "round": 4,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.021575762
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.080359325
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.563084151
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.543110454
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.569873314
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.571632347
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.523108244
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.547250198
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.551416132
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.56650355
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.068243748
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.790264391
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.868326843
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.802226246
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.823745171
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.105224669
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.016773573
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.017491323
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.016969343
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.020417076
+    },
+    {
+      "round": 5,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.016807106
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.565699436
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "php",
+      "wall": 0.079914512
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "main-maxperf",
+      "wall": 0.575631555
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.528698246
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_generics_method_diamond_manual.php",
+      "variant": "merged-maxperf",
+      "wall": 0.560209844
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "merged-maxperf",
+      "wall": 0.554116077
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "php",
+      "wall": 0.063028366
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "main-maxperf",
+      "wall": 0.561660543
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.568303229
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_call_user_func.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.546382795
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "merged-maxperf",
+      "wall": 0.826927
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.787495234
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "php",
+      "wall": 0.102226348
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "main-maxperf",
+      "wall": 0.803840825
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_stdclass_string_property_strlen.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.79314511
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "main-maxperf",
+      "wall": 0.016696967
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "merged-maxperf",
+      "wall": 0.017475853
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "php",
+      "wall": 0.021873566
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "previous-hybrid-maxperf",
+      "wall": 0.015594188
+    },
+    {
+      "round": 6,
+      "script": "benches/bench_array.php",
+      "variant": "previous-rust-maxperf",
+      "wall": 0.016663584
+    }
+  ],
+  "complete": true
+}

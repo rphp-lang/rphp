@@ -5,6 +5,11 @@ implementation passed the correctness matrix. Performance is mixed; this is a
 measured Rust-only baseline, not a claim of universal improvement or a closed
 performance ceiling. Additional TLS abstractions that regressed were removed.
 
+Subsequent decision (2026-09-28): the user approved integrating this Rust-only
+checkpoint with its reported costs. The results below identify the pre-merge
+source; [the integration report](performance-php-heap-integration.md) records
+fresh verification and PHPStan measurements after combining current main.
+
 Performance profile: `cargo build --profile max-perf --bin rphp`. This keeps
 whole-program optimization explicit; ordinary release defaults are unchanged.
 

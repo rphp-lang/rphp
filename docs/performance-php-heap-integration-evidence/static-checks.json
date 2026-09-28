@@ -1,0 +1,58 @@
+{
+  "source_sha256": "1d084092e90caf488b99958d34763b394a86c28768fbfbc9f45f5ea7101005f5",
+  "checks": [
+    {
+      "name": "format",
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "included-format",
+      "command": [
+        "rustfmt",
+        "--edition",
+        "2024",
+        "--check",
+        "src/heap/debug.rs",
+        "src/heap/layout.rs",
+        "src/heap/mod.rs",
+        "src/heap/pages.rs",
+        "src/heap/region.rs",
+        "src/heap/remote.rs",
+        "src/heap/slow.rs",
+        "src/heap/tests.rs",
+        "src/heap/thread.rs"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    },
+    {
+      "name": "unsafe-policy",
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "97bff1e3"
+      ],
+      "exit": 0,
+      "log_sha256": "0eccda081ebfbdcce92b53a83caaa104baf10b0c6bc32135dda2a0f289dfa7d3"
+    },
+    {
+      "name": "whitespace",
+      "command": [
+        "git",
+        "diff",
+        "--check"
+      ],
+      "exit": 0,
+      "log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "allocator_handwritten_asm_absent": true
+}

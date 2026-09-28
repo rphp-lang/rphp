@@ -1,0 +1,54 @@
+{
+  "source_sha256": "1d084092e90caf488b99958d34763b394a86c28768fbfbc9f45f5ea7101005f5",
+  "gates": [
+    {
+      "name": "default",
+      "exit": 0,
+      "elapsed": 173.30009646399412,
+      "tests": 7077,
+      "ignored": 15,
+      "log_sha256": "fc366c3bab56d76e5f87856051d33b550167f46a25d9d86d9ab1288bd5a64d8e"
+    },
+    {
+      "name": "no-default",
+      "exit": 0,
+      "elapsed": 152.51732153701596,
+      "tests": 6726,
+      "ignored": 15,
+      "log_sha256": "068485e1d4badbfcbf9f9fe95647919d73e1c6f9e4da98749f2eac56e279a686"
+    },
+    {
+      "name": "erased",
+      "exit": 0,
+      "elapsed": 165.26121694600442,
+      "tests": 7148,
+      "ignored": 15,
+      "log_sha256": "9a1fd3f2a70d4292a28b9f88c317a4fc1aaf9618b872c2d933e1d7cafcdf4201"
+    },
+    {
+      "name": "reified",
+      "exit": 0,
+      "elapsed": 161.33648295898456,
+      "tests": 7170,
+      "ignored": 15,
+      "log_sha256": "c091c0dc8475af0d7c1d0e37716a717f4456be6a3777d9e7b89c2a197115b1d7"
+    },
+    {
+      "name": "all-features",
+      "exit": 0,
+      "elapsed": 160.63236965896795,
+      "tests": 7224,
+      "ignored": 18,
+      "log_sha256": "1471d2da3328bc76ea2d71b70a6ba30db3d9fd4489f09c8aa306a1419c71ddb7"
+    },
+    {
+      "name": "all-targets",
+      "exit": 0,
+      "elapsed": 21.180238872999325,
+      "tests": 0,
+      "ignored": 0,
+      "log_sha256": "1318bcac48b62a27fe813be06b0d24d3e43aca8758a65a7c36703ac5629e2a97"
+    }
+  ],
+  "complete": true
+}

@@ -1,0 +1,42 @@
+{
+  "workload": "tools",
+  "stage": "validation warmup",
+  "variant": "main-maxperf",
+  "timeout_seconds": 120,
+  "exit": "timeout; entire wrapper/runtime process group terminated",
+  "complete": false,
+  "source_files": [
+    {
+      "path": "scripts/phpt/case.php",
+      "sha256": "3397e2f6b8dbddd2dcd045394d40e1163bd172f43e6ac524a93c458bb672b793",
+      "bytes": 4779,
+      "lines": 145
+    },
+    {
+      "path": "scripts/phpt/execution.php",
+      "sha256": "a82851a586c7d8fbf13f06232021faabbcba3cd7d053d36161e2ae27c9da3bf0",
+      "bytes": 16273,
+      "lines": 393
+    },
+    {
+      "path": "scripts/phpt/expectation.php",
+      "sha256": "40924bed8216243b6fa2c72dcba0fb56aec5ee3b5902b407cb544df45f83aec8",
+      "bytes": 5664,
+      "lines": 159
+    },
+    {
+      "path": "scripts/phpt/process.php",
+      "sha256": "a67f18590592b0620bb065388aa0c48b0451b546f7e755c058628059b7a5fb2f",
+      "bytes": 7712,
+      "lines": 248
+    },
+    {
+      "path": "scripts/phpt/report.php",
+      "sha256": "0b83456a88350bc147c8f52256f768bdcb2af54f5c279763120ac220af35f0af",
+      "bytes": 8651,
+      "lines": 216
+    }
+  ],
+  "stderr_sha256": "17938b5946b324fdf6e5a795c475f5a60493e5be59d65bc3309efc1707ad1b9e",
+  "native_samples_accepted": 0
+}

@@ -1,0 +1,38 @@
+{
+  "scope": "Ten-second interrupted sampling windows started after ten seconds of startup on the larger project; no whole-program CPU-time claim",
+  "caveats": [
+    "Initial profiles reported interval timer changes and were rejected for quantitative attribution.",
+    "Delayed profiles report no warnings but were not closed normally; their clock weights are not used as CPU seconds.",
+    "The acyclic-chain Callgrind experiment independently validates repeated graph marking."
+  ],
+  "windows": [
+    {
+      "variant": "main",
+      "top_exclusive_symbols": [
+        "<rphp::value::Value>::clone_cycle_handle",
+        "<rphp::value::Value>::mark_deep_drop_tree_checkpoints_with_root_policy",
+        "<hashbrown::raw::RawTable<((usize, rphp::value::CycleNodeKind), ())>>::reserve_rehash::<hashbrown::map::make_hasher<(usize, rphp::value::CycleNodeKind), (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+        "<static>@0xa8e24 (<libc.so.6>)",
+        "rphp::vm::execute::execute_ex_inner",
+        "<rphp::runtime::ExecutorGlobals>::find_class",
+        "<static>@0x188341 (<libc.so.6>)",
+        "rphp::vm::execute::caller_scope"
+      ],
+      "header_sha256": "e466261bcfdf2c4313fa2e8f0ddead33f2d88487a59a7ec5cb63cea990e658bf"
+    },
+    {
+      "variant": "merged",
+      "top_exclusive_symbols": [
+        "<rphp::value::Value>::clone_cycle_handle",
+        "<rphp::value::Value>::mark_deep_drop_tree_checkpoints_with_root_policy",
+        "<hashbrown::raw::RawTable<((usize, rphp::value::CycleNodeKind), ())>>::reserve_rehash::<hashbrown::map::make_hasher<(usize, rphp::value::CycleNodeKind), (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+        "core::ptr::drop_glue::<rphp::value::Value>",
+        "rphp::value::register_cycle_candidate_with_admission",
+        "rphp::vm::execute::execute_ex_inner",
+        "rphp::vm::execute::finish_foreach_step",
+        "rphp::vm::execute::release_statement_temps"
+      ],
+      "header_sha256": "58445eed72b269912498c9932b382841285dcc158c50fba1ceee6f5aaf36f665"
+    }
+  ]
+}
