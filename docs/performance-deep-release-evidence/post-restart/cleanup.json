@@ -1,0 +1,11 @@
+{
+  "complete": true,
+  "all_three_owned_services_inactive": true,
+  "all_three_owned_services_result": "success",
+  "remaining_build_or_runtime_processes": 0,
+  "local_cleanup_hook": "passed in the integration checkout and isolated worktree",
+  "owned_disposable_cargo_targets_removed": 2,
+  "source_snapshots_and_exact_comparison_executables_retained": true,
+  "private_benchmark_host_configured": false,
+  "remote_cleanup": "not applicable"
+}

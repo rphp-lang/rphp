@@ -1,0 +1,37 @@
+{
+  "complete": true,
+  "stages": [
+    {
+      "stage": "quick-check",
+      "exit": 0,
+      "seconds": 6.596081377000019
+    },
+    {
+      "stage": "phpstan",
+      "exit": 0,
+      "seconds": 590.0756125560001
+    },
+    {
+      "stage": "corpus",
+      "exit": 0,
+      "seconds": 606.33634895
+    },
+    {
+      "stage": "confirmation",
+      "exit": 0,
+      "seconds": 447.6303415090001
+    }
+  ],
+  "memory_max_bytes": 6442450944,
+  "memory_swap_max_bytes": 0,
+  "memory_peak_bytes": 1694441472,
+  "memory_events": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0,
+    "sock_throttled": 0
+  }
+}

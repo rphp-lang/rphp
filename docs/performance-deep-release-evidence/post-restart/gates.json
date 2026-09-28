@@ -1,0 +1,55 @@
+{
+  "source_sha256": "b7965c1c1dfad4299f3b03e074e03490640d41af1a6969ecf6c7a2736f78f940",
+  "carried_forward_default": {
+    "name": "default",
+    "exit": 0,
+    "elapsed": 168.3063229410327,
+    "tests": 7089,
+    "ignored": 15,
+    "log_sha256": "b186c3015a2370f84178cdb1cbce2f4c00b6cab18063cce4e68593d30812e2b5"
+  },
+  "carried_forward_note": "Default passed before hardware maintenance with this exact source; only incomplete configurations are resumed.",
+  "gates": [
+    {
+      "name": "no-default",
+      "exit": 0,
+      "elapsed": 149.926008713,
+      "tests": 6738,
+      "ignored": 15,
+      "log_sha256": "757b2d533c3b56f08327159548485b30b9977a6717e5a4391d80fbcd27a89aea"
+    },
+    {
+      "name": "erased",
+      "exit": 0,
+      "elapsed": 161.16288177999996,
+      "tests": 7160,
+      "ignored": 15,
+      "log_sha256": "43363791503396133a653e8102c62e01741ba12eb57952b912ac88fba7d448e8"
+    },
+    {
+      "name": "reified",
+      "exit": 0,
+      "elapsed": 166.52069557800002,
+      "tests": 7182,
+      "ignored": 15,
+      "log_sha256": "d1cc78195eec54f0b59899f076dc8cf90575d6161ee2c1a2fc9ec8f7e2512342"
+    },
+    {
+      "name": "all-features",
+      "exit": 0,
+      "elapsed": 171.02183491200003,
+      "tests": 7236,
+      "ignored": 18,
+      "log_sha256": "a7eafb6ba3e2d70408d47b28284e9dd7a13b4a81e5e36625aa3f03c18f01415d"
+    },
+    {
+      "name": "all-targets",
+      "exit": 0,
+      "elapsed": 21.014858676000017,
+      "tests": 0,
+      "ignored": 0,
+      "log_sha256": "b7451d92b479218b9f6b6fdeee83c20c1b3e9a6dce1fa5d22f9e05b9bccc5b4d"
+    }
+  ],
+  "complete": true
+}

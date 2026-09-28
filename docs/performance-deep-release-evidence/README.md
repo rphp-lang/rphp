@@ -4,13 +4,25 @@ This directory records the candidate described in
 [`../performance-deep-release.md`](../performance-deep-release.md).
 Acceptance status is controlled by that report; partial records are not gates.
 
+- `post-restart/`: fresh verification after the maintenance pause, using the
+  checkpoint's identical source and immutable native executables. `gates.json`
+  carries forward the completed default suite and records all remaining
+  configurations plus all-target compilation. Exact-source ASan, seven-round
+  PHPStan controls (including the same executable's system fallback), deep
+  release, the full 103-case corpus and the independent 33-case/11-round
+  confirmation are complete. `confirmation-summary.json` records the five
+  regressions covered by the report's explicit acceptance exception.
+  `regression-profile.json` contains reduced instruction diagnostics, not native
+  timings. Memory events and temperature samples are retained for the complete
+  bounded cycle. Timings from different machine sessions are not combined into
+  one ratio.
 - `current/`: current GC-sweep executable's exact build identity, seven-round
   corrected PHPStan comparisons, deep-release/shallow controls, 23-case
   confirmation, full corpus and reduced instruction diagnostics. Its
   `gates.json` and `validation-cycle.json` record the user-requested interruption
   before powering off: only the default full suite completed. The complete
-  feature matrix, exact-current-source ASan and final corpus confirmation are
-  pending gates; historical
+  feature matrix, exact-current-source ASan and final corpus confirmation were
+  pending at the pause and are now completed in `post-restart/`; historical
   root-level gates must not be presented as proof for this source revision.
 - Historical root-level `build.json`, `gates.json`, `quick-check.json`,
   `corpus.json` and `asan-current-validation.json` below describe the rejected

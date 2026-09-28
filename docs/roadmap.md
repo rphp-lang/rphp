@@ -25,7 +25,7 @@ microbenchmark improves.
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
 | PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The Rector 2.5.9 bootstrap now runs an unmodified real parallel transformation and an idempotent second pass. Its vendor audit finds 339/351 observed globals present with zero call-shape mismatches; twelve conditional observations remain explicit nonclaims. Five Cargo configurations, all-targets, Composer/Symfony S0-S3 and unsafe gates pass; performance is deferred by user direction ahead of the Rust upgrade. |
-| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | The Rust-only heap is integrated with 35,345 successful joint test executions. A fresh PHPStan control improves about 20%, while a larger input exposes repeated deep-release graph scans. The next measured M1 candidate is to remove those scans with destructor semantics intact; the earlier dynamic String-key admission and dual-host scorecard remain pending. |
+| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | The Rust heap and bounded release/PHPStan repair are accepted with 35,405 successful test executions and exact-source ASan. Deep release improves 68.5x and disabled-GC RSS falls 31.6%; five confirmed microbenchmark regressions of 2.85–6.46% have an explicit correctness tradeoff. Large-input PHPStan still takes 16.33 s versus PHP's 1.45 s. The next M1 candidates are repeated VM bookkeeping costs; typed admission and the dual-host scorecard remain pending. |
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
 diagnostic observation or favorable but unverified benchmark remains work in
@@ -35,8 +35,11 @@ The [heap integration checkpoint](performance-php-heap-integration.md) records
 the accepted assembly-removal tradeoff, fresh same-profile comparisons and the
 failed 120-second larger-project gate. Subprocess tracing rules out a stuck
 child wait in that serial failure. Native reproduction and Callgrind establish
-quadratic graph marking during nested PHP destructor release; no speculative
-release-path fix is included in the allocator merge.
+quadratic graph marking during nested PHP destructor release. The subsequent
+[bounded runtime repair](performance-deep-release.md) records the fixes, full
+joint verification and the integrating task's measured exception. It also
+corrects PHPStan's self-restart benchmark protocol; the remaining application
+gap is explicitly open.
 
 ## Coordination rules
 

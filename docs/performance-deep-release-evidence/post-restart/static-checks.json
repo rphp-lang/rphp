@@ -1,0 +1,12 @@
+{
+  "source_sha256": "b7965c1c1dfad4299f3b03e074e03490640d41af1a6969ecf6c7a2736f78f940",
+  "unsafe_policy": {
+    "exit": 0,
+    "base": "ceddd97b",
+    "unsafe_blocks": 1744,
+    "unsafe_block_ceiling": 1747,
+    "unsafe_functions": 321,
+    "unsafe_function_ceiling": 321
+  },
+  "formatting": "unchanged Rust source; carried forward from the checkpoint validation"
+}

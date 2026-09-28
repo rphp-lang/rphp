@@ -1,20 +1,106 @@
 # Bounded release and PHPStan repair
 
-Status: paused by user request for a hardware change. This local checkpoint is
-not accepted or merged. The current Rust candidate combines bounded storage
-release, correct VM page restoration and disabled-GC storage sweeps. The default
-suite passed 7,089 tests (15 ignored); the no-default suite was interrupted,
-and the remaining feature/all-target and exact-current-source sanitizer gates
-have not completed. Two regressions remain in the independent 23-case timing
-confirmation; this is not an all-workloads speedup claim.
+Status: verified and accepted by the integrating task as a bounded correctness
+and storage-release repair, with the explicit performance exception below.
+The source and immutable executables match checkpoint `a4f12c83` exactly.
+The current Rust candidate combines
+bounded storage release, correct VM page restoration and disabled-GC storage
+sweeps. All feature configurations and the all-target check now pass for the
+same source: 35,405 successful test executions. The default suite's 7,089 passes
+(15 ignored) predate the pause; the other configurations completed after the
+restart. Exact-current-source ASan also passes the five-file PHPStan input,
+with identical reference output and exit status and sampled peak RSS of
+2,565.5 MiB. Leak detection is disabled and the system allocator fallback is
+used; this is an invalid-access check, not a leak or performance result. The
+aggregate 6 GiB boundary reclaimed memory during builds (8,045 `max` events)
+but recorded zero OOM or OOM-kill events. The current comparisons remeasure both
+sides together after the restart; earlier-session results are kept separately.
 
-The user explicitly requested a checkpoint commit before powering off. All
-expensive jobs were stopped as whole process groups. The final corpus rerun is
-complete, but its independent confirmation remains pending. After the hardware
-change, repeat timing for both immutable baseline and candidate together; do not
-compare one side measured before the change with the other measured afterward.
+| Correctness configuration | Passed | Ignored | Verification session |
+| --- | ---: | ---: | --- |
+| Default | 7,089 | 15 | Before pause, identical source |
+| No default features | 6,738 | 15 | After restart |
+| Erased | 7,160 | 15 | After restart |
+| Reified | 7,182 | 15 | After restart |
+| All features | 7,236 | 18 | After restart |
+
+Ignored tests are not counted as passes. All-feature/all-target compilation,
+formatting and the unchanged unsafe-policy gate also pass.
+
+The pre-shutdown checkpoint and all historical measurements remain recorded.
+Post-restart confirmation includes the union of fresh and previous full-corpus
+suspects, previously confirmed regressions and the same fixed controls. All
+103 programs have PHP-equivalent output; five complete rounds retain 1,030
+samples, and an independent 33-case/11-round series retains another 726.
 
 ## Current candidate
+
+The first completed post-restart comparison retains seven interleaved rounds.
+On the one-file startup control, the integrated baseline takes 3.091 seconds
+cold and the candidate 2.969 seconds (-3.95%), with peak RSS 723.9 versus
+667.1 MiB. Warm medians are 1.121 and 1.116 seconds; reference PHP takes 0.437
+seconds cold and 0.241 seconds warm. Separately, the 8,192-object release takes
+0.957 seconds in the baseline and 0.0140 seconds in the candidate (68.5x).
+Both sides are freshly measured; changes relative to the older absolute times
+below do not establish either a hardware effect or a runtime regression.
+The completed seven-round large-input comparison is:
+
+| Fresh post-restart PHPStan | Boot | Cold analysis | Warm analysis | Cold peak RSS |
+| --- | ---: | ---: | ---: | ---: |
+| Previous repair, before GC sweep | 0.897 s | 16.376 s | 1.213 s | 1,525.6 MiB |
+| Current Rust heap | 0.904 s | 16.332 s | 1.214 s | 1,044.1 MiB |
+| Same current executable, system fallback | 1.145 s | 21.094 s | 1.549 s | 970.6 MiB |
+| PHP | 0.217 s | 1.452 s | 0.259 s | 172.4 MiB |
+
+All four configurations keep restart and process workers disabled and agree on
+output and exit. Within the current executable, the Rust heap reduces cold time
+by 22.6% and warm time by 21.7%, at a 7.6% cold RSS cost against system fallback.
+The fallback still includes heap routing/TLS overhead, so it is not a clean
+separately compiled system-allocator baseline. The GC sweep reduces RSS 31.6%
+against the previous repaired executable; its -0.27% cold-time change does not
+establish a whole-request CPU improvement. Current user/system CPU medians are
+15.78/0.53 seconds, which account for essentially the whole 16.33-second request.
+The remaining approximately 11.2x gap against PHP is not explained by waiting
+for process termination.
+
+### Integration decision and measured exception
+
+The full-corpus geometric mean of per-case median ratios is 1.0136. The
+independent confirmation retains five regressions outside the observed p10/p90
+bands; the apparent 33% short-JSON regression does not repeat (-0.42%, overlapping
+bands). The five confirmed cases are:
+
+| Program | Baseline median | Candidate median | Change |
+| --- | ---: | ---: | ---: |
+| `bench_call_user_func.php` | 514.801 ms | 543.175 ms | +5.51% |
+| `bench_mixed_trace_guard_loop.php` | 485.014 ms | 506.771 ms | +4.49% |
+| `bench_modulo_branch_loop.php` | 470.562 ms | 489.759 ms | +4.08% |
+| `bench_scoped_static_callback.php` | 656.245 ms | 674.949 ms | +2.85% |
+| `bench_typed_float_composed_tree.php` | 1,443.939 ms | 1,537.157 ms | +6.46% |
+
+These are recorded costs, not discarded outliers or an all-workloads speedup.
+The integrating task approves the evidence-backed exception allowed by the
+execution strategy for this specific correctness checkpoint: the old runtime
+can loop indefinitely on the application input, has a demonstrated out-of-bounds
+VM-stack access, and repeatedly walks complete destructor graphs. The repair
+passes the full feature matrix and ASan, completes the application with PHP's
+output, makes deep release approximately 68.5x faster, and reduces disabled-GC
+RSS by 31.6%. Acceptance retains these repairs with the five measured costs
+recorded as follow-up controls. This exception does not approve further
+regressions or declare the remaining application performance gap solved.
+
+Reduced instruction diagnostics add 0.273% for the composed Float-call case and
+0.376% for `call_user_func`; JSON and the scalar-loop control differ by less than
+0.025%. This is insufficient to attribute the full timing change to extra
+operations. Earlier disassembly records code placement and dispatch changes,
+but no specific cache or branch-predictor cause is proven. These cases remain
+explicit follow-up controls. The checkpoint changes no typed IR/JIT lowering
+or public call-frame ABI; native performance claims are limited to x86-64, and
+the dual-architecture scorecard remains open.
+
+The fresh native cycle peaks at 1,615.9 MiB aggregate memory with zero memory-
+limit or OOM events. Read-only CPU temperature samples span 50.75–79.625 C;
+there is no pre-maintenance thermal series from which to infer a cooling effect.
 
 The executable SHA-256 is
 `e922e13dfbe4c441e6f4d2282e9b5878d6e1ac804aadaf3a5afd11f39dd033ca`;
@@ -23,6 +109,8 @@ its source/test/Cargo fingerprint is
 It uses default features and `max-perf`, with the same toolchain and flags as
 the integrated-heap baseline. The cold `VmStack::extend` boundary restores the
 dispatcher's original native stack reservation without changing ExecuteData.
+
+## Pre-restart candidate measurements
 
 Seven interleaved, output-validated rounds use a fresh PHPStan result cache for
 each cold request and reuse it for the warm request. Filesystem caches are warm.
@@ -69,8 +157,9 @@ cache or branch-prediction cause. The fresh five-round corpus validates all 103
 inputs against PHP and retains 1,030 timing samples. Its geometric mean of
 per-case median ratios is 1.0082; fourteen cases meet the predeclared suspicion
 rule. A separate confirmation includes all fourteen, the two previously
-confirmed cases and five fixed controls. The integration decision remains
-pending; a pooled average cannot waive individual regressions.
+confirmed cases and five fixed controls. Integration was pending at the pause;
+the completed post-restart confirmation and explicit decision are above. A
+pooled average cannot waive individual regressions.
 
 ## Checkpoint contract
 

@@ -7,7 +7,7 @@ See the [project coordination map](roadmap.md), the
 and the shared [goal contract](agent-goal-contract.md) for assignment and
 integration rules.
 
-## Accepted heap integration and next measured cost
+## Accepted heap and bounded runtime repair
 
 The Rust-only allocator checkpoint is integrated at `0a0099fe` after the joint
 five-configuration matrix (35,345 passes), all-target compilation, formatting
@@ -17,15 +17,33 @@ The earlier localized TLS-removal tradeoff remains an explicit accepted limit.
 See the [integration report](performance-php-heap-integration.md) for all samples
 and the distinction between release and max-perf builds.
 
-The larger PHP-tool project fails a 120-second validation timeout on premerge
-main. Process tracing shows active CPU work, not an uncollected child process.
-Acyclic chains with PHP destructors expose repeated complete graph marking:
-doubling 512 objects to 1,024 multiplies marker instructions by 4.00. The same
-functions dominate late samples from the larger PHPStan input. This admits an
-M1 investigation of traversal reuse or a unified release walk, with callbacks,
-mutation, resurrection, aliases, cycles and deep-stack safety as required gates.
-No release algorithm has been changed or accepted by this measurement checkpoint.
-The previous typed-admission and ARM64/x86-64 scorecard work remains pending.
+The subsequent [bounded release and PHPStan repair](performance-deep-release.md)
+is accepted for the exact source in `a4f12c83`: repeated graph prepasses are
+removed, nested-reference iteration and interface lookup terminate correctly,
+VM stack pages restore valid bounds, and disabled-GC dead weak records release
+their storage. The five feature configurations record 35,405 successful test
+executions; exact-source ASan and all-target checks also pass. Native claims
+remain limited to x86-64 and do not change typed/JIT coverage.
+
+Fresh paired measurements after the maintenance pause show 68.5x faster release
+of an 8,192-object chain and 31.6% lower large-input PHPStan RSS than the previous
+repaired executable. Current PHPStan cold analysis is 16.332 seconds with the
+Rust heap, 21.094 seconds with the same executable's system fallback, and
+1.452 seconds with PHP. The system control still includes heap routing overhead.
+All outputs match, and CPU time accounts for essentially the whole request.
+
+The integrating task explicitly accepts five independently confirmed
+microbenchmark regressions of 2.85–6.46% for this correctness checkpoint. The
+103-case corpus geometric mean is 1.0136; this is not an all-workloads speedup.
+The report retains every sample, the 33-case confirmation and the rationale for
+the exception. The five affected programs remain controls for subsequent work.
+
+The remaining application gap is approximately 11.2x. The previously profiled
+repaired runtime executes about 9.9x PHP's instruction count, with substantial
+dispatch, cycle registration, class lookup and temporary cleanup costs. These
+are the next M1 profiling candidates; no further implementation is admitted by
+this checkpoint. The previous typed-admission and ARM64/x86-64 scorecard work
+remains pending.
 
 ## Mission
 

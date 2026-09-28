@@ -1,0 +1,5788 @@
+{
+  "interval_seconds": 2,
+  "description": "Read-only CPU temperature/frequency samples during the fresh paired cycle; no old-hardware causal comparison.",
+  "samples": [
+    {
+      "elapsed_seconds": 0.0001225910000357544,
+      "Tccd1_celsius": 58.625,
+      "Tccd2_celsius": 38.25,
+      "Tctl_celsius": 50.75,
+      "cpu0_frequency_khz": 5389004
+    },
+    {
+      "elapsed_seconds": 2.000406185999964,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 64.0,
+      "cpu0_frequency_khz": 5463976
+    },
+    {
+      "elapsed_seconds": 4.000653433000025,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.375,
+      "cpu0_frequency_khz": 5487530
+    },
+    {
+      "elapsed_seconds": 6.000904318000039,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 69.25,
+      "cpu0_frequency_khz": 5463342
+    },
+    {
+      "elapsed_seconds": 8.001184599999988,
+      "Tccd1_celsius": 57.25,
+      "Tccd2_celsius": 41.375,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5488798
+    },
+    {
+      "elapsed_seconds": 10.001497095000104,
+      "Tccd1_celsius": 55.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 5475415
+    },
+    {
+      "elapsed_seconds": 12.001741964000075,
+      "Tccd1_celsius": 49.625,
+      "Tccd2_celsius": 41.375,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5488492
+    },
+    {
+      "elapsed_seconds": 14.001984288999893,
+      "Tccd1_celsius": 55.375,
+      "Tccd2_celsius": 41.125,
+      "Tctl_celsius": 64.5,
+      "cpu0_frequency_khz": 5488634
+    },
+    {
+      "elapsed_seconds": 16.002225773999953,
+      "Tccd1_celsius": 63.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 5494742
+    },
+    {
+      "elapsed_seconds": 18.002491466000038,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 64.625,
+      "cpu0_frequency_khz": 5488645
+    },
+    {
+      "elapsed_seconds": 20.002749255000026,
+      "Tccd1_celsius": 61.5,
+      "Tccd2_celsius": 39.25,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5455829
+    },
+    {
+      "elapsed_seconds": 22.002990784000076,
+      "Tccd1_celsius": 58.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5488833
+    },
+    {
+      "elapsed_seconds": 24.00325745300006,
+      "Tccd1_celsius": 52.625,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 63.875,
+      "cpu0_frequency_khz": 5482944
+    },
+    {
+      "elapsed_seconds": 26.00351409299992,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 5466451
+    },
+    {
+      "elapsed_seconds": 28.003752510999902,
+      "Tccd1_celsius": 55.375,
+      "Tccd2_celsius": 40.0,
+      "Tctl_celsius": 65.375,
+      "cpu0_frequency_khz": 5488494
+    },
+    {
+      "elapsed_seconds": 30.003975510999908,
+      "Tccd1_celsius": 49.875,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5504471
+    },
+    {
+      "elapsed_seconds": 32.004221486000006,
+      "Tccd1_celsius": 58.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.125,
+      "cpu0_frequency_khz": 5489357
+    },
+    {
+      "elapsed_seconds": 34.004480577000095,
+      "Tccd1_celsius": 51.375,
+      "Tccd2_celsius": 42.375,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 4391445
+    },
+    {
+      "elapsed_seconds": 36.00473779499998,
+      "Tccd1_celsius": 63.75,
+      "Tccd2_celsius": 39.25,
+      "Tctl_celsius": 63.75,
+      "cpu0_frequency_khz": 5487619
+    },
+    {
+      "elapsed_seconds": 38.00498892399992,
+      "Tccd1_celsius": 56.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5488851
+    },
+    {
+      "elapsed_seconds": 40.005246555999975,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 42.005582387000004,
+      "Tccd1_celsius": 59.375,
+      "Tccd2_celsius": 39.125,
+      "Tctl_celsius": 64.875,
+      "cpu0_frequency_khz": 5489570
+    },
+    {
+      "elapsed_seconds": 44.0058850559999,
+      "Tccd1_celsius": 65.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.625,
+      "cpu0_frequency_khz": 5097655
+    },
+    {
+      "elapsed_seconds": 46.00619060300005,
+      "Tccd1_celsius": 45.625,
+      "Tccd2_celsius": 45.625,
+      "Tctl_celsius": 63.75,
+      "cpu0_frequency_khz": 5488232
+    },
+    {
+      "elapsed_seconds": 48.00648435800008,
+      "Tccd1_celsius": 56.75,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 64.875,
+      "cpu0_frequency_khz": 5490712
+    },
+    {
+      "elapsed_seconds": 50.00677059000009,
+      "Tccd1_celsius": 46.625,
+      "Tccd2_celsius": 43.75,
+      "Tctl_celsius": 64.125,
+      "cpu0_frequency_khz": 5489054
+    },
+    {
+      "elapsed_seconds": 52.007278152000026,
+      "Tccd1_celsius": 60.375,
+      "Tccd2_celsius": 40.5,
+      "Tctl_celsius": 62.75,
+      "cpu0_frequency_khz": 5488403
+    },
+    {
+      "elapsed_seconds": 54.007649227,
+      "Tccd1_celsius": 65.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5489316
+    },
+    {
+      "elapsed_seconds": 56.0079898030001,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.875,
+      "cpu0_frequency_khz": 5481261
+    },
+    {
+      "elapsed_seconds": 58.00829199000009,
+      "Tccd1_celsius": 51.75,
+      "Tccd2_celsius": 40.875,
+      "Tctl_celsius": 64.25,
+      "cpu0_frequency_khz": 5489205
+    },
+    {
+      "elapsed_seconds": 60.008628202999944,
+      "Tccd1_celsius": 53.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5485146
+    },
+    {
+      "elapsed_seconds": 62.00893835800002,
+      "Tccd1_celsius": 51.75,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5487540
+    },
+    {
+      "elapsed_seconds": 64.00926114799995,
+      "Tccd1_celsius": 65.125,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5489897
+    },
+    {
+      "elapsed_seconds": 66.00960559000009,
+      "Tccd1_celsius": 53.5,
+      "Tccd2_celsius": 41.0,
+      "Tctl_celsius": 64.875,
+      "cpu0_frequency_khz": 4670179
+    },
+    {
+      "elapsed_seconds": 68.010035044,
+      "Tccd1_celsius": 50.375,
+      "Tccd2_celsius": 41.0,
+      "Tctl_celsius": 67.875,
+      "cpu0_frequency_khz": 5489138
+    },
+    {
+      "elapsed_seconds": 70.0102711940001,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.875,
+      "cpu0_frequency_khz": 5488591
+    },
+    {
+      "elapsed_seconds": 72.0105261409999,
+      "Tccd1_celsius": 59.875,
+      "Tccd2_celsius": 40.125,
+      "Tctl_celsius": 65.125,
+      "cpu0_frequency_khz": 5490528
+    },
+    {
+      "elapsed_seconds": 74.010799313,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 65.125,
+      "cpu0_frequency_khz": 5488164
+    },
+    {
+      "elapsed_seconds": 76.01107019200003,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5488993
+    },
+    {
+      "elapsed_seconds": 78.01134635199992,
+      "Tccd1_celsius": 57.25,
+      "Tccd2_celsius": 40.0,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5486314
+    },
+    {
+      "elapsed_seconds": 80.01158091499997,
+      "Tccd1_celsius": 61.5,
+      "Tccd2_celsius": 40.5,
+      "Tctl_celsius": 64.0,
+      "cpu0_frequency_khz": 5488769
+    },
+    {
+      "elapsed_seconds": 82.01186113499989,
+      "Tccd1_celsius": 54.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5488724
+    },
+    {
+      "elapsed_seconds": 84.01216997999995,
+      "Tccd1_celsius": 53.5,
+      "Tccd2_celsius": 43.375,
+      "Tctl_celsius": 64.25,
+      "cpu0_frequency_khz": 5481347
+    },
+    {
+      "elapsed_seconds": 86.01240049900002,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 64.125,
+      "cpu0_frequency_khz": 5489332
+    },
+    {
+      "elapsed_seconds": 88.0126394240001,
+      "Tccd1_celsius": 55.375,
+      "Tccd2_celsius": 40.5,
+      "Tctl_celsius": 64.25,
+      "cpu0_frequency_khz": 5488455
+    },
+    {
+      "elapsed_seconds": 90.01291020100007,
+      "Tccd1_celsius": 54.5,
+      "Tccd2_celsius": 40.125,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5488818
+    },
+    {
+      "elapsed_seconds": 92.01320771900009,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5488775
+    },
+    {
+      "elapsed_seconds": 94.01346154599992,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5489325
+    },
+    {
+      "elapsed_seconds": 96.01370782000004,
+      "Tccd1_celsius": 75.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5412081
+    },
+    {
+      "elapsed_seconds": 98.0139764160001,
+      "Tccd1_celsius": 50.75,
+      "Tccd2_celsius": 43.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 4439066
+    },
+    {
+      "elapsed_seconds": 100.01429729300003,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5485846
+    },
+    {
+      "elapsed_seconds": 102.01453179700002,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5488749
+    },
+    {
+      "elapsed_seconds": 104.01478024900007,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 37.5,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5487916
+    },
+    {
+      "elapsed_seconds": 106.01507971799992,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5423432
+    },
+    {
+      "elapsed_seconds": 108.01536905900002,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.0,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5487223
+    },
+    {
+      "elapsed_seconds": 110.01561850600001,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5473930
+    },
+    {
+      "elapsed_seconds": 112.01587185099993,
+      "Tccd1_celsius": 65.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5485606
+    },
+    {
+      "elapsed_seconds": 114.01613677899991,
+      "Tccd1_celsius": 51.375,
+      "Tccd2_celsius": 37.5,
+      "Tctl_celsius": 65.375,
+      "cpu0_frequency_khz": 5494430
+    },
+    {
+      "elapsed_seconds": 116.01643594300003,
+      "Tccd1_celsius": 49.25,
+      "Tccd2_celsius": 42.375,
+      "Tctl_celsius": 63.75,
+      "cpu0_frequency_khz": 5487730
+    },
+    {
+      "elapsed_seconds": 118.01667948199997,
+      "Tccd1_celsius": 64.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5489274
+    },
+    {
+      "elapsed_seconds": 120.0169664340001,
+      "Tccd1_celsius": 66.625,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5295662
+    },
+    {
+      "elapsed_seconds": 122.01721054399991,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5484388
+    },
+    {
+      "elapsed_seconds": 124.01745238300009,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.625,
+      "cpu0_frequency_khz": 5485946
+    },
+    {
+      "elapsed_seconds": 126.01768850300004,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 68.5,
+      "cpu0_frequency_khz": 5488467
+    },
+    {
+      "elapsed_seconds": 128.01792077599998,
+      "Tccd1_celsius": 65.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5489401
+    },
+    {
+      "elapsed_seconds": 130.01816016299995,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5486219
+    },
+    {
+      "elapsed_seconds": 132.01839727700008,
+      "Tccd1_celsius": 53.5,
+      "Tccd2_celsius": 41.375,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5489095
+    },
+    {
+      "elapsed_seconds": 134.0186331499999,
+      "Tccd1_celsius": 56.75,
+      "Tccd2_celsius": 41.375,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5489267
+    },
+    {
+      "elapsed_seconds": 136.0188695039999,
+      "Tccd1_celsius": 65.625,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5449271
+    },
+    {
+      "elapsed_seconds": 138.01910688199996,
+      "Tccd1_celsius": 63.75,
+      "Tccd2_celsius": 41.875,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5488171
+    },
+    {
+      "elapsed_seconds": 140.01934661399991,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5468159
+    },
+    {
+      "elapsed_seconds": 142.01963266500002,
+      "Tccd1_celsius": 64.125,
+      "Tccd2_celsius": 38.625,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5485053
+    },
+    {
+      "elapsed_seconds": 144.01992943699997,
+      "Tccd1_celsius": 63.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.625,
+      "cpu0_frequency_khz": 5488970
+    },
+    {
+      "elapsed_seconds": 146.020202295,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5489365
+    },
+    {
+      "elapsed_seconds": 148.02045478500008,
+      "Tccd1_celsius": 64.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 150.02069905000008,
+      "Tccd1_celsius": 60.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.625,
+      "cpu0_frequency_khz": 5488827
+    },
+    {
+      "elapsed_seconds": 152.020929691,
+      "Tccd1_celsius": 62.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5489143
+    },
+    {
+      "elapsed_seconds": 154.02116788600006,
+      "Tccd1_celsius": 63.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5489228
+    },
+    {
+      "elapsed_seconds": 156.0214178650001,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 63.0,
+      "cpu0_frequency_khz": 5487891
+    },
+    {
+      "elapsed_seconds": 158.02171565499998,
+      "Tccd1_celsius": 53.75,
+      "Tccd2_celsius": 42.5,
+      "Tctl_celsius": 62.875,
+      "cpu0_frequency_khz": 5477854
+    },
+    {
+      "elapsed_seconds": 160.02195406400006,
+      "Tccd1_celsius": 46.625,
+      "Tccd2_celsius": 51.625,
+      "Tctl_celsius": 64.875,
+      "cpu0_frequency_khz": 5485977
+    },
+    {
+      "elapsed_seconds": 162.0222198450001,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5488413
+    },
+    {
+      "elapsed_seconds": 164.02248929400002,
+      "Tccd1_celsius": 61.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5489404
+    },
+    {
+      "elapsed_seconds": 166.022805652,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5486424
+    },
+    {
+      "elapsed_seconds": 168.02304763999996,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 37.0,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5487607
+    },
+    {
+      "elapsed_seconds": 170.023301682,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5488963
+    },
+    {
+      "elapsed_seconds": 172.02355362100002,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5489289
+    },
+    {
+      "elapsed_seconds": 174.02383772200005,
+      "Tccd1_celsius": 58.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5488834
+    },
+    {
+      "elapsed_seconds": 176.02414698999996,
+      "Tccd1_celsius": 63.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5487716
+    },
+    {
+      "elapsed_seconds": 178.02444057999992,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.125,
+      "cpu0_frequency_khz": 5486061
+    },
+    {
+      "elapsed_seconds": 180.0247551299999,
+      "Tccd1_celsius": 54.125,
+      "Tccd2_celsius": 39.125,
+      "Tctl_celsius": 65.375,
+      "cpu0_frequency_khz": 5489306
+    },
+    {
+      "elapsed_seconds": 182.02509447800003,
+      "Tccd1_celsius": 49.875,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 63.875,
+      "cpu0_frequency_khz": 5488744
+    },
+    {
+      "elapsed_seconds": 184.02532866799993,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 63.875,
+      "cpu0_frequency_khz": 5487684
+    },
+    {
+      "elapsed_seconds": 186.02563029399994,
+      "Tccd1_celsius": 65.625,
+      "Tccd2_celsius": 38.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5461413
+    },
+    {
+      "elapsed_seconds": 188.02592759499998,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5478981
+    },
+    {
+      "elapsed_seconds": 190.0263659719999,
+      "Tccd1_celsius": 60.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.875,
+      "cpu0_frequency_khz": 5488737
+    },
+    {
+      "elapsed_seconds": 192.0267339080001,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5485688
+    },
+    {
+      "elapsed_seconds": 194.02706172800004,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5486718
+    },
+    {
+      "elapsed_seconds": 196.02731462799989,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5489187
+    },
+    {
+      "elapsed_seconds": 198.02760379699998,
+      "Tccd1_celsius": 54.625,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.875,
+      "cpu0_frequency_khz": 5489093
+    },
+    {
+      "elapsed_seconds": 200.027851328,
+      "Tccd1_celsius": 49.0,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 63.875,
+      "cpu0_frequency_khz": 5457029
+    },
+    {
+      "elapsed_seconds": 202.02813453699991,
+      "Tccd1_celsius": 64.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 68.625,
+      "cpu0_frequency_khz": 5489062
+    },
+    {
+      "elapsed_seconds": 204.0283933809999,
+      "Tccd1_celsius": 53.25,
+      "Tccd2_celsius": 38.375,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5488937
+    },
+    {
+      "elapsed_seconds": 206.02870164799992,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5488491
+    },
+    {
+      "elapsed_seconds": 208.02895842899989,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.5,
+      "cpu0_frequency_khz": 5484327
+    },
+    {
+      "elapsed_seconds": 210.02919537399998,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5489037
+    },
+    {
+      "elapsed_seconds": 212.029433401,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5488463
+    },
+    {
+      "elapsed_seconds": 214.02968695799996,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 216.029927091,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5485426
+    },
+    {
+      "elapsed_seconds": 218.030166582,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5489338
+    },
+    {
+      "elapsed_seconds": 220.0304061249999,
+      "Tccd1_celsius": 58.25,
+      "Tccd2_celsius": 41.5,
+      "Tctl_celsius": 64.375,
+      "cpu0_frequency_khz": 5487766
+    },
+    {
+      "elapsed_seconds": 222.0306663880001,
+      "Tccd1_celsius": 51.75,
+      "Tccd2_celsius": 39.75,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5489248
+    },
+    {
+      "elapsed_seconds": 224.03091851499994,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 4901901
+    },
+    {
+      "elapsed_seconds": 226.03119126299998,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 5420625
+    },
+    {
+      "elapsed_seconds": 228.03145725800005,
+      "Tccd1_celsius": 54.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5483033
+    },
+    {
+      "elapsed_seconds": 230.03172624900003,
+      "Tccd1_celsius": 64.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5486953
+    },
+    {
+      "elapsed_seconds": 232.0321195260001,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 5480266
+    },
+    {
+      "elapsed_seconds": 234.03235628800007,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5489202
+    },
+    {
+      "elapsed_seconds": 236.0326044420001,
+      "Tccd1_celsius": 42.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5488958
+    },
+    {
+      "elapsed_seconds": 238.03284501200005,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5484449
+    },
+    {
+      "elapsed_seconds": 240.0330890790001,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.875,
+      "cpu0_frequency_khz": 5488422
+    },
+    {
+      "elapsed_seconds": 242.03334236499995,
+      "Tccd1_celsius": 51.75,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 63.5,
+      "cpu0_frequency_khz": 5489385
+    },
+    {
+      "elapsed_seconds": 244.03361835400005,
+      "Tccd1_celsius": 53.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5489805
+    },
+    {
+      "elapsed_seconds": 246.03384896800003,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 38.375,
+      "Tctl_celsius": 63.875,
+      "cpu0_frequency_khz": 5488395
+    },
+    {
+      "elapsed_seconds": 248.03412867499992,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5483720
+    },
+    {
+      "elapsed_seconds": 250.0343929830001,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.875,
+      "cpu0_frequency_khz": 5090562
+    },
+    {
+      "elapsed_seconds": 252.03462847800006,
+      "Tccd1_celsius": 66.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 4361085
+    },
+    {
+      "elapsed_seconds": 254.03486534600006,
+      "Tccd1_celsius": 65.625,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5490304
+    },
+    {
+      "elapsed_seconds": 256.03512619,
+      "Tccd1_celsius": 57.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.5,
+      "cpu0_frequency_khz": 5465394
+    },
+    {
+      "elapsed_seconds": 258.0353688800001,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.625,
+      "cpu0_frequency_khz": 5481405
+    },
+    {
+      "elapsed_seconds": 260.03560601000004,
+      "Tccd1_celsius": 60.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5435696
+    },
+    {
+      "elapsed_seconds": 262.03586696499997,
+      "Tccd1_celsius": 53.25,
+      "Tccd2_celsius": 41.75,
+      "Tctl_celsius": 64.375,
+      "cpu0_frequency_khz": 5489377
+    },
+    {
+      "elapsed_seconds": 264.03620593899996,
+      "Tccd1_celsius": 54.875,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5484290
+    },
+    {
+      "elapsed_seconds": 266.0364894480001,
+      "Tccd1_celsius": 51.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 5489496
+    },
+    {
+      "elapsed_seconds": 268.03673380400005,
+      "Tccd1_celsius": 60.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5489280
+    },
+    {
+      "elapsed_seconds": 270.03698561500005,
+      "Tccd1_celsius": 64.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5488282
+    },
+    {
+      "elapsed_seconds": 272.03725336599996,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5488303
+    },
+    {
+      "elapsed_seconds": 274.0375008389999,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 37.5,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5478523
+    },
+    {
+      "elapsed_seconds": 276.03777083599994,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5484346
+    },
+    {
+      "elapsed_seconds": 278.03802857999995,
+      "Tccd1_celsius": 62.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.375,
+      "cpu0_frequency_khz": 5487737
+    },
+    {
+      "elapsed_seconds": 280.03826660699997,
+      "Tccd1_celsius": 50.375,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5486959
+    },
+    {
+      "elapsed_seconds": 282.03850695899996,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 4507372
+    },
+    {
+      "elapsed_seconds": 284.03876114700006,
+      "Tccd1_celsius": 57.25,
+      "Tccd2_celsius": 39.125,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5470284
+    },
+    {
+      "elapsed_seconds": 286.039006921,
+      "Tccd1_celsius": 55.375,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5489378
+    },
+    {
+      "elapsed_seconds": 288.0392501199999,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5489317
+    },
+    {
+      "elapsed_seconds": 290.03948685699993,
+      "Tccd1_celsius": 66.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5487131
+    },
+    {
+      "elapsed_seconds": 292.0397223120001,
+      "Tccd1_celsius": 61.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.5,
+      "cpu0_frequency_khz": 5489171
+    },
+    {
+      "elapsed_seconds": 294.0399767639999,
+      "Tccd1_celsius": 69.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.75,
+      "cpu0_frequency_khz": 4522274
+    },
+    {
+      "elapsed_seconds": 296.04023606500004,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5489009
+    },
+    {
+      "elapsed_seconds": 298.0404780240001,
+      "Tccd1_celsius": 61.875,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5486798
+    },
+    {
+      "elapsed_seconds": 300.0407137320001,
+      "Tccd1_celsius": 55.625,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5486853
+    },
+    {
+      "elapsed_seconds": 302.04097181199995,
+      "Tccd1_celsius": 58.625,
+      "Tccd2_celsius": 40.25,
+      "Tctl_celsius": 64.25,
+      "cpu0_frequency_khz": 5484988
+    },
+    {
+      "elapsed_seconds": 304.04127263400005,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5487797
+    },
+    {
+      "elapsed_seconds": 306.041606989,
+      "Tccd1_celsius": 66.625,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 68.75,
+      "cpu0_frequency_khz": 5463815
+    },
+    {
+      "elapsed_seconds": 308.0418785060001,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.625,
+      "cpu0_frequency_khz": 5488696
+    },
+    {
+      "elapsed_seconds": 310.042118695,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5488276
+    },
+    {
+      "elapsed_seconds": 312.04239574300004,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5419926
+    },
+    {
+      "elapsed_seconds": 314.0427068460001,
+      "Tccd1_celsius": 64.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5450443
+    },
+    {
+      "elapsed_seconds": 316.0429884949999,
+      "Tccd1_celsius": 64.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5487793
+    },
+    {
+      "elapsed_seconds": 318.04325993299994,
+      "Tccd1_celsius": 53.125,
+      "Tccd2_celsius": 38.625,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5489016
+    },
+    {
+      "elapsed_seconds": 320.0435181769999,
+      "Tccd1_celsius": 48.375,
+      "Tccd2_celsius": 38.375,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 4814505
+    },
+    {
+      "elapsed_seconds": 322.04381324199994,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.125,
+      "cpu0_frequency_khz": 5484775
+    },
+    {
+      "elapsed_seconds": 324.04413920599995,
+      "Tccd1_celsius": 59.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.375,
+      "cpu0_frequency_khz": 5489298
+    },
+    {
+      "elapsed_seconds": 326.044394516,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 5488981
+    },
+    {
+      "elapsed_seconds": 328.04467234000003,
+      "Tccd1_celsius": 62.75,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5489023
+    },
+    {
+      "elapsed_seconds": 330.0449901689999,
+      "Tccd1_celsius": 62.875,
+      "Tccd2_celsius": 41.625,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5488521
+    },
+    {
+      "elapsed_seconds": 332.0452621019999,
+      "Tccd1_celsius": 60.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5488543
+    },
+    {
+      "elapsed_seconds": 334.045559183,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 69.25,
+      "cpu0_frequency_khz": 5465940
+    },
+    {
+      "elapsed_seconds": 336.045821469,
+      "Tccd1_celsius": 44.625,
+      "Tccd2_celsius": 37.875,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5489273
+    },
+    {
+      "elapsed_seconds": 338.04619944399997,
+      "Tccd1_celsius": 57.5,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5489312
+    },
+    {
+      "elapsed_seconds": 340.04652198400004,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5486676
+    },
+    {
+      "elapsed_seconds": 342.046758232,
+      "Tccd1_celsius": 52.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.125,
+      "cpu0_frequency_khz": 5489308
+    },
+    {
+      "elapsed_seconds": 344.046974032,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.875,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5488276
+    },
+    {
+      "elapsed_seconds": 346.04723132000004,
+      "Tccd1_celsius": 54.625,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5489236
+    },
+    {
+      "elapsed_seconds": 348.0474750630001,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 38.625,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5486432
+    },
+    {
+      "elapsed_seconds": 350.047708588,
+      "Tccd1_celsius": 65.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5482023
+    },
+    {
+      "elapsed_seconds": 352.0479667090001,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5489096
+    },
+    {
+      "elapsed_seconds": 354.04827293099993,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5483653
+    },
+    {
+      "elapsed_seconds": 356.04852546300003,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5489284
+    },
+    {
+      "elapsed_seconds": 358.0487826430001,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5488884
+    },
+    {
+      "elapsed_seconds": 360.0489756029999,
+      "Tccd1_celsius": 62.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5489470
+    },
+    {
+      "elapsed_seconds": 362.04921433899995,
+      "Tccd1_celsius": 58.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5489259
+    },
+    {
+      "elapsed_seconds": 364.04947148099996,
+      "Tccd1_celsius": 65.0,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5489301
+    },
+    {
+      "elapsed_seconds": 366.0497097980001,
+      "Tccd1_celsius": 66.625,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5488055
+    },
+    {
+      "elapsed_seconds": 368.0499488160001,
+      "Tccd1_celsius": 49.875,
+      "Tccd2_celsius": 46.875,
+      "Tctl_celsius": 63.375,
+      "cpu0_frequency_khz": 5487528
+    },
+    {
+      "elapsed_seconds": 370.0502195639999,
+      "Tccd1_celsius": 59.625,
+      "Tccd2_celsius": 39.75,
+      "Tctl_celsius": 65.0,
+      "cpu0_frequency_khz": 5488399
+    },
+    {
+      "elapsed_seconds": 372.05046440399997,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.0,
+      "cpu0_frequency_khz": 4922294
+    },
+    {
+      "elapsed_seconds": 374.0506935640001,
+      "Tccd1_celsius": 58.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5489317
+    },
+    {
+      "elapsed_seconds": 376.0509304300001,
+      "Tccd1_celsius": 62.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.875,
+      "cpu0_frequency_khz": 5469246
+    },
+    {
+      "elapsed_seconds": 378.0511757219999,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.25,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5489216
+    },
+    {
+      "elapsed_seconds": 380.0514418529999,
+      "Tccd1_celsius": 61.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5486229
+    },
+    {
+      "elapsed_seconds": 382.051680241,
+      "Tccd1_celsius": 65.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5197361
+    },
+    {
+      "elapsed_seconds": 384.0519181699999,
+      "Tccd1_celsius": 64.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5487796
+    },
+    {
+      "elapsed_seconds": 386.05218364200005,
+      "Tccd1_celsius": 53.125,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5488711
+    },
+    {
+      "elapsed_seconds": 388.05250598,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 37.75,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5485745
+    },
+    {
+      "elapsed_seconds": 390.0527437999999,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5489247
+    },
+    {
+      "elapsed_seconds": 392.05297524799994,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5486229
+    },
+    {
+      "elapsed_seconds": 394.05322879799996,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5482130
+    },
+    {
+      "elapsed_seconds": 396.0535267119999,
+      "Tccd1_celsius": 65.625,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5481190
+    },
+    {
+      "elapsed_seconds": 398.0537669380001,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5488874
+    },
+    {
+      "elapsed_seconds": 400.05402852399993,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5489343
+    },
+    {
+      "elapsed_seconds": 402.0542727479999,
+      "Tccd1_celsius": 62.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5475893
+    },
+    {
+      "elapsed_seconds": 404.0545645110001,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5457476
+    },
+    {
+      "elapsed_seconds": 406.0547949899999,
+      "Tccd1_celsius": 52.75,
+      "Tccd2_celsius": 38.625,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5489297
+    },
+    {
+      "elapsed_seconds": 408.055041629,
+      "Tccd1_celsius": 64.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.875,
+      "cpu0_frequency_khz": 5487847
+    },
+    {
+      "elapsed_seconds": 410.0552994499999,
+      "Tccd1_celsius": 56.375,
+      "Tccd2_celsius": 42.0,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 5461577
+    },
+    {
+      "elapsed_seconds": 412.05558266799994,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5481452
+    },
+    {
+      "elapsed_seconds": 414.05583009,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5493178
+    },
+    {
+      "elapsed_seconds": 416.05608791200007,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5486864
+    },
+    {
+      "elapsed_seconds": 418.0563431989999,
+      "Tccd1_celsius": 63.125,
+      "Tccd2_celsius": 37.0,
+      "Tctl_celsius": 68.5,
+      "cpu0_frequency_khz": 5414248
+    },
+    {
+      "elapsed_seconds": 420.0565998689999,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5489256
+    },
+    {
+      "elapsed_seconds": 422.0568491449999,
+      "Tccd1_celsius": 63.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5489629
+    },
+    {
+      "elapsed_seconds": 424.05709026599993,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5483284
+    },
+    {
+      "elapsed_seconds": 426.0573419079999,
+      "Tccd1_celsius": 54.5,
+      "Tccd2_celsius": 42.875,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 4415533
+    },
+    {
+      "elapsed_seconds": 428.05757641700006,
+      "Tccd1_celsius": 55.0,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 64.125,
+      "cpu0_frequency_khz": 5489246
+    },
+    {
+      "elapsed_seconds": 430.0578136219999,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5488135
+    },
+    {
+      "elapsed_seconds": 432.05810156300004,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.875,
+      "cpu0_frequency_khz": 5402653
+    },
+    {
+      "elapsed_seconds": 434.05834063099996,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5481975
+    },
+    {
+      "elapsed_seconds": 436.05857431999993,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5489323
+    },
+    {
+      "elapsed_seconds": 438.05881148599997,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5483864
+    },
+    {
+      "elapsed_seconds": 440.05905493399996,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5489115
+    },
+    {
+      "elapsed_seconds": 442.05931179699996,
+      "Tccd1_celsius": 66.625,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5488064
+    },
+    {
+      "elapsed_seconds": 444.05964833100006,
+      "Tccd1_celsius": 52.5,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5405398
+    },
+    {
+      "elapsed_seconds": 446.0601406200001,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5360284
+    },
+    {
+      "elapsed_seconds": 448.06038613300007,
+      "Tccd1_celsius": 56.5,
+      "Tccd2_celsius": 46.25,
+      "Tctl_celsius": 64.375,
+      "cpu0_frequency_khz": 5489328
+    },
+    {
+      "elapsed_seconds": 450.060627608,
+      "Tccd1_celsius": 59.375,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 64.875,
+      "cpu0_frequency_khz": 5475308
+    },
+    {
+      "elapsed_seconds": 452.060897457,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5286139
+    },
+    {
+      "elapsed_seconds": 454.0611591720001,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.875,
+      "cpu0_frequency_khz": 5212060
+    },
+    {
+      "elapsed_seconds": 456.0614047050001,
+      "Tccd1_celsius": 64.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5489102
+    },
+    {
+      "elapsed_seconds": 458.0616720610001,
+      "Tccd1_celsius": 65.625,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5229333
+    },
+    {
+      "elapsed_seconds": 460.0619840710001,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.75,
+      "cpu0_frequency_khz": 5486406
+    },
+    {
+      "elapsed_seconds": 462.0624842760001,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5449282
+    },
+    {
+      "elapsed_seconds": 464.0628642250001,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5488519
+    },
+    {
+      "elapsed_seconds": 466.06320428799995,
+      "Tccd1_celsius": 62.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.875,
+      "cpu0_frequency_khz": 5488990
+    },
+    {
+      "elapsed_seconds": 468.06350640000005,
+      "Tccd1_celsius": 63.75,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 64.625,
+      "cpu0_frequency_khz": 5466966
+    },
+    {
+      "elapsed_seconds": 470.063815386,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5477578
+    },
+    {
+      "elapsed_seconds": 472.0640766009999,
+      "Tccd1_celsius": 55.125,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 66.0,
+      "cpu0_frequency_khz": 5483830
+    },
+    {
+      "elapsed_seconds": 474.0643135309999,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.875,
+      "cpu0_frequency_khz": 5439180
+    },
+    {
+      "elapsed_seconds": 476.06455455900004,
+      "Tccd1_celsius": 61.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5486790
+    },
+    {
+      "elapsed_seconds": 478.0647923910001,
+      "Tccd1_celsius": 66.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5483166
+    },
+    {
+      "elapsed_seconds": 480.0650368470001,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5406254
+    },
+    {
+      "elapsed_seconds": 482.06528176300003,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 69.0,
+      "cpu0_frequency_khz": 5489035
+    },
+    {
+      "elapsed_seconds": 484.065550714,
+      "Tccd1_celsius": 58.875,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 68.625,
+      "cpu0_frequency_khz": 5424171
+    },
+    {
+      "elapsed_seconds": 486.065868658,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 38.25,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5487847
+    },
+    {
+      "elapsed_seconds": 488.0661099480001,
+      "Tccd1_celsius": 54.625,
+      "Tccd2_celsius": 40.125,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5427547
+    },
+    {
+      "elapsed_seconds": 490.066358282,
+      "Tccd1_celsius": 55.0,
+      "Tccd2_celsius": 39.5,
+      "Tctl_celsius": 64.625,
+      "cpu0_frequency_khz": 5461104
+    },
+    {
+      "elapsed_seconds": 492.06659968200006,
+      "Tccd1_celsius": 59.375,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 5489292
+    },
+    {
+      "elapsed_seconds": 494.0668521340001,
+      "Tccd1_celsius": 59.875,
+      "Tccd2_celsius": 39.75,
+      "Tctl_celsius": 65.875,
+      "cpu0_frequency_khz": 5489223
+    },
+    {
+      "elapsed_seconds": 496.06709723099993,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 68.0,
+      "cpu0_frequency_khz": 5486462
+    },
+    {
+      "elapsed_seconds": 498.067340997,
+      "Tccd1_celsius": 57.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5489140
+    },
+    {
+      "elapsed_seconds": 500.06758543399997,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5489210
+    },
+    {
+      "elapsed_seconds": 502.06788288100006,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 38.375,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5439203
+    },
+    {
+      "elapsed_seconds": 504.06812853099996,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 38.25,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5488001
+    },
+    {
+      "elapsed_seconds": 506.0683599839999,
+      "Tccd1_celsius": 54.5,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 5482838
+    },
+    {
+      "elapsed_seconds": 508.068604953,
+      "Tccd1_celsius": 51.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 63.875,
+      "cpu0_frequency_khz": 5489661
+    },
+    {
+      "elapsed_seconds": 510.068878907,
+      "Tccd1_celsius": 59.625,
+      "Tccd2_celsius": 41.375,
+      "Tctl_celsius": 68.5,
+      "cpu0_frequency_khz": 5488296
+    },
+    {
+      "elapsed_seconds": 512.069136611,
+      "Tccd1_celsius": 57.75,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5487949
+    },
+    {
+      "elapsed_seconds": 514.0693900660001,
+      "Tccd1_celsius": 59.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.125,
+      "cpu0_frequency_khz": 5459491
+    },
+    {
+      "elapsed_seconds": 516.0696209790001,
+      "Tccd1_celsius": 71.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5379157
+    },
+    {
+      "elapsed_seconds": 518.069862202,
+      "Tccd1_celsius": 60.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5489153
+    },
+    {
+      "elapsed_seconds": 520.0701027939999,
+      "Tccd1_celsius": 66.625,
+      "Tccd2_celsius": 37.875,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5292796
+    },
+    {
+      "elapsed_seconds": 522.0703377960001,
+      "Tccd1_celsius": 66.125,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5408351
+    },
+    {
+      "elapsed_seconds": 524.070572527,
+      "Tccd1_celsius": 66.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.375,
+      "cpu0_frequency_khz": 5482603
+    },
+    {
+      "elapsed_seconds": 526.0708444889999,
+      "Tccd1_celsius": 62.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5480468
+    },
+    {
+      "elapsed_seconds": 528.071171525,
+      "Tccd1_celsius": 68.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5487862
+    },
+    {
+      "elapsed_seconds": 530.071428558,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5413986
+    },
+    {
+      "elapsed_seconds": 532.071690021,
+      "Tccd1_celsius": 56.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 64.625,
+      "cpu0_frequency_khz": 5450658
+    },
+    {
+      "elapsed_seconds": 534.0719704589999,
+      "Tccd1_celsius": 50.875,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 65.375,
+      "cpu0_frequency_khz": 5467281
+    },
+    {
+      "elapsed_seconds": 536.0722393460001,
+      "Tccd1_celsius": 57.25,
+      "Tccd2_celsius": 40.625,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5403778
+    },
+    {
+      "elapsed_seconds": 538.072474049,
+      "Tccd1_celsius": 66.125,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 67.0,
+      "cpu0_frequency_khz": 5461238
+    },
+    {
+      "elapsed_seconds": 540.072708942,
+      "Tccd1_celsius": 65.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5482421
+    },
+    {
+      "elapsed_seconds": 542.0729669689999,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5488653
+    },
+    {
+      "elapsed_seconds": 544.0732046380001,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5433416
+    },
+    {
+      "elapsed_seconds": 546.073451403,
+      "Tccd1_celsius": 60.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5487406
+    },
+    {
+      "elapsed_seconds": 548.073685756,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5484567
+    },
+    {
+      "elapsed_seconds": 550.073918286,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5435459
+    },
+    {
+      "elapsed_seconds": 552.074160764,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5487088
+    },
+    {
+      "elapsed_seconds": 554.0744006980001,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.625,
+      "cpu0_frequency_khz": 5487185
+    },
+    {
+      "elapsed_seconds": 556.0746510920001,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 65.25,
+      "cpu0_frequency_khz": 5472942
+    },
+    {
+      "elapsed_seconds": 558.074952773,
+      "Tccd1_celsius": 71.75,
+      "Tccd2_celsius": 39.25,
+      "Tctl_celsius": 64.5,
+      "cpu0_frequency_khz": 5427962
+    },
+    {
+      "elapsed_seconds": 560.075272838,
+      "Tccd1_celsius": 60.375,
+      "Tccd2_celsius": 40.0,
+      "Tctl_celsius": 64.25,
+      "cpu0_frequency_khz": 5488509
+    },
+    {
+      "elapsed_seconds": 562.075506481,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 64.375,
+      "cpu0_frequency_khz": 5488762
+    },
+    {
+      "elapsed_seconds": 564.0757490809999,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5488804
+    },
+    {
+      "elapsed_seconds": 566.07598594,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5488980
+    },
+    {
+      "elapsed_seconds": 568.0762500400001,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 38.375,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5484583
+    },
+    {
+      "elapsed_seconds": 570.076480728,
+      "Tccd1_celsius": 60.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 66.875,
+      "cpu0_frequency_khz": 5489297
+    },
+    {
+      "elapsed_seconds": 572.0767168560001,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.75,
+      "cpu0_frequency_khz": 5438990
+    },
+    {
+      "elapsed_seconds": 574.0769679729999,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.625,
+      "cpu0_frequency_khz": 5488660
+    },
+    {
+      "elapsed_seconds": 576.077215734,
+      "Tccd1_celsius": 51.75,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5488874
+    },
+    {
+      "elapsed_seconds": 578.0774572729999,
+      "Tccd1_celsius": 65.125,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 64.375,
+      "cpu0_frequency_khz": 5217791
+    },
+    {
+      "elapsed_seconds": 580.077715143,
+      "Tccd1_celsius": 65.0,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 65.5,
+      "cpu0_frequency_khz": 5489489
+    },
+    {
+      "elapsed_seconds": 582.077963495,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.5,
+      "cpu0_frequency_khz": 5485865
+    },
+    {
+      "elapsed_seconds": 584.0782457109999,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.75,
+      "cpu0_frequency_khz": 5489349
+    },
+    {
+      "elapsed_seconds": 586.078522647,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5362455
+    },
+    {
+      "elapsed_seconds": 588.0787604499999,
+      "Tccd1_celsius": 63.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 5489332
+    },
+    {
+      "elapsed_seconds": 590.078974428,
+      "Tccd1_celsius": 64.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 67.375,
+      "cpu0_frequency_khz": 5492493
+    },
+    {
+      "elapsed_seconds": 592.079241376,
+      "Tccd1_celsius": 60.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5488979
+    },
+    {
+      "elapsed_seconds": 594.079499377,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 67.5,
+      "cpu0_frequency_khz": 5489020
+    },
+    {
+      "elapsed_seconds": 596.0797624280001,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 39.125,
+      "Tctl_celsius": 64.75,
+      "cpu0_frequency_khz": 5476645
+    },
+    {
+      "elapsed_seconds": 598.080040026,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 600.080332172,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5409964
+    },
+    {
+      "elapsed_seconds": 602.0806052620001,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5412811
+    },
+    {
+      "elapsed_seconds": 604.080917046,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5389221
+    },
+    {
+      "elapsed_seconds": 606.081270959,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5414146
+    },
+    {
+      "elapsed_seconds": 608.08159738,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5414454
+    },
+    {
+      "elapsed_seconds": 610.081973796,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 37.0,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5463313
+    },
+    {
+      "elapsed_seconds": 612.082207964,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 37.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5417053
+    },
+    {
+      "elapsed_seconds": 614.0824549859999,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5357031
+    },
+    {
+      "elapsed_seconds": 616.0827425540001,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389365
+    },
+    {
+      "elapsed_seconds": 618.082974468,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5464158
+    },
+    {
+      "elapsed_seconds": 620.083214647,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5462775
+    },
+    {
+      "elapsed_seconds": 622.083484433,
+      "Tccd1_celsius": 77.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5372267
+    },
+    {
+      "elapsed_seconds": 624.083803381,
+      "Tccd1_celsius": 58.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 73.125,
+      "cpu0_frequency_khz": 5489306
+    },
+    {
+      "elapsed_seconds": 626.0840400039999,
+      "Tccd1_celsius": 58.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 69.625,
+      "cpu0_frequency_khz": 5489385
+    },
+    {
+      "elapsed_seconds": 628.084291225,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 68.125,
+      "cpu0_frequency_khz": 5280616
+    },
+    {
+      "elapsed_seconds": 630.0845298419999,
+      "Tccd1_celsius": 58.875,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 66.375,
+      "cpu0_frequency_khz": 5489294
+    },
+    {
+      "elapsed_seconds": 632.0847705839999,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5386477
+    },
+    {
+      "elapsed_seconds": 634.0849740240001,
+      "Tccd1_celsius": 77.25,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5383668
+    },
+    {
+      "elapsed_seconds": 636.0852105179999,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5450638
+    },
+    {
+      "elapsed_seconds": 638.08544607,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5438853
+    },
+    {
+      "elapsed_seconds": 640.0856784959999,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5439489
+    },
+    {
+      "elapsed_seconds": 642.085973731,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 73.25,
+      "cpu0_frequency_khz": 5438983
+    },
+    {
+      "elapsed_seconds": 644.0862020489999,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 73.25,
+      "cpu0_frequency_khz": 5265237
+    },
+    {
+      "elapsed_seconds": 646.086447791,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5414178
+    },
+    {
+      "elapsed_seconds": 648.0867217959999,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5398782
+    },
+    {
+      "elapsed_seconds": 650.0869650730001,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 74.5,
+      "cpu0_frequency_khz": 5398490
+    },
+    {
+      "elapsed_seconds": 652.087220784,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5414430
+    },
+    {
+      "elapsed_seconds": 654.0874568679999,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5437511
+    },
+    {
+      "elapsed_seconds": 656.0876941040001,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5325418
+    },
+    {
+      "elapsed_seconds": 658.087932783,
+      "Tccd1_celsius": 78.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 4304888
+    },
+    {
+      "elapsed_seconds": 660.088177824,
+      "Tccd1_celsius": 78.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5363736
+    },
+    {
+      "elapsed_seconds": 662.0884179560001,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5272604
+    },
+    {
+      "elapsed_seconds": 664.0886844480001,
+      "Tccd1_celsius": 79.125,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.5,
+      "cpu0_frequency_khz": 5294505
+    },
+    {
+      "elapsed_seconds": 666.0889207729999,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5302214
+    },
+    {
+      "elapsed_seconds": 668.089170514,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5373056
+    },
+    {
+      "elapsed_seconds": 670.0893987439999,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5361629
+    },
+    {
+      "elapsed_seconds": 672.0896423629999,
+      "Tccd1_celsius": 43.125,
+      "Tccd2_celsius": 60.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5480996
+    },
+    {
+      "elapsed_seconds": 674.089889929,
+      "Tccd1_celsius": 54.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5432304
+    },
+    {
+      "elapsed_seconds": 676.0901324869999,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5414409
+    },
+    {
+      "elapsed_seconds": 678.090366357,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5436047
+    },
+    {
+      "elapsed_seconds": 680.0906224810001,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5194966
+    },
+    {
+      "elapsed_seconds": 682.090882171,
+      "Tccd1_celsius": 60.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5293650
+    },
+    {
+      "elapsed_seconds": 684.0911220529999,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.25,
+      "cpu0_frequency_khz": 5396894
+    },
+    {
+      "elapsed_seconds": 686.091367928,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5488580
+    },
+    {
+      "elapsed_seconds": 688.091622017,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5364543
+    },
+    {
+      "elapsed_seconds": 690.0918452789999,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5412860
+    },
+    {
+      "elapsed_seconds": 692.092089991,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5107680
+    },
+    {
+      "elapsed_seconds": 694.0923266279999,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5364619
+    },
+    {
+      "elapsed_seconds": 696.0925799270001,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5389540
+    },
+    {
+      "elapsed_seconds": 698.092845589,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5364327
+    },
+    {
+      "elapsed_seconds": 700.0930904920001,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5464377
+    },
+    {
+      "elapsed_seconds": 702.0933253860001,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 74.25,
+      "cpu0_frequency_khz": 5363753
+    },
+    {
+      "elapsed_seconds": 704.093578495,
+      "Tccd1_celsius": 77.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5382581
+    },
+    {
+      "elapsed_seconds": 706.0939092399999,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5413910
+    },
+    {
+      "elapsed_seconds": 708.094151218,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5302382
+    },
+    {
+      "elapsed_seconds": 710.09439501,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 712.0946513050001,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5407020
+    },
+    {
+      "elapsed_seconds": 714.094895748,
+      "Tccd1_celsius": 78.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5363648
+    },
+    {
+      "elapsed_seconds": 716.0951348809999,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 78.125,
+      "cpu0_frequency_khz": 5364500
+    },
+    {
+      "elapsed_seconds": 718.095376709,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 4384153
+    },
+    {
+      "elapsed_seconds": 720.0956495349999,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5389597
+    },
+    {
+      "elapsed_seconds": 722.095896493,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5388903
+    },
+    {
+      "elapsed_seconds": 724.096132781,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5364586
+    },
+    {
+      "elapsed_seconds": 726.096384318,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5389465
+    },
+    {
+      "elapsed_seconds": 728.0966249640001,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.25,
+      "cpu0_frequency_khz": 5487938
+    },
+    {
+      "elapsed_seconds": 730.0968826830001,
+      "Tccd1_celsius": 77.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5377698
+    },
+    {
+      "elapsed_seconds": 732.0971510920001,
+      "Tccd1_celsius": 61.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5487920
+    },
+    {
+      "elapsed_seconds": 734.0973824509999,
+      "Tccd1_celsius": 60.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 71.125,
+      "cpu0_frequency_khz": 5489337
+    },
+    {
+      "elapsed_seconds": 736.097634409,
+      "Tccd1_celsius": 62.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 5488718
+    },
+    {
+      "elapsed_seconds": 738.0978910859999,
+      "Tccd1_celsius": 59.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5489307
+    },
+    {
+      "elapsed_seconds": 740.0981432640001,
+      "Tccd1_celsius": 77.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5388970
+    },
+    {
+      "elapsed_seconds": 742.098397557,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5318316
+    },
+    {
+      "elapsed_seconds": 744.098645007,
+      "Tccd1_celsius": 75.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 4303047
+    },
+    {
+      "elapsed_seconds": 746.098935297,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5425277
+    },
+    {
+      "elapsed_seconds": 748.0992190060001,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 73.875,
+      "cpu0_frequency_khz": 5462488
+    },
+    {
+      "elapsed_seconds": 750.099592063,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 72.5,
+      "cpu0_frequency_khz": 5463709
+    },
+    {
+      "elapsed_seconds": 752.099875441,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 73.75,
+      "cpu0_frequency_khz": 5344369
+    },
+    {
+      "elapsed_seconds": 754.1001660019999,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.0,
+      "cpu0_frequency_khz": 5410676
+    },
+    {
+      "elapsed_seconds": 756.100462715,
+      "Tccd1_celsius": 63.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 73.875,
+      "cpu0_frequency_khz": 5403529
+    },
+    {
+      "elapsed_seconds": 758.1007549200001,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5433489
+    },
+    {
+      "elapsed_seconds": 760.101068446,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5389341
+    },
+    {
+      "elapsed_seconds": 762.1013981010001,
+      "Tccd1_celsius": 78.375,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5363964
+    },
+    {
+      "elapsed_seconds": 764.1016978810001,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 35.5,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5389330
+    },
+    {
+      "elapsed_seconds": 766.1019420350001,
+      "Tccd1_celsius": 79.75,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5364400
+    },
+    {
+      "elapsed_seconds": 768.102233369,
+      "Tccd1_celsius": 78.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 78.375,
+      "cpu0_frequency_khz": 5364583
+    },
+    {
+      "elapsed_seconds": 770.102534831,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5343121
+    },
+    {
+      "elapsed_seconds": 772.1027838749999,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5386712
+    },
+    {
+      "elapsed_seconds": 774.1030302239999,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5405178
+    },
+    {
+      "elapsed_seconds": 776.1032896879999,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 79.0,
+      "cpu0_frequency_khz": 5437556
+    },
+    {
+      "elapsed_seconds": 778.1035875140001,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5414380
+    },
+    {
+      "elapsed_seconds": 780.1038230730001,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 34.875,
+      "Tctl_celsius": 78.125,
+      "cpu0_frequency_khz": 5439116
+    },
+    {
+      "elapsed_seconds": 782.104065284,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5414290
+    },
+    {
+      "elapsed_seconds": 784.1043149300001,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5414325
+    },
+    {
+      "elapsed_seconds": 786.1045524629999,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 38.25,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5401601
+    },
+    {
+      "elapsed_seconds": 788.104796758,
+      "Tccd1_celsius": 53.75,
+      "Tccd2_celsius": 54.625,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5389196
+    },
+    {
+      "elapsed_seconds": 790.1050390999999,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 4262835
+    },
+    {
+      "elapsed_seconds": 792.105276733,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5408880
+    },
+    {
+      "elapsed_seconds": 794.1055036759999,
+      "Tccd1_celsius": 78.625,
+      "Tccd2_celsius": 36.0,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5361999
+    },
+    {
+      "elapsed_seconds": 796.1057413799999,
+      "Tccd1_celsius": 77.25,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5388757
+    },
+    {
+      "elapsed_seconds": 798.1059807260001,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5466336
+    },
+    {
+      "elapsed_seconds": 800.106231705,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5463440
+    },
+    {
+      "elapsed_seconds": 802.1064685870001,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5389348
+    },
+    {
+      "elapsed_seconds": 804.1067179720001,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 75.25,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 806.106976365,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5383518
+    },
+    {
+      "elapsed_seconds": 808.1072398880001,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.25,
+      "cpu0_frequency_khz": 5389350
+    },
+    {
+      "elapsed_seconds": 810.107517507,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389230
+    },
+    {
+      "elapsed_seconds": 812.107784666,
+      "Tccd1_celsius": 75.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5413713
+    },
+    {
+      "elapsed_seconds": 814.107973288,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5414537
+    },
+    {
+      "elapsed_seconds": 816.1082098300001,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5412937
+    },
+    {
+      "elapsed_seconds": 818.1084674609999,
+      "Tccd1_celsius": 65.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5489360
+    },
+    {
+      "elapsed_seconds": 820.108714142,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5389546
+    },
+    {
+      "elapsed_seconds": 822.108959461,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5388651
+    },
+    {
+      "elapsed_seconds": 824.109200742,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5404323
+    },
+    {
+      "elapsed_seconds": 826.1095200499999,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5463916
+    },
+    {
+      "elapsed_seconds": 828.109771942,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 74.0,
+      "cpu0_frequency_khz": 5461879
+    },
+    {
+      "elapsed_seconds": 830.110009516,
+      "Tccd1_celsius": 60.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 4481129
+    },
+    {
+      "elapsed_seconds": 832.110300691,
+      "Tccd1_celsius": 58.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 71.75,
+      "cpu0_frequency_khz": 5488099
+    },
+    {
+      "elapsed_seconds": 834.11055672,
+      "Tccd1_celsius": 58.25,
+      "Tccd2_celsius": 37.0,
+      "Tctl_celsius": 68.375,
+      "cpu0_frequency_khz": 5489243
+    },
+    {
+      "elapsed_seconds": 836.1108199529999,
+      "Tccd1_celsius": 49.375,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 66.25,
+      "cpu0_frequency_khz": 5489386
+    },
+    {
+      "elapsed_seconds": 838.111071364,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 72.375,
+      "cpu0_frequency_khz": 5389473
+    },
+    {
+      "elapsed_seconds": 840.1113071350001,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5405578
+    },
+    {
+      "elapsed_seconds": 842.111574535,
+      "Tccd1_celsius": 77.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5379764
+    },
+    {
+      "elapsed_seconds": 844.111887302,
+      "Tccd1_celsius": 38.5,
+      "Tccd2_celsius": 67.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5485116
+    },
+    {
+      "elapsed_seconds": 846.112145375,
+      "Tccd1_celsius": 57.875,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5370901
+    },
+    {
+      "elapsed_seconds": 848.1123613489999,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5440841
+    },
+    {
+      "elapsed_seconds": 850.1126257349999,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 73.0,
+      "cpu0_frequency_khz": 5414357
+    },
+    {
+      "elapsed_seconds": 852.1129205679999,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.0,
+      "cpu0_frequency_khz": 5414981
+    },
+    {
+      "elapsed_seconds": 854.1131575009999,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5414407
+    },
+    {
+      "elapsed_seconds": 856.1134198029999,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5387219
+    },
+    {
+      "elapsed_seconds": 858.113682806,
+      "Tccd1_celsius": 71.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5457766
+    },
+    {
+      "elapsed_seconds": 860.1139672490001,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5400415
+    },
+    {
+      "elapsed_seconds": 862.1141990839999,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5409204
+    },
+    {
+      "elapsed_seconds": 864.1144370290001,
+      "Tccd1_celsius": 79.125,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5371131
+    },
+    {
+      "elapsed_seconds": 866.1146940210001,
+      "Tccd1_celsius": 79.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 79.125,
+      "cpu0_frequency_khz": 5277137
+    },
+    {
+      "elapsed_seconds": 868.1149586670001,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 45.0,
+      "Tctl_celsius": 78.75,
+      "cpu0_frequency_khz": 5387538
+    },
+    {
+      "elapsed_seconds": 870.115219537,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5389228
+    },
+    {
+      "elapsed_seconds": 872.1155406400001,
+      "Tccd1_celsius": 77.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5390676
+    },
+    {
+      "elapsed_seconds": 874.115804475,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5384579
+    },
+    {
+      "elapsed_seconds": 876.1161391129999,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 4854304
+    },
+    {
+      "elapsed_seconds": 878.116404702,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5388593
+    },
+    {
+      "elapsed_seconds": 880.116713251,
+      "Tccd1_celsius": 71.625,
+      "Tccd2_celsius": 41.125,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5358990
+    },
+    {
+      "elapsed_seconds": 882.1169744619999,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 884.117223148,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5384931
+    },
+    {
+      "elapsed_seconds": 886.1174756519999,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5364214
+    },
+    {
+      "elapsed_seconds": 888.1177750449999,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5364163
+    },
+    {
+      "elapsed_seconds": 890.118119281,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5413854
+    },
+    {
+      "elapsed_seconds": 892.118406311,
+      "Tccd1_celsius": 65.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5488851
+    },
+    {
+      "elapsed_seconds": 894.118656781,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5388656
+    },
+    {
+      "elapsed_seconds": 896.1189274190001,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5427145
+    },
+    {
+      "elapsed_seconds": 898.119237893,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5405148
+    },
+    {
+      "elapsed_seconds": 900.1194784650002,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.25,
+      "cpu0_frequency_khz": 5384322
+    },
+    {
+      "elapsed_seconds": 902.1197304379998,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5413468
+    },
+    {
+      "elapsed_seconds": 904.1199731239999,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5439330
+    },
+    {
+      "elapsed_seconds": 906.120211251,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5333284
+    },
+    {
+      "elapsed_seconds": 908.120472261,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5364484
+    },
+    {
+      "elapsed_seconds": 910.1207705719999,
+      "Tccd1_celsius": 71.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5388162
+    },
+    {
+      "elapsed_seconds": 912.1209726410002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5364476
+    },
+    {
+      "elapsed_seconds": 914.121208605,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5389518
+    },
+    {
+      "elapsed_seconds": 916.1214998720002,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5389488
+    },
+    {
+      "elapsed_seconds": 918.1218596389999,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 37.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5364133
+    },
+    {
+      "elapsed_seconds": 920.1221050909999,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5384876
+    },
+    {
+      "elapsed_seconds": 922.1223595790002,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5389460
+    },
+    {
+      "elapsed_seconds": 924.1226187359998,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 4887233
+    },
+    {
+      "elapsed_seconds": 926.1228743370002,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 41.375,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5402352
+    },
+    {
+      "elapsed_seconds": 928.1231190069998,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5389279
+    },
+    {
+      "elapsed_seconds": 930.1233771329998,
+      "Tccd1_celsius": 60.5,
+      "Tccd2_celsius": 37.25,
+      "Tctl_celsius": 73.125,
+      "cpu0_frequency_khz": 5452928
+    },
+    {
+      "elapsed_seconds": 932.1236306290002,
+      "Tccd1_celsius": 61.25,
+      "Tccd2_celsius": 37.875,
+      "Tctl_celsius": 69.625,
+      "cpu0_frequency_khz": 5489233
+    },
+    {
+      "elapsed_seconds": 934.1238929430001,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 40.125,
+      "Tctl_celsius": 67.125,
+      "cpu0_frequency_khz": 5391902
+    },
+    {
+      "elapsed_seconds": 936.1241817260002,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 68.875,
+      "cpu0_frequency_khz": 5389446
+    },
+    {
+      "elapsed_seconds": 938.1244576549998,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5389494
+    },
+    {
+      "elapsed_seconds": 940.1247002320001,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5389365
+    },
+    {
+      "elapsed_seconds": 942.1249702199998,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5404704
+    },
+    {
+      "elapsed_seconds": 944.1252051820002,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5463383
+    },
+    {
+      "elapsed_seconds": 946.125443721,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 73.5,
+      "cpu0_frequency_khz": 5435513
+    },
+    {
+      "elapsed_seconds": 948.1256976190002,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 72.625,
+      "cpu0_frequency_khz": 5439332
+    },
+    {
+      "elapsed_seconds": 950.1259321399998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 38.25,
+      "Tctl_celsius": 72.875,
+      "cpu0_frequency_khz": 5215435
+    },
+    {
+      "elapsed_seconds": 952.12617133,
+      "Tccd1_celsius": 66.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 72.75,
+      "cpu0_frequency_khz": 5488674
+    },
+    {
+      "elapsed_seconds": 954.1264254880002,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5386551
+    },
+    {
+      "elapsed_seconds": 956.1266872810002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5414249
+    },
+    {
+      "elapsed_seconds": 958.1269346170002,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 960.1271799790002,
+      "Tccd1_celsius": 79.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5363587
+    },
+    {
+      "elapsed_seconds": 962.1274195300002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5362918
+    },
+    {
+      "elapsed_seconds": 964.1276797700002,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5359586
+    },
+    {
+      "elapsed_seconds": 966.127957353,
+      "Tccd1_celsius": 77.75,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 78.125,
+      "cpu0_frequency_khz": 5369018
+    },
+    {
+      "elapsed_seconds": 968.128240176,
+      "Tccd1_celsius": 52.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.25,
+      "cpu0_frequency_khz": 5384995
+    },
+    {
+      "elapsed_seconds": 970.1285015580002,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5438545
+    },
+    {
+      "elapsed_seconds": 972.128735198,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5414485
+    },
+    {
+      "elapsed_seconds": 974.128973076,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 4379905
+    },
+    {
+      "elapsed_seconds": 976.1292086600001,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5414319
+    },
+    {
+      "elapsed_seconds": 978.1294518579998,
+      "Tccd1_celsius": 67.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 4355367
+    },
+    {
+      "elapsed_seconds": 980.1296799669999,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5437592
+    },
+    {
+      "elapsed_seconds": 982.1299196489999,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 4277104
+    },
+    {
+      "elapsed_seconds": 984.1301832160002,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 986.130420122,
+      "Tccd1_celsius": 77.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5379243
+    },
+    {
+      "elapsed_seconds": 988.1306748820002,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5386933
+    },
+    {
+      "elapsed_seconds": 990.130926417,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5338635
+    },
+    {
+      "elapsed_seconds": 992.1311907650002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5363940
+    },
+    {
+      "elapsed_seconds": 994.131427541,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5410044
+    },
+    {
+      "elapsed_seconds": 996.1316784539999,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5484713
+    },
+    {
+      "elapsed_seconds": 998.131940538,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5460154
+    },
+    {
+      "elapsed_seconds": 1000.132236426,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5449744
+    },
+    {
+      "elapsed_seconds": 1002.1324735940002,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 4704112
+    },
+    {
+      "elapsed_seconds": 1004.1327200979999,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5414197
+    },
+    {
+      "elapsed_seconds": 1006.1329797779999,
+      "Tccd1_celsius": 78.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.0,
+      "cpu0_frequency_khz": 5363502
+    },
+    {
+      "elapsed_seconds": 1008.1333140490001,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 37.75,
+      "Tctl_celsius": 78.25,
+      "cpu0_frequency_khz": 5390017
+    },
+    {
+      "elapsed_seconds": 1010.1335489520002,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5381498
+    },
+    {
+      "elapsed_seconds": 1012.133784786,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5389511
+    },
+    {
+      "elapsed_seconds": 1014.1339732920001,
+      "Tccd1_celsius": 75.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5388362
+    },
+    {
+      "elapsed_seconds": 1016.13421079,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.25,
+      "cpu0_frequency_khz": 5462880
+    },
+    {
+      "elapsed_seconds": 1018.134517468,
+      "Tccd1_celsius": 77.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5403922
+    },
+    {
+      "elapsed_seconds": 1020.1348118340002,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5388540
+    },
+    {
+      "elapsed_seconds": 1022.135103434,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 4289168
+    },
+    {
+      "elapsed_seconds": 1024.1353828810002,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5488557
+    },
+    {
+      "elapsed_seconds": 1026.135629196,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5387786
+    },
+    {
+      "elapsed_seconds": 1028.135883857,
+      "Tccd1_celsius": 54.125,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5488723
+    },
+    {
+      "elapsed_seconds": 1030.136209191,
+      "Tccd1_celsius": 58.0,
+      "Tccd2_celsius": 37.875,
+      "Tctl_celsius": 71.125,
+      "cpu0_frequency_khz": 5479885
+    },
+    {
+      "elapsed_seconds": 1032.1365307669998,
+      "Tccd1_celsius": 60.375,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 68.25,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 1034.1368304829998,
+      "Tccd1_celsius": 57.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 65.75,
+      "cpu0_frequency_khz": 5489278
+    },
+    {
+      "elapsed_seconds": 1036.1371302389998,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 74.25,
+      "cpu0_frequency_khz": 4847394
+    },
+    {
+      "elapsed_seconds": 1038.1373928940002,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5398247
+    },
+    {
+      "elapsed_seconds": 1040.1376772909998,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5281912
+    },
+    {
+      "elapsed_seconds": 1042.1379271730002,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 37.0,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5407832
+    },
+    {
+      "elapsed_seconds": 1044.1381679269998,
+      "Tccd1_celsius": 57.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 73.75,
+      "cpu0_frequency_khz": 5463167
+    },
+    {
+      "elapsed_seconds": 1046.138407169,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 73.125,
+      "cpu0_frequency_khz": 5409859
+    },
+    {
+      "elapsed_seconds": 1048.1386902939998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 73.125,
+      "cpu0_frequency_khz": 5396135
+    },
+    {
+      "elapsed_seconds": 1050.13892687,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.0,
+      "cpu0_frequency_khz": 5410712
+    },
+    {
+      "elapsed_seconds": 1052.139170601,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5410224
+    },
+    {
+      "elapsed_seconds": 1054.139411666,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5489266
+    },
+    {
+      "elapsed_seconds": 1056.139665004,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5413717
+    },
+    {
+      "elapsed_seconds": 1058.139897383,
+      "Tccd1_celsius": 58.875,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 4784266
+    },
+    {
+      "elapsed_seconds": 1060.1401363149998,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5389520
+    },
+    {
+      "elapsed_seconds": 1062.140380536,
+      "Tccd1_celsius": 78.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.25,
+      "cpu0_frequency_khz": 5360288
+    },
+    {
+      "elapsed_seconds": 1064.1406292460001,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 79.625,
+      "cpu0_frequency_khz": 5357470
+    },
+    {
+      "elapsed_seconds": 1066.140918612,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 79.125,
+      "cpu0_frequency_khz": 5383540
+    },
+    {
+      "elapsed_seconds": 1068.1411599080002,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.0,
+      "cpu0_frequency_khz": 5388061
+    },
+    {
+      "elapsed_seconds": 1070.141395653,
+      "Tccd1_celsius": 67.875,
+      "Tccd2_celsius": 37.875,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5417803
+    },
+    {
+      "elapsed_seconds": 1072.141642951,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 78.0,
+      "cpu0_frequency_khz": 5438661
+    },
+    {
+      "elapsed_seconds": 1074.141874128,
+      "Tccd1_celsius": 47.0,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 4847894
+    },
+    {
+      "elapsed_seconds": 1076.1421269349999,
+      "Tccd1_celsius": 80.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.25,
+      "cpu0_frequency_khz": 5351622
+    },
+    {
+      "elapsed_seconds": 1078.1423646940002,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5478068
+    },
+    {
+      "elapsed_seconds": 1080.1426081250002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 4804819
+    },
+    {
+      "elapsed_seconds": 1082.142861293,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5414396
+    },
+    {
+      "elapsed_seconds": 1084.1431047330002,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5388629
+    },
+    {
+      "elapsed_seconds": 1086.143355918,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5110554
+    },
+    {
+      "elapsed_seconds": 1088.143613284,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5414993
+    },
+    {
+      "elapsed_seconds": 1090.143855963,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5389033
+    },
+    {
+      "elapsed_seconds": 1092.1441341589998,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5378639
+    },
+    {
+      "elapsed_seconds": 1094.1443970250002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5414409
+    },
+    {
+      "elapsed_seconds": 1096.1446523680002,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5462859
+    },
+    {
+      "elapsed_seconds": 1098.144920104,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5389053
+    },
+    {
+      "elapsed_seconds": 1100.145169556,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5433215
+    },
+    {
+      "elapsed_seconds": 1102.145424839,
+      "Tccd1_celsius": 75.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5413477
+    },
+    {
+      "elapsed_seconds": 1104.145655445,
+      "Tccd1_celsius": 42.375,
+      "Tccd2_celsius": 39.5,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5343227
+    },
+    {
+      "elapsed_seconds": 1106.145893034,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5389456
+    },
+    {
+      "elapsed_seconds": 1108.1461561719998,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5388837
+    },
+    {
+      "elapsed_seconds": 1110.1464112039998,
+      "Tccd1_celsius": 78.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5364538
+    },
+    {
+      "elapsed_seconds": 1112.1466473,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 1114.1469952779998,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5388183
+    },
+    {
+      "elapsed_seconds": 1116.147257694,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5389417
+    },
+    {
+      "elapsed_seconds": 1118.147498119,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5323963
+    },
+    {
+      "elapsed_seconds": 1120.147754474,
+      "Tccd1_celsius": 66.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5377846
+    },
+    {
+      "elapsed_seconds": 1122.1480263879998,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5487903
+    },
+    {
+      "elapsed_seconds": 1124.1483256840002,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5468147
+    },
+    {
+      "elapsed_seconds": 1126.1485629929998,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 40.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5390282
+    },
+    {
+      "elapsed_seconds": 1128.148803828,
+      "Tccd1_celsius": 63.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 72.625,
+      "cpu0_frequency_khz": 5444353
+    },
+    {
+      "elapsed_seconds": 1130.149097263,
+      "Tccd1_celsius": 62.375,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 69.625,
+      "cpu0_frequency_khz": 5488887
+    },
+    {
+      "elapsed_seconds": 1132.149432177,
+      "Tccd1_celsius": 60.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 67.25,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 1134.149663264,
+      "Tccd1_celsius": 75.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.25,
+      "cpu0_frequency_khz": 5412501
+    },
+    {
+      "elapsed_seconds": 1136.149896816,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5439361
+    },
+    {
+      "elapsed_seconds": 1138.15016358,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5439414
+    },
+    {
+      "elapsed_seconds": 1140.150410197,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5246978
+    },
+    {
+      "elapsed_seconds": 1142.150635864,
+      "Tccd1_celsius": 71.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5464035
+    },
+    {
+      "elapsed_seconds": 1144.1508636449998,
+      "Tccd1_celsius": 56.75,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5403132
+    },
+    {
+      "elapsed_seconds": 1146.1511284560002,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.0,
+      "cpu0_frequency_khz": 5438294
+    },
+    {
+      "elapsed_seconds": 1148.151421951,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5408277
+    },
+    {
+      "elapsed_seconds": 1150.1516804100002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5414175
+    },
+    {
+      "elapsed_seconds": 1152.1519701080001,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5389474
+    },
+    {
+      "elapsed_seconds": 1154.152261019,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5413316
+    },
+    {
+      "elapsed_seconds": 1156.152649353,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5384646
+    },
+    {
+      "elapsed_seconds": 1158.1529229910002,
+      "Tccd1_celsius": 76.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 4310217
+    },
+    {
+      "elapsed_seconds": 1160.153256051,
+      "Tccd1_celsius": 78.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 78.0,
+      "cpu0_frequency_khz": 5364019
+    },
+    {
+      "elapsed_seconds": 1162.153511474,
+      "Tccd1_celsius": 78.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.5,
+      "cpu0_frequency_khz": 5328726
+    },
+    {
+      "elapsed_seconds": 1164.153781265,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5383155
+    },
+    {
+      "elapsed_seconds": 1166.154132269,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5413309
+    },
+    {
+      "elapsed_seconds": 1168.1544168280002,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5389118
+    },
+    {
+      "elapsed_seconds": 1170.154734449,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 3012481
+    },
+    {
+      "elapsed_seconds": 1172.1551059009998,
+      "Tccd1_celsius": 75.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5383244
+    },
+    {
+      "elapsed_seconds": 1174.155366735,
+      "Tccd1_celsius": 80.125,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5345582
+    },
+    {
+      "elapsed_seconds": 1176.1556022609998,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5428585
+    },
+    {
+      "elapsed_seconds": 1178.155841744,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5393578
+    },
+    {
+      "elapsed_seconds": 1180.1562318719998,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5433937
+    },
+    {
+      "elapsed_seconds": 1182.156555174,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5414120
+    },
+    {
+      "elapsed_seconds": 1184.1567854,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5381646
+    },
+    {
+      "elapsed_seconds": 1186.156982083,
+      "Tccd1_celsius": 73.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5402039
+    },
+    {
+      "elapsed_seconds": 1188.1572586359998,
+      "Tccd1_celsius": 59.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 4336853
+    },
+    {
+      "elapsed_seconds": 1190.1575202109998,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5389227
+    },
+    {
+      "elapsed_seconds": 1192.1577560679998,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5414503
+    },
+    {
+      "elapsed_seconds": 1194.157987987,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5463982
+    },
+    {
+      "elapsed_seconds": 1196.15828526,
+      "Tccd1_celsius": 78.25,
+      "Tccd2_celsius": 39.5,
+      "Tctl_celsius": 74.0,
+      "cpu0_frequency_khz": 5345097
+    },
+    {
+      "elapsed_seconds": 1198.1585168289998,
+      "Tccd1_celsius": 77.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5388647
+    },
+    {
+      "elapsed_seconds": 1200.158769447,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5413225
+    },
+    {
+      "elapsed_seconds": 1202.1590403700002,
+      "Tccd1_celsius": 79.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5359172
+    },
+    {
+      "elapsed_seconds": 1204.1593226240002,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 40.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5387531
+    },
+    {
+      "elapsed_seconds": 1206.1595624790002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5350217
+    },
+    {
+      "elapsed_seconds": 1208.159819806,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5414351
+    },
+    {
+      "elapsed_seconds": 1210.16006479,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5414259
+    },
+    {
+      "elapsed_seconds": 1212.160358136,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 39.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5386658
+    },
+    {
+      "elapsed_seconds": 1214.160593872,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5389267
+    },
+    {
+      "elapsed_seconds": 1216.160831923,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5389619
+    },
+    {
+      "elapsed_seconds": 1218.161074393,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5353429
+    },
+    {
+      "elapsed_seconds": 1220.1613282839999,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5388879
+    },
+    {
+      "elapsed_seconds": 1222.161582395,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5346025
+    },
+    {
+      "elapsed_seconds": 1224.1618329399998,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5366833
+    },
+    {
+      "elapsed_seconds": 1226.1620939240001,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5389520
+    },
+    {
+      "elapsed_seconds": 1228.1623365740002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5360245
+    },
+    {
+      "elapsed_seconds": 1230.162581338,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5389306
+    },
+    {
+      "elapsed_seconds": 1232.162841371,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5406137
+    },
+    {
+      "elapsed_seconds": 1234.1630885999998,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5439225
+    },
+    {
+      "elapsed_seconds": 1236.1633233950001,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5414467
+    },
+    {
+      "elapsed_seconds": 1238.1635549339999,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5414251
+    },
+    {
+      "elapsed_seconds": 1240.1637911019998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5439415
+    },
+    {
+      "elapsed_seconds": 1242.1640376290002,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 73.75,
+      "cpu0_frequency_khz": 5409403
+    },
+    {
+      "elapsed_seconds": 1244.1643037929998,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5414330
+    },
+    {
+      "elapsed_seconds": 1246.16465097,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5381160
+    },
+    {
+      "elapsed_seconds": 1248.164914549,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5414538
+    },
+    {
+      "elapsed_seconds": 1250.165153072,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5364624
+    },
+    {
+      "elapsed_seconds": 1252.1654234339999,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5389450
+    },
+    {
+      "elapsed_seconds": 1254.1656824450001,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.0,
+      "cpu0_frequency_khz": 5364491
+    },
+    {
+      "elapsed_seconds": 1256.165929152,
+      "Tccd1_celsius": 54.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5464228
+    },
+    {
+      "elapsed_seconds": 1258.1661897059998,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389502
+    },
+    {
+      "elapsed_seconds": 1260.166448587,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5364552
+    },
+    {
+      "elapsed_seconds": 1262.1667153419999,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5364373
+    },
+    {
+      "elapsed_seconds": 1264.166975445,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5439077
+    },
+    {
+      "elapsed_seconds": 1266.167213757,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5439398
+    },
+    {
+      "elapsed_seconds": 1268.1674572890001,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5464377
+    },
+    {
+      "elapsed_seconds": 1270.1677465970001,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 37.25,
+      "Tctl_celsius": 73.0,
+      "cpu0_frequency_khz": 5461435
+    },
+    {
+      "elapsed_seconds": 1272.167981512,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 40.875,
+      "Tctl_celsius": 72.125,
+      "cpu0_frequency_khz": 5431285
+    },
+    {
+      "elapsed_seconds": 1274.1682257050002,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 71.75,
+      "cpu0_frequency_khz": 5464328
+    },
+    {
+      "elapsed_seconds": 1276.168460891,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 71.25,
+      "cpu0_frequency_khz": 5463133
+    },
+    {
+      "elapsed_seconds": 1278.1687097230001,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5344241
+    },
+    {
+      "elapsed_seconds": 1280.1689577830002,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.875,
+      "cpu0_frequency_khz": 5389470
+    },
+    {
+      "elapsed_seconds": 1282.1691923479998,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5488166
+    },
+    {
+      "elapsed_seconds": 1284.1694322029998,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5464359
+    },
+    {
+      "elapsed_seconds": 1286.169692807,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 40.25,
+      "Tctl_celsius": 73.25,
+      "cpu0_frequency_khz": 5464093
+    },
+    {
+      "elapsed_seconds": 1288.1699571079998,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 72.375,
+      "cpu0_frequency_khz": 5489098
+    },
+    {
+      "elapsed_seconds": 1290.170195741,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5414436
+    },
+    {
+      "elapsed_seconds": 1292.1704776350002,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.125,
+      "cpu0_frequency_khz": 5439380
+    },
+    {
+      "elapsed_seconds": 1294.170732087,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 42.0,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5384900
+    },
+    {
+      "elapsed_seconds": 1296.1709865799999,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5389385
+    },
+    {
+      "elapsed_seconds": 1298.171249178,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5364456
+    },
+    {
+      "elapsed_seconds": 1300.171467452,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 78.125,
+      "cpu0_frequency_khz": 5345342
+    },
+    {
+      "elapsed_seconds": 1302.171730611,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 38.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5184425
+    },
+    {
+      "elapsed_seconds": 1304.1719859549999,
+      "Tccd1_celsius": 57.5,
+      "Tccd2_celsius": 38.875,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5432135
+    },
+    {
+      "elapsed_seconds": 1306.172301042,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5364488
+    },
+    {
+      "elapsed_seconds": 1308.172574921,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389300
+    },
+    {
+      "elapsed_seconds": 1310.1729297430002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5347852
+    },
+    {
+      "elapsed_seconds": 1312.1732772609998,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5357589
+    },
+    {
+      "elapsed_seconds": 1314.173689882,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 34.875,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5464355
+    },
+    {
+      "elapsed_seconds": 1316.173940348,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 34.875,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5414500
+    },
+    {
+      "elapsed_seconds": 1318.174173209,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5414268
+    },
+    {
+      "elapsed_seconds": 1320.174409498,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 34.875,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5366293
+    },
+    {
+      "elapsed_seconds": 1322.1746673060002,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5389543
+    },
+    {
+      "elapsed_seconds": 1324.174942218,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 39.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5388924
+    },
+    {
+      "elapsed_seconds": 1326.1751899679998,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5488841
+    },
+    {
+      "elapsed_seconds": 1328.1754395409998,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5463661
+    },
+    {
+      "elapsed_seconds": 1330.175668926,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 34.875,
+      "Tctl_celsius": 72.625,
+      "cpu0_frequency_khz": 5489320
+    },
+    {
+      "elapsed_seconds": 1332.1759001350001,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 71.625,
+      "cpu0_frequency_khz": 5400254
+    },
+    {
+      "elapsed_seconds": 1334.176153846,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5439244
+    },
+    {
+      "elapsed_seconds": 1336.17640338,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5389507
+    },
+    {
+      "elapsed_seconds": 1338.176618859,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.25,
+      "cpu0_frequency_khz": 5464375
+    },
+    {
+      "elapsed_seconds": 1340.176844697,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5414518
+    },
+    {
+      "elapsed_seconds": 1342.177079092,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5464365
+    },
+    {
+      "elapsed_seconds": 1344.177302045,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5488587
+    },
+    {
+      "elapsed_seconds": 1346.177551408,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 34.875,
+      "Tctl_celsius": 72.25,
+      "cpu0_frequency_khz": 5489346
+    },
+    {
+      "elapsed_seconds": 1348.1778085259998,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5389467
+    },
+    {
+      "elapsed_seconds": 1350.1780649829998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5439395
+    },
+    {
+      "elapsed_seconds": 1352.1783060399998,
+      "Tccd1_celsius": 64.625,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5405448
+    },
+    {
+      "elapsed_seconds": 1354.178552888,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 39.5,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5412211
+    },
+    {
+      "elapsed_seconds": 1356.1787969309999,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5464019
+    },
+    {
+      "elapsed_seconds": 1358.1790347729998,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5414452
+    },
+    {
+      "elapsed_seconds": 1360.1792939739998,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.25,
+      "cpu0_frequency_khz": 5489344
+    },
+    {
+      "elapsed_seconds": 1362.179552004,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 72.75,
+      "cpu0_frequency_khz": 5389072
+    },
+    {
+      "elapsed_seconds": 1364.1798094219998,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5389491
+    },
+    {
+      "elapsed_seconds": 1366.1801078980002,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5414319
+    },
+    {
+      "elapsed_seconds": 1368.180364535,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5381127
+    },
+    {
+      "elapsed_seconds": 1370.1806232059998,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5439454
+    },
+    {
+      "elapsed_seconds": 1372.180874453,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5487994
+    },
+    {
+      "elapsed_seconds": 1374.1811514679998,
+      "Tccd1_celsius": 67.0,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 72.375,
+      "cpu0_frequency_khz": 5489308
+    },
+    {
+      "elapsed_seconds": 1376.181403566,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 73.875,
+      "cpu0_frequency_khz": 5414460
+    },
+    {
+      "elapsed_seconds": 1378.181651557,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.75,
+      "cpu0_frequency_khz": 5389507
+    },
+    {
+      "elapsed_seconds": 1380.1819289629998,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5478420
+    },
+    {
+      "elapsed_seconds": 1382.1821894270001,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 73.0,
+      "cpu0_frequency_khz": 5464207
+    },
+    {
+      "elapsed_seconds": 1384.182432348,
+      "Tccd1_celsius": 63.125,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 74.375,
+      "cpu0_frequency_khz": 5333967
+    },
+    {
+      "elapsed_seconds": 1386.182637458,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5414514
+    },
+    {
+      "elapsed_seconds": 1388.1828833539998,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 73.5,
+      "cpu0_frequency_khz": 5464309
+    },
+    {
+      "elapsed_seconds": 1390.183147105,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5413846
+    },
+    {
+      "elapsed_seconds": 1392.183373164,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5413649
+    },
+    {
+      "elapsed_seconds": 1394.1835983820001,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5375604
+    },
+    {
+      "elapsed_seconds": 1396.183844048,
+      "Tccd1_celsius": 54.125,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5497545
+    },
+    {
+      "elapsed_seconds": 1398.184082491,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5389544
+    },
+    {
+      "elapsed_seconds": 1400.184317447,
+      "Tccd1_celsius": 68.375,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5489382
+    },
+    {
+      "elapsed_seconds": 1402.1845692040001,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5389510
+    },
+    {
+      "elapsed_seconds": 1404.1848075869998,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5489265
+    },
+    {
+      "elapsed_seconds": 1406.184985375,
+      "Tccd1_celsius": 67.375,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 73.5,
+      "cpu0_frequency_khz": 5475206
+    },
+    {
+      "elapsed_seconds": 1408.185233997,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 72.5,
+      "cpu0_frequency_khz": 5401238
+    },
+    {
+      "elapsed_seconds": 1410.185476447,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 33.875,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5404742
+    },
+    {
+      "elapsed_seconds": 1412.185723787,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 34.375,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5414453
+    },
+    {
+      "elapsed_seconds": 1414.1859501069998,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 58.5,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5362445
+    },
+    {
+      "elapsed_seconds": 1416.1861976559999,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5389521
+    },
+    {
+      "elapsed_seconds": 1418.186440978,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 36.0,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5435998
+    },
+    {
+      "elapsed_seconds": 1420.1866864140002,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5389198
+    },
+    {
+      "elapsed_seconds": 1422.1869427410002,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5389235
+    },
+    {
+      "elapsed_seconds": 1424.1872321300002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5378633
+    },
+    {
+      "elapsed_seconds": 1426.18747941,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 35.5,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5355223
+    },
+    {
+      "elapsed_seconds": 1428.1877197959998,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5364370
+    },
+    {
+      "elapsed_seconds": 1430.1879808519998,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5366146
+    },
+    {
+      "elapsed_seconds": 1432.1882228210002,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389163
+    },
+    {
+      "elapsed_seconds": 1434.1884923520001,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5432155
+    },
+    {
+      "elapsed_seconds": 1436.188757626,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5414364
+    },
+    {
+      "elapsed_seconds": 1438.1890010379998,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5414370
+    },
+    {
+      "elapsed_seconds": 1440.189275499,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5364550
+    },
+    {
+      "elapsed_seconds": 1442.189565539,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5388007
+    },
+    {
+      "elapsed_seconds": 1444.189989562,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.375,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5488519
+    },
+    {
+      "elapsed_seconds": 1446.1902748329999,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5389500
+    },
+    {
+      "elapsed_seconds": 1448.190581594,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5364218
+    },
+    {
+      "elapsed_seconds": 1450.1908966820001,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5386547
+    },
+    {
+      "elapsed_seconds": 1452.19120695,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5364436
+    },
+    {
+      "elapsed_seconds": 1454.1915171589999,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5360029
+    },
+    {
+      "elapsed_seconds": 1456.191764097,
+      "Tccd1_celsius": 71.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5439449
+    },
+    {
+      "elapsed_seconds": 1458.1920544180002,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 37.625,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5464176
+    },
+    {
+      "elapsed_seconds": 1460.1922851160002,
+      "Tccd1_celsius": 54.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5464014
+    },
+    {
+      "elapsed_seconds": 1462.1925130589998,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5463263
+    },
+    {
+      "elapsed_seconds": 1464.1927795450001,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5430724
+    },
+    {
+      "elapsed_seconds": 1466.1930584339998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.625,
+      "cpu0_frequency_khz": 5439446
+    },
+    {
+      "elapsed_seconds": 1468.193313879,
+      "Tccd1_celsius": 78.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5364460
+    },
+    {
+      "elapsed_seconds": 1470.193567661,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5389418
+    },
+    {
+      "elapsed_seconds": 1472.1938036790002,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5464372
+    },
+    {
+      "elapsed_seconds": 1474.1940568300001,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 74.5,
+      "cpu0_frequency_khz": 5464015
+    },
+    {
+      "elapsed_seconds": 1476.1943163219998,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5364179
+    },
+    {
+      "elapsed_seconds": 1478.1945527510002,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5364579
+    },
+    {
+      "elapsed_seconds": 1480.194790954,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5357288
+    },
+    {
+      "elapsed_seconds": 1482.1950348669998,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389556
+    },
+    {
+      "elapsed_seconds": 1484.1952639320002,
+      "Tccd1_celsius": 73.625,
+      "Tccd2_celsius": 42.0,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5413461
+    },
+    {
+      "elapsed_seconds": 1486.1955167320002,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5389290
+    },
+    {
+      "elapsed_seconds": 1488.1957840999999,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5389363
+    },
+    {
+      "elapsed_seconds": 1490.1960287440002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5364616
+    },
+    {
+      "elapsed_seconds": 1492.196290541,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 39.625,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5387428
+    },
+    {
+      "elapsed_seconds": 1494.196530928,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5364327
+    },
+    {
+      "elapsed_seconds": 1496.196775943,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5364515
+    },
+    {
+      "elapsed_seconds": 1498.196986203,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5413871
+    },
+    {
+      "elapsed_seconds": 1500.1972887470001,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5438974
+    },
+    {
+      "elapsed_seconds": 1502.197535205,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 40.875,
+      "Tctl_celsius": 75.0,
+      "cpu0_frequency_khz": 5414001
+    },
+    {
+      "elapsed_seconds": 1504.1977715429998,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.375,
+      "cpu0_frequency_khz": 5389158
+    },
+    {
+      "elapsed_seconds": 1506.1979858609998,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5464024
+    },
+    {
+      "elapsed_seconds": 1508.1982668340002,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 74.5,
+      "cpu0_frequency_khz": 5463810
+    },
+    {
+      "elapsed_seconds": 1510.1985240529998,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5389104
+    },
+    {
+      "elapsed_seconds": 1512.198765922,
+      "Tccd1_celsius": 74.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5413264
+    },
+    {
+      "elapsed_seconds": 1514.1989730260002,
+      "Tccd1_celsius": 78.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5364266
+    },
+    {
+      "elapsed_seconds": 1516.1992088739999,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 38.125,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5388251
+    },
+    {
+      "elapsed_seconds": 1518.1994489899998,
+      "Tccd1_celsius": 69.75,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5464023
+    },
+    {
+      "elapsed_seconds": 1520.1996859199999,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 37.375,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5464100
+    },
+    {
+      "elapsed_seconds": 1522.199926677,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 76.25,
+      "cpu0_frequency_khz": 5364540
+    },
+    {
+      "elapsed_seconds": 1524.2001947059998,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 39.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5436165
+    },
+    {
+      "elapsed_seconds": 1526.200447747,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5389515
+    },
+    {
+      "elapsed_seconds": 1528.200699214,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5464364
+    },
+    {
+      "elapsed_seconds": 1530.200958627,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.25,
+      "cpu0_frequency_khz": 5464292
+    },
+    {
+      "elapsed_seconds": 1532.2012232490001,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5363327
+    },
+    {
+      "elapsed_seconds": 1534.2014725929998,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5388269
+    },
+    {
+      "elapsed_seconds": 1536.2017250019999,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5364610
+    },
+    {
+      "elapsed_seconds": 1538.201974145,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5389267
+    },
+    {
+      "elapsed_seconds": 1540.202214301,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5440805
+    },
+    {
+      "elapsed_seconds": 1542.2025418530002,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.5,
+      "cpu0_frequency_khz": 5395243
+    },
+    {
+      "elapsed_seconds": 1544.2027759769999,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.0,
+      "cpu0_frequency_khz": 5389511
+    },
+    {
+      "elapsed_seconds": 1546.2029680629998,
+      "Tccd1_celsius": 61.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.25,
+      "cpu0_frequency_khz": 5455967
+    },
+    {
+      "elapsed_seconds": 1548.203210263,
+      "Tccd1_celsius": 71.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5439141
+    },
+    {
+      "elapsed_seconds": 1550.2034621920002,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.0,
+      "cpu0_frequency_khz": 5179832
+    },
+    {
+      "elapsed_seconds": 1552.203712597,
+      "Tccd1_celsius": 54.125,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5464099
+    },
+    {
+      "elapsed_seconds": 1554.2039683930002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5364606
+    },
+    {
+      "elapsed_seconds": 1556.2042364220001,
+      "Tccd1_celsius": 63.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5289389
+    },
+    {
+      "elapsed_seconds": 1558.20448266,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5388854
+    },
+    {
+      "elapsed_seconds": 1560.204749166,
+      "Tccd1_celsius": 79.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 78.375,
+      "cpu0_frequency_khz": 5364347
+    },
+    {
+      "elapsed_seconds": 1562.204974404,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 78.125,
+      "cpu0_frequency_khz": 5389339
+    },
+    {
+      "elapsed_seconds": 1564.2051912460001,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5383990
+    },
+    {
+      "elapsed_seconds": 1566.2054390970002,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.5,
+      "cpu0_frequency_khz": 5389001
+    },
+    {
+      "elapsed_seconds": 1568.205676398,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5342494
+    },
+    {
+      "elapsed_seconds": 1570.2059204819998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5438933
+    },
+    {
+      "elapsed_seconds": 1572.206169725,
+      "Tccd1_celsius": 73.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.625,
+      "cpu0_frequency_khz": 5414262
+    },
+    {
+      "elapsed_seconds": 1574.2064262120002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 40.125,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5363900
+    },
+    {
+      "elapsed_seconds": 1576.206680846,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5389260
+    },
+    {
+      "elapsed_seconds": 1578.206986576,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5463838
+    },
+    {
+      "elapsed_seconds": 1580.2072288160002,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 37.125,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5364584
+    },
+    {
+      "elapsed_seconds": 1582.207467008,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5386642
+    },
+    {
+      "elapsed_seconds": 1584.2077081369998,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.125,
+      "cpu0_frequency_khz": 5488696
+    },
+    {
+      "elapsed_seconds": 1586.2079653649998,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5464271
+    },
+    {
+      "elapsed_seconds": 1588.2082583709998,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5410870
+    },
+    {
+      "elapsed_seconds": 1590.2086346239998,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 38.75,
+      "Tctl_celsius": 76.5,
+      "cpu0_frequency_khz": 5389218
+    },
+    {
+      "elapsed_seconds": 1592.208937429,
+      "Tccd1_celsius": 72.625,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5439219
+    },
+    {
+      "elapsed_seconds": 1594.2092482480002,
+      "Tccd1_celsius": 78.75,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5364220
+    },
+    {
+      "elapsed_seconds": 1596.2095517540001,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5388780
+    },
+    {
+      "elapsed_seconds": 1598.2098569630002,
+      "Tccd1_celsius": 76.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5362614
+    },
+    {
+      "elapsed_seconds": 1600.210119211,
+      "Tccd1_celsius": 70.75,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.375,
+      "cpu0_frequency_khz": 5462819
+    },
+    {
+      "elapsed_seconds": 1602.2104060360002,
+      "Tccd1_celsius": 70.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.875,
+      "cpu0_frequency_khz": 5429561
+    },
+    {
+      "elapsed_seconds": 1604.210686889,
+      "Tccd1_celsius": 68.875,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 73.625,
+      "cpu0_frequency_khz": 5449592
+    },
+    {
+      "elapsed_seconds": 1606.210960428,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.5,
+      "cpu0_frequency_khz": 5347855
+    },
+    {
+      "elapsed_seconds": 1608.211212868,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5364332
+    },
+    {
+      "elapsed_seconds": 1610.211469495,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.5,
+      "cpu0_frequency_khz": 5414312
+    },
+    {
+      "elapsed_seconds": 1612.211723027,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5364355
+    },
+    {
+      "elapsed_seconds": 1614.2119628629998,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5364587
+    },
+    {
+      "elapsed_seconds": 1616.2122002639999,
+      "Tccd1_celsius": 78.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5364166
+    },
+    {
+      "elapsed_seconds": 1618.21243487,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5383021
+    },
+    {
+      "elapsed_seconds": 1620.212674675,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.625,
+      "cpu0_frequency_khz": 5364491
+    },
+    {
+      "elapsed_seconds": 1622.2129410419998,
+      "Tccd1_celsius": 75.5,
+      "Tccd2_celsius": 39.75,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5368317
+    },
+    {
+      "elapsed_seconds": 1624.21318741,
+      "Tccd1_celsius": 69.375,
+      "Tccd2_celsius": 36.875,
+      "Tctl_celsius": 75.25,
+      "cpu0_frequency_khz": 5463881
+    },
+    {
+      "elapsed_seconds": 1626.2134216549998,
+      "Tccd1_celsius": 74.5,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 75.125,
+      "cpu0_frequency_khz": 5414120
+    },
+    {
+      "elapsed_seconds": 1628.2136913579998,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.75,
+      "cpu0_frequency_khz": 5351520
+    },
+    {
+      "elapsed_seconds": 1630.2139688440002,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 40.5,
+      "Tctl_celsius": 76.125,
+      "cpu0_frequency_khz": 5425543
+    },
+    {
+      "elapsed_seconds": 1632.2142116260002,
+      "Tccd1_celsius": 72.125,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 74.75,
+      "cpu0_frequency_khz": 5438304
+    },
+    {
+      "elapsed_seconds": 1634.2144739239998,
+      "Tccd1_celsius": 71.25,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 75.875,
+      "cpu0_frequency_khz": 5439368
+    },
+    {
+      "elapsed_seconds": 1636.2147297400002,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 35.75,
+      "Tctl_celsius": 77.875,
+      "cpu0_frequency_khz": 5364510
+    },
+    {
+      "elapsed_seconds": 1638.214974304,
+      "Tccd1_celsius": 76.0,
+      "Tccd2_celsius": 36.75,
+      "Tctl_celsius": 77.625,
+      "cpu0_frequency_khz": 5386291
+    },
+    {
+      "elapsed_seconds": 1640.215211104,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.25,
+      "cpu0_frequency_khz": 5389375
+    },
+    {
+      "elapsed_seconds": 1642.215452113,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.75,
+      "cpu0_frequency_khz": 5364492
+    },
+    {
+      "elapsed_seconds": 1644.2157113449998,
+      "Tccd1_celsius": 75.0,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 76.875,
+      "cpu0_frequency_khz": 5389490
+    },
+    {
+      "elapsed_seconds": 1646.2159740040001,
+      "Tccd1_celsius": 76.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5364337
+    },
+    {
+      "elapsed_seconds": 1648.2162135889998,
+      "Tccd1_celsius": 77.375,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 77.375,
+      "cpu0_frequency_khz": 5364341
+    },
+    {
+      "elapsed_seconds": 1650.2164488859999,
+      "Tccd1_celsius": 77.875,
+      "Tccd2_celsius": 36.25,
+      "Tctl_celsius": 78.375,
+      "cpu0_frequency_khz": 5364555
+    }
+  ]
+}
