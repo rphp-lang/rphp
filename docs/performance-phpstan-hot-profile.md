@@ -100,23 +100,70 @@ whole-request instruction counts, not seconds or phase-only counts; the
 separate application timers establish that a similarly large gap remains
 inside analysis. Instruction counting does not measure cache misses or cycles.
 
-Selected RPHP exclusive costs are disjoint and can be added:
+The complete RPHP profile contains 5,079 function bodies. Reading every raw
+exclusive cost entry, including the tail omitted by the original 99% annotated
+listing, reproduces the exact total. Classify each body once; do not add its
+callees again. The resulting instruction budget is:
 
 | Cost centre | Instructions | Whole-request share |
 | --- | ---: | ---: |
 | Main `execute_ex_inner` body | 30.027 billion | 19.33% |
+| Other VM bodies: calls, frames and opcode helpers | 21.866 billion | 14.07% |
 | Explicit VM release-planning and retirement helpers | 21.614 billion | 13.91% |
+| General Rust container, hashing, drop and string helpers | 24.004 billion | 15.45% |
 | Class lookup, class relations and method-info helpers | 9.452 billion | 6.08% |
 | `register_cycle_candidate_with_admission` | 7.391 billion | 4.76% |
+| Value, PHP-array and PHP-object bodies | 8.345 billion | 5.37% |
+| Other runtime bodies, including cycle-graph work | 6.787 billion | 4.37% |
+| Memory copying, comparison and filling routines | 6.630 billion | 4.27% |
+| Request accounting and outlined heap helpers | 4.558 billion | 2.93% |
+| Compiler, lexer and parser bodies | 3.276 billion | 2.11% |
+| PHP builtins, regex and JSON bodies | 8.858 billion | 5.70% |
+| Remaining functions | 2.548 billion | 1.64% |
+| **Total, before display rounding** | **155.356633415 billion** | **100%** |
+
+Subtract the entire PHP reference once: the total instruction gap is exactly
+139,779,928,708. These rows locate RPHP instructions; they are not matched
+RPHP-minus-PHP subsystem differences. Different function boundaries and
+inlining prevent that interpretation. An instruction budget is also not proof
+that a particular patch can remove all of its costs.
 
 The release group includes statement/frame planning, retained-container scans,
 value-tree checks, destructor-child enumeration and bitmap retirement, including
-their outlined closures. It does not include arbitrary callees' work. These are
-selected costs, not a complete ownership or allocator accounting. Inlined work
-is attributed to its enclosing function, so the main VM body is not just the
-dispatch switch. Inclusive costs overlap and must not be added to this table.
+their outlined closures. It does not include arbitrary callees' work. General
+helpers are classified by their own body rather than by the subsystem calling
+them; this is not a complete semantic ownership or allocator accounting.
+Inlined work is attributed to its enclosing function, so the main VM body is
+not just the dispatch switch. Inclusive costs overlap and must not be added to
+this table. The remaining-functions row is mostly case-insensitive byte
+comparison and SHA-512 compression, not an unobserved 100-billion-instruction
+hole.
 
-Two concrete repeated operations stand out:
+The 24.004-billion general-helper row comprises 7.559 billion in drop and
+reference-release bodies, 7.102 billion in hash-table operations, 3.496 billion
+in hash calculation, 3.013 billion in allocation/vector/string/Rc helpers,
+1.597 billion in string operations, 0.917 billion in formatting and 0.321 billion
+elsewhere. These are costs of operations our implementation requests, not a
+claim that Rust inherently requires this much work.
+
+### Limit of the two previously highlighted functions
+
+Call counts alone are not an explanation of the gap. The bodies of
+`find_class` and `register_cycle_candidate_with_admission` together cost
+13,101,617,181 instructions. Including their callees raises this to
+16,739,936,246 instructions. The observed call graph contains neither recursion
+through these entry points nor a path from one to the other, so those two
+inclusive totals do not overlap with each other. They do overlap the other
+rows of the exclusive table above.
+
+Even assigning both functions and their callees zero cost in this fixed trace
+leaves 138,616,697,169 instructions, versus PHP's 15,576,704,707: still 8.90x.
+Their complete removal could account for only 11.98% of the instruction gap.
+This is an instruction-count bound, not a native-time speedup prediction or a
+proposal to remove PHP semantics. The earlier emphasis on their invocation
+counts was insufficient to explain the application slowdown.
+
+Two partial optimization hypotheses remain:
 
 1. **Class metadata is repeatedly resolved by name.** RPHP calls `find_class`
    50,375,971 times. Of these, 36,580,994 come from `class_is_a`, which resolves
@@ -126,17 +173,17 @@ Two concrete repeated operations stand out:
    byte-identical input names. The PHP profile has 146,967 observed calls to
    `zend_lookup_class_ex` across its contexts, while still executing 10,968,615
    calls to `instanceof_function_slow`. The next useful optimization target is
-   avoiding repeated name resolution using valid request-local class identity,
-   rather than accelerating each repeated hash lookup. Aliases, unresolved
+   avoiding repeated name resolution using valid request-local class identity.
+   This addresses only part of the total cost. Aliases, unresolved
    symbols and reuse of compiled code across requests still require guards.
 2. **Dropping aliases repeatedly enters GC bookkeeping and VM release planning.**
    RPHP calls the cycle-admission helper 83,914,755 times, versus 1,643,283
    observed calls to PHP's `gc_possible_root`. The RPHP helper checks whether a
-   candidate is already present, usually through the identity index after a
+   candidate is already present through the identity index after a
    one-entry tail check. Statement cleanup executes 18,105,267 times and frame
    destructor planning 9,205,511 times. A cheap, valid already-buffered check
-   and fewer unnecessary temporary owners are stronger targets than allocator
-   instruction tuning. Simply disabling GC or dropping ownership checks would
+   and fewer unnecessary temporary owners are candidates for reducing this
+   specific cost. Simply disabling GC or dropping ownership checks would
    change PHP behavior and is not an optimization demonstrated here.
 
 The cross-runtime helper counts are observed out-of-line calls, not identical
@@ -153,6 +200,38 @@ show little admission for this workload, not an execution-time coverage ratio.
 The native PHP reference has JIT disabled too, so lack of RPHP JIT coverage does
 not explain the gap as a PHP-JIT advantage.
 
+## Minimal reproduction of expensive ordinary execution
+
+Use the existing small shared-frame-release diagnostic with 50,000 loop
+iterations. Each iteration passes an object, array, closure and boolean to an
+ordinary function, creates two local aliases, reads one object property and
+adds the returned integer to a checksum. It produces 450,000. A zero-iteration
+copy preserves setup and compilation so a second profile can approximately
+subtract process startup and finalization. It produces zero. All results match
+PHP; these are instruction diagnostics, not additional test suites.
+
+| Runtime | Full 50,000-iteration request | Zero-iteration control | Difference per iteration |
+| --- | ---: | ---: | ---: |
+| RPHP baseline | 299,239,956 | 14,533,248 | 5,694.13 |
+| PHP reference | 54,480,855 | 28,676,655 | 516.08 |
+
+The incremental ratio is 11.03x, reproduced without PHPStan. An iteration
+includes the function body, arguments and surrounding loop, not just call/ret.
+This is a targeted example, not a workload-independent speed ratio.
+
+Of the RPHP incremental instructions per iteration, about 2,121 are in the main
+VM body, 1,261 in the explicit release-helper group, 1,405 in general Rust
+helpers, 349 in cycle admission and 319 in other VM bodies. Class lookup costs
+only 0.013 instructions per iteration here. The large gap can therefore occur
+without significant class-lookup work. Expensive ordinary execution and
+ownership handling span several functions; they cannot be diagnosed from the
+two previously highlighted invocation counts alone.
+
+The earlier cleanup candidate removes substantial work on this targeted example
+but improves PHPStan's analysis phase by only about 3.25%. That difference is
+evidence against extrapolating the small reproduction's savings to the whole
+application. No new runtime implementation was made for this follow-up.
+
 ## Decision and limits
 
 The current evidence favors excessive repeated interpreter and ownership work
@@ -161,12 +240,15 @@ single demonstrated fix worth the entire 10–13x gap. The previous cleanup
 candidate improves the phase only about 3.25% and remains unaccepted; it cannot
 be presented as resolving the application bottleneck.
 
-The next implementation should eliminate a measured repeated operation, with
-a narrow output check and before/after profile first. Class identity resolution
-and admission of already-buffered GC owners are concrete candidates. Further
-assembler or allocator tuning is not justified as the primary response to
-these profiles. No new runtime patch or broad test matrix is part of this
-diagnostic checkpoint.
+The profile is now fully accounted for at function-body level. It does not yet
+provide a causal, matched breakdown of all 139.78 billion excess instructions
+or demonstrate a fix for most of them. The VM and release groups together cost
+73.51 billion instructions; generic helpers and memory primitives cost another
+30.63 billion. These costs must be connected to individual PHP operations and
+unnecessary ownership transitions before choosing a larger implementation.
+Class identity resolution and GC admission remain bounded subproblems, not an
+explanation or solution for the entire gap. No new runtime patch or broad test
+matrix is part of this diagnostic checkpoint.
 
 The earlier gprofng sample has an unreliable timer/coverage warning and is not
 used for CPU-time percentages. This report does not convert Callgrind shares
