@@ -757,3 +757,64 @@ runner pins the same setting on both sides. The failed job remains recorded,
 and no runtime change or retry without memory limits hides it. All jobs stay
 below 4.25 GB with no OOM or timeout. Cleanup ran in both local checkouts; no
 private benchmark host was configured. PHP time/instruction parity remains open.
+
+## Rejected checkpoint: statement root-owner bound
+
+Baseline is clean `4ad0c998`, with 125.8780 billion instructions and 10.1982
+seconds of PHPStan analysis in the independent window above. The exact native
+profile still charges about four percent of cycles to temporary release and
+its snapshot closure. The earlier instruction profile attributes 12.03 billion
+inclusive instructions to the unchanged release helper over 18.10 million calls.
+
+The hypothesis is a general physical-ownership proof: if every callback-capable
+root in an ordinary release range has more strong owners than the total number
+of owning handles in that range, none can be final. Each allocation loses at
+most that many direct edges; because none becomes final, no children retire.
+Strings and native resources without VM callbacks need no such proof. Owned
+references compare their cell's count, never their target's count. Unknown
+ownership fails conservatively. A failed proof changes no state. Successful
+proofs still use the original drop order, snapshot checks and GC admission.
+The foreach protocol and pending-call/operand cleanup retain their established
+paths; this does not cache a proof across any callback.
+
+The integrating task owns `src/vm/execute/call_frames.rs` and focused tests.
+No other agent edits this checkout. Validation requires alias counts on both
+sides of the bound, owned-reference indirection, ordinary shared/final roots,
+weak observations, exceptions, fibers and GC ordering; default, no-default and
+all-feature focused tests; direct PHP comparisons; formatting and unsafe gates.
+Application A/B, the existing independent controls and code size decide whether
+the extra proof pays for itself. Reject semantic differences, unchanged target
+cost or reproducible target regressions. No Value/frame/JIT ABI change is planned;
+native measurement remains x86-64 only.
+
+The first ordinary-only experiment passes 62 focused checks and 53 direct PHP
+programs, but reduces application instructions only 0.134% (125.8881 to 125.7197
+billion); analysis changes from 10.0390 to 10.1077 seconds. It is superseded
+without acceptance. The same all-root proof now also precedes operand/nested
+planning, after the mandatory pending-call cleanup. It does not mix partial
+survival proofs with callbacks: every callback-capable root must survive, or
+the original alias-aware/shallow-drop test runs unchanged. The source profile
+already covers these modes; they account for most temporary-release calls.
+
+
+### Owner-bound result: rejected
+
+The [two complete measurement packets](performance-phpstan-statement-bound-rejected-samples.json)
+retain both exact builds and every valid sample. The extended variant lowers
+application instructions only from 125.8827 to 125.6644 billion (0.173%). Analysis
+medians are 10.1198 and 9.8872 seconds, with reference PHP at 0.9451 seconds and
+15.4742 billion instructions. This single window is not independently confirmed.
+
+The shared-frame control regresses 4.61% in the short window and 3.13% in five
+longer pairs. It executes 2770.94 versus 2761.44 instructions per iteration:
+failed-proof work has a measurable steady-state cost. Relative self-return
+regresses 5.79%, adding 18 instructions per iteration and substantially more
+branch misses. Scalar and property controls improve, while deep-release
+controls are slightly slower. A tiny application instruction reduction does not
+justify the extra checks and observed regressions. Both implementations and
+their tests are removed; `4ad0c998` remains the accepted source baseline.
+
+Each variant passed 62 focused checks and 53 direct PHP programs. The remaining
+feature matrix is deliberately not run after rejecting the performance
+hypothesis. All four bounded jobs completed without OOM or timeout; maximum
+aggregate memory was below 3.87 GB. No new unsafe block or ABI change was made.
