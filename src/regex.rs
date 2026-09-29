@@ -1170,7 +1170,7 @@ impl Regex {
                 control: &mut control,
                 budget: &mut budget,
             };
-            if match_seq_from(&self.ast, &[], start, &mut ctx).is_some() {
+            if match_seq_from(&self.ast, Continuation::EMPTY, start, &mut ctx).is_some() {
                 return Ok(true);
             }
             if let Some(error) = budget.error() {
@@ -1249,7 +1249,7 @@ impl Regex {
                     control: &mut control,
                     budget: &mut budget,
                 };
-                match_seq_from(&self.ast, &[], start, &mut ctx)
+                match_seq_from(&self.ast, Continuation::EMPTY, start, &mut ctx)
             };
             if let Some(end) = end {
                 publish_overall_match(&mut groups, byte_offsets.get(start), byte_offsets.get(end));
@@ -1387,7 +1387,7 @@ impl Regex {
                 if retry_nonempty {
                     match_nonempty_at_start(&self.ast, pos, &mut ctx)
                 } else {
-                    match_seq_from(&self.ast, &[], pos, &mut ctx)
+                    match_seq_from(&self.ast, Continuation::EMPTY, pos, &mut ctx)
                 }
             };
             if let Some(error) = budget.error() {
@@ -1548,7 +1548,7 @@ impl Regex {
                 if retry_nonempty {
                     match_nonempty_at_start(&self.ast, pos, &mut ctx)
                 } else {
-                    match_seq_from(&self.ast, &[], pos, &mut ctx)
+                    match_seq_from(&self.ast, Continuation::EMPTY, pos, &mut ctx)
                 }
             };
             if let Some(error) = budget.error() {
@@ -1647,7 +1647,7 @@ impl Regex {
                 if retry_nonempty {
                     match_nonempty_at_start(&self.ast, pos, &mut ctx)
                 } else {
-                    match_seq_from(&self.ast, &[], pos, &mut ctx)
+                    match_seq_from(&self.ast, Continuation::EMPTY, pos, &mut ctx)
                 }
             };
             if let Some(end) = end {
@@ -1748,7 +1748,9 @@ impl Regex {
                     control: &mut control,
                     budget: &mut budget,
                 };
-                if let Some(end) = match_seq_from(&self.ast, &[], try_start, &mut ctx) {
+                if let Some(end) =
+                    match_seq_from(&self.ast, Continuation::EMPTY, try_start, &mut ctx)
+                {
                     publish_overall_match(
                         &mut groups,
                         byte_offsets.get(try_start),
@@ -1824,7 +1826,7 @@ impl Regex {
             let end = if retry_nonempty {
                 match_nonempty_at_start(&self.ast, pos, &mut ctx)
             } else {
-                match_seq_from(&self.ast, &[], pos, &mut ctx)
+                match_seq_from(&self.ast, Continuation::EMPTY, pos, &mut ctx)
             };
             if let Some(end) = end {
                 let attempt_start = byte_offsets.get(pos);
@@ -2414,7 +2416,7 @@ fn capture_condition_matches(
                     *ctx.groups = saved_groups.clone();
                     *ctx.mark = saved_mark.clone();
                     *ctx.mark_positions = saved_mark_positions.clone();
-                    let result = match_seq_from(inner, &[], start, ctx);
+                    let result = match_seq_from(inner, Continuation::EMPTY, start, ctx);
                     let accepted = matches!(ctx.control.take(), Some(MatchControl::Accept));
                     if accepted || result == Some(pos) {
                         found = true;
@@ -2427,7 +2429,7 @@ fn capture_condition_matches(
                 }
                 found
             } else {
-                let matched = match_seq_from(inner, &[], pos, ctx).is_some();
+                let matched = match_seq_from(inner, Continuation::EMPTY, pos, ctx).is_some();
                 ctx.control.take();
                 matched
             };
@@ -2522,7 +2524,7 @@ fn pop_subroutine_call(ctx: &mut MatchCtx<'_>) {
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn match_subroutine(
     target: &SubroutineTarget,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -2534,12 +2536,11 @@ fn match_subroutine(
     push_subroutine_call(ctx, target_kind, pos);
     let initial = BacktrackState::take(pos, ctx);
     let caller_groups = Rc::new(initial.groups.clone());
-    let mut continuation = Vec::with_capacity(rest.len() + 1);
-    continuation.push(Node::CaptureRestore {
+    let restore = [Node::CaptureRestore {
         groups: Rc::clone(&caller_groups),
-    });
-    continuation.extend_from_slice(rest);
-    let result = target.and_then(|target| match_seq_from(&target, &continuation, pos, ctx));
+    }];
+    let continuation = Continuation::prepend(&restore, &rest);
+    let result = target.and_then(|target| match_seq_from(&target, continuation, pos, ctx));
     if result.is_some() && matches!(ctx.control, Some(MatchControl::Accept)) {
         ctx.groups.clone_from(caller_groups.as_ref());
     }
@@ -2558,7 +2559,7 @@ fn match_conditional(
     condition: &CaptureCondition,
     yes: &Node,
     no: Option<&Node>,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -2578,7 +2579,7 @@ fn match_conditional(
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn match_non_atomic_lookahead(
     inner: &Node,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -2602,7 +2603,7 @@ fn match_non_atomic_lookahead(
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn match_non_atomic_lookbehind(
     inner: &Node,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -2712,7 +2713,7 @@ fn script_run_is_valid(chars: &[char]) -> bool {
 fn match_script_run(
     inner: &Node,
     atomic: bool,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -2809,27 +2810,71 @@ fn node_length_range(node: &Node) -> Option<(usize, usize)> {
     }
 }
 
+/// The remaining immutable pattern, ordered from an inner sequence to its
+/// enclosing continuation. Empty slices never retain a parent: advancing past
+/// a slice restores its enclosing cursor directly. Matcher calls are synchronous,
+/// so borrowed AST and synthetic capture nodes outlive every use of the cursor.
+#[derive(Clone, Copy)]
+struct Continuation<'a> {
+    nodes: &'a [Node],
+    outer: Option<&'a Continuation<'a>>,
+}
+
+impl<'a> Continuation<'a> {
+    const EMPTY: Self = Self {
+        nodes: &[],
+        outer: None,
+    };
+
+    #[inline]
+    fn prepend(nodes: &'a [Node], outer: &'a Self) -> Self {
+        if nodes.is_empty() {
+            *outer
+        } else {
+            Self {
+                nodes,
+                outer: (!outer.is_empty()).then_some(outer),
+            }
+        }
+    }
+
+    #[inline]
+    fn is_empty(self) -> bool {
+        self.nodes.is_empty()
+    }
+}
+
+impl<'a> Iterator for Continuation<'a> {
+    type Item = &'a Node;
+
+    #[inline]
+    fn next(&mut self) -> Option<Self::Item> {
+        let (node, tail) = self.nodes.split_first()?;
+        if tail.is_empty() {
+            *self = self.outer.copied().unwrap_or(Self::EMPTY);
+        } else {
+            self.nodes = tail;
+        }
+        Some(node)
+    }
+}
+
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
-fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
+fn match_seq_from(
+    node: &Node,
+    rest: Continuation<'_>,
+    pos: usize,
+    ctx: &mut MatchCtx,
+) -> Option<usize> {
     if ctx.budget.has_error() {
         return None;
     }
     match node {
         Node::Sequence(nodes) => {
-            // Flatten: match first element with rest = remaining + outer rest
-            if nodes.is_empty() {
+            let Some((first, tail)) = nodes.split_first() else {
                 return match_rest(rest, pos, ctx);
-            }
-            if nodes.len() == 1 {
-                return match_seq_from(&nodes[0], rest, pos, ctx);
-            }
-            if rest.is_empty() {
-                return match_seq_from(&nodes[0], &nodes[1..], pos, ctx);
-            }
-            // Build combined rest: nodes[1..] ++ rest
-            let mut combined: Vec<Node> = nodes[1..].to_vec();
-            combined.extend_from_slice(rest);
-            match_seq_from(&nodes[0], &combined, pos, ctx)
+            };
+            match_seq_from(first, Continuation::prepend(tail, &rest), pos, ctx)
         }
         Node::Literal(ch) => {
             if pos >= ctx.chars.len() {
@@ -2968,7 +3013,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             ctx.flags.case_insensitive = flags.case_insensitive;
             ctx.flags.multiline = flags.multiline;
             ctx.flags.dotall = flags.dotall;
-            let end = match_seq_from(inner, &[], pos, ctx);
+            let end = match_seq_from(inner, Continuation::EMPTY, pos, ctx);
             ctx.flags = saved;
             end.and_then(|end| match_rest(rest, end, ctx))
         }
@@ -3056,7 +3101,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             let saved_mark = ctx.mark.clone();
             let saved_mark_positions = ctx.mark_positions.clone();
             // Use empty rest — lookahead doesn't consume input, just checks
-            let result = match_seq_from(inner, &[], pos, ctx);
+            let result = match_seq_from(inner, Continuation::EMPTY, pos, ctx);
             // Every control verb is contained by an assertion. ACCEPT makes
             // a positive assertion succeed immediately; the remaining verbs
             // make it fail when they are triggered by backtracking.
@@ -3111,7 +3156,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
                     let saved = ctx.groups.clone();
                     let saved_mark = ctx.mark.clone();
                     let saved_mark_positions = ctx.mark_positions.clone();
-                    let result = match_seq_from(inner, &[], start, ctx);
+                    let result = match_seq_from(inner, Continuation::EMPTY, start, ctx);
                     let accepted = matches!(ctx.control.take(), Some(MatchControl::Accept));
                     if accepted || result == Some(pos) {
                         true
@@ -3134,8 +3179,8 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
             if !ctx.budget.enter_recursion() {
                 return None;
             }
-            let result =
-                match_seq_from(inner, &[], pos, ctx).and_then(|end| match_rest(rest, end, ctx));
+            let result = match_seq_from(inner, Continuation::EMPTY, pos, ctx)
+                .and_then(|end| match_rest(rest, end, ctx));
             ctx.budget.leave_recursion();
             result
         }
@@ -3241,7 +3286,7 @@ fn match_seq_from(node: &Node, rest: &[Node], pos: usize, ctx: &mut MatchCtx) ->
 fn match_capture_end(
     index: usize,
     start: usize,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -3266,7 +3311,7 @@ fn match_capture_end(
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zregex"))]
 fn match_seq_from_with_group(
     inner: &Node,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx,
     group_idx: Option<usize>,
@@ -3276,7 +3321,7 @@ fn match_seq_from_with_group(
     // inner match. Let the ordinary matcher consume that path directly; this
     // keeps the common `(prefix)(digits+)` capture shape allocation-free.
     if rest.is_empty() {
-        let end = match_seq_from(inner, &[], pos, ctx)?;
+        let end = match_seq_from(inner, Continuation::EMPTY, pos, ctx)?;
         if let Some(idx) = group_idx {
             ctx.groups[idx] = Some(Match {
                 start: start_offset,
@@ -3305,13 +3350,11 @@ fn match_seq_from_with_group(
         initial.install(ctx);
         return None;
     }
-    let mut continuation = Vec::with_capacity(rest.len() + 1);
-    continuation.push(Node::CaptureEnd {
+    let capture = [Node::CaptureEnd {
         index,
         start: start_offset,
-    });
-    continuation.extend_from_slice(rest);
-    match_seq_from(inner, &continuation, pos, ctx)
+    }];
+    match_seq_from(inner, Continuation::prepend(&capture, &rest), pos, ctx)
 }
 
 /// One possible matcher continuation. Capture registers and the last MARK are
@@ -3493,7 +3536,7 @@ fn collect_match_states_from(
         _ => {
             let pos = state.end;
             state.install(ctx);
-            if let Some(end) = match_seq_from(node, &[], pos, ctx) {
+            if let Some(end) = match_seq_from(node, Continuation::EMPTY, pos, ctx) {
                 vec![BacktrackState::take(end, ctx)]
             } else {
                 Vec::new()
@@ -3673,7 +3716,7 @@ fn first_required_consuming_node(node: &Node) -> Option<&Node> {
     }
 }
 
-fn first_required_consuming_rest(rest: &[Node]) -> Option<&Node> {
+fn first_required_consuming_rest<'a>(rest: Continuation<'a>) -> Option<&'a Node> {
     for node in rest {
         if let Some(node) = first_required_consuming_node(node) {
             return Some(node);
@@ -3778,7 +3821,7 @@ fn single_atoms_may_overlap(left: &Node, right: &Node, flags: RegexFlags) -> boo
 /// them; this preserves `pcre.backtrack_limit` while retaining linear memory.
 fn impossible_partition_search_cost(
     inner: &Node,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &MatchCtx<'_>,
 ) -> Option<usize> {
@@ -4016,19 +4059,20 @@ fn collect_branching_quantifier_states(
 }
 
 /// Match remaining nodes in the rest slice.
-fn match_rest(rest: &[Node], pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
+fn match_rest(rest: Continuation<'_>, pos: usize, ctx: &mut MatchCtx) -> Option<usize> {
     if matches!(*ctx.control, Some(MatchControl::Accept)) {
         return Some(pos);
     }
-    if rest.is_empty() {
-        return Some(pos);
+    let mut rest = rest;
+    match rest.next() {
+        Some(node) => match_seq_from(node, rest, pos, ctx),
+        None => Some(pos),
     }
-    match_seq_from(&rest[0], &rest[1..], pos, ctx)
 }
 
 fn match_backref_by_index(
     n: usize,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx,
 ) -> Option<usize> {
@@ -4227,7 +4271,7 @@ fn repeatable_single_char_exclusions(node: &Node) -> Option<Vec<char>> {
 fn match_universal_quantifier(
     greedy: bool,
     possessive: bool,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -4285,7 +4329,7 @@ fn match_balanced_delimiter_quantifier(
     plain_allows_open: bool,
     greedy: bool,
     possessive: bool,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -4379,7 +4423,7 @@ fn match_control_quantifier(
     min: usize,
     max: Option<usize>,
     greedy: bool,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx<'_>,
 ) -> Option<usize> {
@@ -4394,18 +4438,17 @@ fn match_control_quantifier(
         let try_repetition = |ctx: &mut MatchCtx<'_>| {
             let next_min = min.saturating_sub(1);
             let next_max = max.map(|limit| limit.saturating_sub(1));
-            let mut continuation = Vec::with_capacity(rest.len() + 1);
-            if next_min != 0 || next_max != Some(0) {
-                continuation.push(Node::Quantifier {
-                    inner: Box::new(inner.clone()),
-                    min: next_min,
-                    max: next_max,
-                    greedy,
-                    possessive: false,
-                });
+            if next_min == 0 && next_max == Some(0) {
+                return match_seq_from(inner, rest, pos, ctx);
             }
-            continuation.extend_from_slice(rest);
-            match_seq_from(inner, &continuation, pos, ctx)
+            let repetition = [Node::Quantifier {
+                inner: Box::new(inner.clone()),
+                min: next_min,
+                max: next_max,
+                greedy,
+                possessive: false,
+            }];
+            match_seq_from(inner, Continuation::prepend(&repetition, &rest), pos, ctx)
         };
 
         if min != 0 {
@@ -4440,7 +4483,7 @@ fn match_quantifier(
     max: Option<usize>,
     greedy: bool,
     possessive: bool,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx,
 ) -> Option<usize> {
@@ -4506,7 +4549,7 @@ fn match_quantifier(
             let saved_groups = tracks_captures.then(|| ctx.groups.clone());
             let saved_mark = ctx.mark.clone();
             let saved_mark_positions = ctx.mark_positions.clone();
-            match match_seq_from(inner, &[], current_pos, ctx) {
+            match match_seq_from(inner, Continuation::EMPTY, current_pos, ctx) {
                 Some(next_pos) => {
                     if matches!(*ctx.control, Some(MatchControl::Accept)) {
                         return Some(next_pos);
@@ -4656,7 +4699,7 @@ fn match_quantifier(
         let saved_mark = ctx.mark.clone();
         let saved_mark_positions = ctx.mark_positions.clone();
         // Try one more repetition
-        match match_seq_from(inner, &[], current_pos, ctx) {
+        match match_seq_from(inner, Continuation::EMPTY, current_pos, ctx) {
             Some(next_pos) => {
                 if matches!(*ctx.control, Some(MatchControl::Accept)) {
                     return Some(next_pos);
@@ -4752,7 +4795,7 @@ fn match_quantifier_preferred_path(
     max: Option<usize>,
     greedy: bool,
     possessive: bool,
-    rest: &[Node],
+    rest: Continuation<'_>,
     pos: usize,
     ctx: &mut MatchCtx,
 ) -> Option<usize> {
@@ -4802,7 +4845,7 @@ fn match_quantifier_preferred_path(
         let saved_groups = tracks_captures.then(|| ctx.groups.clone());
         let saved_mark = ctx.mark.clone();
         let saved_mark_positions = ctx.mark_positions.clone();
-        match match_seq_from(inner, &[], current_pos, ctx) {
+        match match_seq_from(inner, Continuation::EMPTY, current_pos, ctx) {
             Some(next_pos) => {
                 if matches!(*ctx.control, Some(MatchControl::Accept)) {
                     return Some(next_pos);

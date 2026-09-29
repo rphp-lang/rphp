@@ -1912,3 +1912,82 @@ main executor, with further costs in class/method lookup, value retirement and
 regular expressions. Three lost samples and unusable callchains prevent exact
 or inclusive attribution; this profile is selection evidence only. The hardware
 phase counters above remain the acceptance evidence.
+
+## Accepted checkpoint: borrowed regular-expression continuations
+
+- Outcome: joining a nested sequence to its enclosing continuation borrows
+  immutable AST nodes instead of cloning their trees into temporary vectors.
+- Baseline: accepted `a81a0a1d`, source
+  `d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad`,
+  executable
+  `34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405`.
+  Analysis costs 85.8101 billion instructions versus PHP's 10.3338 billion.
+- Evidence: the earlier exact `fcc3736f` profile records 839,693 nested sequence
+  joins. Their direct vector clone, extension and destruction edges cost
+  752,191,420, 307,033,460 and 440,239,715 instructions. These disjoint call
+  edges include their helpers; recursive node-clone totals must not be added
+  again. The current phase-only sample still identifies matcher and node-clone
+  costs, but its skid and lost samples prevent exact attribution.
+- Hypothesis: a copyable cursor over a borrowed node slice and its enclosing
+  cursor preserves traversal while eliminating continuation-vector allocation,
+  AST cloning and destruction. Runtime capture/restore nodes remain scoped to
+  their synchronous matcher call. No compiled regex or result is cached anew.
+- Ownership: the sole integrator owns `src/regex.rs` and focused regressions.
+  No compiler, Value/frame layout, opcode/JIT contract or execution admission
+  changes. This is safe Rust with ordinary borrow-checked stack lifetimes.
+- Semantic envelope: retain branch order, capture rollback, subroutine scope,
+  control verbs, empty matches, flags, UTF handling and recursion/backtrack
+  budgets. No successful or failed path may be skipped or duplicated.
+- Gates: focused regex and preg tests, exact PHP differentials for nested
+  continuations, groups, recursion and controls, all-target compilation and
+  feature checks. Fresh independent PGO with the same 18 inputs; PHPStan phase
+  and whole counters, four existing controls and a nested-regex holdout. Reject
+  semantic drift or no confirmed application instruction reduction. Keep every
+  failure and valid sample. ARM64 native evidence remains unavailable.
+
+### Borrowed continuation measurements
+
+Analysis-only instructions decrease from **85.8000 to 84.4368 billion
+(-1.59%)**, against PHP's 10.3366 billion. Whole-command medians decrease from
+104.4810 to 103.0372 billion initially and 104.4712 to 103.0310 billion in
+confirmation. Analysis times change from 7.9690 to 7.7335 seconds initially and
+7.8346 to 7.7266 seconds in confirmation; PHP takes 0.9455 seconds in that
+confirmation window. Confirmation RSS is 610194 versus 611260 KiB (+0.17%).
+All five files, twenty findings, stderr and exit status match. Analysis-only
+counters and whole-command counters remain separate measurement scopes.
+
+The four existing controls have effectively unchanged instruction counts. The
+independent nested-regex holdout falls from 3.7270 to 1.8785 billion instructions
+(-49.60%) and from 0.2448 to 0.1184 seconds (-51.65%) in confirmation. This is a
+narrow control for continuation storage, not a claim about all regex execution.
+It is excluded from PGO training. All valid runs are retained in
+[the continuation packet](performance-phpstan-regex-continuations-samples.json).
+
+Validation records **337 focused test executions** across default, no-default
+and all features, formatting, unchanged unsafe inventory and all-target/all-
+feature compilation. A global-operation differential matches PHP exactly; 18
+of 19 nested cases also match. The remaining PRUNE case already differs on the
+baseline: `~^(?:(a(*PRUNE)b)|(ac))d$~` on `acd` returns a match in RPHP and none
+in PHP. Candidate and baseline output remain identical for the complete probe.
+The original failed differential gate, fixture and outputs remain retained;
+this unresolved compatibility case is not counted as a PHP pass. Initial
+formatting and duplicate-definition compile failures are also retained.
+
+The copyable continuation cursor borrows immutable node slices and enclosing
+cursors. Capture/restore nodes use stack storage scoped to the synchronous
+matcher call. Control quantifiers still clone their repeated inner node; this
+checkpoint does not eliminate every AST clone. Branch order, capture rollback,
+backtracking budgets and recursion behavior remain under the canonical matcher.
+
+The exact source is
+`48432692b66e1c17c67a8657a5a9e972e3229d0dd67903d737624512af4f76b2`;
+the executable is
+`1303e6fd731a8bd83ac44a7cedcf4792eef1a079e98ea7a441d0977e6f34b841`.
+Fresh PGO uses the unchanged 18 independent training programs. Instrumented and
+final builds take 287.20 and 210.62 seconds. Main executor size stays 390710
+bytes; the sequence matcher shrinks from 6302 to 5689 bytes. Aggregate peak is
+4,974,931,968 bytes, with no OOM or timeout. Both local checkouts run cleanup;
+exact sources, executables and failed evidence survive disposable build removal.
+No private benchmark host is configured. Measurements remain x86-64 only.
+The integrator accepts this reduction; the remaining **8.17x** analysis
+instruction gap leaves the overarching parity goal open.

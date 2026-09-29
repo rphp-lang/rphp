@@ -48,18 +48,18 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. Tracking the first 64 value owners
-in every frame reduces analysis-only instructions from 87.4294 to 85.8101 billion;
-reference PHP uses 10.3338 billion. Confirmation analysis time falls from 9.0176
-to 8.7357 seconds in the same window. All four controls use fewer instructions,
-but scalar and relative-self times regress by 3.80% and 4.04% in confirmation;
-the instruction-priority checkpoint accepts these explicit tradeoffs. The
-223 focused feature checks, twelve exact PHP differentials and all-target
-compilation pass. Four existing surplus-argument static-scope failures are
-corrected by separating scope from ownership metadata. Rejected variants and
-failed gates remain recorded. This branch checkpoint is not yet merged to main;
-the remaining 8.30x instruction gap does not complete parity. A fresh phase-only
-instruction sample selects further executor, metadata and retirement work.
+continues on its isolated performance branch. Borrowed regex continuations
+reduce analysis-only instructions from 85.8000 to 84.4368 billion; reference PHP
+uses 10.3366 billion. Confirmation analysis time falls from 7.8346 to 7.7266
+seconds, against PHP's 0.9455 seconds. The four existing controls retain their
+instruction budgets, while the independent nested-regex holdout uses 49.60%
+fewer instructions. The 337 focused feature checks and all-target compilation
+pass. One global-operation differential and 18 of 19 nested cases match PHP;
+the remaining PRUNE mismatch exists on the baseline and stays explicitly open.
+Baseline and candidate outputs match for the entire probe. Failed gates and
+every valid measurement remain recorded. This checkpoint is not yet merged to
+main; the remaining 8.17x instruction gap does not complete parity. Repeated
+method metadata resolution is the next profiled investigation.
 
 ## Mission
 
