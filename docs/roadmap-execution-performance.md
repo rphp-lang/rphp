@@ -48,12 +48,12 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. The latest constructor-owned
-cleanup metadata checkpoint reduces analysis-only instructions from 94.1301
-to 91.8486 billion; reference PHP uses 10.3366 billion. This is an accepted
-instruction reduction under the user's explicit priority, with every timing
-sample and the relative-self control regression retained in the report.
-The 137 focused feature checks and all-target compilation pass. This branch
+continues on its isolated performance branch. The latest pending-only collection
+boundary reduces analysis-only instructions from 91.8334 to 89.9791 billion;
+reference PHP uses 10.3365 billion. This is an accepted instruction reduction
+under the user's explicit priority, with every timing sample and the shared-frame
+and relative-self control regressions retained in the report. The 129 focused
+feature checks, six PHP differentials and all-target compilation pass. This branch
 checkpoint is not yet merged to main and does not complete PHP parity.
 
 ## Mission

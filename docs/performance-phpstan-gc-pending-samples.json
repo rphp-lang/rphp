@@ -1,0 +1,5463 @@
+{
+  "checkpoint": "Pending-only automatic collection boundary",
+  "status": "accepted instruction checkpoint",
+  "goal_complete": false,
+  "baseline_commit": "03474af8",
+  "baseline_build": {
+    "source_sha256": "2779488c7fafbba22b2cbc486ed43f2b71db7d03e6c7822b929c32ea416d7204",
+    "binary_sha256": "72202b7701f5add2db49a5128be031d984ff45454db6ab96403649f4d20a6224",
+    "binary_bytes": 76264752,
+    "merged_profile_sha256": "ee92bbcc35317edbaa1a8bfc07608acd6c3bd2d32015cafc5ddb8377f14d3d41"
+  },
+  "build": {
+    "complete": true,
+    "source_sha256": "487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626",
+    "baseline_commit": "03474af8",
+    "baseline_binary_sha256": "72202b7701f5add2db49a5128be031d984ff45454db6ab96403649f4d20a6224",
+    "profdata_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.98.1-stable\n  Optimized build.",
+    "training_selection": [
+      {
+        "path": "benches/corpus_ledger_pipeline.php",
+        "source_sha256": "ce7703e1c4ba6c86c1f7b54a0eb641299937be77df018d7017fea94b363dc207"
+      },
+      {
+        "path": "benches/corpus_order_pipeline.php",
+        "source_sha256": "c5f7b84b109a152e103b89db867c129f29bc814f8014cbe11c0b9aa8f587c4ee"
+      },
+      {
+        "path": "benches/corpus_typed_ledger_pipeline.php",
+        "source_sha256": "930fd5ba6dfcab96f8748399d4474e61ff8a3f503fb270e06b0221e898229c91"
+      },
+      {
+        "path": "benches/corpus_typed_order_pipeline.php",
+        "source_sha256": "d258cf3361b13a450123aaf5ba0e2530ab6319793e34d03709b24170fb58d72f"
+      },
+      {
+        "path": "benches/bench_array.php",
+        "source_sha256": "982a5b4f080ea9b3025066056aeb6a6b963c8ea0c2b46b0767115c6f5b643ea2"
+      },
+      {
+        "path": "benches/bench_string.php",
+        "source_sha256": "1c9e408330dbc1dfde85cd205a472551ad2d78b6f5727e5817ffceb0ac7dfe42"
+      },
+      {
+        "path": "benches/bench_type_function_params.php",
+        "source_sha256": "7687ae68c52ed6ef20ce9cdd1f0f538c71601ee3b2489da3a69fe320adf9c0fb"
+      },
+      {
+        "path": "benches/bench_type_function_return.php",
+        "source_sha256": "22912e2830ae83b6a73abc33043c4824fde0ee9b6d537311e0d086aa3ebc7206"
+      },
+      {
+        "path": "benches/bench_type_method_return_fanout_typed.php",
+        "source_sha256": "e41beff27da8bee058f74575711a2f408655bc85a311c1bce1e080145ecb4fc1"
+      },
+      {
+        "path": "benches/bench_type_chain_string_typed.php",
+        "source_sha256": "95d981bcf618bcdf19b2b5653366a6305f51ddd43b476023ddacc5f25c88aa4d"
+      },
+      {
+        "path": "benches/bench_closure_invoke_array.php",
+        "source_sha256": "96ef4c6b1955672312b54e19b5c16ff5d80673c9fb2af17131e9ae003c538c4c"
+      },
+      {
+        "path": "benches/bench_closure_storage.php",
+        "source_sha256": "d63498575f9c12a57c5883761248d65e57b40a003958f44dbc4fd8de6c988c3d"
+      },
+      {
+        "path": "benches/bench_callback_array_map_long.php",
+        "source_sha256": "cfb54ab09c9a6d1be77a51e4c7b7e3e87e9f1a9d1b7193bac633f4ea9ea610dc"
+      },
+      {
+        "path": "benches/bench_declared_object_lifecycle.php",
+        "source_sha256": "ff74f465e43327179f9ba9dd987995d3f56a9de8b6be7523988bf6c4455423f2"
+      },
+      {
+        "path": "benches/bench_json_decode_object_dynamic.php",
+        "source_sha256": "acd70e5106de29346246f58b442b82f5255885cc26f1e18eee57345c15b568cd"
+      },
+      {
+        "path": "benches/bench_hash_string_array_loop.php",
+        "source_sha256": "4adb68141550a71beaa65c7bb920cd07f866c4bdf9bd5b537bc431e8bda1d9ab"
+      },
+      {
+        "path": "benches/bench_regex_match_all.php",
+        "source_sha256": "a00ad05e245ea4dcd1d7bb0081b98f8c57f75cbeb1cf2a6c12fb363e75c15414"
+      },
+      {
+        "path": "benches/bench_regex_repeated_callback_groups.php",
+        "source_sha256": "a903fef9eb3e9cf1bfc33e426a63c348331e2dae0014a95fde81a705c38cea3c"
+      }
+    ],
+    "training": [
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.048851354004000314,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.009973799998988397,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.11220995499752462,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.010949275994789787,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.04818722698837519,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.009969741993700154,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.11637992299802136,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.010650019001332112,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "php",
+        "seconds": 0.02068455400876701,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "baseline",
+        "seconds": 0.013697525006136857,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "php",
+        "seconds": 0.011722798997652717,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "baseline",
+        "seconds": 0.0062169620068743825,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "php",
+        "seconds": 0.07700785400811583,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "baseline",
+        "seconds": 0.09306117599771824,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "php",
+        "seconds": 0.07912387799296994,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "baseline",
+        "seconds": 0.0912156150006922,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "php",
+        "seconds": 0.11793166000279598,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "baseline",
+        "seconds": 0.27653798399842344,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "php",
+        "seconds": 0.04164141300134361,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "baseline",
+        "seconds": 0.13073366000026,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "php",
+        "seconds": 0.022214258002350107,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "baseline",
+        "seconds": 0.025636393009335734,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "php",
+        "seconds": 0.01814646199636627,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "baseline",
+        "seconds": 0.01536695400136523,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "php",
+        "seconds": 0.027243111995630898,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "baseline",
+        "seconds": 0.02508798499184195,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "php",
+        "seconds": 0.03775154300092254,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "baseline",
+        "seconds": 0.007234196993522346,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "php",
+        "seconds": 0.05541405100666452,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "baseline",
+        "seconds": 0.06576612500066403,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "php",
+        "seconds": 0.09164478701131884,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "baseline",
+        "seconds": 0.5404665509995539,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "php",
+        "seconds": 0.01368103398999665,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "baseline",
+        "seconds": 0.008540377995814197,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "php",
+        "seconds": 0.01016176499251742,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "baseline",
+        "seconds": 0.008239397997385822,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.01505752099910751,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4866904,
+            "sha256": "3f68f31b43ec776032d8fdc760e237deb3a96c4012d35619c5ea8caf5f926945"
+          }
+        ]
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.017330251008388586,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4867608,
+            "sha256": "c0a21ecde86db89c57e716f02facf3f53f5c3938452603f37831e30fca121f8c"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.015704024001024663,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4866888,
+            "sha256": "1be8f2d5a773f233c6f35ac0b577cd62f8b4766bac71ad61287495d09cefeebc"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.018198774007032625,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4868072,
+            "sha256": "7bb674a52221465ce92c2954ae072b648c99f12776ec678664646620c1010a26"
+          }
+        ]
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "instrumented",
+        "seconds": 0.02339391400164459,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862664,
+            "sha256": "9be0acd4cc2212d2955a98a975f7f14ee471641bbe2e5ce39cbe9723e7bf841f"
+          }
+        ]
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "instrumented",
+        "seconds": 0.013839526000083424,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862728,
+            "sha256": "f5708b672132d6d6398d4cc8059753f5fbf742a4303252d725bb12a1e2ec0918"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "instrumented",
+        "seconds": 0.1462957930052653,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863240,
+            "sha256": "8b3326468c6296e2d62c664103c84659b2e7dc689b35901f4250d529fbd4eb60"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "instrumented",
+        "seconds": 0.13908418799110223,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863240,
+            "sha256": "74186bffb128f0732595d93aed705898fca03b3883203518b06d52d83503a265"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.39971590200730134,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864648,
+            "sha256": "b663d3d94dbb14f7b389704d3ffb759125936ec1521f723fc75ddf18b575738b"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.21230853999441024,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864648,
+            "sha256": "5842ae4df188b3133f661b15dd3f2d2615e03acdb44f85fc07fd18592d2d7352"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "instrumented",
+        "seconds": 0.03757598900119774,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863512,
+            "sha256": "10495d5153d130fe7f2887a4f0cd6c96888babd81ca86b6cb07f90a71aa15de3"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "instrumented",
+        "seconds": 0.022883047990035266,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863928,
+            "sha256": "04e945e1d2b7e93ff1388c892737745aa62cc7fdf2be92d1c0cf7185e8584bb7"
+          }
+        ]
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "instrumented",
+        "seconds": 0.04523117399367038,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863688,
+            "sha256": "d239d0c7312a1f737819a23f10bd7fce1ee56079eac6a643ff727b784b16493e"
+          }
+        ]
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "instrumented",
+        "seconds": 0.012873469007899985,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864536,
+            "sha256": "dd784e472ecdcbfe4bb641bbf5c79a7640623727090a9488dca23ddc2dd5f1a2"
+          }
+        ]
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "instrumented",
+        "seconds": 0.13655077401199378,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863928,
+            "sha256": "725c52e741d5efabcdb69a31c03388dc0e6cbb82acd4e4fe11c1c198cf054427"
+          }
+        ]
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "instrumented",
+        "seconds": 0.9045033259899355,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862824,
+            "sha256": "34dcde54c617011489a4785a5d38c3c933145f137e41e4dbc024855edb40065e"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "instrumented",
+        "seconds": 0.015397665003547445,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863704,
+            "sha256": "19ea84cb5a56ac1de2aba60be747efaf91fe986ec405a0f35fe79789263590c9"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "instrumented",
+        "seconds": 0.015776482003275305,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863736,
+            "sha256": "ee89021f2b70e7adc47a7d49f9cb256b2554a4274dec2918ca6689c8ccaf1fdd"
+          }
+        ]
+      }
+    ],
+    "builds": [
+      {
+        "stage": "instrumented",
+        "exit": 0,
+        "seconds": 281.89677182000014,
+        "log_sha256": "5324e59c37afb8c9171e88c69bf8e92fd14900770a181452d0215d2c85112768",
+        "warning_lines": 0
+      },
+      {
+        "stage": "profile-use",
+        "exit": 0,
+        "seconds": 220.19836352900893,
+        "log_sha256": "85c4ecb761446325a456c552d29c4e56786f4b3ad3cfb35f67b2f8e299338de8",
+        "warning_lines": 27
+      }
+    ],
+    "profile_merge": {
+      "exit": 0,
+      "raw_count": 18,
+      "stderr": ""
+    },
+    "instrumented_binary_sha256": "bf6bded8c00a654152b062235c26bb6dd3283015dbcba731c86b61016da31a21",
+    "merged_profile_sha256": "b1cb8762dfef41704a44faade6c79769c214ac883fcdb28af7bcb73790819b4c",
+    "merged_profile_bytes": 6632776,
+    "binary_sha256": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+    "binary_bytes": 76265056
+  },
+  "environment": {
+    "reference_packet": "performance-phpstan-cleanup-bit-samples.json",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "native_architecture": "x86_64",
+    "affinity_cpu": 2
+  },
+  "build_policy": {
+    "profile": "max-perf",
+    "features": "default",
+    "cpu": "rustc default",
+    "debug": "line-tables-only",
+    "pgo": true,
+    "alignment": "-C llvm-args=--align-all-functions=6",
+    "training_manifest": "scripts/pgo-workloads.txt",
+    "target_and_controls_excluded_from_training": true
+  },
+  "checks": {
+    "complete": true,
+    "source_sha256": "487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626",
+    "baseline_commit": "03474af8",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.6205460950004635,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_automatic_cycle_admission",
+          "--test",
+          "e2e_gc_finalization_remainder"
+        ],
+        "exit": 0,
+        "seconds": 57.915886460003094,
+        "test_results": [
+          "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "vm_basic",
+          "interrupt"
+        ],
+        "exit": 0,
+        "seconds": 0.6650529089965858,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.4684013450023485,
+        "test_results": []
+      }
+    ],
+    "php_cases": []
+  },
+  "feature_checks": {
+    "complete": true,
+    "source_sha256": "487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626",
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--test",
+          "e2e_automatic_cycle_admission",
+          "--test",
+          "e2e_gc_finalization_remainder"
+        ],
+        "exit": 0,
+        "seconds": 52.90567780499987,
+        "test_results": [
+          "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.19s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--test",
+          "vm_basic",
+          "interrupt"
+        ],
+        "exit": 0,
+        "seconds": 0.6146261589892674,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_automatic_cycle_admission",
+          "--test",
+          "e2e_gc_finalization_remainder"
+        ],
+        "exit": 0,
+        "seconds": 59.11323490500217,
+        "test_results": [
+          "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.18s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "vm_basic",
+          "interrupt"
+        ],
+        "exit": 0,
+        "seconds": 0.6649495150049916,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 12 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--profile",
+          "dev-fast",
+          "--all-targets",
+          "--all-features"
+        ],
+        "exit": 0,
+        "seconds": 19.548526814003708,
+        "test_results": []
+      },
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.720250151003711,
+        "test_results": []
+      }
+    ]
+  },
+  "differentials": {
+    "complete": true,
+    "cases": [
+      {
+        "case": "boundary_callback_status",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "b9a1a2749ff129da3eb31be691893d679c66225a1683ecf0fc9123f009df252b"
+      },
+      {
+        "case": "boundary_callback_status",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "b9a1a2749ff129da3eb31be691893d679c66225a1683ecf0fc9123f009df252b"
+      },
+      {
+        "case": "boundary_callback_status",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "b9a1a2749ff129da3eb31be691893d679c66225a1683ecf0fc9123f009df252b"
+      },
+      {
+        "case": "boundary_callback_exception",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "cb450d89dabf8a7b864321b7c62f7795ac8fa846acf4f63524a87e88349a7d45"
+      },
+      {
+        "case": "boundary_callback_exception",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "cb450d89dabf8a7b864321b7c62f7795ac8fa846acf4f63524a87e88349a7d45"
+      },
+      {
+        "case": "boundary_callback_exception",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "cb450d89dabf8a7b864321b7c62f7795ac8fa846acf4f63524a87e88349a7d45"
+      },
+      {
+        "case": "boundary_callback_resurrection",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "ae7ca17aa57cb7da0012bbe768edb040a1cbbd65f295864cca3b04f1b0f7c1d2"
+      },
+      {
+        "case": "boundary_callback_resurrection",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "ae7ca17aa57cb7da0012bbe768edb040a1cbbd65f295864cca3b04f1b0f7c1d2"
+      },
+      {
+        "case": "boundary_callback_resurrection",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "ae7ca17aa57cb7da0012bbe768edb040a1cbbd65f295864cca3b04f1b0f7c1d2"
+      },
+      {
+        "case": "boundary_callback_creates_cycle",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "507ccfbf59fe9ddf916890631e106cfcc1f67d3a558329e84869c2fdbd833779"
+      },
+      {
+        "case": "boundary_callback_creates_cycle",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "507ccfbf59fe9ddf916890631e106cfcc1f67d3a558329e84869c2fdbd833779"
+      },
+      {
+        "case": "boundary_callback_creates_cycle",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "507ccfbf59fe9ddf916890631e106cfcc1f67d3a558329e84869c2fdbd833779"
+      },
+      {
+        "case": "boundary_repeated_admission",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "e95a739e7082b9e54e7d417edbe5ac6c8e2ddeb7b534b392e4480a0fd826a695"
+      },
+      {
+        "case": "boundary_repeated_admission",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "e95a739e7082b9e54e7d417edbe5ac6c8e2ddeb7b534b392e4480a0fd826a695"
+      },
+      {
+        "case": "boundary_repeated_admission",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "e95a739e7082b9e54e7d417edbe5ac6c8e2ddeb7b534b392e4480a0fd826a695"
+      },
+      {
+        "case": "admission_array_10001",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "4ee8be52e3911a46ceac9e22effb8b0568d3f7ab28ebf6ebedce9ce45abfd5e2"
+      },
+      {
+        "case": "admission_array_10001",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "4ee8be52e3911a46ceac9e22effb8b0568d3f7ab28ebf6ebedce9ce45abfd5e2"
+      },
+      {
+        "case": "admission_array_10001",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "4ee8be52e3911a46ceac9e22effb8b0568d3f7ab28ebf6ebedce9ce45abfd5e2"
+      }
+    ]
+  },
+  "application": {
+    "first": {
+      "complete": true,
+      "source_sha256": "487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626",
+      "cpu": 2,
+      "event": "instructions:u",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "runtime": "php",
+          "round": 0,
+          "instructions": 15474081587,
+          "analysis_seconds": 1.0393641,
+          "wall_seconds": 1.5039524099993287,
+          "max_rss_kib": 177404,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 98.6842105263158,
+            "cpu18": 0.6666666666666666
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 111182704444,
+          "analysis_seconds": 9.201931953,
+          "wall_seconds": 11.410127530005411,
+          "max_rss_kib": 610108,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 1.8551236749116609
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 2,
+          "instructions": 109153640468,
+          "analysis_seconds": 8.812649488,
+          "wall_seconds": 11.073250134009868,
+          "max_rss_kib": 609984,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 1.2704174228675136
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 3,
+          "instructions": 109152919187,
+          "analysis_seconds": 9.079540968,
+          "wall_seconds": 11.354621133999899,
+          "max_rss_kib": 612112,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.8873114463176575
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 4,
+          "instructions": 111193096289,
+          "analysis_seconds": 9.156005383,
+          "wall_seconds": 11.372587664998719,
+          "max_rss_kib": 609884,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 1.8584070796460177
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 5,
+          "instructions": 15474058243,
+          "analysis_seconds": 1.027179003,
+          "wall_seconds": 1.4840434310026467,
+          "max_rss_kib": 177676,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.33333333333333,
+            "cpu18": 0.6802721088435374
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "72202b7701f5add2db49a5128be031d984ff45454db6ab96403649f4d20a6224",
+        "candidate": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    },
+    "confirmation": {
+      "complete": true,
+      "source_sha256": "487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626",
+      "cpu": 2,
+      "event": "{cycles:u,instructions:u,branches:u,branch-misses:u}",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "cycles:u": 59643121767,
+          "branches:u": 21070981248,
+          "branch-misses:u": 281183869,
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 109132893234,
+          "analysis_seconds": 9.122956276,
+          "wall_seconds": 11.379514504005783,
+          "max_rss_kib": 612132,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.82425307557118,
+            "cpu18": 1.7621145374449338
+          }
+        },
+        {
+          "cycles:u": 7184203422,
+          "branches:u": 3076285985,
+          "branch-misses:u": 37808247,
+          "runtime": "php",
+          "round": 1,
+          "instructions": 15474074093,
+          "analysis_seconds": 1.033887863,
+          "wall_seconds": 1.4827824399981182,
+          "max_rss_kib": 177632,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "cycles:u": 60820648755,
+          "branches:u": 21246984319,
+          "branch-misses:u": 275002020,
+          "runtime": "baseline",
+          "round": 2,
+          "instructions": 111179766299,
+          "analysis_seconds": 9.347803593,
+          "wall_seconds": 11.603008379999665,
+          "max_rss_kib": 611884,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 3.543647363872083
+          }
+        },
+        {
+          "cycles:u": 54758783487,
+          "branches:u": 21248638880,
+          "branch-misses:u": 269167716,
+          "runtime": "baseline",
+          "round": 3,
+          "instructions": 111183335074,
+          "analysis_seconds": 8.389136076,
+          "wall_seconds": 10.451570157005335,
+          "max_rss_kib": 609968,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.3838771593090211
+          }
+        },
+        {
+          "cycles:u": 6761126169,
+          "branches:u": 3076287292,
+          "branch-misses:u": 37772518,
+          "runtime": "php",
+          "round": 4,
+          "instructions": 15474077903,
+          "analysis_seconds": 0.958784103,
+          "wall_seconds": 1.394436503003817,
+          "max_rss_kib": 177608,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "cycles:u": 55175783188,
+          "branches:u": 21077688923,
+          "branch-misses:u": 271848436,
+          "runtime": "candidate",
+          "round": 5,
+          "instructions": 109164162315,
+          "analysis_seconds": 8.402101994,
+          "wall_seconds": 10.527159917997778,
+          "max_rss_kib": 609952,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 1.9065776930409915
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "72202b7701f5add2db49a5128be031d984ff45454db6ab96403649f4d20a6224",
+        "candidate": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    }
+  },
+  "controls": {
+    "first": {
+      "complete": true,
+      "seed": 291032,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.59357237815857,
+          "output": "45000000",
+          "cycles:u": 3175376151,
+          "instructions:u": 12218062001,
+          "branches:u": 2587923358,
+          "branch-misses:u": 8056954
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.53958439826965,
+          "output": "45000000",
+          "cycles:u": 2879399599,
+          "instructions:u": 13045075035,
+          "branches:u": 2635374810,
+          "branch-misses:u": 598288
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.54904627799988,
+          "output": "45000000",
+          "cycles:u": 2941070078,
+          "instructions:u": 12218062736,
+          "branches:u": 2587923562,
+          "branch-misses:u": 552473
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.53825688362122,
+          "output": "45000000",
+          "cycles:u": 2873927645,
+          "instructions:u": 13045074981,
+          "branches:u": 2635374815,
+          "branch-misses:u": 591734
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.66628432273865,
+          "output": "45000000",
+          "cycles:u": 3580586422,
+          "instructions:u": 13045075388,
+          "branches:u": 2635375146,
+          "branch-misses:u": 700065
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.61106777191162,
+          "output": "45000000",
+          "cycles:u": 3281554433,
+          "instructions:u": 12218060763,
+          "branches:u": 2587923028,
+          "branch-misses:u": 5626318
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.27368021011353,
+          "output": "45000000",
+          "cycles:u": 1458899006,
+          "instructions:u": 7397590276,
+          "branches:u": 1637860422,
+          "branch-misses:u": 474309
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.28521180152893,
+          "output": "45000000",
+          "cycles:u": 1517931341,
+          "instructions:u": 8024701827,
+          "branches:u": 1665312301,
+          "branch-misses:u": 502079
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.28882765769958,
+          "output": "45000000",
+          "cycles:u": 1543440880,
+          "instructions:u": 8024699812,
+          "branches:u": 1665311571,
+          "branch-misses:u": 495840
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.27467799186707,
+          "output": "45000000",
+          "cycles:u": 1467165642,
+          "instructions:u": 7397592308,
+          "branches:u": 1637861102,
+          "branch-misses:u": 451094
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.26934623718262,
+          "output": "45000000",
+          "cycles:u": 1437849409,
+          "instructions:u": 7397589100,
+          "branches:u": 1637860102,
+          "branch-misses:u": 457354
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.28670358657837,
+          "output": "45000000",
+          "cycles:u": 1528931687,
+          "instructions:u": 8024699564,
+          "branches:u": 1665311542,
+          "branch-misses:u": 497243
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.21355628967285,
+          "output": "48640000",
+          "cycles:u": 1146408064,
+          "instructions:u": 5948089774,
+          "branches:u": 1089121060,
+          "branch-misses:u": 329348
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.22185111045837,
+          "output": "48640000",
+          "cycles:u": 1192455964,
+          "instructions:u": 5593125896,
+          "branches:u": 1068559316,
+          "branch-misses:u": 308161
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.2349112033844,
+          "output": "48640000",
+          "cycles:u": 1259000334,
+          "instructions:u": 5948088542,
+          "branches:u": 1089120676,
+          "branch-misses:u": 328665
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.20667457580566,
+          "output": "48640000",
+          "cycles:u": 1108561468,
+          "instructions:u": 5593126422,
+          "branches:u": 1068559670,
+          "branch-misses:u": 305955
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.20804715156555,
+          "output": "48640000",
+          "cycles:u": 1114236762,
+          "instructions:u": 5593123794,
+          "branches:u": 1068558791,
+          "branch-misses:u": 306698
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.21445059776306,
+          "output": "48640000",
+          "cycles:u": 1146548911,
+          "instructions:u": 5948088703,
+          "branches:u": 1089120710,
+          "branch-misses:u": 326888
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.83189415931702,
+          "output": "5000000",
+          "cycles:u": 4440562391,
+          "instructions:u": 19919698656,
+          "branches:u": 3857798952,
+          "branch-misses:u": 498511
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.96736335754395,
+          "output": "5000000",
+          "cycles:u": 5195051720,
+          "instructions:u": 19220086431,
+          "branches:u": 3802817705,
+          "branch-misses:u": 476808
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.95213317871094,
+          "output": "5000000",
+          "cycles:u": 5106071701,
+          "instructions:u": 19220088567,
+          "branches:u": 3802818387,
+          "branch-misses:u": 476182
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.83739376068115,
+          "output": "5000000",
+          "cycles:u": 4465694126,
+          "instructions:u": 19919698917,
+          "branches:u": 3857799037,
+          "branch-misses:u": 498207
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.93369245529175,
+          "output": "5000000",
+          "cycles:u": 5001765713,
+          "instructions:u": 19919698567,
+          "branches:u": 3857799041,
+          "branch-misses:u": 500775
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 1.0090515613556,
+          "output": "5000000",
+          "cycles:u": 5427083233,
+          "instructions:u": 19220089849,
+          "branches:u": 3802818910,
+          "branch-misses:u": 477941
+        }
+      ]
+    },
+    "confirmation": {
+      "complete": true,
+      "seed": 291045,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.58048868179321,
+          "output": "45000000",
+          "cycles:u": 3077032274,
+          "instructions:u": 13045076262,
+          "branches:u": 2635375249,
+          "branch-misses:u": 603742
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.55078077316284,
+          "output": "45000000",
+          "cycles:u": 2939861193,
+          "instructions:u": 12218065634,
+          "branches:u": 2587924540,
+          "branch-misses:u": 552041
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.52627015113831,
+          "output": "45000000",
+          "cycles:u": 2807792739,
+          "instructions:u": 13045073490,
+          "branches:u": 2635374361,
+          "branch-misses:u": 590283
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.55381679534912,
+          "output": "45000000",
+          "cycles:u": 2956767684,
+          "instructions:u": 12218061779,
+          "branches:u": 2587923260,
+          "branch-misses:u": 553897
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.54354405403137,
+          "output": "45000000",
+          "cycles:u": 2907873450,
+          "instructions:u": 12218062978,
+          "branches:u": 2587923569,
+          "branch-misses:u": 554259
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.52788543701172,
+          "output": "45000000",
+          "cycles:u": 2819979164,
+          "instructions:u": 13045079944,
+          "branches:u": 2635375725,
+          "branch-misses:u": 586462
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.52764940261841,
+          "output": "45000000",
+          "cycles:u": 2816752969,
+          "instructions:u": 13045074989,
+          "branches:u": 2635374785,
+          "branch-misses:u": 582790
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.54581665992737,
+          "output": "45000000",
+          "cycles:u": 2921091527,
+          "instructions:u": 12218062560,
+          "branches:u": 2587923515,
+          "branch-misses:u": 555196
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.58778023719788,
+          "output": "45000000",
+          "cycles:u": 3144270631,
+          "instructions:u": 12218061526,
+          "branches:u": 2587923206,
+          "branch-misses:u": 8056976
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.52865433692932,
+          "output": "45000000",
+          "cycles:u": 2822074901,
+          "instructions:u": 13045075670,
+          "branches:u": 2635374946,
+          "branch-misses:u": 592545
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.29288530349731,
+          "output": "45000000",
+          "cycles:u": 1564548453,
+          "instructions:u": 8024701926,
+          "branches:u": 1665312310,
+          "branch-misses:u": 475493
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.2794783115387,
+          "output": "45000000",
+          "cycles:u": 1492154204,
+          "instructions:u": 7397591352,
+          "branches:u": 1637860801,
+          "branch-misses:u": 447742
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.29880905151367,
+          "output": "45000000",
+          "cycles:u": 1594600052,
+          "instructions:u": 8024699023,
+          "branches:u": 1665311450,
+          "branch-misses:u": 476758
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.27404236793518,
+          "output": "45000000",
+          "cycles:u": 1459756243,
+          "instructions:u": 7397591489,
+          "branches:u": 1637860925,
+          "branch-misses:u": 445884
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.29215431213379,
+          "output": "45000000",
+          "cycles:u": 1551722538,
+          "instructions:u": 8024697826,
+          "branches:u": 1665310973,
+          "branch-misses:u": 475852
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.26668906211853,
+          "output": "45000000",
+          "cycles:u": 1417088330,
+          "instructions:u": 7397589170,
+          "branches:u": 1637860126,
+          "branch-misses:u": 448117
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.2899796962738,
+          "output": "45000000",
+          "cycles:u": 1548110728,
+          "instructions:u": 7397589801,
+          "branches:u": 1637860396,
+          "branch-misses:u": 447991
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.29716348648071,
+          "output": "45000000",
+          "cycles:u": 1585498718,
+          "instructions:u": 8024699936,
+          "branches:u": 1665311680,
+          "branch-misses:u": 477248
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.27195930480957,
+          "output": "45000000",
+          "cycles:u": 1450088189,
+          "instructions:u": 7397590002,
+          "branches:u": 1637860420,
+          "branch-misses:u": 448811
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.29266571998596,
+          "output": "45000000",
+          "cycles:u": 1559223701,
+          "instructions:u": 8024700297,
+          "branches:u": 1665311772,
+          "branch-misses:u": 475580
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.21256923675537,
+          "output": "48640000",
+          "cycles:u": 1138812011,
+          "instructions:u": 5948087634,
+          "branches:u": 1089120488,
+          "branch-misses:u": 326413
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.20992469787598,
+          "output": "48640000",
+          "cycles:u": 1126056805,
+          "instructions:u": 5593129353,
+          "branches:u": 1068560578,
+          "branch-misses:u": 306251
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.20907187461853,
+          "output": "48640000",
+          "cycles:u": 1119617512,
+          "instructions:u": 5593127819,
+          "branches:u": 1068560019,
+          "branch-misses:u": 307124
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.21515011787415,
+          "output": "48640000",
+          "cycles:u": 1154496223,
+          "instructions:u": 5948090488,
+          "branches:u": 1089121261,
+          "branch-misses:u": 327782
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.2120156288147,
+          "output": "48640000",
+          "cycles:u": 1136803812,
+          "instructions:u": 5593127148,
+          "branches:u": 1068559789,
+          "branch-misses:u": 307981
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.21682071685791,
+          "output": "48640000",
+          "cycles:u": 1159269475,
+          "instructions:u": 5948086899,
+          "branches:u": 1089120080,
+          "branch-misses:u": 327174
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.21794176101685,
+          "output": "48640000",
+          "cycles:u": 1162350716,
+          "instructions:u": 5948089577,
+          "branches:u": 1089121006,
+          "branch-misses:u": 332295
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.21560215950012,
+          "output": "48640000",
+          "cycles:u": 1147038030,
+          "instructions:u": 5593126798,
+          "branches:u": 1068559802,
+          "branch-misses:u": 310640
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.21504878997803,
+          "output": "48640000",
+          "cycles:u": 1148050310,
+          "instructions:u": 5593127037,
+          "branches:u": 1068559823,
+          "branch-misses:u": 306969
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.21448230743408,
+          "output": "48640000",
+          "cycles:u": 1146562913,
+          "instructions:u": 5948088779,
+          "branches:u": 1089120707,
+          "branch-misses:u": 326062
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.84272837638855,
+          "output": "5000000",
+          "cycles:u": 4470228913,
+          "instructions:u": 19919697803,
+          "branches:u": 3857798585,
+          "branch-misses:u": 497895
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.94902014732361,
+          "output": "5000000",
+          "cycles:u": 5073863508,
+          "instructions:u": 19220088997,
+          "branches:u": 3802818500,
+          "branch-misses:u": 481508
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.9579553604126,
+          "output": "5000000",
+          "cycles:u": 5140726740,
+          "instructions:u": 19220088202,
+          "branches:u": 3802818276,
+          "branch-misses:u": 479876
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.85079956054688,
+          "output": "5000000",
+          "cycles:u": 4545347710,
+          "instructions:u": 20014698733,
+          "branches:u": 3872798619,
+          "branch-misses:u": 508734
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.97094655036926,
+          "output": "5000000",
+          "cycles:u": 5213193783,
+          "instructions:u": 19315088173,
+          "branches:u": 3817818207,
+          "branch-misses:u": 479736
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.83385920524597,
+          "output": "5000000",
+          "cycles:u": 4454281658,
+          "instructions:u": 19919698441,
+          "branches:u": 3857798733,
+          "branch-misses:u": 498116
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.84340834617615,
+          "output": "5000000",
+          "cycles:u": 4503116977,
+          "instructions:u": 19919698140,
+          "branches:u": 3857798761,
+          "branch-misses:u": 504673
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.93947505950928,
+          "output": "5000000",
+          "cycles:u": 5037856784,
+          "instructions:u": 19220088211,
+          "branches:u": 3802818209,
+          "branch-misses:u": 480060
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.94173979759216,
+          "output": "5000000",
+          "cycles:u": 5049211519,
+          "instructions:u": 19220088560,
+          "branches:u": 3802818352,
+          "branch-misses:u": 478962
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.84054565429688,
+          "output": "5000000",
+          "cycles:u": 4492943480,
+          "instructions:u": 19919700964,
+          "branches:u": 3857799269,
+          "branch-misses:u": 496512
+        }
+      ]
+    }
+  },
+  "exact_baseline_profile": {
+    "complete": true,
+    "source_sha256": "854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565",
+    "binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+    "cpu": 2,
+    "instructions": 115338275570,
+    "seconds": 474.7380931700027,
+    "output_equal": true,
+    "main_executor_own_instructions": 37109122139,
+    "cleanup_classification_source_instructions": 2680528361,
+    "cleanup_classification_in_main_instructions": 1893555882
+  },
+  "phase_counters": {
+    "complete": true,
+    "archive_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "source_probe_sha256": "ba96eb92779c9fe913d609e34c03c21dd4bf39f9d21505b6534460f98fc5e46b",
+    "counter_scope": "Events explicitly enabled at analysis entry and disabled at analysis completion using perf FIFO acknowledgements; startup excluded",
+    "samples": [
+      {
+        "runtime": "php",
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "instructions": 10336549176,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 1.5103203719918383,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "binary_sha256": "72202b7701f5add2db49a5128be031d984ff45454db6ab96403649f4d20a6224",
+        "instructions": 91833354684,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 11.447433888009982,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "binary_sha256": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "instructions": 89979137143,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 11.504058607009938,
+        "output_equal": true
+      }
+    ]
+  },
+  "dispatch_counts": {
+    "total": 274071199,
+    "baseline_binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+    "rows": [
+      {
+        "opcodes": [
+          "ReleaseTemps"
+        ],
+        "target": "0x3a2084",
+        "count": 38176316
+      },
+      {
+        "opcodes": [
+          "JmpZ"
+        ],
+        "target": "0x3a25de",
+        "count": 34188537
+      },
+      {
+        "opcodes": [
+          "AssignCv",
+          "BindCvRef"
+        ],
+        "target": "0x3a23c0",
+        "count": 24699727
+      },
+      {
+        "opcodes": [
+          "FetchObjR"
+        ],
+        "target": "0x3a546d",
+        "count": 24515478
+      },
+      {
+        "opcodes": [
+          "DoFcall"
+        ],
+        "target": "0x3a334d",
+        "count": 13442063
+      },
+      {
+        "opcodes": [
+          "FetchDimR"
+        ],
+        "target": "0x3a2e6f",
+        "count": 12854780
+      },
+      {
+        "opcodes": [
+          "Jmp"
+        ],
+        "target": "0x3a2208",
+        "count": 11286080
+      },
+      {
+        "opcodes": [
+          "IsIdentical",
+          "IsNotIdentical"
+        ],
+        "target": "0x3a48c6",
+        "count": 9695909
+      },
+      {
+        "opcodes": [
+          "Return"
+        ],
+        "target": "0x3a36f3",
+        "count": 9497791
+      },
+      {
+        "opcodes": [
+          "SendVarEx"
+        ],
+        "target": "0x3a950a",
+        "count": 8567216
+      },
+      {
+        "opcodes": [
+          "SendVal"
+        ],
+        "target": "0x3a351f",
+        "count": 8447352
+      },
+      {
+        "opcodes": [
+          "Instanceof"
+        ],
+        "target": "0x3ab708",
+        "count": 7099837
+      },
+      {
+        "opcodes": [
+          "InitMethodCall"
+        ],
+        "target": "0x3a3c61",
+        "count": 6710706
+      },
+      {
+        "opcodes": [
+          "JmpNZ"
+        ],
+        "target": "0x3ad164",
+        "count": 5876509
+      },
+      {
+        "opcodes": [
+          "AssignObjProp"
+        ],
+        "target": "0x3a9734",
+        "count": 5533405
+      },
+      {
+        "opcodes": [
+          "IsEqual",
+          "IsNotEqual",
+          "IsSmaller",
+          "IsSmallerOrEqual"
+        ],
+        "target": "0x3a2cae",
+        "count": 5211043
+      },
+      {
+        "opcodes": [
+          "InitFcall"
+        ],
+        "target": "0x3a2453",
+        "count": 4465616
+      },
+      {
+        "opcodes": [
+          "FetchConst"
+        ],
+        "target": "0x3ab776",
+        "count": 3526360
+      },
+      {
+        "opcodes": [
+          "AddArrayElement"
+        ],
+        "target": "0x3a961c",
+        "count": 3235000
+      },
+      {
+        "opcodes": [
+          "FetchClassConst"
+        ],
+        "target": "0x3ac5ac",
+        "count": 3058413
+      },
+      {
+        "opcodes": [
+          "InitArray"
+        ],
+        "target": "0x3a9aac",
+        "count": 2798302
+      },
+      {
+        "opcodes": [
+          "ForeachNextPlain"
+        ],
+        "target": "0x3ab52c",
+        "count": 2471554
+      },
+      {
+        "opcodes": [
+          "AssignDim"
+        ],
+        "target": "0x3aafcd",
+        "count": 2462481
+      },
+      {
+        "opcodes": [
+          "BindDefaultParam"
+        ],
+        "target": "0x3ab811",
+        "count": 2364041
+      },
+      {
+        "opcodes": [
+          "BoolNot"
+        ],
+        "target": "0x3ad949",
+        "count": 2285220
+      },
+      {
+        "opcodes": [
+          "FetchCvR"
+        ],
+        "target": "0x3a1fba",
+        "count": 1733175
+      },
+      {
+        "opcodes": [
+          "Isset"
+        ],
+        "target": "0x3ada0f",
+        "count": 1656962
+      },
+      {
+        "opcodes": [
+          "Sub"
+        ],
+        "target": "0x3aa37b",
+        "count": 1465346
+      },
+      {
+        "opcodes": [
+          "InitStaticCall"
+        ],
+        "target": "0x3ab688",
+        "count": 1449906
+      },
+      {
+        "opcodes": [
+          "BindObjPropRef"
+        ],
+        "target": "0x3aa912",
+        "count": 1336909
+      },
+      {
+        "opcodes": [
+          "NewObj"
+        ],
+        "target": "0x3a9124",
+        "count": 1313606
+      },
+      {
+        "opcodes": [
+          "ForeachInit"
+        ],
+        "target": "0x3ab252",
+        "count": 1197123
+      },
+      {
+        "opcodes": [
+          "PreInc"
+        ],
+        "target": "0x3a534b",
+        "count": 1108095
+      },
+      {
+        "opcodes": [
+          "FetchStaticProp"
+        ],
+        "target": "0x3ab61a",
+        "count": 1079792
+      },
+      {
+        "opcodes": [
+          "PostInc"
+        ],
+        "target": "0x3a2230",
+        "count": 935726
+      },
+      {
+        "opcodes": [
+          "ArrayPushOp"
+        ],
+        "target": "0x3a5aad",
+        "count": 873037
+      },
+      {
+        "opcodes": [
+          "Add"
+        ],
+        "target": "0x3a91d3",
+        "count": 711532
+      },
+      {
+        "opcodes": [
+          "Concat"
+        ],
+        "target": "0x3a66cc",
+        "count": 683964
+      },
+      {
+        "opcodes": [
+          "Add_LongLong",
+          "Sub_LongLong",
+          "Mul_LongLong",
+          "Mod_LongLong",
+          "BitwiseXor_LongLong",
+          "BitwiseAnd_LongLong",
+          "BitwiseOr_LongLong"
+        ],
+        "target": "0x3a22d6",
+        "count": 652928
+      },
+      {
+        "opcodes": [
+          "InitDynamicCall"
+        ],
+        "target": "0x3a5d8b",
+        "count": 585479
+      },
+      {
+        "opcodes": [
+          "Cast"
+        ],
+        "target": "0x3adaba",
+        "count": 568459
+      },
+      {
+        "opcodes": [
+          "Add_TmpTmp"
+        ],
+        "target": "0x3a2137",
+        "count": 493563
+      },
+      {
+        "opcodes": [
+          "ForeachNext"
+        ],
+        "target": "0x3ab2d2",
+        "count": 425206
+      },
+      {
+        "opcodes": [
+          "AddCallUnpack"
+        ],
+        "target": "0x3ab1e4",
+        "count": 366474
+      },
+      {
+        "opcodes": [
+          "CallUserFuncArray"
+        ],
+        "target": "0x3ad5cb",
+        "count": 356497
+      },
+      {
+        "opcodes": [
+          "BitwiseAnd",
+          "BitwiseOr",
+          "BitwiseXor"
+        ],
+        "target": "0x3a5ded",
+        "count": 293141
+      },
+      {
+        "opcodes": [
+          "PreDec"
+        ],
+        "target": "0x3adc40",
+        "count": 274853
+      },
+      {
+        "opcodes": [
+          "AssignConcat"
+        ],
+        "target": "0x3a6730",
+        "count": 271422
+      },
+      {
+        "opcodes": [
+          "CreateClosure"
+        ],
+        "target": "0x3aa7a1",
+        "count": 230107
+      },
+      {
+        "opcodes": [
+          "AddCallArgument"
+        ],
+        "target": "0x3ab176",
+        "count": 227242
+      },
+      {
+        "opcodes": [
+          "Add_CvTmp"
+        ],
+        "target": "0x3a393d",
+        "count": 207116
+      },
+      {
+        "opcodes": [
+          "CheckDefaultType"
+        ],
+        "target": "0x3aceb7",
+        "count": 171174
+      },
+      {
+        "opcodes": [
+          "SendRef"
+        ],
+        "target": "0x3aaaaa",
+        "count": 159406
+      },
+      {
+        "opcodes": [
+          "ClosureUseVar"
+        ],
+        "target": "0x3aa25f",
+        "count": 148108
+      },
+      {
+        "opcodes": [
+          "Concat_StringString"
+        ],
+        "target": "0x3a49db",
+        "count": 126595
+      },
+      {
+        "opcodes": [
+          "Sub_TmpTmp"
+        ],
+        "target": "0x3a9923",
+        "count": 95086
+      },
+      {
+        "opcodes": [
+          "AssertCheck"
+        ],
+        "target": "0x3acb88",
+        "count": 67533
+      },
+      {
+        "opcodes": [
+          "UnsetDim"
+        ],
+        "target": "0x3ab08c",
+        "count": 54849
+      },
+      {
+        "opcodes": [
+          "FetchLateClassConst"
+        ],
+        "target": "0x3ac61a",
+        "count": 52497
+      },
+      {
+        "opcodes": [
+          "ForeachNextRef"
+        ],
+        "target": "0x3ab352",
+        "count": 36270
+      },
+      {
+        "opcodes": [
+          "Mul"
+        ],
+        "target": "0x3a9328",
+        "count": 33361
+      },
+      {
+        "opcodes": [
+          "PostDec"
+        ],
+        "target": "0x3aaf9b",
+        "count": 26278
+      },
+      {
+        "opcodes": [
+          "CheckStatic"
+        ],
+        "target": "0x3abf7d",
+        "count": 25023
+      },
+      {
+        "opcodes": [
+          "CloneObj"
+        ],
+        "target": "0x3ac221",
+        "count": 19092
+      },
+      {
+        "opcodes": [
+          "JmpFinally"
+        ],
+        "target": "0x3ad1bb",
+        "count": 17032
+      },
+      {
+        "opcodes": [
+          "Sub_CvConst"
+        ],
+        "target": "0x3aa9aa",
+        "count": 13172
+      },
+      {
+        "opcodes": [
+          "IsSmaller_CvConst",
+          "JmpZ_Lt_CvConst",
+          "JmpNZ_Lt_CvConst"
+        ],
+        "target": "0x3a2544",
+        "count": 11757
+      },
+      {
+        "opcodes": [
+          "Mod"
+        ],
+        "target": "0x3a5f3a",
+        "count": 10174
+      },
+      {
+        "opcodes": [
+          "ForeachWriteback"
+        ],
+        "target": "0x3ab3d2",
+        "count": 9412
+      },
+      {
+        "opcodes": [
+          "Spaceship"
+        ],
+        "target": "0x3ab920",
+        "count": 3029
+      },
+      {
+        "opcodes": [
+          "Include"
+        ],
+        "target": "0x3ac12f",
+        "count": 2775
+      },
+      {
+        "opcodes": [
+          "DeclareClass"
+        ],
+        "target": "0x3a9a32",
+        "count": 2577
+      },
+      {
+        "opcodes": [
+          "ShiftRight"
+        ],
+        "target": "0x3abcab",
+        "count": 2282
+      },
+      {
+        "opcodes": [
+          "FetchLateStaticProp"
+        ],
+        "target": "0x3ac462",
+        "count": 2259
+      },
+      {
+        "opcodes": [
+          "AssignStaticProp"
+        ],
+        "target": "0x3ac4d0",
+        "count": 1978
+      },
+      {
+        "opcodes": [
+          "UnsetObj"
+        ],
+        "target": "0x3ac7d2",
+        "count": 1928
+      },
+      {
+        "opcodes": [
+          "Throw"
+        ],
+        "target": "0x3ab5ac",
+        "count": 1336
+      },
+      {
+        "opcodes": [
+          "Div"
+        ],
+        "target": "0x3ad1f8",
+        "count": 1333
+      },
+      {
+        "opcodes": [
+          "Strlen_Cv"
+        ],
+        "target": "0x3aa890",
+        "count": 1329
+      },
+      {
+        "opcodes": [
+          "BitwiseNot"
+        ],
+        "target": "0x3abe95",
+        "count": 950
+      },
+      {
+        "opcodes": [
+          "BindArrayDimRef"
+        ],
+        "target": "0x3ac904",
+        "count": 828
+      },
+      {
+        "opcodes": [
+          "SnapshotDiagnosticWrite"
+        ],
+        "target": "0x3acf1e",
+        "count": 648
+      },
+      {
+        "opcodes": [
+          "InitLateStaticCall"
+        ],
+        "target": "0x3ac3b7",
+        "count": 555
+      },
+      {
+        "opcodes": [
+          "Yield"
+        ],
+        "target": "0x3ab82f",
+        "count": 532
+      },
+      {
+        "opcodes": [
+          "FetchDynamicClassConst"
+        ],
+        "target": "0x3ac688",
+        "count": 524
+      },
+      {
+        "opcodes": [
+          "DirectInternalCall2"
+        ],
+        "target": "0x3a9dd6",
+        "count": 458
+      },
+      {
+        "opcodes": [
+          "IssetObj"
+        ],
+        "target": "0x3ac764",
+        "count": 410
+      },
+      {
+        "opcodes": [
+          "IsSmallerOrEqual_CvConst",
+          "JmpZ_Le_CvConst",
+          "JmpNZ_Le_CvConst"
+        ],
+        "target": "0x3ad0ad",
+        "count": 280
+      },
+      {
+        "opcodes": [
+          "ShiftLeft"
+        ],
+        "target": "0x3abac4",
+        "count": 269
+      },
+      {
+        "opcodes": [
+          "AddArrayUnpack"
+        ],
+        "target": "0x3ab108",
+        "count": 188
+      },
+      {
+        "opcodes": [
+          "ReportDeprecatedTraitUses"
+        ],
+        "target": "0x3acd24",
+        "count": 188
+      },
+      {
+        "opcodes": [
+          "FetchGlobal",
+          "AssignGlobal",
+          "UnsetGlobal",
+          "BindGlobalRef",
+          "AssignGlobalRef",
+          "FetchGlobals"
+        ],
+        "target": "0x3ac972",
+        "count": 92
+      },
+      {
+        "opcodes": [
+          "DeclareFunction"
+        ],
+        "target": "0x3a9a03",
+        "count": 85
+      },
+      {
+        "opcodes": [
+          "BindGlobal"
+        ],
+        "target": "0x3abf5d",
+        "count": 70
+      },
+      {
+        "opcodes": [
+          "QuickLongLoopJmp"
+        ],
+        "target": "0x3a578a",
+        "count": 34
+      },
+      {
+        "opcodes": [
+          "InitDynamicStaticCall"
+        ],
+        "target": "0x3ace4d",
+        "count": 31
+      },
+      {
+        "opcodes": [
+          "BindStatic"
+        ],
+        "target": "0x3abfa8",
+        "count": 10
+      },
+      {
+        "opcodes": [
+          "AssignLateStaticProp"
+        ],
+        "target": "0x3ac53e",
+        "count": 2
+      },
+      {
+        "opcodes": [
+          "Strlen_String"
+        ],
+        "target": "0x3a50f6",
+        "count": 2
+      },
+      {
+        "opcodes": [
+          "SendNamed"
+        ],
+        "target": "0x3ad55d",
+        "count": 1
+      },
+      {
+        "opcodes": [
+          "InitUserCall"
+        ],
+        "target": "0x3ad72c",
+        "count": 1
+      }
+    ],
+    "release_temps_compact_visits": 14586441,
+    "release_temps_wide_visits": 23589875
+  },
+  "reference_dispatch_counts": {
+    "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+    "profile": "original accepted baseline reference archive profile",
+    "main_own": 3444521840,
+    "identified_dispatch_instructions": 187222782,
+    "dispatch_sites": 1239,
+    "executed_sites": 499,
+    "note": "Only execute_ex-symbol indirect opcode jumps through r15; cold split or helper jumps outside that symbol are not included.",
+    "sites": {
+      "0x5a2e28": 15518254,
+      "0x5a396b": 8050511,
+      "0x5a6357": 7536383,
+      "0x5a1f3b": 6412135,
+      "0x5a67b3": 5915815,
+      "0x5a5e4c": 5572686,
+      "0x5a36b9": 5418666,
+      "0x5a22af": 5232263,
+      "0x5a640d": 5205282,
+      "0x5a1f6b": 5001041,
+      "0x5a90e0": 4955765,
+      "0x5a3558": 4112654,
+      "0x5a2504": 3958884,
+      "0x5a546a": 3927504,
+      "0x5a399b": 3136124,
+      "0x5a4eb1": 2838596,
+      "0x5a1f47": 2552286,
+      "0x5a2ea3": 2486230,
+      "0x5a23b0": 2368797,
+      "0x5a3c55": 2284187,
+      "0x5a1f23": 2141630,
+      "0x5a720f": 2005478,
+      "0x5a7ed7": 1980876,
+      "0x5a33cf": 1822017,
+      "0x5a2e34": 1800676,
+      "0x5a2b3c": 1798283,
+      "0x5a56fd": 1681138,
+      "0x5a2073": 1644080,
+      "0x5a8ac5": 1567281,
+      "0x5a213f": 1561609,
+      "0x5a23a4": 1558522,
+      "0x5a3611": 1556911,
+      "0x5a4342": 1545147,
+      "0x5a2e4c": 1386100,
+      "0x5a7099": 1328323,
+      "0x5a730c": 1295566,
+      "0x5a444e": 1273836,
+      "0x5a4e03": 1175444,
+      "0x5a7ad2": 1160497,
+      "0x5a20af": 1150687,
+      "0x5a84e1": 1142295,
+      "0x5a1e93": 1138721,
+      "0x5ab1af": 1122308,
+      "0x5a4798": 1109000,
+      "0x5a3953": 1102124,
+      "0x5a19c9": 1081734,
+      "0x5a7bfb": 1073485,
+      "0x5a2e67": 1020345,
+      "0x5a15f3": 1003117,
+      "0x5a5b16": 1000261,
+      "0x5a44cc": 989487,
+      "0x5a6689": 968538,
+      "0x5a1a7d": 945550,
+      "0x5a3393": 891963,
+      "0x5a760c": 873393,
+      "0x5a2cdc": 861659,
+      "0x5a733a": 817114,
+      "0x5a3599": 800424,
+      "0x5a2037": 776420,
+      "0x5a92e2": 738552,
+      "0x5a4cf9": 736209,
+      "0x5a171f": 735194,
+      "0x5a2cf4": 732513,
+      "0x5a3abd": 683418,
+      "0x5a7927": 627655,
+      "0x5a207f": 624385,
+      "0x5a333f": 603593,
+      "0x5a395f": 566411,
+      "0x5a3b1d": 563480,
+      "0x5a3a99": 560460,
+      "0x5a1773": 544151,
+      "0x5a7389": 531391,
+      "0x5a2303": 530391,
+      "0x5a1c14": 525237,
+      "0x5a3ae1": 518785,
+      "0x5a174f": 508650,
+      "0x5a4815": 498804,
+      "0x5a2193": 494060,
+      "0x5a3d57": 481905,
+      "0x5a3c31": 477700,
+      "0x5a6819": 463547,
+      "0x5a1c8c": 453349,
+      "0x5a2edf": 438357,
+      "0x5a1f53": 438023,
+      "0x5a242e": 413688,
+      "0x5a4c3b": 398748,
+      "0x5a22bb": 382177,
+      "0x5a3977": 379949,
+      "0x5a19b1": 377213,
+      "0x5a1647": 366474,
+      "0x5a499b": 357983,
+      "0x5a675a": 357871,
+      "0x5a97d9": 356932,
+      "0x5a4b4d": 350169,
+      "0x5a7a75": 343160,
+      "0x5a2374": 340518,
+      "0x5a2da8": 337802,
+      "0x5a3791": 329893,
+      "0x5a3aed": 324111,
+      "0x5a291a": 311475,
+      "0x5a3ad5": 304341,
+      "0x5a41e4": 303773,
+      "0x5a6d37": 302012,
+      "0x5a204f": 293533,
+      "0x5a1d8b": 289875,
+      "0x5a8980": 279345,
+      "0x5a33db": 270128,
+      "0x5a3483": 259148,
+      "0x5ab004": 259101,
+      "0x5a3665": 255063,
+      "0x5a416a": 254906,
+      "0x5a3cac": 254389,
+      "0x5a60fd": 243513,
+      "0x5a77b7": 235760,
+      "0x5a2661": 234475,
+      "0x5a2368": 231553,
+      "0x5a1999": 231241,
+      "0x5a2e8b": 230820,
+      "0x5a39a7": 223127,
+      "0x5a3b4d": 217469,
+      "0x5a1707": 215215,
+      "0x5a24ec": 205098,
+      "0x5a6711": 188468,
+      "0x5a3d3f": 179282,
+      "0x5a35c9": 176748,
+      "0x5a6a90": 172936,
+      "0x5a24d4": 170599,
+      "0x5a3d6f": 170016,
+      "0x5a3088": 169087,
+      "0x5a6ec4": 166621,
+      "0x5a2db4": 158931,
+      "0x5a2e97": 158425,
+      "0x5a14e0": 156507,
+      "0x5a3327": 150716,
+      "0x5a2c3b": 148278,
+      "0x5a2528": 145895,
+      "0x5a3c94": 142388,
+      "0x5a25cc": 137415,
+      "0x5a35bd": 137005,
+      "0x5a243a": 133716,
+      "0x5a3dff": 131772,
+      "0x5a3ab1": 124520,
+      "0x5a7635": 122693,
+      "0x5a80e6": 120328,
+      "0x5a6e07": 117377,
+      "0x5a3983": 114656,
+      "0x5a81cb": 112596,
+      "0x5a269d": 110971,
+      "0x5a1b64": 107272,
+      "0x5a307c": 105636,
+      "0x5a9c77": 99856,
+      "0x5a20d3": 99456,
+      "0x5a656f": 98879,
+      "0x5aa133": 96746,
+      "0x5a240a": 95914,
+      "0x5a1add": 95821,
+      "0x5a3248": 94440,
+      "0x5a4fff": 92953,
+      "0x5a6c79": 87144,
+      "0x5a3ac9": 87021,
+      "0x5a9367": 85781,
+      "0x5a1fcb": 83122,
+      "0x5a2b0c": 83054,
+      "0x5a251c": 82574,
+      "0x5a798b": 82348,
+      "0x5a3d63": 82025,
+      "0x5a34a7": 80930,
+      "0x5a3de7": 78800,
+      "0x5a15a6": 76421,
+      "0x5a3260": 73319,
+      "0x5a2ef7": 72829,
+      "0x5a2043": 71920,
+      "0x5a23c8": 71794,
+      "0x5a35b1": 71033,
+      "0x5a2e7f": 70997,
+      "0x5a3b65": 69602,
+      "0x5a357c": 68540,
+      "0x5a3363": 66638,
+      "0x5a224f": 65484,
+      "0x5a214b": 65194,
+      "0x5a602a": 63297,
+      "0x5a19ed": 59545,
+      "0x5a2b60": 58800,
+      "0x5a2590": 58372,
+      "0x5a1c20": 53281,
+      "0x5a1a71": 51580,
+      "0x5a5129": 50975,
+      "0x5a330f": 49889,
+      "0x5a326c": 49104,
+      "0x5a337b": 46912,
+      "0x5a3dcf": 46724,
+      "0x5a3aa5": 45547,
+      "0x5a393b": 45081,
+      "0x5a60d7": 42944,
+      "0x5a205b": 41704,
+      "0x5a2b24": 40322,
+      "0x5a7892": 38929,
+      "0x5a2679": 37589,
+      "0x5a3ba1": 37506,
+      "0x5a2297": 37372,
+      "0x5aad35": 36648,
+      "0x5a460b": 36259,
+      "0x5a2691": 36011,
+      "0x5a35d5": 33455,
+      "0x5a34c4": 32598,
+      "0x5a36d1": 31707,
+      "0x5a1d43": 31610,
+      "0x5a8ba3": 31355,
+      "0x5a3004": 31217,
+      "0x5a1f9b": 31093,
+      "0x5a3564": 30920,
+      "0x5a2ce8": 30882,
+      "0x5a31f4": 28839,
+      "0x5a9f4f": 28835,
+      "0x5a259c": 28122,
+      "0x5a88e2": 28070,
+      "0x5a2b18": 27764,
+      "0x5a2267": 27204,
+      "0x5a1743": 26358,
+      "0x5a3d1b": 26263,
+      "0x5a1e9f": 25982,
+      "0x5aafeb": 25054,
+      "0x5a28f3": 24816,
+      "0x5a3bad": 24577,
+      "0x5a2b84": 24098,
+      "0x5a38b7": 23847,
+      "0x5a3070": 23336,
+      "0x5ab6f3": 21077,
+      "0x5a2b78": 20185,
+      "0x5a3d4b": 19983,
+      "0x5a2d90": 19527,
+      "0x5a301c": 19127,
+      "0x5a1ce3": 18663,
+      "0x5ab5ec": 18442,
+      "0x5a16d7": 18158,
+      "0x5a16cb": 18150,
+      "0x5a931b": 18010,
+      "0x5a2b90": 17982,
+      "0x5a2767": 17974,
+      "0x5a2498": 17605,
+      "0x5a3c79": 17033,
+      "0x5a3605": 16485,
+      "0x5a37b5": 16036,
+      "0x5a8aa2": 15197,
+      "0x5a3d33": 14963,
+      "0x5a8f8b": 14809,
+      "0x5a2416": 14490,
+      "0x5a2d9c": 14272,
+      "0x5a289f": 14216,
+      "0x5a6064": 14015,
+      "0x5a37c1": 13945,
+      "0x5a35ed": 12807,
+      "0x5a2655": 12522,
+      "0x5a1f77": 12467,
+      "0x5a2a55": 12242,
+      "0x5a26b5": 11786,
+      "0x5a1d73": 11714,
+      "0x5a1cb0": 11602,
+      "0x5a175b": 11549,
+      "0x5a29d1": 11528,
+      "0x5a68cf": 11418,
+      "0x5a1981": 11229,
+      "0x5a69f6": 11212,
+      "0x5a474a": 10771,
+      "0x5a2ec7": 10628,
+      "0x5a3923": 10426,
+      "0x5a1d4f": 10168,
+      "0x5a33c3": 9949,
+      "0x5a37d9": 9487,
+      "0x5a2863": 9216,
+      "0x5ab6b9": 9183,
+      "0x5a2c14": 8712,
+      "0x5a39bf": 8294,
+      "0x5a8613": 8138,
+      "0x5a370d": 7957,
+      "0x5a1da3": 7777,
+      "0x5a35e1": 7766,
+      "0x5a334b": 7706,
+      "0x5a286f": 7391,
+      "0x5aacb1": 7220,
+      "0x5a1c08": 6961,
+      "0x5a5fd2": 6839,
+      "0x5a2273": 6663,
+      "0x5a331b": 6625,
+      "0x5a77d2": 6104,
+      "0x5a23e3": 5999,
+      "0x5a2d60": 5898,
+      "0x5a361d": 5654,
+      "0x5a31e8": 5443,
+      "0x5a3c61": 5443,
+      "0x5a2452": 5159,
+      "0x5a38ab": 4898,
+      "0x5a3695": 4852,
+      "0x5a24a4": 4676,
+      "0x5a2e73": 4524,
+      "0x5a3731": 4516,
+      "0x5a2a3d": 4399,
+      "0x5a345f": 4358,
+      "0x5a398f": 4288,
+      "0x5a2cd0": 4184,
+      "0x5a2a91": 3944,
+      "0x5a1d7f": 3670,
+      "0x5a1677": 3615,
+      "0x5a238c": 3615,
+      "0x5a1c2c": 3559,
+      "0x5a16a7": 3526,
+      "0x5a8988": 3428,
+      "0x5a3725": 3378,
+      "0x5a3153": 3344,
+      "0x5aa63d": 3329,
+      "0x5a87dd": 3275,
+      "0x5a2510": 3242,
+      "0x5a266d": 3025,
+      "0x5a87c5": 2652,
+      "0x5a3d7b": 2623,
+      "0x5a9c68": 2600,
+      "0x5a2b54": 2491,
+      "0x5a19f9": 2447,
+      "0x5a1b7c": 2366,
+      "0x5a1969": 2302,
+      "0x5a1a65": 2282,
+      "0x5a3b95": 2270,
+      "0x5a2127": 2253,
+      "0x5a3357": 2248,
+      "0x5a2726": 2234,
+      "0x5a208b": 2169,
+      "0x5a15db": 2159,
+      "0x5a390b": 2134,
+      "0x5a2f0f": 2068,
+      "0x5a389f": 2038,
+      "0x5a348f": 2014,
+      "0x5a1a05": 1956,
+      "0x5ab62c": 1947,
+      "0x5a7b75": 1938,
+      "0x5a9cdd": 1926,
+      "0x5a4b10": 1719,
+      "0x5a609e": 1542,
+      "0x5a198d": 1540,
+      "0x5a21ab": 1468,
+      "0x5a1b70": 1444,
+      "0x5a1951": 1403,
+      "0x5a29c5": 1400,
+      "0x5a231b": 1361,
+      "0x5a36ad": 1354,
+      "0x5a1f5f": 1336,
+      "0x5a8dc8": 1336,
+      "0x5a41a7": 1326,
+      "0x5a20a3": 1325,
+      "0x5a1fb3": 1270,
+      "0x5a3200": 1174,
+      "0x5a3a8d": 1170,
+      "0x5a3dc3": 1157,
+      "0x5a35a5": 1150,
+      "0x5a38ff": 1079,
+      "0x5a8a1b": 1008,
+      "0x5a3671": 989,
+      "0x5a73c2": 952,
+      "0x5a1ca4": 946,
+      "0x5a4cab": 946,
+      "0x5a4bed": 938,
+      "0x5a37f4": 913,
+      "0x5a889f": 898,
+      "0x5a1b58": 892,
+      "0x5a4280": 887,
+      "0x5a1623": 883,
+      "0x5a39b3": 833,
+      "0x5a15b2": 782,
+      "0x5a340b": 714,
+      "0x5a1af5": 705,
+      "0x5a4c78": 673,
+      "0x5a1b34": 611,
+      "0x5a1d97": 594,
+      "0x5a33e7": 593,
+      "0x5a1d1f": 584,
+      "0x5a28ff": 576,
+      "0x5a37cd": 576,
+      "0x5a6d96": 576,
+      "0x5a494d": 544,
+      "0x5a273e": 534,
+      "0x5a2857": 524,
+      "0x5a36a1": 523,
+      "0x5a1fe3": 512,
+      "0x5a1fd7": 482,
+      "0x5a3333": 475,
+      "0x5a3b29": 469,
+      "0x5a3bc5": 452,
+      "0x5a9501": 443,
+      "0x5a2398": 392,
+      "0x5a5cfa": 390,
+      "0x5a35f9": 377,
+      "0x5a1d5b": 369,
+      "0x5a1ffb": 368,
+      "0x5a2a0d": 368,
+      "0x5a27c7": 358,
+      "0x5a3c01": 351,
+      "0x5a2f1b": 328,
+      "0x5a4232": 324,
+      "0x5a1e63": 323,
+      "0x5a2007": 306,
+      "0x5aa9ca": 300,
+      "0x5a3893": 284,
+      "0x5aaa69": 276,
+      "0x5a32df": 237,
+      "0x5a1b40": 235,
+      "0x5ab7b9": 235,
+      "0x5a27a3": 228,
+      "0x5a16ef": 225,
+      "0x5a15e7": 224,
+      "0x5a8563": 220,
+      "0x5a29ad": 204,
+      "0x5a2a79": 198,
+      "0x5a29b9": 195,
+      "0x5a165f": 188,
+      "0x5a864d": 188,
+      "0x5a3641": 184,
+      "0x5aad1f": 143,
+      "0x5a1d2b": 138,
+      "0x5a3094": 138,
+      "0x5a1683": 133,
+      "0x5a26fd": 133,
+      "0x5a24bc": 128,
+      "0x5a3719": 123,
+      "0x5a163b": 119,
+      "0x5abb75": 117,
+      "0x5a1939": 114,
+      "0x5a2243": 112,
+      "0x5a33ff": 101,
+      "0x5a1d13": 98,
+      "0x5a2b00": 94,
+      "0x5aaab5": 93,
+      "0x5a367d": 87,
+      "0x5a33f3": 85,
+      "0x5ab26b": 79,
+      "0x5a9241": 74,
+      "0x5a3010": 70,
+      "0x5a168f": 68,
+      "0x5a2b9c": 66,
+      "0x5a27df": 65,
+      "0x5a2685": 62,
+      "0x5a1bf0": 50,
+      "0x5a2067": 50,
+      "0x5a1a59": 44,
+      "0x5a1ac5": 44,
+      "0x5a3d27": 44,
+      "0x5a1c50": 44,
+      "0x5a25b4": 42,
+      "0x5a15ff": 41,
+      "0x5a5de8": 40,
+      "0x5a2797": 39,
+      "0x5a27af": 38,
+      "0x5a281b": 31,
+      "0x5a1617": 29,
+      "0x5a1ba7": 29,
+      "0x5a95dc": 29,
+      "0x5a38e7": 21,
+      "0x5a201f": 20,
+      "0x5a227f": 20,
+      "0x5a2534": 19,
+      "0x5a2631": 18,
+      "0x5a316b": 15,
+      "0x5a2bb4": 14,
+      "0x5a3629": 14,
+      "0x5a3af9": 13,
+      "0x5a160b": 11,
+      "0x5a27d3": 9,
+      "0x5a876c": 9,
+      "0x5a21b7": 8,
+      "0x5aac9d": 8,
+      "0x5ab299": 8,
+      "0x5a287b": 7,
+      "0x5a34d0": 7,
+      "0x5a158e": 6,
+      "0x5a1e6f": 6,
+      "0x5a2d54": 5,
+      "0x5a2ebb": 5,
+      "0x5a27bb": 4,
+      "0x5aafbe": 4,
+      "0x5a1bce": 3,
+      "0x5a2d00": 3,
+      "0x5a2a9d": 2,
+      "0x5a6266": 2,
+      "0x5aa1bb": 2,
+      "0x5ab72b": 2,
+      "0x5a19e1": 1,
+      "0x5a1b4c": 1,
+      "0x5a1b96": 1,
+      "0x5a1bdf": 1,
+      "0x5a1c44": 1,
+      "0x5a2a19": 1,
+      "0x5a339f": 1,
+      "0x5a4637": 1,
+      "0x5a4ad3": 1,
+      "0x5a4f44": 1,
+      "0x5a7fcc": 1,
+      "0x5a8730": 1,
+      "0x5a890e": 1,
+      "0x5a8b3d": 1,
+      "0x5a93f6": 1,
+      "0x5a9756": 1
+    }
+  },
+  "code_sizes": {
+    "baseline": {
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3808320,
+        "size": 394096
+      },
+      "rphp::vm::execute::bitmap_drop_and_update": {
+        "address": 3742400,
+        "size": 2018
+      },
+      "rphp::vm::execute::release_statement_temps": {
+        "address": 9292480,
+        "size": 14238
+      },
+      "rphp::vm::execute::retire_return_frame_owners": {
+        "address": 4596288,
+        "size": 3467
+      }
+    },
+    "candidate": {
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3808384,
+        "size": 391247
+      },
+      "rphp::vm::execute::bitmap_drop_and_update": {
+        "address": 3742464,
+        "size": 2018
+      },
+      "rphp::vm::execute::release_statement_temps": {
+        "address": 9289920,
+        "size": 14238
+      },
+      "rphp::vm::execute::retire_return_frame_owners": {
+        "address": 4593536,
+        "size": 3467
+      },
+      "rphp::vm::execute::collect_cycles_at_instruction_boundary": {
+        "address": 9455168,
+        "size": 1285
+      }
+    }
+  },
+  "boundaries": {
+    "parity-gc-pending-prepare": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 633.5870708769944,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4901974016,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-gc-pending-finish": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 230.47271204399294,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4051984384,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "fixtures": {
+    "confirm-bench_scalar_frame_return.php": "5dce2e51d71d3635f59b487f6ececb8ac13981e6c1b6a518dc6cb5dce72508ff",
+    "confirm-return-self.php": "2b3c47d6a3bea1f28fff7d7851ff225d71fd37a00c2a0fc617ffdbd5a7f093ba",
+    "confirm-bench_shared_frame_release.php": "1ed4edc65342545945ac0a61175e1c832c90b4cf3b1e88542dd8cad8f5f804ef",
+    "confirm-bench_foreach_declared_property_reads.php": "390f222c8f87894a6bd71e8116216b6e7fca66439b7f69593ad2aeede9b5381e"
+  },
+  "limitations": [
+    "The PHP parity goal remains open.",
+    "Native measurements are available only on x86-64; no native lowering changes.",
+    "Whole-command instructions and analysis-only time have different scopes; phase counters are reported separately.",
+    "One additional annotated unsafe block is an extraction of existing live-frame operations, with no new unsafe functions or raw-pointer operations. The optional origin uses safe NonNull::from.",
+    "Prior exact opcode attribution predates the cleanup-bit baseline and is only evidence for selecting an optimization family, not a current-source performance claim.",
+    "Every valid time/control sample is retained under the user instruction-count priority."
+  ],
+  "prior_opcode_body_accounting": {
+    "baseline_binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+    "main_total": 37109122139,
+    "unique_body_instructions": 30132150736,
+    "shared_body_instructions": 6959385379,
+    "unattributed_instructions": 17586024,
+    "note": "Exact recorded PC instruction costs grouped only when the executed/direct machine CFG is reachable from one opcode target without crossing central dispatch. Shared tails, setup and called functions are not attributed to an individual opcode. Direct conditional edges are conservative; this is a lower bound for each body, not an inclusive opcode cost.",
+    "rows": [
+      {
+        "opcodes": [
+          "ReleaseTemps"
+        ],
+        "dispatches": 38176316,
+        "unique_reachable_body_instructions": 7899982972
+      },
+      {
+        "opcodes": [
+          "Return"
+        ],
+        "dispatches": 9497791,
+        "unique_reachable_body_instructions": 3846849785
+      },
+      {
+        "opcodes": [
+          "FetchObjR"
+        ],
+        "dispatches": 24515478,
+        "unique_reachable_body_instructions": 3047833949
+      },
+      {
+        "opcodes": [
+          "AssignCv",
+          "BindCvRef"
+        ],
+        "dispatches": 24699727,
+        "unique_reachable_body_instructions": 2531557068
+      },
+      {
+        "opcodes": [
+          "FetchDimR"
+        ],
+        "dispatches": 12854780,
+        "unique_reachable_body_instructions": 2173755935
+      },
+      {
+        "opcodes": [
+          "DoFcall"
+        ],
+        "dispatches": 13442063,
+        "unique_reachable_body_instructions": 1842614835
+      },
+      {
+        "opcodes": [
+          "AssignObjProp"
+        ],
+        "dispatches": 5533405,
+        "unique_reachable_body_instructions": 1201508652
+      },
+      {
+        "opcodes": [
+          "InitMethodCall"
+        ],
+        "dispatches": 6710706,
+        "unique_reachable_body_instructions": 1152969311
+      },
+      {
+        "opcodes": [
+          "IsIdentical",
+          "IsNotIdentical"
+        ],
+        "dispatches": 9695909,
+        "unique_reachable_body_instructions": 770175708
+      },
+      {
+        "opcodes": [
+          "SendVal"
+        ],
+        "dispatches": 8447352,
+        "unique_reachable_body_instructions": 711708963
+      },
+      {
+        "opcodes": [
+          "JmpZ"
+        ],
+        "dispatches": 34188537,
+        "unique_reachable_body_instructions": 662110675
+      },
+      {
+        "opcodes": [
+          "SendVarEx"
+        ],
+        "dispatches": 8567216,
+        "unique_reachable_body_instructions": 655391272
+      },
+      {
+        "opcodes": [
+          "AssignDim"
+        ],
+        "dispatches": 2462481,
+        "unique_reachable_body_instructions": 629687145
+      },
+      {
+        "opcodes": [
+          "InitFcall"
+        ],
+        "dispatches": 4465616,
+        "unique_reachable_body_instructions": 379390941
+      },
+      {
+        "opcodes": [
+          "IsEqual",
+          "IsNotEqual",
+          "IsSmaller",
+          "IsSmallerOrEqual"
+        ],
+        "dispatches": 5211043,
+        "unique_reachable_body_instructions": 376938764
+      },
+      {
+        "opcodes": [
+          "FetchConst"
+        ],
+        "dispatches": 3526360,
+        "unique_reachable_body_instructions": 255292455
+      },
+      {
+        "opcodes": [
+          "AddArrayElement"
+        ],
+        "dispatches": 3235000,
+        "unique_reachable_body_instructions": 218984558
+      },
+      {
+        "opcodes": [
+          "InitArray"
+        ],
+        "dispatches": 2798302,
+        "unique_reachable_body_instructions": 183608183
+      },
+      {
+        "opcodes": [
+          "JmpNZ"
+        ],
+        "dispatches": 5876509,
+        "unique_reachable_body_instructions": 135073719
+      },
+      {
+        "opcodes": [
+          "Instanceof"
+        ],
+        "dispatches": 7099837,
+        "unique_reachable_body_instructions": 113597392
+      },
+      {
+        "opcodes": [
+          "CallUserFuncArray"
+        ],
+        "dispatches": 356497,
+        "unique_reachable_body_instructions": 112724746
+      },
+      {
+        "opcodes": [
+          "BoolNot"
+        ],
+        "dispatches": 2285220,
+        "unique_reachable_body_instructions": 104536974
+      },
+      {
+        "opcodes": [
+          "Sub"
+        ],
+        "dispatches": 1465346,
+        "unique_reachable_body_instructions": 101074855
+      },
+      {
+        "opcodes": [
+          "ArrayPushOp"
+        ],
+        "dispatches": 873037,
+        "unique_reachable_body_instructions": 87515449
+      },
+      {
+        "opcodes": [
+          "FetchCvR"
+        ],
+        "dispatches": 1733175,
+        "unique_reachable_body_instructions": 84555955
+      },
+      {
+        "opcodes": [
+          "Jmp"
+        ],
+        "dispatches": 11286080,
+        "unique_reachable_body_instructions": 67716480
+      },
+      {
+        "opcodes": [
+          "Concat_StringString"
+        ],
+        "dispatches": 126595,
+        "unique_reachable_body_instructions": 67305889
+      },
+      {
+        "opcodes": [
+          "Isset"
+        ],
+        "dispatches": 1656962,
+        "unique_reachable_body_instructions": 64920571
+      },
+      {
+        "opcodes": [
+          "Add"
+        ],
+        "dispatches": 711532,
+        "unique_reachable_body_instructions": 53875052
+      },
+      {
+        "opcodes": [
+          "ForeachNextPlain"
+        ],
+        "dispatches": 2471554,
+        "unique_reachable_body_instructions": 49431080
+      },
+      {
+        "opcodes": [
+          "FetchClassConst"
+        ],
+        "dispatches": 3058413,
+        "unique_reachable_body_instructions": 48934608
+      },
+      {
+        "opcodes": [
+          "Cast"
+        ],
+        "dispatches": 568459,
+        "unique_reachable_body_instructions": 48307240
+      },
+      {
+        "opcodes": [
+          "Add_LongLong",
+          "Sub_LongLong",
+          "Mul_LongLong",
+          "Mod_LongLong",
+          "BitwiseXor_LongLong",
+          "BitwiseAnd_LongLong",
+          "BitwiseOr_LongLong"
+        ],
+        "dispatches": 652928,
+        "unique_reachable_body_instructions": 44029392
+      },
+      {
+        "opcodes": [
+          "AssignConcat"
+        ],
+        "dispatches": 271422,
+        "unique_reachable_body_instructions": 41857706
+      },
+      {
+        "opcodes": [
+          "PreInc"
+        ],
+        "dispatches": 1108095,
+        "unique_reachable_body_instructions": 39885005
+      },
+      {
+        "opcodes": [
+          "InitStaticCall"
+        ],
+        "dispatches": 1449906,
+        "unique_reachable_body_instructions": 28998120
+      },
+      {
+        "opcodes": [
+          "PostInc"
+        ],
+        "dispatches": 935726,
+        "unique_reachable_body_instructions": 27188482
+      },
+      {
+        "opcodes": [
+          "BindObjPropRef"
+        ],
+        "dispatches": 1336909,
+        "unique_reachable_body_instructions": 26978426
+      },
+      {
+        "opcodes": [
+          "Add_TmpTmp"
+        ],
+        "dispatches": 493563,
+        "unique_reachable_body_instructions": 26376841
+      },
+      {
+        "opcodes": [
+          "NewObj"
+        ],
+        "dispatches": 1313606,
+        "unique_reachable_body_instructions": 25946108
+      },
+      {
+        "opcodes": [
+          "ForeachInit"
+        ],
+        "dispatches": 1197123,
+        "unique_reachable_body_instructions": 22949762
+      },
+      {
+        "opcodes": [
+          "BitwiseAnd",
+          "BitwiseOr",
+          "BitwiseXor"
+        ],
+        "dispatches": 293141,
+        "unique_reachable_body_instructions": 17795639
+      },
+      {
+        "opcodes": [
+          "SendRef"
+        ],
+        "dispatches": 159406,
+        "unique_reachable_body_instructions": 17680203
+      },
+      {
+        "opcodes": [
+          "FetchStaticProp"
+        ],
+        "dispatches": 1079792,
+        "unique_reachable_body_instructions": 17276672
+      },
+      {
+        "opcodes": [
+          "CreateClosure"
+        ],
+        "dispatches": 230107,
+        "unique_reachable_body_instructions": 15375490
+      },
+      {
+        "opcodes": [
+          "BindDefaultParam"
+        ],
+        "dispatches": 2364041,
+        "unique_reachable_body_instructions": 14184246
+      },
+      {
+        "opcodes": [
+          "Add_CvTmp"
+        ],
+        "dispatches": 207116,
+        "unique_reachable_body_instructions": 10752259
+      },
+      {
+        "opcodes": [
+          "Concat"
+        ],
+        "dispatches": 683964,
+        "unique_reachable_body_instructions": 10259460
+      },
+      {
+        "opcodes": [
+          "PreDec"
+        ],
+        "dispatches": 274853,
+        "unique_reachable_body_instructions": 9963436
+      },
+      {
+        "opcodes": [
+          "InitDynamicCall"
+        ],
+        "dispatches": 585479,
+        "unique_reachable_body_instructions": 8782185
+      },
+      {
+        "opcodes": [
+          "ForeachNext"
+        ],
+        "dispatches": 425206,
+        "unique_reachable_body_instructions": 8504120
+      },
+      {
+        "opcodes": [
+          "UnsetDim"
+        ],
+        "dispatches": 54849,
+        "unique_reachable_body_instructions": 8181236
+      },
+      {
+        "opcodes": [
+          "AddCallUnpack"
+        ],
+        "dispatches": 366474,
+        "unique_reachable_body_instructions": 5863584
+      },
+      {
+        "opcodes": [
+          "Sub_TmpTmp"
+        ],
+        "dispatches": 95086,
+        "unique_reachable_body_instructions": 4776217
+      },
+      {
+        "opcodes": [
+          "AddCallArgument"
+        ],
+        "dispatches": 227242,
+        "unique_reachable_body_instructions": 3635872
+      },
+      {
+        "opcodes": [
+          "CheckDefaultType"
+        ],
+        "dispatches": 171174,
+        "unique_reachable_body_instructions": 2738784
+      },
+      {
+        "opcodes": [
+          "AssertCheck"
+        ],
+        "dispatches": 67533,
+        "unique_reachable_body_instructions": 2217286
+      },
+      {
+        "opcodes": [
+          "Mul"
+        ],
+        "dispatches": 33361,
+        "unique_reachable_body_instructions": 2086342
+      },
+      {
+        "opcodes": [
+          "PostDec"
+        ],
+        "dispatches": 26278,
+        "unique_reachable_body_instructions": 1317406
+      },
+      {
+        "opcodes": [
+          "ClosureUseVar"
+        ],
+        "dispatches": 148108,
+        "unique_reachable_body_instructions": 1036756
+      },
+      {
+        "opcodes": [
+          "FetchLateClassConst"
+        ],
+        "dispatches": 52497,
+        "unique_reachable_body_instructions": 839952
+      },
+      {
+        "opcodes": [
+          "Mod"
+        ],
+        "dispatches": 10174,
+        "unique_reachable_body_instructions": 791718
+      },
+      {
+        "opcodes": [
+          "Sub_CvConst"
+        ],
+        "dispatches": 13172,
+        "unique_reachable_body_instructions": 758769
+      },
+      {
+        "opcodes": [
+          "ForeachNextRef"
+        ],
+        "dispatches": 36270,
+        "unique_reachable_body_instructions": 725400
+      },
+      {
+        "opcodes": [
+          "JmpFinally"
+        ],
+        "dispatches": 17032,
+        "unique_reachable_body_instructions": 457462
+      },
+      {
+        "opcodes": [
+          "IsSmaller_CvConst",
+          "JmpZ_Lt_CvConst",
+          "JmpNZ_Lt_CvConst"
+        ],
+        "dispatches": 11757,
+        "unique_reachable_body_instructions": 445842
+      },
+      {
+        "opcodes": [
+          "CloneObj"
+        ],
+        "dispatches": 19092,
+        "unique_reachable_body_instructions": 305472
+      },
+      {
+        "opcodes": [
+          "ShiftRight"
+        ],
+        "dispatches": 2282,
+        "unique_reachable_body_instructions": 221354
+      },
+      {
+        "opcodes": [
+          "Spaceship"
+        ],
+        "dispatches": 3029,
+        "unique_reachable_body_instructions": 193757
+      },
+      {
+        "opcodes": [
+          "Div"
+        ],
+        "dispatches": 1333,
+        "unique_reachable_body_instructions": 127449
+      },
+      {
+        "opcodes": [
+          "CheckStatic"
+        ],
+        "dispatches": 25023,
+        "unique_reachable_body_instructions": 125115
+      },
+      {
+        "opcodes": [
+          "ForeachWriteback"
+        ],
+        "dispatches": 9412,
+        "unique_reachable_body_instructions": 94120
+      },
+      {
+        "opcodes": [
+          "Include"
+        ],
+        "dispatches": 2775,
+        "unique_reachable_body_instructions": 72135
+      },
+      {
+        "opcodes": [
+          "DirectInternalCall2"
+        ],
+        "dispatches": 458,
+        "unique_reachable_body_instructions": 63819
+      },
+      {
+        "opcodes": [
+          "Strlen_Cv"
+        ],
+        "dispatches": 1329,
+        "unique_reachable_body_instructions": 63085
+      },
+      {
+        "opcodes": [
+          "FetchLateStaticProp"
+        ],
+        "dispatches": 2259,
+        "unique_reachable_body_instructions": 36144
+      },
+      {
+        "opcodes": [
+          "BitwiseNot"
+        ],
+        "dispatches": 950,
+        "unique_reachable_body_instructions": 34270
+      },
+      {
+        "opcodes": [
+          "AssignStaticProp"
+        ],
+        "dispatches": 1978,
+        "unique_reachable_body_instructions": 31648
+      },
+      {
+        "opcodes": [
+          "DeclareClass"
+        ],
+        "dispatches": 2577,
+        "unique_reachable_body_instructions": 30924
+      },
+      {
+        "opcodes": [
+          "UnsetObj"
+        ],
+        "dispatches": 1928,
+        "unique_reachable_body_instructions": 30848
+      },
+      {
+        "opcodes": [
+          "ShiftLeft"
+        ],
+        "dispatches": 269,
+        "unique_reachable_body_instructions": 30297
+      },
+      {
+        "opcodes": [
+          "Throw"
+        ],
+        "dispatches": 1336,
+        "unique_reachable_body_instructions": 21376
+      },
+      {
+        "opcodes": [
+          "SnapshotDiagnosticWrite"
+        ],
+        "dispatches": 648,
+        "unique_reachable_body_instructions": 15552
+      },
+      {
+        "opcodes": [
+          "BindArrayDimRef"
+        ],
+        "dispatches": 828,
+        "unique_reachable_body_instructions": 13248
+      },
+      {
+        "opcodes": [
+          "InitLateStaticCall"
+        ],
+        "dispatches": 555,
+        "unique_reachable_body_instructions": 11100
+      },
+      {
+        "opcodes": [
+          "IsSmallerOrEqual_CvConst",
+          "JmpZ_Le_CvConst",
+          "JmpNZ_Le_CvConst"
+        ],
+        "dispatches": 280,
+        "unique_reachable_body_instructions": 9800
+      },
+      {
+        "opcodes": [
+          "FetchDynamicClassConst"
+        ],
+        "dispatches": 524,
+        "unique_reachable_body_instructions": 8384
+      },
+      {
+        "opcodes": [
+          "Yield"
+        ],
+        "dispatches": 532,
+        "unique_reachable_body_instructions": 7448
+      },
+      {
+        "opcodes": [
+          "IssetObj"
+        ],
+        "dispatches": 410,
+        "unique_reachable_body_instructions": 6560
+      },
+      {
+        "opcodes": [
+          "AddArrayUnpack"
+        ],
+        "dispatches": 188,
+        "unique_reachable_body_instructions": 3008
+      },
+      {
+        "opcodes": [
+          "ReportDeprecatedTraitUses"
+        ],
+        "dispatches": 188,
+        "unique_reachable_body_instructions": 2820
+      },
+      {
+        "opcodes": [
+          "FetchGlobal",
+          "AssignGlobal",
+          "UnsetGlobal",
+          "BindGlobalRef",
+          "AssignGlobalRef",
+          "FetchGlobals"
+        ],
+        "dispatches": 92,
+        "unique_reachable_body_instructions": 1472
+      },
+      {
+        "opcodes": [
+          "DeclareFunction"
+        ],
+        "dispatches": 85,
+        "unique_reachable_body_instructions": 595
+      },
+      {
+        "opcodes": [
+          "InitDynamicStaticCall"
+        ],
+        "dispatches": 31,
+        "unique_reachable_body_instructions": 496
+      },
+      {
+        "opcodes": [
+          "BindGlobal"
+        ],
+        "dispatches": 70,
+        "unique_reachable_body_instructions": 490
+      },
+      {
+        "opcodes": [
+          "QuickLongLoopJmp"
+        ],
+        "dispatches": 34,
+        "unique_reachable_body_instructions": 306
+      },
+      {
+        "opcodes": [
+          "BindStatic"
+        ],
+        "dispatches": 10,
+        "unique_reachable_body_instructions": 150
+      },
+      {
+        "opcodes": [
+          "Strlen_String"
+        ],
+        "dispatches": 2,
+        "unique_reachable_body_instructions": 64
+      },
+      {
+        "opcodes": [
+          "AssignLateStaticProp"
+        ],
+        "dispatches": 2,
+        "unique_reachable_body_instructions": 32
+      },
+      {
+        "opcodes": [
+          "InitUserCall"
+        ],
+        "dispatches": 1,
+        "unique_reachable_body_instructions": 23
+      },
+      {
+        "opcodes": [
+          "SendNamed"
+        ],
+        "dispatches": 1,
+        "unique_reachable_body_instructions": 16
+      }
+    ],
+    "shared": [
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "DoFcall"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "Jmp"
+          ],
+          [
+            "IsIdentical",
+            "IsNotIdentical"
+          ],
+          [
+            "Return"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "AddArrayElement"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "BindDefaultParam"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "Sub"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "PreInc"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "PostInc"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Add_TmpTmp"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "AddCallUnpack"
+          ],
+          [
+            "CallUserFuncArray"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "PreDec"
+          ],
+          [
+            "AssignConcat"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "AddCallArgument"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "SendRef"
+          ],
+          [
+            "ClosureUseVar"
+          ],
+          [
+            "Concat_StringString"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "UnsetDim"
+          ],
+          [
+            "FetchLateClassConst"
+          ],
+          [
+            "ForeachNextRef"
+          ],
+          [
+            "Mul"
+          ],
+          [
+            "PostDec"
+          ],
+          [
+            "CheckStatic"
+          ],
+          [
+            "CloneObj"
+          ],
+          [
+            "JmpFinally"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "IsSmaller_CvConst",
+            "JmpZ_Lt_CvConst",
+            "JmpNZ_Lt_CvConst"
+          ],
+          [
+            "Mod"
+          ],
+          [
+            "ForeachWriteback"
+          ],
+          [
+            "Spaceship"
+          ],
+          [
+            "Include"
+          ],
+          [
+            "DeclareClass"
+          ],
+          [
+            "ShiftRight"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssignStaticProp"
+          ],
+          [
+            "UnsetObj"
+          ],
+          [
+            "Throw"
+          ],
+          [
+            "Div"
+          ],
+          [
+            "Strlen_Cv"
+          ],
+          [
+            "BitwiseNot"
+          ],
+          [
+            "BindArrayDimRef"
+          ],
+          [
+            "SnapshotDiagnosticWrite"
+          ],
+          [
+            "InitLateStaticCall"
+          ],
+          [
+            "FetchDynamicClassConst"
+          ],
+          [
+            "DirectInternalCall2"
+          ],
+          [
+            "IssetObj"
+          ],
+          [
+            "IsSmallerOrEqual_CvConst",
+            "JmpZ_Le_CvConst",
+            "JmpNZ_Le_CvConst"
+          ],
+          [
+            "ShiftLeft"
+          ],
+          [
+            "AddArrayUnpack"
+          ],
+          [
+            "ReportDeprecatedTraitUses"
+          ],
+          [
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef",
+            "FetchGlobals"
+          ],
+          [
+            "DeclareFunction"
+          ],
+          [
+            "BindGlobal"
+          ],
+          [
+            "QuickLongLoopJmp"
+          ],
+          [
+            "InitDynamicStaticCall"
+          ],
+          [
+            "BindStatic"
+          ],
+          [
+            "AssignLateStaticProp"
+          ],
+          [
+            "Strlen_String"
+          ],
+          [
+            "SendNamed"
+          ],
+          [
+            "InitUserCall"
+          ]
+        ],
+        "instructions": 4390596440
+      },
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "IsIdentical",
+            "IsNotIdentical"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "AddArrayElement"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "BindDefaultParam"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "Sub"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Add_TmpTmp"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "AddCallUnpack"
+          ],
+          [
+            "CallUserFuncArray"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "AssignConcat"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "AddCallArgument"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "SendRef"
+          ],
+          [
+            "ClosureUseVar"
+          ],
+          [
+            "Concat_StringString"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "UnsetDim"
+          ],
+          [
+            "FetchLateClassConst"
+          ],
+          [
+            "ForeachNextRef"
+          ],
+          [
+            "Mul"
+          ],
+          [
+            "CheckStatic"
+          ],
+          [
+            "CloneObj"
+          ],
+          [
+            "JmpFinally"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "IsSmaller_CvConst",
+            "JmpZ_Lt_CvConst",
+            "JmpNZ_Lt_CvConst"
+          ],
+          [
+            "Mod"
+          ],
+          [
+            "ForeachWriteback"
+          ],
+          [
+            "Spaceship"
+          ],
+          [
+            "DeclareClass"
+          ],
+          [
+            "ShiftRight"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssignStaticProp"
+          ],
+          [
+            "UnsetObj"
+          ],
+          [
+            "Throw"
+          ],
+          [
+            "Div"
+          ],
+          [
+            "Strlen_Cv"
+          ],
+          [
+            "BitwiseNot"
+          ],
+          [
+            "BindArrayDimRef"
+          ],
+          [
+            "SnapshotDiagnosticWrite"
+          ],
+          [
+            "InitLateStaticCall"
+          ],
+          [
+            "FetchDynamicClassConst"
+          ],
+          [
+            "DirectInternalCall2"
+          ],
+          [
+            "IssetObj"
+          ],
+          [
+            "IsSmallerOrEqual_CvConst",
+            "JmpZ_Le_CvConst",
+            "JmpNZ_Le_CvConst"
+          ],
+          [
+            "ShiftLeft"
+          ],
+          [
+            "AddArrayUnpack"
+          ],
+          [
+            "ReportDeprecatedTraitUses"
+          ],
+          [
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef",
+            "FetchGlobals"
+          ],
+          [
+            "DeclareFunction"
+          ],
+          [
+            "BindGlobal"
+          ],
+          [
+            "InitDynamicStaticCall"
+          ],
+          [
+            "BindStatic"
+          ],
+          [
+            "AssignLateStaticProp"
+          ],
+          [
+            "Strlen_String"
+          ],
+          [
+            "SendNamed"
+          ],
+          [
+            "InitUserCall"
+          ]
+        ],
+        "instructions": 811350940
+      },
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "DoFcall"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "Jmp"
+          ],
+          [
+            "IsIdentical",
+            "IsNotIdentical"
+          ],
+          [
+            "Return"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "AddArrayElement"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "BindDefaultParam"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "Sub"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Add_TmpTmp"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "AddCallUnpack"
+          ],
+          [
+            "CallUserFuncArray"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "AssignConcat"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "AddCallArgument"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "SendRef"
+          ],
+          [
+            "ClosureUseVar"
+          ],
+          [
+            "Concat_StringString"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "UnsetDim"
+          ],
+          [
+            "FetchLateClassConst"
+          ],
+          [
+            "ForeachNextRef"
+          ],
+          [
+            "Mul"
+          ],
+          [
+            "CheckStatic"
+          ],
+          [
+            "CloneObj"
+          ],
+          [
+            "JmpFinally"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "IsSmaller_CvConst",
+            "JmpZ_Lt_CvConst",
+            "JmpNZ_Lt_CvConst"
+          ],
+          [
+            "Mod"
+          ],
+          [
+            "ForeachWriteback"
+          ],
+          [
+            "Spaceship"
+          ],
+          [
+            "Include"
+          ],
+          [
+            "DeclareClass"
+          ],
+          [
+            "ShiftRight"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssignStaticProp"
+          ],
+          [
+            "UnsetObj"
+          ],
+          [
+            "Throw"
+          ],
+          [
+            "Div"
+          ],
+          [
+            "Strlen_Cv"
+          ],
+          [
+            "BitwiseNot"
+          ],
+          [
+            "BindArrayDimRef"
+          ],
+          [
+            "SnapshotDiagnosticWrite"
+          ],
+          [
+            "InitLateStaticCall"
+          ],
+          [
+            "FetchDynamicClassConst"
+          ],
+          [
+            "DirectInternalCall2"
+          ],
+          [
+            "IssetObj"
+          ],
+          [
+            "IsSmallerOrEqual_CvConst",
+            "JmpZ_Le_CvConst",
+            "JmpNZ_Le_CvConst"
+          ],
+          [
+            "ShiftLeft"
+          ],
+          [
+            "AddArrayUnpack"
+          ],
+          [
+            "ReportDeprecatedTraitUses"
+          ],
+          [
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef",
+            "FetchGlobals"
+          ],
+          [
+            "DeclareFunction"
+          ],
+          [
+            "BindGlobal"
+          ],
+          [
+            "QuickLongLoopJmp"
+          ],
+          [
+            "InitDynamicStaticCall"
+          ],
+          [
+            "BindStatic"
+          ],
+          [
+            "AssignLateStaticProp"
+          ],
+          [
+            "Strlen_String"
+          ],
+          [
+            "SendNamed"
+          ],
+          [
+            "InitUserCall"
+          ]
+        ],
+        "instructions": 731972343
+      },
+      {
+        "opcodes": [
+          [
+            "DoFcall"
+          ],
+          [
+            "Return"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "AddCallUnpack"
+          ],
+          [
+            "AddCallArgument"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "FetchLateClassConst"
+          ],
+          [
+            "CloneObj"
+          ],
+          [
+            "JmpFinally"
+          ],
+          [
+            "Include"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssignStaticProp"
+          ],
+          [
+            "UnsetObj"
+          ],
+          [
+            "Throw"
+          ],
+          [
+            "BindArrayDimRef"
+          ],
+          [
+            "FetchDynamicClassConst"
+          ],
+          [
+            "IssetObj"
+          ],
+          [
+            "AddArrayUnpack"
+          ],
+          [
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef",
+            "FetchGlobals"
+          ],
+          [
+            "InitDynamicStaticCall"
+          ],
+          [
+            "AssignLateStaticProp"
+          ],
+          [
+            "SendNamed"
+          ]
+        ],
+        "instructions": 410478288
+      },
+      {
+        "opcodes": [
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "DoFcall"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "PreInc"
+          ],
+          [
+            "PostInc"
+          ],
+          [
+            "PreDec"
+          ],
+          [
+            "PostDec"
+          ]
+        ],
+        "instructions": 180593011
+      },
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "AssignConcat"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "DeclareClass"
+          ],
+          [
+            "Strlen_Cv"
+          ],
+          [
+            "DeclareFunction"
+          ],
+          [
+            "InitUserCall"
+          ]
+        ],
+        "instructions": 101252858
+      },
+      {
+        "opcodes": [
+          [
+            "Instanceof"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "AddCallUnpack"
+          ],
+          [
+            "AddCallArgument"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "FetchLateClassConst"
+          ],
+          [
+            "CloneObj"
+          ],
+          [
+            "Spaceship"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssignStaticProp"
+          ],
+          [
+            "UnsetObj"
+          ],
+          [
+            "Throw"
+          ],
+          [
+            "BindArrayDimRef"
+          ],
+          [
+            "FetchDynamicClassConst"
+          ],
+          [
+            "IssetObj"
+          ],
+          [
+            "AddArrayUnpack"
+          ],
+          [
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef",
+            "FetchGlobals"
+          ],
+          [
+            "InitDynamicStaticCall"
+          ],
+          [
+            "AssignLateStaticProp"
+          ],
+          [
+            "SendNamed"
+          ]
+        ],
+        "instructions": 43113033
+      },
+      {
+        "opcodes": [
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "UnsetDim"
+          ]
+        ],
+        "instructions": 38012352
+      },
+      {
+        "opcodes": [
+          [
+            "Jmp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "QuickLongLoopJmp"
+          ]
+        ],
+        "instructions": 34060941
+      },
+      {
+        "opcodes": [
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "SendRef"
+          ]
+        ],
+        "instructions": 31138842
+      },
+      {
+        "opcodes": [
+          [
+            "FetchObjR"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "InitArray"
+          ]
+        ],
+        "instructions": 26308962
+      },
+      {
+        "opcodes": [
+          [
+            "Instanceof"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "AddCallUnpack"
+          ],
+          [
+            "AddCallArgument"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "FetchLateClassConst"
+          ],
+          [
+            "CloneObj"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssignStaticProp"
+          ],
+          [
+            "UnsetObj"
+          ],
+          [
+            "Throw"
+          ],
+          [
+            "BindArrayDimRef"
+          ],
+          [
+            "FetchDynamicClassConst"
+          ],
+          [
+            "IssetObj"
+          ],
+          [
+            "AddArrayUnpack"
+          ],
+          [
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef",
+            "FetchGlobals"
+          ],
+          [
+            "InitDynamicStaticCall"
+          ],
+          [
+            "AssignLateStaticProp"
+          ],
+          [
+            "SendNamed"
+          ]
+        ],
+        "instructions": 24168196
+      },
+      {
+        "opcodes": [
+          [
+            "SendVal"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "ForeachNextRef"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "BitwiseNot"
+          ],
+          [
+            "InitLateStaticCall"
+          ]
+        ],
+        "instructions": 24005484
+      },
+      {
+        "opcodes": [
+          [
+            "FetchObjR"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "Mul"
+          ]
+        ],
+        "instructions": 17727678
+      },
+      {
+        "opcodes": [
+          [
+            "JmpNZ"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "ForeachWriteback"
+          ],
+          [
+            "SnapshotDiagnosticWrite"
+          ],
+          [
+            "ReportDeprecatedTraitUses"
+          ],
+          [
+            "BindStatic"
+          ]
+        ],
+        "instructions": 15881937
+      }
+    ],
+    "reference_note": "Precedes the accepted cleanup-bit checkpoint. Counts identify candidate families, not current-source acceptance budgets."
+  },
+  "acceptance": {
+    "integrator": "sole integrating agent",
+    "primary_criterion": "retired analysis instructions with identical PHP semantics",
+    "phase_instruction_delta_percent": -2.0191111904605763,
+    "confirmed_control_timing_regressions_percent": {
+      "shared_frame_release": 4.337178968362365,
+      "relative_self_return": 12.612814984415909
+    },
+    "tradeoff": "Explicitly accepted under the user instruction-count priority; timing regressions remain visible controls.",
+    "safety": "One extraction block, no new unsafe function or raw-pointer operation; safe NonNull origin construction."
+  }
+}

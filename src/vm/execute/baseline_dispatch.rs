@@ -2592,6 +2592,39 @@ fn execute_ex(eg: &mut ExecutorGlobals, mut initial_frame: *mut ExecuteData) -> 
     }
 }
 
+/// GC may re-enter PHP only at an instruction boundary. Keep its frame
+/// publication and exception dispatch out of the ordinary opcode loop so the
+/// pending flag is the only state that loop must inspect before dispatch.
+#[cold]
+#[inline(never)]
+fn collect_cycles_at_instruction_boundary<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    previous_opline: Option<std::ptr::NonNull<Instruction>>,
+) -> Result<Option<ThrowResult<'a>>, VmError> {
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    // SAFETY: the caller is between opcodes in a live activation. Both the
+    // next and previous instruction belong to that activation, and no opcode
+    // borrow survives collection or PHP re-entry. Restore the next instruction
+    // before propagating a VM error; PHP exceptions retain the original site.
+    unsafe {
+        let next = (*frame).opline;
+        let origin = previous_opline.map_or(next, |instruction| instruction.as_ptr().cast_const());
+        (*frame).opline = origin;
+        eg.current_execute_data.set(frame);
+        let collected = eg.collect_automatic_cycles();
+        (*frame).opline = next;
+        collected?;
+        if let Some(exception) = eg.exception.take() {
+            (*frame).opline = origin;
+            return throw_in_frame(eg, frame, exception).map(Some);
+        }
+    }
+    Ok(None)
+}
+
 fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     // SAFETY: the executor enters with a live user activation and its metadata.
     let mut activation = (initial_frame, unsafe { (*initial_frame).op_array() });
@@ -2617,34 +2650,27 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
             }
         }
 
-        // SAFETY: the active frame's opline and the preceding instruction
-        // both belong to this live activation. At this loop boundary no
-        // opcode-local value/container borrow survives PHP callback re-entry.
-        let (mut opline_ptr, opline) = unsafe {
-            if crate::value::automatic_cycle_collection_pending() && eg.exception.is_none() {
-                let next = (*frame).opline;
-                let origin = previous_opline.unwrap_or(next);
-                (*frame).opline = origin;
-                eg.current_execute_data.set(frame);
-                let collected = eg.collect_automatic_cycles();
-                (*frame).opline = next;
-                collected?;
-                if let Some(exception) = eg.exception.take() {
-                    (*frame).opline = origin;
-                    match throw_in_frame(eg, frame, exception)? {
-                        ThrowResult::Handled(new_frame, new_op_array) => {
-                            resume_activation!(new_frame, new_op_array);
-                        }
-                        ThrowResult::Unhandled(exception) => {
-                            eg.exception = Some(exception);
-                            return Ok(());
-                        }
+        if crate::value::automatic_cycle_collection_pending() {
+            if let Some(result) = collect_cycles_at_instruction_boundary(eg, frame, previous_opline)? {
+                match result {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        resume_activation!(new_frame, new_op_array);
+                    }
+                    ThrowResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
                     }
                 }
             }
+        }
+        // SAFETY: the active frame's instruction is a non-null pointer into
+        // this live activation. Collection and frame transitions have completed.
+        // NonNull retains the same optional origin in one pointer-sized word.
+        let (mut opline_ptr, opline) = unsafe {
             let opline_ptr: *const Instruction = (*frame).opline;
-            previous_opline = Some(opline_ptr);
-            (opline_ptr, &*opline_ptr)
+            let opline = &*opline_ptr;
+            previous_opline = Some(std::ptr::NonNull::from(opline));
+            (opline_ptr, opline)
         };
         macro_rules! array_key_or_throw {
             ($conversion:expr, $message:expr) => {

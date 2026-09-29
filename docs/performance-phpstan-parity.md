@@ -1472,3 +1472,82 @@ memory peak is 4742590464 bytes, with no OOM or timeout. Cleanup runs in both
 local checkouts; no private benchmark host is configured. Native measurements
 remain limited to x86-64. The remaining analysis instruction gap is about
 8.89 times PHP; this checkpoint does not complete the goal.
+
+## Accepted instruction checkpoint: pending-only collection state
+
+- Outcome: ordinary dispatch reads the pending-collection flag before preparing
+  collection-specific exception and origin state. Keep every existing safe
+  point and interrupt check at the same opcode boundary.
+- Baseline: `03474af8`, source fingerprint
+  `2779488c7fafbba22b2cbc486ed43f2b71db7d03e6c7822b929c32ea416d7204`,
+  executable `72202b7701f5add2db49a5128be031d984ff45454db6ab96403649f4d20a6224`.
+  Analysis-only instructions are 91.8486 billion versus PHP's 10.3366 billion.
+- Evidence: the current executable still loads and tests exception state before
+  the pending TLS probe, carries a separate optional-origin tag and combines
+  both predicates on ordinary dispatch. The exact preceding profile counted
+  274071199 opcode selections. The older compact boundary reduced instructions
+  but was rejected under the previous timing rule; its measurements are not
+  current-baseline acceptance evidence.
+- Hypothesis: outline collection publication/throw handling after the pending
+  probe, and store optional origin as `Option<NonNull<Instruction>>`, derived
+  safely from the already-valid instruction reference.
+- Semantic envelope: preserve opcode-by-opcode collection opportunities,
+  256-opcode interrupt cadence, pending-exception exclusion, previous-opcode
+  origin, restoration before VmError propagation, exception handling and frame
+  transitions. No batching, name recognition, allocator, Value or frame layout
+  change is permitted.
+- Ownership and safety review: the sole integrator owns dispatch and this local
+  boundary. Extraction adds one annotated unsafe block, with zero new unsafe
+  functions or raw-pointer operations; the existing live-frame/op-array and
+  no-borrow-across-PHP-reentry obligations are unchanged. This narrowly reviewed
+  inventory change is recorded in the unsafe baseline. A safe NonNull conversion
+  replaces the earlier prototype's unchecked conversion. Roll it back with the
+  candidate if the checkpoint fails.
+- Gates: automatic-GC admission/finalization/interrupt tests, six exact PHP
+  collection differentials, relevant feature configurations, all-target checks,
+  formatting and unsafe inventory; independent PGO training and phase-only and
+  whole-command hardware counts, timings, retained controls and code sizes.
+  Native ARM64 performance is unavailable; no native lowering changes.
+- Stop rule: reject a changed callback/error/GC boundary, unsafe lifetime
+  invariant, unbounded memory cost or no confirmed application instruction
+  reduction. Time remains a recorded diagnostic under the user's current rule.
+
+Collection-specific exception inspection, frame publication and throw handling
+now live behind the existing pending flag. The optional previous instruction
+uses one nullable pointer representation. The main executor shrinks from 394096
+to 391247 bytes; the outlined collection helper occupies 1285 bytes. This
+changes neither safe-point frequency nor interrupt cadence.
+
+All 129 focused feature test executions pass, together with six exact PHP
+differentials, formatting, all-target/all-feature compilation and the reviewed
+unsafe inventory. The production source fingerprint is
+`487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626`;
+the independently trained executable is
+`a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f`.
+The two bounded services peak at 4901974016 and 4051984384 bytes respectively,
+with no OOM or timeout. Cleanup completes locally; no private host is configured.
+
+Analysis-only hardware counts fall from **91.8334 to 89.9791 billion (-2.02%)**,
+against PHP's **10.3365 billion**. Independent whole-command windows confirm
+111.1879 to 109.1533 billion and 111.1816 to 109.1485 billion, both approximately
+**-1.83%**. All diagnostic output and statuses match. Analysis time medians are
+9.1790 to 8.9461 seconds in the first window and 8.8685 to 8.7625 seconds in
+confirmation; all samples, including their CPU occupancy, remain in
+[the collection-boundary packet](performance-phpstan-gc-pending-samples.json).
+
+The integrating task accepts this partial checkpoint under the user's
+instruction-count priority. Confirmed instructions fall 6.34% for shared-frame
+release, 7.81% for scalar return, 5.97% for property reads and 3.51% for relative
+self return. Timing does not fall proportionally: the shared-frame and relative
+self medians regress 4.34% and 12.61%, while scalar return and property reads
+improve 6.43% and 1.46%. These explicit tradeoffs remain controls; they are not
+discarded as noise or presented as universal speedups. Native ARM64 measurement
+remains unavailable. The analysis instruction gap is still approximately 8.70x.
+
+The archived exact profile also permits conservative opcode-body attribution:
+7.900 billion instructions inside the main executor are reachable only from
+`ReleaseTemps`, before counting called helpers. Shared machine-code tails are
+left unattributed to individual opcodes. That profile predates cleanup metadata
+and this boundary extraction, so it identifies the next investigation family
+rather than claiming the same budget for the newly accepted source. Repeated
+ownership, alias and snapshot scans are the next candidate; parity remains open.
