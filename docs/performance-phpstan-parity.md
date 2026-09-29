@@ -460,3 +460,69 @@ programs, all-target/all-feature compilation, formatting and unsafe enforcement.
 No unsafe invariant, value/frame ABI or JIT lowering changes. Native evidence is
 x86-64 only. All aggregate jobs completed within 6 GiB without OOM or timeout;
 cleanup ran in both checkouts and no private benchmark host was configured.
+
+## Accepted checkpoint: bounded temporary snapshot proofs
+
+- Outcome: capturing live-read proofs before temporary release does not allocate
+  a list for an ordinary statement and does not linearly search that list for
+  each retired slot.
+- Baseline: `f937b0f6` (seeded weak identities). Source accounting attributes
+  2.985 billion instructions to the snapshot-capture closure, including
+  1.725 billion in its filtering iterator and 1.23 million vector growth calls.
+  The accepted native profile still identifies temporary release as a hot cost.
+- Hypothesis: store proofs for the first 64 slots of the release range in one
+  word, with the existing growable list only for proven slots beyond that range.
+  Compact frame ownership already supplies the slots to visit directly.
+- Semantics: perform exactly the existing identity proof, after callbacks and
+  before any source temporary is dropped; preserve slot order, GC root admission,
+  callback/exception exits and wide-frame ownership. No proof survives PHP
+  callbacks. No frame, Value or JIT ABI change and no extra unsafe invariant.
+- Ownership: integrating task owns the temporary-release implementation and its
+  focused GC/alias tests. No other implementation checkpoint is active.
+- Gates: compact/wide and overflow proof coverage, GC-root/temporary/finalization
+  suites in relevant feature configurations, direct PHP differentials, same-output
+  application instructions/time/RSS, and existing call/property/deep controls.
+  Reject semantic changes or an unaccounted confirmed control regression; do not
+  compound a rejected representation with unrelated dispatcher changes.
+
+### Temporary snapshot result
+
+The measured source fingerprint is
+`8bdbd64e59f0a0c4478aa4ef9bf41cd6b4d6cc03aa955d9fc6c416b0a92069c1`.
+[The complete sample packet](performance-phpstan-temporary-snapshot-samples.json)
+retains both application windows and all controls. Independent confirmation
+changes PHPStan from 128.4387 to 128.3484 billion whole-command instructions
+(-0.0703%), and actual analysis from 10.34398 to 10.30752 seconds (-0.35%).
+The first window gives a larger 1.29% time reduction; do not pool it with the
+confirmation or describe the latter as a large application win. Peak RSS stays
+equivalent (598546 versus 598776 KiB). PHP remains at 0.96281 seconds and
+15.47394 billion instructions in the confirmation window.
+
+Five-pair controls improve 0.91% for shared frames, 4.90% for scalar frames,
+2.44% for property foreach and 7.23% for relative self returns. The shared
+control nevertheless adds 6.5 instructions per iteration (2754.94 to 2761.44),
+while scalar instruction counts are unchanged. Deep-release controls improve
+about 0.83%. A first short mixed-loop regression triggers independent longer
+confirmation: 245.602 versus 247.162 ms (+0.64%), within the one-percent gate.
+Code placement still affects native controls; instruction and time results are
+reported independently.
+
+The representation avoids overflow allocation for proofs within the first 64
+slots of a statement, including a statement located in a wide frame. This is
+covered by a boundary test and eight direct PHP programs with nested property
+chains; the whole application's allocation count is not measured. The change
+passes 73 focused test executions and 29 direct differential programs across
+GC roots, weak observations, references, aliases, destructor exceptions, Fibers
+and temporary foreach owners. All-target/all-feature compilation, formatting
+and unsafe enforcement pass. Main executor size stays 341653 bytes; the release
+helper grows from 18369 to 18429 bytes. No frame ABI or JIT lowering changes;
+native performance evidence remains x86-64 only.
+
+One fresh Callgrind profile of this exact candidate validates the same PHP output
+and attributes 29.394 billion instructions to the main executor, 5.582 billion
+to temporary release, 3.115 billion to class lookup and 2.603 billion to release
+tree classification, as self costs. Its 130.537 billion total is source attribution,
+not another native hardware sample. All jobs stay below 4.07 GB without OOM or
+timeout. Cleanup ran in both checkouts; no private host was configured. The
+integrating task accepts this bounded representation while keeping the overall
+PHP time/instruction parity goal active.

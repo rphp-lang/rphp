@@ -3072,6 +3072,54 @@ fn statement_temp_is_live_read_snapshot<'a>(
     false
 }
 
+/// Proofs are relative to one release range, including ranges in wide frames.
+/// Only unusually wide statements need heap storage. The set is captured after
+/// PHP callbacks and consumed before any further PHP code can run.
+#[derive(Default)]
+struct StatementTempSnapshots {
+    inline: u64,
+    overflow: Vec<usize>,
+}
+
+impl StatementTempSnapshots {
+    #[inline]
+    fn insert(&mut self, offset: usize) {
+        if offset < u64::BITS as usize {
+            self.inline |= 1u64 << offset;
+        } else {
+            self.overflow.push(offset);
+        }
+    }
+
+    #[inline]
+    fn contains(&self, offset: usize) -> bool {
+        if offset < u64::BITS as usize {
+            self.inline & (1u64 << offset) != 0
+        } else {
+            self.overflow.contains(&offset)
+        }
+    }
+}
+
+#[test]
+fn statement_snapshot_proofs_keep_inline_and_overflow_slots_distinct() {
+    let mut snapshots = StatementTempSnapshots::default();
+    for offset in [0, 31, 63] {
+        snapshots.insert(offset);
+    }
+    assert_eq!(snapshots.overflow.capacity(), 0);
+    for offset in [64, 95, 127, 128] {
+        snapshots.insert(offset);
+    }
+    for offset in 0..192 {
+        assert_eq!(
+            snapshots.contains(offset),
+            [0, 31, 63, 64, 95, 127, 128].contains(&offset),
+            "snapshot proof for offset {offset}",
+        );
+    }
+}
+
 #[cold]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
@@ -3154,17 +3202,35 @@ fn release_statement_temps(
         // is retired. Nested borrowed-property receivers may themselves be
         // earlier in the range. No proof may survive arbitrary PHP code.
         let op_array = (*frame).op_array();
-        let read_snapshots = |eg: &ExecutorGlobals| -> Vec<usize> {
-            (first..end).filter(|index| {
-                is_owned(*index) && statement_temp_is_live_read_snapshot(
-                    eg, op_array, *index, &*base.add(*index),
+        let read_snapshots = |eg: &ExecutorGlobals| {
+            let mut snapshots = StatementTempSnapshots::default();
+            let mut capture = |index: usize| {
+                if statement_temp_is_live_read_snapshot(
+                    eg, op_array, index, &*base.add(index),
                     |operand, kind| &*(*frame).get_op_ptr(operand as u32, kind, op_array),
                 )
-            }).collect()
+                {
+                    snapshots.insert(index - first);
+                }
+            };
+            if let Some(bitmap) = bitmap {
+                let below_end = u64::MAX.checked_shr((64 - end) as u32).unwrap_or(0);
+                let below_first = u64::MAX.checked_shr((64 - first) as u32).unwrap_or(0);
+                for index in HeapSlotIter::new(bitmap & below_end & !below_first) {
+                    capture(index as usize);
+                }
+            } else {
+                for index in first..end {
+                    if is_owned(index) {
+                        capture(index);
+                    }
+                }
+            }
+            snapshots
         };
         macro_rules! drop_statement_temp {
             ($value:expr, $index:expr, $snapshots:expr) => {{
-                let _snapshot = $snapshots.contains(&$index)
+                let _snapshot = $snapshots.contains($index - first)
                     .then(crate::value::suppress_cycle_snapshot_roots);
                 std::ptr::drop_in_place($value);
             }};
