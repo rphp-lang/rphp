@@ -691,3 +691,69 @@ local checkouts and no private host was configured. No frame ABI or JIT lowering
 changes; native evidence remains x86-64 only. The separate echo callable-lifetime
 failure is still open and does not block resuming the borrowed release-tree
 experiment after this reference-escape repair.
+
+## Accepted checkpoint: borrowed release-tree observation resumed
+
+The deferred classifier change resumes on `aabbd1e8`, after the reference-array
+escape proof and its failing deep DAG regression are fixed. The semantic proof,
+files, gates and rejection conditions above remain unchanged. Baseline and
+candidate use separate exact binaries; the corrected compiler is present on
+both sides. The two native transient-edge/shared-owner unit tests and the fixed
+deep reference regression are mandatory. This checkpoint makes no claim to fix
+the separately recorded echo callable-lifetime behavior.
+
+The root-pin proof also covers native visitor effects: `NativeObjectState` is
+crate-private, and every current `for_each_value` implementation only visits
+retained fields or delegates to another read-only visitor. Generator traversal
+can construct transient snapshots, which remain owned here. None of these
+visitors invokes PHP, edits ownership edges or retires a queued ordinary child.
+Only traversal metadata, including deep-drop markers, may change during the
+inspection. A future visitor that mutates that graph would require a different
+borrowing boundary before it could be used by this classifier.
+
+### Borrowed observer results and accepted limits
+
+The [exact-source samples](performance-phpstan-borrowed-release-tree-samples.json)
+identify source `e3a57f989f2b346314bea0d305c251bae9ef9f6018fad8b97bb9f3d5d8516f81`.
+PHPStan instructions fall from 128.3313 to 125.8905 billion in the first window
+and from 128.3294 to 125.8780 billion in the independent confirmation (about
+1.91%). Analysis changes from 10.3310 to 9.9112 seconds and, independently, from
+10.3244 to 10.1982 seconds. Every application run produces the same findings;
+reference PHP in the second window is 0.9679 seconds and 15.4742 billion
+instructions. RSS is effectively unchanged (598284 to 598330 KiB in the second
+window). The wide candidate time spread remains visible; windows are not pooled.
+
+The scalar-frame control regresses 5.54% initially and 4.07% in an independent
+five-pair confirmation; property reads regress 2.18% and 2.70%. Their median
+instruction counts are unchanged. Shared frames improve 0.21%, relative-self
+returns 6.67%, the long mixed control 1.44%, and deep releases about four percent.
+The integrating task explicitly accepts the two time regressions for this
+targeted 2.45-billion-instruction application reduction, favorable application
+windows and deep-release benefit. This is not an all-workloads speedup; scalar
+and property controls remain required for subsequent work.
+
+The main executor and temporary-release helper remain 341653 and 18429 bytes.
+The classifier shrinks from 5783 to 5716 bytes. After excluding relocation
+addresses and disassembler comments that label anonymous data tables, the main
+executor has the same 73,261-instruction sequence. Code and table placement
+change; these observations do not establish the precise hardware cause of the
+two time regressions. A fresh native cycle sample of this exact candidate
+attributes 23.08% to the main executor, 5.32% to class lookup and 2.27% to the
+temporary-release body plus 1.82% to its snapshot closure. This is sampled cycle
+attribution, not an additional instruction measurement.
+
+All 383 focused feature test executions and 61 direct PHP programs pass, as do
+all-target/all-feature compilation, formatting and unsafe enforcement. Three
+minimal/deep PHP programs and both transient/shared ownership unit regressions
+report zero Memcheck errors. The single new unsafe block is the documented
+root-pinned Value-bit copy; opaque handles remain owned. No frame, Value or JIT
+ABI changes. Allocation counts for the whole application and ARM64 native timing
+are not measured.
+
+The first expanded CLI differential run fails because host PHP and RPHP use
+different default `zend.exception_ignore_args` settings. Both explicit settings
+produce identical PHP/baseline/candidate output; the corrected differential
+runner pins the same setting on both sides. The failed job remains recorded,
+and no runtime change or retry without memory limits hides it. All jobs stay
+below 4.25 GB with no OOM or timeout. Cleanup ran in both local checkouts; no
+private benchmark host was configured. PHP time/instruction parity remains open.

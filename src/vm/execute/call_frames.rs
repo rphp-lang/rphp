@@ -304,6 +304,24 @@ fn value_tree_requires_vm_release(
 ) -> bool {
     type Counts = IdentityMap;
 
+    enum TreeHandle {
+        Borrowed(std::mem::ManuallyDrop<Value>),
+        Owned(Value),
+    }
+
+    impl TreeHandle {
+        fn value(&self) -> &Value {
+            match self {
+                Self::Borrowed(value) => value,
+                Self::Owned(value) => value,
+            }
+        }
+
+        fn rooted(&self) -> bool {
+            matches!(self, Self::Borrowed(_))
+        }
+    }
+
     #[inline]
     fn node_identity(value: &Value) -> Option<usize> {
         value
@@ -316,9 +334,31 @@ fn value_tree_requires_vm_release(
     fn queue_cycle_child(
         value: &Value,
         depth: u32,
-        pending: &mut Vec<(Value, u32)>,
+        rooted: bool,
+        pending: &mut Vec<(TreeHandle, u32)>,
         queued: &mut Counts,
     ) {
+        if rooted {
+            let value = if value.cycle_node().is_some() {
+                value
+            } else {
+                let value = value.dereferenced();
+                if value.cycle_node().is_none() && !value.needs_vm_resource_release() {
+                    return;
+                }
+                value
+            };
+            // SAFETY: rooted edges are ordinary storage transitively owned by
+            // the original, borrowed root. This entire walk runs without PHP
+            // re-entry, graph mutation or owner retirement. Copying the Value
+            // preserves allocation provenance without borrowing its slot; only
+            // persistent deep-drop markers may change. ManuallyDrop never
+            // releases this non-owner. Opaque visitors and every descendant
+            // of their owned snapshots always pass rooted=false instead.
+            let value = std::mem::ManuallyDrop::new(unsafe { std::ptr::read(value) });
+            pending.push((TreeHandle::Borrowed(value), depth.saturating_add(1)));
+            return;
+        }
         if let Some(value) = value
             .clone_cycle_handle()
             .or_else(|| value.dereferenced().clone_cycle_handle())
@@ -327,7 +367,7 @@ fn value_tree_requires_vm_release(
             if let Some(identity) = node_identity(value.dereferenced()) {
                 *queued.entry(identity).or_insert(0) += 1;
             }
-            pending.push((value, depth.saturating_add(1)));
+            pending.push((TreeHandle::Owned(value), depth.saturating_add(1)));
         }
     }
 
@@ -352,14 +392,15 @@ fn value_tree_requires_vm_release(
         }
     }
 
-    // Temporary Rc snapshots are read-only graph handles. Suppress ordinary
-    // possible-root registration until every snapshot has dropped; otherwise
-    // this predicate would itself perturb `gc_status()['roots']`.
+    // Ordinary edges borrow the graph pinned by `root`. Opaque native and
+    // generator visitors may expose transient Values, so they and their
+    // descendants retain owned snapshots. Suppress possible-root registration
+    // until those snapshots drop; inspection must not perturb GC root counts.
     let _cycle_snapshot_guard = crate::value::suppress_cycle_snapshot_roots();
     let root = value;
     let mut pending = Vec::new();
-    // Snapshot handles this walk itself holds per node, so a node's owner
-    // count can be reduced to the PHP references it really has.
+    // Only opaque owned handles alter strong counts. Ordinary borrowed edges
+    // need neither a retain/release pair nor an entry in this table.
     let mut queued: Counts = Counts::default();
     // In-tree references found so far per shared node. A container that
     // other PHP owners hold cannot die with this tree, so its children are
@@ -369,13 +410,15 @@ fn value_tree_requires_vm_release(
     let mut encounters: Counts = Counts::default();
     let mut descended: IdentitySet =
         Default::default();
-    let mut current: Option<(Value, u32)> = None;
+    let mut current: Option<(TreeHandle, u32)> = None;
     let mut maximum_depth = 0u32;
     let mut requires_release = false;
     loop {
-        let (value, depth) = current
+        let (value, depth, rooted) = current
             .as_ref()
-            .map_or((value, 0), |(value, depth)| (value, *depth));
+            .map_or((value, 0, true), |(handle, depth)| {
+                (handle.value(), *depth, handle.rooted())
+            });
         maximum_depth = maximum_depth.max(depth);
         if let Some(identity) = value.reference_identity()
             && !seen_references.insert(identity)
@@ -410,8 +453,8 @@ fn value_tree_requires_vm_release(
                         *slot += 1;
                         *slot
                     };
-                    // `queued` still counts the handle held in `current`;
-                    // it is released only after this node is processed.
+                    // An opaque handle held in `current` still counts until
+                    // this node is processed. Borrowed views add no owner.
                     let held_here = queued.get(&identity).copied().unwrap_or(0);
                     let owners = value
                         .cycle_strong_count()
@@ -428,28 +471,31 @@ fn value_tree_requires_vm_release(
                 if value.object_identity().is_some()
                     && let Some(object) = value.as_object()
                 {
-                    object.for_each_owned_value(|property| {
-                        queue_cycle_child(property, depth, &mut pending, &mut queued)
+                    object.for_each_native_value(|child| {
+                        queue_cycle_child(child, depth, false, &mut pending, &mut queued)
+                    });
+                    object.for_each_property(|_, property| {
+                        queue_cycle_child(property, depth, rooted, &mut pending, &mut queued)
                     });
                     if let Some(generator) = &object.generator {
                         generator
                             .as_ref()
                             .borrow()
                             .for_each_cycle_child(|child| {
-                                queue_cycle_child(child, depth, &mut pending, &mut queued)
+                                queue_cycle_child(child, depth, false, &mut pending, &mut queued)
                             });
                     }
                 } else if value.value_type() == ValueType::Closure {
                     if let Some(closure) = value.as_closure() {
                         if let Some(bound_this) = &closure.bound_this {
-                            queue_cycle_child(bound_this, depth, &mut pending, &mut queued);
+                            queue_cycle_child(bound_this, depth, rooted, &mut pending, &mut queued);
                         }
                         for capture in &closure.captures {
-                            queue_cycle_child(capture, depth, &mut pending, &mut queued);
+                            queue_cycle_child(capture, depth, rooted, &mut pending, &mut queued);
                         }
                         if let Some(static_vars) = &closure.static_vars {
                             for value in static_vars.as_ref().borrow().values() {
-                                queue_cycle_child(value, depth, &mut pending, &mut queued);
+                                queue_cycle_child(value, depth, rooted, &mut pending, &mut queued);
                             }
                         }
                     }
@@ -457,14 +503,14 @@ fn value_tree_requires_vm_release(
                     && let Some(array) = value.as_array()
                 {
                     for value in array.values() {
-                        queue_cycle_child(value, depth, &mut pending, &mut queued);
+                        queue_cycle_child(value, depth, rooted, &mut pending, &mut queued);
                     }
                 }
             }
         }
         // The finished snapshot handle drops with `current`; its identity no
         // longer counts as held by this walk.
-        if let Some((finished, _)) = current.take()
+        if let Some((TreeHandle::Owned(finished), _)) = current.take()
             && let Some(identity) = node_identity(finished.dereferenced())
             && let Some(slot) = queued.get_mut(&identity)
         {
@@ -475,6 +521,102 @@ fn value_tree_requires_vm_release(
             mark_deep_root(root, maximum_depth);
             return requires_release;
         }
+    }
+}
+
+#[cfg(test)]
+mod release_tree_observation_tests {
+    use super::*;
+    use crate::value::NativeObjectState;
+    use std::{any::Any, cell::Cell, rc::Rc};
+
+    #[derive(Clone, Default)]
+    struct SnapshotState {
+        visits: Rc<Cell<usize>>,
+        depth: usize,
+    }
+
+    impl NativeObjectState for SnapshotState {
+        fn clone_state(&self) -> Box<dyn NativeObjectState> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn for_each_value(&self, visit: &mut dyn FnMut(&Value)) {
+            self.visits.set(self.visits.get() + 1);
+            let mut value = Value::long(47);
+            for index in 0..self.depth {
+                value = match index % 3 {
+                    0 => {
+                        let mut array = PhpArray::new();
+                        array.push(value);
+                        Value::array(array)
+                    }
+                    1 => Value::object(PhpObject::dynamic(
+                        "TransientReleaseEdge".into(), 0,
+                        HashMap::from([("child".into(), value)]),
+                    )),
+                    _ => Value::owned_reference(value),
+                };
+            }
+            // No owner survives this method except what the observer retains.
+            // Descendants must remain owned after this temporary root retires.
+            visit(&value);
+        }
+    }
+
+    fn native_owner(state: SnapshotState) -> Value {
+        let mut object = PhpObject::dynamic("NativeReleaseEdges".into(), 0, HashMap::new());
+        *object.native_object_state_mut::<SnapshotState>() = state;
+        Value::object(object)
+    }
+
+    fn inspect(eg: &ExecutorGlobals, root: &Value) -> (usize, usize, usize) {
+        let mut objects = IdentitySet::default();
+        let mut arrays = IdentitySet::default();
+        let mut references = IdentitySet::default();
+        assert!(!value_tree_requires_vm_release(
+            eg, root, &mut objects, &mut arrays, &mut references,
+            &mut IdentitySet::default(),
+        ));
+        (objects.len(), arrays.len(), references.len())
+    }
+
+    #[test]
+    fn opaque_transient_roots_keep_deep_descendants_alive() {
+        let eg = ExecutorGlobals::new();
+        let state = SnapshotState { depth: 900, ..Default::default() };
+        let visits = Rc::clone(&state.visits);
+        let root = native_owner(state);
+        let roots_before = crate::value::cycle_collection_status().roots;
+        assert_eq!(inspect(&eg, &root), (301, 300, 300));
+        assert_eq!(visits.get(), 1);
+        assert_eq!(crate::value::cycle_collection_status().roots, roots_before);
+    }
+
+    #[test]
+    fn shared_subtrees_wait_for_every_in_tree_owner() {
+        let eg = ExecutorGlobals::new();
+        let state = SnapshotState::default();
+        let visits = Rc::clone(&state.visits);
+        let mut branch = PhpArray::new();
+        branch.push(native_owner(state));
+        let branch = Value::array(branch);
+        let mut root = PhpArray::new();
+        root.push(branch.clone());
+        root.push(branch.clone());
+        let root = Value::array(root);
+        assert_eq!(inspect(&eg, &root), (0, 2, 0));
+        assert_eq!(visits.get(), 0, "an external owner pins the whole subtree");
+        drop(branch);
+        let roots_before = crate::value::cycle_collection_status().roots;
+        assert_eq!(inspect(&eg, &root), (1, 2, 0));
+        assert_eq!(visits.get(), 1, "both in-tree edges identify one live child");
+        assert_eq!(crate::value::cycle_collection_status().roots, roots_before);
     }
 }
 

@@ -3261,10 +3261,17 @@ impl PhpObject {
     /// Ownership edges include native payloads invisible to PHP property
     /// enumeration. Ordinary objects retain their existing property storage.
     pub(crate) fn for_each_owned_value(&self, mut visitor: impl FnMut(&Value)) {
+        self.for_each_native_value(&mut visitor);
+        self.for_each_property(|_, value| visitor(value));
+    }
+
+    /// Native protocols can expose transient snapshot Values. Keep this
+    /// boundary separate from properties for observers that borrow only
+    /// ordinary storage pinned by a live ownership tree.
+    pub(crate) fn for_each_native_value(&self, mut visitor: impl FnMut(&Value)) {
         if let Some(dynamic) = &self.dynamic_properties {
             Self::for_each_native_owned_value(dynamic, &mut visitor);
         }
-        self.for_each_property(|_, value| visitor(value));
     }
 
     #[cold]
