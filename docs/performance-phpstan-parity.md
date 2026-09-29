@@ -902,3 +902,112 @@ stages and needs its own comparison. Shell syntax and manifest hashes pass;
 the equivalent two-stage commands produced the measured artifact, while the
 updated shell entrypoint has not received a second full rebuild. Cleanup ran in
 both local checkouts; no private benchmark host was configured.
+
+## Application-level work diagnostic
+
+Accepted source is `bb46dcca` (Rust unchanged from `4ad0c998`), with the separately
+identified PGO executable. The remaining gap is 122.74 versus 15.47 billion
+whole-command instructions. Existing native profiles identify runtime costs,
+but do not directly establish whether PHPStan executes the same number of PHP
+function bodies on both interpreters.
+
+Create one private diagnostic archive with identical fixed integer counters at
+named-function and ordinary-closure body entries. Exclude abstract declarations
+and arrow expressions; retain a source-position map. Initialize scalar counters
+before archive bootstrap, serialize them only at shutdown, and run both
+interpreters with the same input, fresh cache and explicit INI settings. Keep
+all generated code and raw output outside tracked source. Confirm the original
+application findings, ordinary stderr and exit status before interpreting any
+counts. Instrumented elapsed time is not performance evidence: added PHP code
+changes execution and ownership. Counts from generators represent body entries,
+not allocation of a generator object.
+
+The integrating task owns this diagnostic only. No runtime implementation or
+new language behavior is admitted. Runs inherit the standard memory boundary
+and benchmark lock. Reject the probe if it changes observable application
+results or cannot match entry IDs between interpreters. Use count differences
+to select the next measured runtime boundary; do not turn workload names into
+runtime recognition or optimize the diagnostic instrumentation itself.
+
+The full-array counter probe is rejected after a SIGSEGV. Scalar counters reduce
+probe overhead but reproduce the same crash. Reference PHP preserves all
+original findings with both probes. Both accepted non-PGO and PGO executables
+crash; native debugging locates a corrupted suspended frame during
+`restore_detached_scope_globals`, with ordinary integer Value bytes in its
+header. No OOM occurs. Four simple direct/nested/closure/static callback
+reducers agree across all runtimes but do not reproduce it. Temporary local
+caller-descriptor and frame-retirement invariants then identified the first
+stale logical caller. These assertions are absent from the repaired runtime;
+the failing probes remain diagnostic evidence, not performance samples.
+
+### Diagnostic root cause and bounded repair contract
+
+The current source frame and its function descriptor remain valid across the
+callback and its retirement. The invalid ancestor is a detached trace-table
+entry inherited at a reused stack address, not corruption of the current
+frame. A diagnostic assertion at `pop_vm_call_frame` catches the first leftover
+entry in `force_close_generator_activation`: its branch without a pending
+`finally` pops the materialized generator frame but does not discard the
+logical caller installed by `materialize_generator_frame`. This failure is
+observed before the later invalid ancestor is dereferenced.
+
+The repair scope is that generator retirement boundary. Remove the trace entry
+only after local cleanup/destructors have used the live caller and before stack
+storage is reusable. Keep all temporary diagnostic assertions out of the final
+runtime. Ownership remains with this integrating task in the same isolated
+performance worktree. No language rule or execution-tier admission changes.
+
+The acceptance gate is a regression checking that newly allocated frames do
+not inherit a force-closed generator's caller, for both unstarted and suspended
+generators and both source-origin conventions. It must fail before the repair.
+Run the relevant generator/callback checks, then complete the identical-archive
+application-count comparison with matching findings. Ordinary uninstrumented
+phase/counter measurements remain the performance evidence. A callback-output
+or lifecycle regression rejects the change; incomplete logical counters must
+not be presented as evidence of equal application work.
+
+### Generator retirement repair: accepted
+
+The no-finally close path now discards its detached caller after frame
+local/destructor cleanup and before the stack allocation can be reused. This
+matches the existing ordinary generator retirement protocol. No production
+unsafe block, ABI, opcode, JIT admission or PHP behavior is added.
+
+The new lifecycle regression fails on the unrepaired runtime. After the fix it
+passes in default, no-default-feature and all-feature builds; its four cases
+cover unstarted/suspended generators and both caller-origin conventions. The
+93 existing frame-retirement, generator and native-callback tests also pass.
+Formatting, the unsafe diff gate and all-target/all-feature checking pass. Test
+unsafe operations stay in test support and do not relax production inventory.
+All build and execution jobs use a verified 6 GiB aggregate boundary without
+swap, OOM or timeout. The first build attempt was stopped by the production
+unsafe inventory when test code was colocated in the runtime file; moving the
+regression to test support resolved that packaging issue without changing the
+gate.
+
+The identical instrumented archive now completes with the same 20 findings,
+ordinary stderr and exit status as original PHP. Its 23557 entry IDs span 3014
+modified source files. Reference PHP executes 9605646 counted function bodies;
+RPHP executes 9590291, a difference of -0.160%. There are 773 differing entry
+IDs, with 54903 extra and 70258 fewer RPHP entries. Some differences involve
+native-versus-polyfill selection and reflection-driven Nette dependency
+hashing; their causes have not all been established. Parser traversal counts
+include several exact matches. These counters rule out an order-of-magnitude
+increase in function entries, not all possible differences inside functions.
+Arrow expressions and native function bodies are outside this probe.
+
+The [repair evidence packet](performance-phpstan-generator-trace-samples.json)
+retains exact source/executable/probe hashes, validation commands, counter
+summaries and every ordinary native sample. With two fresh-cache samples per
+runtime, identical non-PGO settings give these medians:
+
+| Runtime | Analysis | Whole-command instructions | Peak RSS |
+| --- | ---: | ---: | ---: |
+| PHP | 1.0208 s | 15.4743 G | 177566 KiB |
+| Previous RPHP | 10.0370 s | 125.8746 G | 598904 KiB |
+| Repaired RPHP | 9.9619 s | 125.8717 G | 598574 KiB |
+
+The instruction difference is negligible and these short timing distributions
+do not establish a performance gain. This is a correctness repair enabling the
+application-work diagnostic. Earlier PGO results use another build policy and
+are not mixed into this source-change comparison. PHP parity remains open.

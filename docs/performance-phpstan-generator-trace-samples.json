@@ -1,0 +1,493 @@
+{
+  "checkpoint": "generator logical-caller retirement",
+  "baseline_commit": "bb46dcca",
+  "source_sha256": "380d36697dca0d225d3f8be578771de5eaa3059caf938693350bd66108c781cd",
+  "binary_sha256": "73aaef3d04a61fd7b16d1e1acfb2bb17c99c84f7254ca6e2178e7167daf42aed",
+  "build": {
+    "profile": "max-perf",
+    "features": "default",
+    "cpu": "rustc default",
+    "debug": "line-tables-only",
+    "pgo": false,
+    "seconds": 188.44256881299953,
+    "bytes": 84280296
+  },
+  "regression_before": {
+    "exit": 101,
+    "seconds": 58.46345399500569,
+    "expected_failure": true
+  },
+  "checks": [
+    {
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "HEAD"
+      ],
+      "exit": 0,
+      "seconds": 3.519431651002378,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--lib",
+        "force_close_discards_trace_link_before_reusing_frame"
+      ],
+      "exit": 0,
+      "seconds": 58.06232207399444,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 897 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--test",
+        "e2e_generators",
+        "--test",
+        "e2e_native_callback_continuations",
+        "--test",
+        "e2e_frame_retirement"
+      ],
+      "exit": 0,
+      "seconds": 53.806521438993514,
+      "test_results": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 68 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.06s",
+        "test result: ok. 15 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 2.4176833579986123,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--no-default-features",
+        "--lib",
+        "force_close_discards_trace_link_before_reusing_frame"
+      ],
+      "exit": 0,
+      "seconds": 55.00703351100674,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 749 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--lib",
+        "force_close_discards_trace_link_before_reusing_frame"
+      ],
+      "exit": 0,
+      "seconds": 59.4642002019973,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 921 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--profile",
+        "dev-fast",
+        "--all-targets",
+        "--all-features"
+      ],
+      "exit": 0,
+      "seconds": 17.743914304999635,
+      "test_results": []
+    }
+  ],
+  "application_counts": {
+    "complete": true,
+    "probe_sha256": "b646812e902d0e6f9318f411c57eaa292a0bea7373c425633a5df6f6c3ad12f1",
+    "input_sha256": "0335fe28e70618e0e38e54d56f2ce361d2372e691474036a0a68318d36d990c2",
+    "archive_sha256": "1e3049e2478fd0f2875646f3d925a04096bc97cf372eb0e2e6677100fc450c7e",
+    "mapped_entries": 23557,
+    "mapped_files": 3014,
+    "runs": [
+      {
+        "runtime": "php-original",
+        "output_equal": true,
+        "exit": 1,
+        "diagnostic_wall_seconds": 1.3866899840068072,
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      {
+        "runtime": "php",
+        "output_equal": true,
+        "exit": 1,
+        "diagnostic_wall_seconds": 1.4772376699984306,
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "body_entries": 9605646,
+        "entered_functions": 6818,
+        "counts_sha256": "60b6b8697ae62d87532eec658e1aa2b5f9310ec0306aed2b0469cb7a0200d118"
+      },
+      {
+        "runtime": "rphp",
+        "output_equal": true,
+        "exit": 1,
+        "diagnostic_wall_seconds": 14.573120059008943,
+        "binary_sha256": "73aaef3d04a61fd7b16d1e1acfb2bb17c99c84f7254ca6e2178e7167daf42aed",
+        "body_entries": 9590291,
+        "entered_functions": 6809,
+        "counts_sha256": "6554be3c4b5cba1687938c4affd05277a32c1501f719f805189c5a340911f891"
+      }
+    ],
+    "total_extra_entries": 54903,
+    "total_fewer_entries": 70258
+  },
+  "count_differences": 773,
+  "largest_count_differences": [
+    {
+      "id": 16981,
+      "file": "vendor/nette/utils/src/Utils/Type.php",
+      "line": 27,
+      "offset": 730,
+      "name": "fromReflection",
+      "php": 10718,
+      "rphp": 1331,
+      "difference": -9387
+    },
+    {
+      "id": 16985,
+      "file": "vendor/nette/utils/src/Utils/Type.php",
+      "line": 73,
+      "offset": 3008,
+      "name": "resolve",
+      "php": 9939,
+      "rphp": 1330,
+      "difference": -8609
+    },
+    {
+      "id": 16982,
+      "file": "vendor/nette/utils/src/Utils/Type.php",
+      "line": 38,
+      "offset": 1342,
+      "name": "fromReflectionType",
+      "php": 9937,
+      "rphp": 1330,
+      "difference": -8607
+    },
+    {
+      "id": 16986,
+      "file": "vendor/nette/utils/src/Utils/Type.php",
+      "line": 86,
+      "offset": 3510,
+      "name": "__construct",
+      "php": 10035,
+      "rphp": 1428,
+      "difference": -8607
+    },
+    {
+      "id": 16987,
+      "file": "vendor/nette/utils/src/Utils/Type.php",
+      "line": 98,
+      "offset": 3944,
+      "name": "__toString",
+      "php": 8743,
+      "rphp": 136,
+      "difference": -8607
+    },
+    {
+      "id": 22995,
+      "file": "vendor/symfony/polyfill-mbstring/Mbstring.php",
+      "line": 1026,
+      "offset": 36192,
+      "name": "getEncoding",
+      "php": 6972,
+      "rphp": 142,
+      "difference": -6830
+    },
+    {
+      "id": 22984,
+      "file": "vendor/symfony/polyfill-mbstring/Mbstring.php",
+      "line": 855,
+      "offset": 29834,
+      "name": "mb_ord",
+      "php": 5839,
+      "rphp": 0,
+      "difference": -5839
+    },
+    {
+      "id": 23077,
+      "file": "vendor/symfony/polyfill-mbstring/bootstrap80.php",
+      "line": 119,
+      "offset": 7793,
+      "name": "mb_ord",
+      "php": 5839,
+      "rphp": 0,
+      "difference": -5839
+    },
+    {
+      "id": 16095,
+      "file": "vendor/nette/di/src/DI/DependencyChecker.php",
+      "line": 121,
+      "offset": 5175,
+      "name": "hashParameters",
+      "php": 3245,
+      "rphp": 0,
+      "difference": -3245
+    },
+    {
+      "id": 8101,
+      "file": "src/TrinaryLogic.php",
+      "line": 99,
+      "offset": 3156,
+      "name": "no",
+      "php": 136024,
+      "rphp": 137952,
+      "difference": 1928
+    },
+    {
+      "id": 12011,
+      "file": "src/Type/StringType.php",
+      "line": 276,
+      "offset": 9696,
+      "name": "hasTemplateOrLateResolvableType",
+      "php": 25122,
+      "rphp": 26935,
+      "difference": 1813
+    },
+    {
+      "id": 8099,
+      "file": "src/TrinaryLogic.php",
+      "line": 83,
+      "offset": 2741,
+      "name": "yes",
+      "php": 366162,
+      "rphp": 367817,
+      "difference": 1655
+    }
+  ],
+  "native_application": {
+    "complete": true,
+    "source_sha256": "380d36697dca0d225d3f8be578771de5eaa3059caf938693350bd66108c781cd",
+    "cpu": 2,
+    "event": "instructions:u",
+    "outlier_policy": "retain all valid measured samples",
+    "samples": [
+      {
+        "runtime": "php",
+        "round": 0,
+        "instructions": 15474364355,
+        "analysis_seconds": 0.982284069,
+        "wall_seconds": 1.4299837190046674,
+        "max_rss_kib": 177492,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 99.3006993006993,
+          "cpu18": 2.0833333333333335
+        }
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "instructions": 125880923701,
+        "analysis_seconds": 10.007286549,
+        "wall_seconds": 12.335064351995243,
+        "max_rss_kib": 598816,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.4889975550122249
+        }
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "instructions": 125866211902,
+        "analysis_seconds": 9.913193703,
+        "wall_seconds": 12.179064159994596,
+        "max_rss_kib": 598508,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.16433853738701726
+        }
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "instructions": 125877195245,
+        "analysis_seconds": 10.010545969,
+        "wall_seconds": 12.264167044006172,
+        "max_rss_kib": 598640,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 1.556101556101556
+        }
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "instructions": 125868327772,
+        "analysis_seconds": 10.066802263,
+        "wall_seconds": 12.39392988900363,
+        "max_rss_kib": 598992,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.2425222312045271
+        }
+      },
+      {
+        "runtime": "php",
+        "round": 5,
+        "instructions": 15474310841,
+        "analysis_seconds": 1.059294939,
+        "wall_seconds": 1.5029906319978181,
+        "max_rss_kib": 177640,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 99.34210526315789,
+          "cpu18": 9.271523178807946
+        }
+      }
+    ],
+    "holdouts": [],
+    "binaries": {
+      "baseline": "2f6c7e23b6f39d9b4e26356fed2fd72a22537029d7beb96800e7b5d0f9cf8c4b",
+      "candidate": "73aaef3d04a61fd7b16d1e1acfb2bb17c99c84f7254ca6e2178e7167daf42aed",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "medians": {
+      "php": {
+        "instructions": 15474337598.0,
+        "analysis_seconds": 1.020789504,
+        "wall_seconds": 1.4664871755012427,
+        "max_rss_kib": 177566.0
+      },
+      "baseline": {
+        "instructions": 125874625736.5,
+        "analysis_seconds": 10.037044406,
+        "wall_seconds": 12.364497120499436,
+        "max_rss_kib": 598904.0
+      },
+      "candidate": {
+        "instructions": 125871703573.5,
+        "analysis_seconds": 9.961869836,
+        "wall_seconds": 12.221615602000384,
+        "max_rss_kib": 598574.0
+      }
+    }
+  },
+  "boundaries": {
+    "parity-generator-regression-before": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 58.490192170997034,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3092447232,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-generator-trace-build-02": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 306.38116637800704,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3742580736,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-generator-trace-counts": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 17.65696787800698,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 690089984,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-generator-trace-final": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 184.725715958004,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3667828736,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "limitations": [
+    "Body counters exclude arrow expressions and native functions.",
+    "Instrumented time is not performance evidence.",
+    "Equal application findings do not prove identical application execution: 773 entry IDs differ.",
+    "Non-PGO baseline and candidate are compared with identical flags; earlier PGO timings form a separate comparison.",
+    "Native validation is x86-64 only."
+  ]
+}

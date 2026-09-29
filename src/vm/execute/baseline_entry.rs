@@ -2759,6 +2759,9 @@ fn force_close_generator_activation(
         )?;
         run_frame_destructors(eg, frame)?;
         eg.current_execute_data.set(saved_execute_data);
+        // Materialization publishes a logical caller even when no finally
+        // body runs. Retire that link before this stack address is reused.
+        eg.discard_detached_trace_caller(frame as usize);
         unsafe { cleanup_frame_slots(frame) };
         pop_vm_call_frame(eg, frame);
         return Ok(());
@@ -4543,3 +4546,7 @@ pub(crate) fn inject_suspended_exception(
         }
     })
 }
+
+#[cfg(test)]
+#[path = "../../../tests/support/generator_frame_retirement.rs"]
+mod generator_frame_retirement_tests;
