@@ -526,3 +526,168 @@ not another native hardware sample. All jobs stay below 4.07 GB without OOM or
 timeout. Cleanup ran in both checkouts; no private host was configured. The
 integrating task accepts this bounded representation while keeping the overall
 PHP time/instruction parity goal active.
+
+## Rejected checkpoint: execution frequency at ordinary ownership boundaries
+
+- Outcome: the compiler can optimize ordinary ownership, call and frame work
+  without an explicit assertion that those routines are rarely executed.
+- Baseline: `8bef72b7`. Exact source profiling charges 5.582 billion self
+  instructions to temporary release, 2.833 billion to full call entry,
+  1.963 billion to committed frame retirement and 1.452 billion to bitmap
+  replacement. These routines and scalar replacement/frame pop carry `cold`
+  attributes despite millions of ordinary invocations. Existing disassembly
+  shows full register-saving prologues even for no-owner overwrite paths.
+- Hypothesis: remove only the six frequency annotations and retain existing
+  explicit non-inlining boundaries. Let the normal optimizer choose block
+  placement and helper inlining. This is an experiment; source annotation alone
+  does not prove that it causes the instruction/time gap.
+- Semantics and ownership: the integrating task changes attributes in the
+  executor, call-frame and slot-write source only. No runtime predicate, PHP
+  operation, ownership order, error boundary, ABI, encoder or allocation changes.
+- Gates: exact-source default ownership/GC/type regressions, remaining feature
+  checks, direct PHP differentials, hardware application counts and phase timing,
+  all existing independent controls, code size and memory. Native evidence is
+  x86-64; no ARM64 performance claim.
+- Reject if application instructions/time do not benefit, generated code expands
+  without an offsetting measured benefit, or independently confirmed control
+  regressions remain outside the agreed band. Do not stack unrelated source
+  changes on an unsuccessful frequency experiment.
+
+### Ordinary frequency result
+
+Removing six `cold` attributes preserves all 29 direct PHP differential outputs
+and the first 26 focused default test executions, but fails the performance gate.
+The application window changes whole-command instructions from 128.3341 to
+128.0681 billion (-0.21%) while analysis changes from 10.1562 to 10.2799 seconds
+(+1.22%). Independent five-pair controls regress 5.97% for shared frames, 4.08%
+for scalar frames and 5.59% for relative self returns. Their instruction counts
+improve slightly, so removing source frequency annotations does not address the
+native execution cost. Property and deep-release controls improve modestly.
+
+The candidate source is `596aa3405b03101428cea4f39a8a64ab8f0402e805f9028d0edf99b1ec819d00`.
+Both bounded jobs complete without OOM or timeout; the largest memory peak is
+3.75 GB. All six annotations are restored exactly to the accepted baseline.
+Remaining feature gates are not run for this rejected candidate. No unrelated
+implementation is stacked on it.
+
+## Deferred checkpoint: borrowed release-tree observation
+
+- Outcome: inspecting a live ownership tree does not manufacture strong owners
+  and an accounting table for ordinary arrays, properties and closure captures.
+- Baseline: `8bef72b7`, exact source Callgrind 130.537 billion instructions.
+  Release classification costs 2.603 billion self instructions; its child queue
+  costs 2.021 billion inclusive over 8.835 million calls, with additional counted
+  snapshots, queue-map growth and Value drops. The frequency experiment is rejected.
+- Hypothesis: pending ordinary edges can store non-owning copies of Value bits
+  while the original root pins the entire read-only graph. Only opaque native and
+  generator visitors retain the existing owned handles and their count corrections.
+  Descendants of such owned handles also remain owned, preserving transient edges.
+- Semantic envelope: no PHP callbacks, graph mutation, owner retirement or escape
+  is permitted during classification. Copies retain pointer provenance but borrow
+  allocations, never storage slots; object marker mutation therefore crosses no
+  property borrow. Shared-owner encounter proofs, reference alias deduplication,
+  traversal order, deep-drop markers and every callback-capable type remain intact.
+  Count corrections cover only handles actually retained by the observer.
+- Ownership: integrating task owns the release classifier, native-edge visitor
+  boundary and focused lifecycle tests. No frame, Value or JIT ABI changes.
+- Gates: pin/opaque transient-edge and shared-alias tests, deep release, GC roots,
+  generator and destructor exception coverage; PHP differential outputs; relevant
+  default/no-default/all-feature gates, unsafe inventory and focused sanitizer
+  diagnostics if the candidate survives measurement. Exact-source PHPStan hardware
+  counts, phase times, RSS, independent controls and code-size comparison.
+- Stop: reject lost callbacks, root-count changes, dangling snapshots, unbounded
+  traversal storage, or confirmed unexplained control regressions above one percent.
+  A reduced instruction count alone does not establish application parity.
+
+### Pre-existing shared-reference lifetime failure
+
+The focused default gate exposes a crash in the new mixed reference, closure and
+native-container regression. Reference PHP prints `held|leaf|cleared`; the exact
+accepted baseline also crashes before output (SIGSEGV), while the checked test
+build rejects an invalid Rc strong-count precondition. The failure is preserved
+and is not attributed to the borrowed observer. The observer passes its two unit
+checks but receives no performance or acceptance claim; its source is restored
+before isolating the lifetime defect.
+
+## Accepted correctness checkpoint: shared-reference release lifetime
+
+- Outcome: a deep ownership DAG built from explicit reference pairs, ordinary
+  object properties, closure captures and native array ownership releases a leaf
+  once, after its last external owner, without using freed Rc storage.
+- Baseline: `8bef72b7`, directly reproduces SIGSEGV for the added PHP differential.
+  The checked build stops in Value clone during retained temporary-container
+  discovery. Reference output is `held|leaf|cleared`.
+- Scope: reduce the reproducer and fix the actual ownership transition. Preserve
+  destructor/exception/GC order; do not guard on the fixture or disable an existing
+  runtime mode. The integrating task owns the necessary shared runtime files.
+- Gates: exact PHP differential, bounded memory diagnostics and relevant ownership,
+  deep-release, reference and GC feature coverage. Recheck application time/counts
+  and independent controls before accepting the correction.
+- Stop: do not restore the deferred observer or combine another performance
+  experiment until the baseline lifetime defect is understood and fixed.
+
+The reducer shows that one reference-array layer suffices; native containers and
+closures are unnecessary for the memory defect. `AddArrayElement` duplicated CV
+promotion and moved the unowned bits of a borrowable heap argument into a new
+owned cell. The first candidate reused `materialize_reference_alias` to acquire
+the real edge before promotion and preserve the shared main-scope mirror
+protocol. That runtime variant is rejected below; the accepted fix changes the
+compiler's argument ownership proof instead.
+
+A separate baseline control also finds that invoking even a direct CV Closure
+keeps it weakly observable after its PHP owner is unset. It reproduces without
+reference arrays, so the promotion regression tests exercise closure alias
+storage without invocation; the independent invocation-lifetime failure remains
+recorded for the next correctness checkpoint. Do not treat that failure as fixed
+by argument promotion.
+
+### Runtime-promotion variant and proof correction
+
+The first repair passes 144 focused feature test executions and 54 PHP programs;
+three Memcheck cases report zero errors, versus the baseline's freed Rc storage.
+However, expanding the canonical promotion helper in the main executor adds
+508 code bytes (341653 to 342161). Independent scalar controls regress 11.66%
+with unchanged instructions; shared frames regress 1.19% and relative self returns
+2.81%. The application instruction count is essentially unchanged. This runtime
+variant is not accepted and is restored before the next implementation.
+
+The ownership proof is the more appropriate boundary: `build_borrowable_heap_args`
+excludes in-place mutation of an array destination, but misses a reference-array
+source in operand two. The candidate clears that parameter's borrow bit during
+compilation. A caller then supplies the owned argument required by existing CV
+promotion. This changes no steady-state opcode body, runtime guard or reference
+representation. The same differential, memory and feature gates apply.
+
+### Accepted compiler proof and explicit performance limit
+
+The compiler repair passes 144 focused test executions across default,
+no-default and all-feature configurations, all-target/all-feature compilation,
+formatting and unsafe enforcement. All 54 direct programs match PHP; three
+minimal/deep reference-escape programs have zero Memcheck errors with system
+heap routing. The baseline's freed-Rc-storage failure is fixed without a new
+unsafe block or executor branch. Leak detection is not part of this diagnostic.
+The [complete measurements](performance-phpstan-reference-escape-samples.json)
+retain both application windows and every valid control sample.
+
+In the independent application window, instructions change from 128.3341 to
+128.3188 billion and analysis from 10.5240 to 10.2595 seconds; reference PHP is
+0.9732 seconds and 15.4742 billion instructions. RSS stays approximately 585 MiB.
+The earlier window is slower for all runtimes and is reported separately.
+These measurements do not establish an instruction speedup or PHP parity.
+
+The relative-self return control regresses 3.87% in the first five-pair window
+and 9.05% in a separate five-pair confirmation. Its median instruction count is
+unchanged. The normalized 73,261-instruction main-executor sequence is identical
+and still 341653 bytes; linked addresses shift by 64 bytes. The precise hardware
+cause of the time difference is not established. Shared-frame confirmation is
+within one percent (+0.72%); scalar, property, mixed and deep controls do not
+show a confirmed regression above the bound.
+
+The integrating task explicitly accepts this narrow correctness tradeoff to
+remove a reproducible use-after-free and crash. This is not acceptance as a
+performance improvement. Relative-self remains an independent regression
+control. All jobs stay below 4.17 GB with no OOM or timeout; cleanup ran in both
+local checkouts and no private host was configured. No frame ABI or JIT lowering
+changes; native evidence remains x86-64 only. The separate echo callable-lifetime
+failure is still open and does not block resuming the borrowed release-tree
+experiment after this reference-escape repair.

@@ -29,9 +29,9 @@ use crate::vm::function::{
     CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
 };
 use crate::vm::instruction::{
-    FETCH_DIM_FUNC_ARG, FETCH_DIM_MUTABLE, FETCH_DIM_REFERENCE_SOURCE, InlineCache, Instruction,
-    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG, OpType,
-    SEND_FLAG_YIELD_SNAPSHOT,
+    ARRAY_ELEMENT_REFERENCE, FETCH_DIM_FUNC_ARG, FETCH_DIM_MUTABLE, FETCH_DIM_REFERENCE_SOURCE,
+    InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG,
+    OpType, SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -1481,10 +1481,23 @@ fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
             // A local `=&` may expose either participating parameter through
             // the other CV for the rest of this frame.
             OpCode::BindCvRef => return 0,
+            // A reference element promotes its source CV into an owned cell.
+            // That cell can outlive this frame, so it must receive a real
+            // argument owner rather than the caller's uncounted borrowed bits.
+            // Ordinary by-value elements still only require destination COW.
+            OpCode::AddArrayElement => {
+                if instruction.op1_type == OpType::Cv {
+                    clear_cv(&mut mask, instruction.op1);
+                }
+                if instruction.op2_type == OpType::Cv
+                    && instruction._pad & ARRAY_ELEMENT_REFERENCE != 0
+                {
+                    clear_cv(&mut mask, instruction.op2);
+                }
+            }
             // In-place array operations require an owned Rc so make_mut can
             // observe the caller and detach according to PHP COW semantics.
-            OpCode::AddArrayElement
-            | OpCode::AddArrayUnpack
+            OpCode::AddArrayUnpack
             | OpCode::AddCallArgument
             | OpCode::AddCallUnpack
             | OpCode::AssignDim
