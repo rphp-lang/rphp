@@ -26,6 +26,9 @@ use crate::vm::virtual_aggregate_cache::{
     RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS, ResolvedVirtualAggregateCacheEntry,
 };
 
+#[cfg(test)]
+mod method_index_tests;
+
 mod cycle;
 pub(crate) mod fiber;
 pub mod startup;
@@ -86,6 +89,17 @@ struct GenericPropertyContractBinding {
     property: Box<str>,
     scope: Box<str>,
     expected: GenericType,
+}
+
+/// Immutable declarations bound the size of both indexes. Native registration
+/// invalidates the owner cache when it changes method metadata.
+#[derive(Default)]
+struct MethodIndex {
+    own: HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>,
+    resolved: std::cell::OnceCell<
+        HashMap<String, (Visibility, bool, String), std::hash::BuildHasherDefault<SymbolHasher>>,
+    >,
+    incomplete_at: Cell<Option<usize>>,
 }
 
 #[derive(Clone, Copy)]
@@ -1160,15 +1174,11 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: PendingNamedVariadic,
-    /// Own-method lookup index per registered class (`class_id` ->
-    /// lowercase method name -> position in `ClassDef::methods`), built on
-    /// first use; method sets are fixed once a class is registered.
+    /// Declaration-bounded method indexes per registered class. The resolved
+    /// index includes traits and inheritance; unregistered/Unicode queries
+    /// retain canonical traversal.
     method_index_cache: std::cell::RefCell<
-        HashMap<
-            u32,
-            Rc<HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>>,
-            std::hash::BuildHasherDefault<SymbolHasher>,
-        >,
+        HashMap<u32, Rc<MethodIndex>, std::hash::BuildHasherDefault<SymbolHasher>>,
     >,
     /// Fingerprints of sources the front end parsed without a syntax error.
     /// `token_get_all(..., TOKEN_PARSE)` on such a source cannot fail either,
@@ -3250,6 +3260,7 @@ impl ExecutorGlobals {
             .entry(owner)
             .or_default()
             .push(contract);
+        self.method_index_cache.get_mut().clear();
     }
 
     /// Bind the body immediately after its native declaration is registered.
@@ -3332,6 +3343,7 @@ impl ExecutorGlobals {
                 .position(|name| name.eq_ignore_ascii_case(method.name))
                 .unwrap_or(usize::MAX)
         });
+        self.method_index_cache.get_mut().clear();
     }
 
     #[cold]
@@ -3368,6 +3380,7 @@ impl ExecutorGlobals {
             .expect("registered internal method");
         contract.visibility = visibility;
         contract.is_abstract = is_abstract;
+        self.method_index_cache.get_mut().clear();
     }
 
     #[cold]
@@ -10600,30 +10613,117 @@ impl ExecutorGlobals {
             .map(|(vis, _, decl)| (vis, decl))
     }
 
-    /// Look up method visibility AND staticness in a class hierarchy.
-    /// Returns (visibility, is_static, declaring_class_name).
-    /// The own-method index of a registered class (see `method_index_cache`).
-    fn method_index(
-        &self,
-        class_def: &ClassDef,
-    ) -> Rc<HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>> {
+    /// Own declarations retain the canonical first-declaration lookup rule.
+    fn method_index(&self, class_def: &ClassDef) -> Rc<MethodIndex> {
         if let Some(index) = self.method_index_cache.borrow().get(&class_def.class_id) {
             return Rc::clone(index);
         }
-        let mut index =
+        let mut own =
             HashMap::with_capacity_and_hasher(class_def.methods.len(), Default::default());
         for (position, (name, _, _, _, _)) in class_def.methods.iter().enumerate() {
-            // The scan returned the first declaration; keep that verdict.
-            index.entry(name.to_ascii_lowercase()).or_insert(position);
+            own.entry(name.to_ascii_lowercase()).or_insert(position);
         }
-        let index = Rc::new(index);
+        let index = Rc::new(MethodIndex {
+            own,
+            ..MethodIndex::default()
+        });
         self.method_index_cache
             .borrow_mut()
             .insert(class_def.class_id, Rc::clone(&index));
         index
     }
 
+    /// Collect a finite set of possible ASCII queries from declarations, not
+    /// from callers. A partial or cyclic native graph must stay canonical.
+    fn collect_method_index_names(
+        &self,
+        class: &ClassDef,
+        names: &mut std::collections::HashSet<String, std::hash::BuildHasherDefault<SymbolHasher>>,
+        visited: &mut HashMap<u32, bool, std::hash::BuildHasherDefault<SymbolHasher>>,
+    ) -> bool {
+        if class.class_id == 0 {
+            return false;
+        }
+        if let Some(complete) = visited.get(&class.class_id) {
+            return *complete;
+        }
+        visited.insert(class.class_id, false);
+        for name in class.methods.iter().map(|method| method.0.as_str()) {
+            // Trait scans use Unicode lowercase even for an ASCII query
+            // (for example Kelvin sign -> k); own indexes still use their
+            // original ASCII rule when the canonical resolver selects a value.
+            let key = name.to_lowercase();
+            if key.is_ascii() {
+                names.insert(key);
+            }
+        }
+        for name in class
+            .trait_aliases
+            .iter()
+            .map(|alias| alias.alias.as_deref().unwrap_or(&alias.method))
+            .chain(
+                self.internal_method_contracts(&class.name)
+                    .iter()
+                    .map(|method| method.name),
+            )
+        {
+            if name.is_ascii() {
+                names.insert(name.to_ascii_lowercase());
+            }
+        }
+        for related in class.uses.iter().chain(class.parent.iter()) {
+            let Some(definition) = self.find_class(related) else {
+                return false;
+            };
+            if !self.collect_method_index_names(definition, names, visited) {
+                return false;
+            }
+        }
+        visited.insert(class.class_id, true);
+        true
+    }
+
+    #[cold]
+    fn resolve_method_index(&self, class: &ClassDef, index: &MethodIndex) {
+        let mut names = std::collections::HashSet::default();
+        if !self.collect_method_index_names(class, &mut names, &mut HashMap::default()) {
+            index.incomplete_at.set(Some(self.class_table.len()));
+            return;
+        }
+        let mut resolved = HashMap::with_capacity_and_hasher(names.len(), Default::default());
+        for name in names {
+            if let Some(info) = self.find_method_info_uncached(&class.name, &name) {
+                resolved.insert(name, info);
+            }
+        }
+        // Population performs no PHP callback or nested resolved-index lookup.
+        let _ = index.resolved.set(resolved);
+    }
+
+    /// Look up visibility, staticness and declaring owner. Only immutable,
+    /// complete registered hierarchies can answer from resolved metadata.
     pub fn find_method_info(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(Visibility, bool, String)> {
+        let class = self.find_class(class_name)?;
+        if class.class_id == 0 || !method_name.is_ascii() {
+            return self.find_method_info_uncached(class_name, method_name);
+        }
+        let index = self.method_index(class);
+        if index.resolved.get().is_none()
+            && index.incomplete_at.get() != Some(self.class_table.len())
+        {
+            self.resolve_method_index(class, &index);
+        }
+        match index.resolved.get() {
+            Some(resolved) => with_ascii_lowercase(method_name, |key| resolved.get(key).cloned()),
+            None => self.find_method_info_uncached(class_name, method_name),
+        }
+    }
+
+    fn find_method_info_uncached(
         &self,
         class_name: &str,
         method_name: &str,
@@ -10641,7 +10741,7 @@ impl ExecutorGlobals {
             // Unicode folding the index does not model).
             if class_def.class_id != 0 && method_name.is_ascii() {
                 let index = self.method_index(class_def);
-                let found = with_ascii_lowercase(method_name, |key| index.get(key).copied());
+                let found = with_ascii_lowercase(method_name, |key| index.own.get(key).copied());
                 if let Some(position) = found
                     && let Some((name, vis, is_static, _is_final, _func)) =
                         class_def.methods.get(position)
@@ -10716,7 +10816,7 @@ impl ExecutorGlobals {
             // falling through to the consumer's parent hierarchy.
             for trait_name in &class_def.uses {
                 if let Some((visibility, is_static, _)) =
-                    self.find_method_info(trait_name, method_name)
+                    self.find_method_info_uncached(trait_name, method_name)
                 {
                     return Some((visibility, is_static, class_name.to_string()));
                 }
@@ -10737,7 +10837,7 @@ impl ExecutorGlobals {
             }
             // Check parent
             if let Some(parent) = &class_def.parent {
-                return self.find_method_info(parent, method_name);
+                return self.find_method_info_uncached(parent, method_name);
             }
         }
         None

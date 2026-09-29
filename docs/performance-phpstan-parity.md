@@ -1991,3 +1991,86 @@ exact sources, executables and failed evidence survive disposable build removal.
 No private benchmark host is configured. Measurements remain x86-64 only.
 The integrator accepts this reduction; the remaining **8.17x** analysis
 instruction gap leaves the overarching parity goal open.
+
+## Accepted checkpoint: resolved class method metadata
+
+- Outcome: repeated visibility/staticness/declaring-owner queries use an index
+  of declared methods instead of rewalking trait and parent metadata.
+- Baseline: clean `e0027706`, source
+  `48432692b66e1c17c67a8657a5a9e972e3229d0dd67903d737624512af4f76b2`,
+  executable
+  `1303e6fd731a8bd83ac44a7cedcf4792eef1a079e98ea7a441d0977e6f34b841`.
+  Analysis costs 84.4368 billion instructions against PHP's 10.3366 billion.
+- Evidence: the exact earlier profile records 3,932,662 method-info visits
+  including recursion. Disjoint callers include private dispatch (1,377,453
+  calls, 1.5264 billion inclusive instructions) and ordinary method-call setup
+  (1,205,234 calls, 1.4403 billion). Recursive edges are not added again. The
+  later phase sample still identifies this unchanged resolver as a hot cost.
+- Hypothesis: augment the existing per-class own-method index with resolved
+  ASCII metadata. Populate only from the finite declaration graph, through the
+  canonical resolver; arbitrary requested names never grow the cache. Preserve
+  the canonical resolver for Unicode and incomplete/unregistered hierarchies.
+- Semantic envelope: preserve declaration order, abstract filtering, trait
+  aliases/adaptations, inherited private methods, native contracts and exact
+  owner spelling. An incomplete graph remains canonical until registry growth;
+  native contract additions/access/order changes invalidate derived indexes.
+  A completed immutable hierarchy survives unrelated class registration.
+- Ownership: the sole integrator owns `src/runtime/mod.rs` and focused tests.
+  Keep executor, class, callable and Value layouts, opcode caches, callbacks,
+  JIT contracts and execution admission unchanged. No new unsafe operation.
+- Gates: indexed/canonical equivalence including misses, non-ASCII names,
+  aliases, late ancestors and native mutations; PHP dispatch/visibility/trait
+  differentials and relevant feature suites; formatting, unsafe and all-target
+  checks. Fresh unchanged independent PGO, application phase/whole counters,
+  existing controls and a polymorphic inherited-method holdout, RSS and code
+  size. Native measurements remain x86-64 only.
+- Stop rule: reject semantic drift, growth driven by query count, unsupported
+  hierarchy traversal, or no confirmed application instruction reduction.
+  Account for one-time population and inherited-metadata memory in the complete
+  application measurement. Preserve failures and every valid sample.
+
+### Resolved metadata measurements
+
+Analysis-only instructions decrease from **84.4235 to 82.5389 billion
+(-2.23%)**, against PHP's 10.3363 billion. Whole-command medians decrease from
+103.0515 to 101.1661 billion initially and 103.0360 to 101.1774 billion in
+confirmation. Analysis times are 7.8615 versus 7.6711 seconds initially and
+7.8557 versus 7.7273 seconds in confirmation; PHP takes 0.9400 seconds in the
+latter window. Confirmation RSS increases from 609978 to 618540 KiB (+8562
+KiB, 1.40%). These counters cover different intervals. All five PHPStan files,
+twenty findings, stderr and status match.
+
+The independent polymorphic inherited-method holdout uses **14.94% fewer
+instructions** and takes 15.24% less time in confirmation. It was excluded from
+PGO training. The four original non-regex controls and the prior regex holdout
+keep instruction budgets within 0.26% of baseline. Confirmed time changes are
++1.32% shared frames, +2.74% scalar frames, +1.34% property reads, -1.45%
+relative self and +3.62% nested regex. The first window has lower times for
+the first three controls; the regex regression occurs in both windows. The
+integrator accepts that explicit timing tradeoff under the user's instruction
+priority, while making no general speedup claim. Every sample is retained in
+[the method metadata packet](performance-phpstan-method-metadata-samples.json).
+
+Validation records **516 focused test executions** across default, no-default
+and all features, formatting, unchanged unsafe inventory and all-target/all-
+feature compilation. Two new PHP differentials match exactly, including class
+aliases, private/inherited access, magic fallback and dynamic class declaration.
+Two retained broader trait-composition probes already differ from PHP on six
+lines each on the baseline; the candidate remains byte-identical to baseline.
+They are not counted as PHP passes. The failed initial test compile and an
+invalid visibility declaration in the first test candidate remain in the
+packet. The declaration-bounded cache preserves the canonical resolver for
+incomplete and non-ASCII graphs, and native metadata updates clear descendant
+indexes. There is no new unsafe code or execution-tier admission.
+
+The exact source is
+`bd14d7b0e4906eb176bfb9db2d0ca454b6b84af232f0fd2e2f38b657c8bc93a4`;
+the executable is
+`a6ba0267f926a030c8c9d859c8872f4204bc175a42319cb1441be25860bf705f`.
+Fresh PGO uses the same 18 independent programs. Instrumented and final
+builds take 289.37 and 212.87 seconds. Main executor size changes from 390710
+to 390674 bytes; the hot method-info entry is 1130 bytes, with the original
+resolver kept separately for fallback. Aggregate preparation peak is
+5,063,122,944 bytes and verification peak is 4,297,121,792 bytes, both within
+the 6 GiB boundary with no OOM or timeout. Native evidence remains x86-64 only.
+The remaining analysis instruction gap is **7.99x**, so parity stays open.
