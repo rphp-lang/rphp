@@ -7410,6 +7410,11 @@ impl Value {
     /// registration argument), retaining lifetime but no additional GC edge.
     /// Cloning or transferring it into PHP storage removes this local marker.
     const INTERNAL_ARGUMENT_SNAPSHOT_FLAG: u32 = 1 << 18;
+    /// Whether this Value owns payload storage. Constructors establish this
+    /// independently of PHP-visible reference/provenance flags; copies retain
+    /// it and scalar writers replace the entire type_info word. Frame slots
+    /// can therefore classify ownership without decoding the payload tag.
+    const NEEDS_CLEANUP_FLAG: u32 = 1 << 19;
 
     #[inline]
     pub(crate) fn mark_internal_argument_snapshot(&mut self) {
@@ -7705,7 +7710,7 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,
             },
-            type_info: ValueType::String as u32,
+            type_info: ValueType::String as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7721,7 +7726,7 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,
             },
-            type_info: ValueType::Array as u32,
+            type_info: ValueType::Array as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7752,7 +7757,7 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(array) as *mut u8,
             },
-            type_info: ValueType::Array as u32,
+            type_info: ValueType::Array as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7777,7 +7782,7 @@ impl Value {
         }
         Self {
             data: ValueData { ptr },
-            type_info: ValueType::Object as u32,
+            type_info: ValueType::Object as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7794,7 +7799,7 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,
             },
-            type_info: ValueType::Object as u32,
+            type_info: ValueType::Object as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7807,7 +7812,7 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(object) as *mut u8,
             },
-            type_info: ValueType::Object as u32,
+            type_info: ValueType::Object as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7820,7 +7825,7 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(closure) as *mut u8,
             },
-            type_info: ValueType::Closure as u32,
+            type_info: ValueType::Closure as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7832,7 +7837,9 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(reference) as *mut u8,
             },
-            type_info: ValueType::Reference as u32 | Self::OWNED_REFERENCE_FLAG,
+            type_info: ValueType::Reference as u32
+                | Self::OWNED_REFERENCE_FLAG
+                | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -7868,7 +7875,7 @@ impl Value {
         }
         Self {
             data: ValueData { ptr },
-            type_info: ValueType::Closure as u32,
+            type_info: ValueType::Closure as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -9383,7 +9390,9 @@ impl Value {
             data: ValueData {
                 ptr: Rc::into_raw(target) as *mut u8,
             },
-            type_info: ValueType::Reference as u32 | Self::OWNED_REFERENCE_FLAG,
+            type_info: ValueType::Reference as u32
+                | Self::OWNED_REFERENCE_FLAG
+                | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -9812,22 +9821,7 @@ impl Value {
 
     #[inline]
     pub fn needs_cleanup(&self) -> bool {
-        Self::type_info_needs_cleanup(self.type_info)
-    }
-
-    #[inline(always)]
-    fn type_info_needs_cleanup(type_info: u32) -> bool {
-        let kind = type_info & 0xff;
-        // Primitive scalars own no storage, regardless of provenance bits.
-        // Reject them before testing the owned-reference exception. The heap
-        // tags are contiguous; resources are counted only in lifetime builds.
-        if !(ValueType::String as u32..=ValueType::Closure as u32).contains(&kind) {
-            return false;
-        }
-        if kind == ValueType::Reference as u32 {
-            return type_info & Self::OWNED_REFERENCE_FLAG != 0;
-        }
-        cfg!(feature = "resource-lifetime") || kind != ValueType::Resource as u32
+        self.type_info & Self::NEEDS_CLEANUP_FLAG != 0
     }
 
     /// Get the target pointer of a reference value.
@@ -9886,7 +9880,7 @@ impl Value {
             data: ValueData {
                 ptr: handle as *mut u8,
             },
-            type_info: ValueType::Resource as u32,
+            type_info: ValueType::Resource as u32 | Self::NEEDS_CLEANUP_FLAG,
             _not_send: PhantomData,
         }
     }
@@ -10365,6 +10359,7 @@ mod raw_field_copy_tests {
                 Value::raw_copy(source, destination.as_mut_ptr());
                 let copy = ManuallyDrop::new(destination.assume_init());
                 assert_eq!(copy.type_info, source.type_info);
+                assert_eq!(copy.needs_cleanup(), source.needs_cleanup());
                 match source.value_type() {
                     ValueType::Double => {
                         assert_eq!(copy.data.double.to_bits(), source.data.double.to_bits())

@@ -7,6 +7,16 @@ exit status and PHP semantics, at the reference PHP instruction count and
 analysis time. Startup is measured separately. A result-cache hit is not an
 analysis and cannot satisfy this goal.
 
+The user subsequently makes retired instructions the deciding optimization
+criterion. Native time, spread and controls remain visible diagnostics, but a
+small timing regression alone does not reject a verified reduction in the
+application's instruction budget. This supersedes the earlier time-based
+one-percent acceptance rule for this task; it does not relax PHP semantics,
+correctness, resource bounds or measurement integrity. The instruction target
+is compared within the analysis phase, whose reference budget is approximately
+10.33 billion instructions.
+
+
 Baseline: `2ee8e73dd532051b73ddf0ff70255a48923aeec7`, default features,
 `max-perf`, PHP 8.5.11 NTS with CLI OPcache/JIT disabled. Both runtimes use the
 same PHAR, fixture, process-disabling settings and `zend.exception_ignore_args=0`.
@@ -1375,3 +1385,90 @@ instruction-address costs before another implementation is selected. It uses the
 unmodified archive, verifies ordinary output against PHP, and retains the same
 6 GiB aggregate memory boundary and exclusive lock. This is profiling, not a
 new native timing claim or completion of the parity goal.
+
+
+The exact accepted-binary profile completes with identical PHP output in a
+bounded service, recording 115,338,275,570 instructions. Of these,
+37,109,122,139 execute in the central VM and 2,680,528,361 map to the inlined
+`Value::needs_cleanup` classification and its helper. That last figure includes
+1,893,555,882 instructions inside the central VM. Compiler line attribution is
+kept distinct from the total measured application budget. The profile also
+counts 274,071,199 visits to the central dispatch selection; optimizing only
+method/class-name lookup cannot remove these repeated value/slot costs.
+The recorded indirect-jump edges resolve 38,176,316 of those visits to
+`ReleaseTemps`; 14,586,441 take the compact-frame bitmap branch and 23,589,875
+use the wide-frame path. These are execution counts from the same archived
+profile, not another timing run or a promise that all cleanup can be omitted.
+
+
+## Accepted instruction checkpoint: constructor-owned cleanup metadata
+
+- Outcome: frame writes and retirement read one ownership bit instead of
+  reclassifying the same value tag, reference ownership and feature-dependent
+  resource representation on every visit.
+- Baseline: `d92f2fff` (documentation-only successor of `5e9b0b38`), production
+  fingerprint `854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565`
+  and accepted executable SHA-256
+  `410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750`.
+- Evidence: exact Callgrind classification costs above; native acceptance will
+  still use independent hardware-counter and analysis-timer comparisons.
+- Hypothesis: payload ownership is fixed when a Value is constructed. Encoding
+  it in an unused private type-info bit removes repeated range/reference/resource
+  checks without adding storage or an ownership operation.
+- Semantic envelope: primitive and borrowed-reference values do not own payloads;
+  strings, arrays, objects, closures and owned-reference cells do. Resource
+  ownership follows the existing resource-lifetime feature. Clones, provenance
+  flags, retyping, COW, aliases and all frame widths preserve the same cleanup
+  verdict. Low-byte type tags and the 16-byte Value layout remain unchanged.
+- Ownership: the sole integrating agent owns Value metadata and focused cleanup
+  tests. No allocator, callback, collection timing or JIT lowering is changed.
+- Gates: all constructor families and provenance/reference variants; existing
+  compact/wide frame cleanup and lifecycle tests under default/no-default/all
+  features, targeted PHP differentials, formatting/unsafe policy/all-target
+  compilation, independently trained PGO application and four retained controls,
+  memory and code-size checks. Native ARM64 measurement is unavailable.
+- Stop rule: reject any changed cleanup verdict, lifetime/order failure or
+  confirmed unjustified regression. The classification's full source-attributed
+  cost is an upper bound, not a promised instruction reduction.
+
+
+Every owning constructor now establishes the private cleanup bit; ordinary
+copies preserve it and scalar constructors/writers replace the complete
+metadata word. Weak upgrades reconstruct the same ownership verdict. The
+primitive, borrowed-reference and feature-dependent resource cases retain their
+previous semantics. No new unsafe operation, allocation, ownership operation,
+frame field or architecture-specific code is introduced.
+
+The exact source passes 137 focused test executions across default, no-default
+and all features, including real constructor/provenance/copy/weak-owner cases,
+compact and wide frame cleanup, shared owners, release plans and resource
+callbacks. Both compact/wide CLI programs match reference PHP. All-target and
+all-feature compilation, formatting and the unchanged unsafe gate pass. An
+initial extra scalar-writer test was removed after the policy inventory counted
+its separate test-file unsafe block as production; that failed gate remains in
+the packet. No policy ceiling was raised.
+
+Analysis-only hardware counters fall from **94.1301 to 91.8486 billion
+instructions (-2.42%)**, against PHP's **10.3366 billion**. Both independent
+whole-command windows confirm approximately **113.546 to 111.200 billion
+(-2.07%)**. Output, twenty findings and five analyzed files remain identical.
+All samples and the exact profiler/binary identity are retained in
+[the cleanup-metadata packet](performance-phpstan-cleanup-bit-samples.json).
+
+This is accepted under the user's explicit instruction-count priority, without
+claiming an application time win. Analysis medians change from 8.7113 to 8.9779
+seconds in the first window (+3.06%) and from 9.2015 to 9.2349 seconds in
+confirmation (+0.36%). The recorded SMT-sibling activity differs across these
+samples; none is discarded or corrected. Confirmed RSS is 610934 versus
+611108 KiB. Relative-self control time regresses 3.46% while its instructions
+fall 0.35%; shared-frame and scalar instructions fall 1.55% and 3.26%, and
+property-read instructions rise 0.26%. These limits remain visible controls.
+
+The main executor shrinks from 399328 to 394096 code bytes; the full executable,
+including line tables, shrinks from 76331392 to 76264752 bytes. Independent PGO
+uses the same 18-case training manifest, excluding PHPStan and the controls.
+Both build stages complete in 285.04 and 215.59 seconds. The largest aggregate
+memory peak is 4742590464 bytes, with no OOM or timeout. Cleanup runs in both
+local checkouts; no private benchmark host is configured. Native measurements
+remain limited to x86-64. The remaining analysis instruction gap is about
+8.89 times PHP; this checkpoint does not complete the goal.

@@ -45,6 +45,17 @@ are the next M1 profiling candidates; no further implementation is admitted by
 this checkpoint. The previous typed-admission and ARM64/x86-64 scorecard work
 remains pending.
 
+## Current PHPStan instruction checkpoint
+
+The integrating task's [parity investigation](performance-phpstan-parity.md)
+continues on its isolated performance branch. The latest constructor-owned
+cleanup metadata checkpoint reduces analysis-only instructions from 94.1301
+to 91.8486 billion; reference PHP uses 10.3366 billion. This is an accepted
+instruction reduction under the user's explicit priority, with every timing
+sample and the relative-self control regression retained in the report.
+The 137 focused feature checks and all-target compilation pass. This branch
+checkpoint is not yet merged to main and does not complete PHP parity.
+
 ## Mission
 
 Make supported PHP execute through one increasingly complete, measurable
