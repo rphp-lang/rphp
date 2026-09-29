@@ -104,7 +104,7 @@ use crate::value::{Value, ValueType};
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 struct HotGenericLongContractProof {
     site: *const Instruction,
-    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    object: std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]

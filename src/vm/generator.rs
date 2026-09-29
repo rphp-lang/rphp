@@ -124,7 +124,7 @@ pub struct Generator {
     /// Weak back-reference to the PHP Generator object. Force-close uses its
     /// visible owner count to avoid aborting a delegate that is also retained
     /// independently by userland.
-    pub owner_object: Option<Weak<RefCell<PhpObject>>>,
+    pub owner_object: Option<Weak<crate::value::CycleOwner<RefCell<PhpObject>>>>,
     /// Active `yield from` delegate (sub-generator or array)
     pub delegate: Option<YieldFromDelegate>,
     pub(crate) iterator_continuation:

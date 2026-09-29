@@ -1264,6 +1264,7 @@ thread_local! {
     static CYCLE_ROOTS: RefCell<CycleRootState> = RefCell::new(CycleRootState::default());
     /// Value release requests work; only a VM boundary may run PHP callbacks.
     static AUTOMATIC_CYCLE_PENDING: Cell<bool> = const { Cell::new(false) };
+    static CYCLE_ROOT_GENERATION: Cell<u64> = const { Cell::new(1) };
 }
 
 #[derive(Default)]
@@ -1275,15 +1276,95 @@ struct ObjectHandleState {
     in_request: bool,
 }
 
+/// Allocation-owned GC metadata. The payload stays at offset zero so PHP
+/// identities, raw payload views and their sidecars continue to name the same
+/// address. Rc/Weak operations always use the complete CycleOwner type.
+/// The stamp is outside RefCell/UnsafeCell payloads and can be inspected while
+/// their PHP contents are mutably borrowed. It never retains a PHP owner.
+#[repr(C)]
+#[derive(Debug)]
+pub struct CycleOwner<T> {
+    inner: T,
+    admitted_generation: Cell<u64>,
+}
+
+impl<T> CycleOwner<T> {
+    #[inline]
+    fn new(inner: T) -> Self {
+        Self {
+            inner,
+            admitted_generation: Cell::new(0),
+        }
+    }
+
+    fn into_payload(self) -> T {
+        self.inner
+    }
+}
+
+impl<T> Deref for CycleOwner<T> {
+    type Target = T;
+    #[inline]
+    fn deref(&self) -> &T {
+        &self.inner
+    }
+}
+
+impl<T> std::ops::DerefMut for CycleOwner<T> {
+    #[inline]
+    fn deref_mut(&mut self) -> &mut T {
+        &mut self.inner
+    }
+}
+
+// Deliberately no Clone implementation: Rc::make_mut can move a payload to a
+// new allocation without cloning when only weak observers remain. Array COW
+// constructs a fresh CycleOwner explicitly instead of inheriting its stamp.
+#[inline(always)]
+fn cycle_root_is_admitted(stamp: &Cell<u64>) -> bool {
+    CYCLE_ROOT_GENERATION.with(|generation| stamp.get() == generation.get())
+}
+
+fn advance_cycle_root_generation() {
+    CYCLE_ROOT_GENERATION.with(|generation| {
+        generation.set(
+            generation
+                .get()
+                .checked_add(1)
+                .expect("cycle root generation exhausted"),
+        );
+    });
+}
+
 #[derive(Clone)]
 enum CycleCandidate {
-    Array(std::rc::Weak<PhpArray>),
-    Object(std::rc::Weak<RefCell<PhpObject>>),
-    Reference(std::rc::Weak<OwnedReference>),
-    Closure(std::rc::Weak<PhpClosure>),
+    Array(std::rc::Weak<CycleOwner<PhpArray>>),
+    Object(std::rc::Weak<CycleOwner<RefCell<PhpObject>>>),
+    Reference(std::rc::Weak<CycleOwner<OwnedReference>>),
+    Closure(std::rc::Weak<CycleOwner<PhpClosure>>),
 }
 
 impl CycleCandidate {
+    fn mark_admitted(&self) {
+        fn mark<T>(owner: &std::rc::Weak<CycleOwner<T>>, generation: u64) {
+            if owner.strong_count() != 0 {
+                // SAFETY: a live strong owner keeps this Weak allocation's
+                // payload initialized. The VM is single-threaded and no PHP
+                // callback occurs between the count and this field projection.
+                // Borrow only the Cell, not the payload: admission can occur
+                // while an array's children or an object's RefCell are mutable.
+                unsafe { (*owner.as_ptr()).admitted_generation.set(generation) };
+            }
+        }
+        let generation = CYCLE_ROOT_GENERATION.with(Cell::get);
+        match self {
+            Self::Array(owner) => mark(owner, generation),
+            Self::Object(owner) => mark(owner, generation),
+            Self::Reference(owner) => mark(owner, generation),
+            Self::Closure(owner) => mark(owner, generation),
+        }
+    }
+
     #[inline]
     fn identity(&self) -> usize {
         match self {
@@ -1418,6 +1499,7 @@ fn register_cycle_candidate_with_admission(candidate: CycleCandidate, allow_auto
             return;
         }
         let identity = candidate.identity();
+        candidate.mark_admitted();
         if !state.admission.initialized {
             state
                 .unadmitted
@@ -1492,6 +1574,9 @@ pub(crate) fn automatic_cycle_collection_pending() -> bool {
 
 pub(crate) fn set_automatic_cycle_collection_enabled(enabled: bool) {
     CYCLE_ROOTS.with_borrow_mut(|state| {
+        if enabled && !state.admission.initialized {
+            advance_cycle_root_generation();
+        }
         state.admission.enabled = enabled;
         // Once enabled in this request, disabling automatic collection keeps
         // the root buffer available to explicit gc_collect_cycles().
@@ -1582,6 +1667,132 @@ pub(crate) fn take_automatic_cycle_admission() -> Option<AutomaticCycleAdmission
 mod repeated_cycle_root_tests {
     use super::*;
 
+    fn in_request(test: impl FnOnce() + Send + 'static) {
+        std::thread::spawn(|| {
+            begin_object_handle_request();
+            test();
+            end_object_handle_request();
+        })
+        .join()
+        .unwrap();
+    }
+
+    #[test]
+    fn allocation_metadata_preserves_payload_identity() {
+        assert_eq!(std::mem::offset_of!(CycleOwner<PhpArray>, inner), 0);
+        assert_eq!(
+            std::mem::offset_of!(CycleOwner<RefCell<PhpObject>>, inner),
+            0
+        );
+        assert_eq!(std::mem::offset_of!(CycleOwner<PhpClosure>, inner), 0);
+        assert_eq!(std::mem::offset_of!(CycleOwner<OwnedReference>, inner), 0);
+    }
+
+    #[test]
+    fn actual_releases_readmit_after_collection_and_request_change() {
+        in_request(|| {
+            let value = Value::array(PhpArray::new());
+            drop(value.clone());
+            drop(value.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+            let mut collection = begin_cycle_collection().unwrap();
+            collection.complete(
+                0,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            );
+            drop(collection);
+            assert_eq!(cycle_collection_status().roots, 0);
+            drop(value.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+            end_object_handle_request();
+            begin_object_handle_request();
+            drop(value.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+        });
+    }
+
+    #[test]
+    fn already_admitted_owner_is_recorded_again_inside_gc_callback() {
+        in_request(|| {
+            let value = Value::array(PhpArray::new());
+            drop(value.clone());
+            let mut collection = begin_cycle_collection().unwrap();
+            {
+                let _callback = record_cycle_callback_roots();
+                drop(value.clone());
+            }
+            assert!(collection.has_callback_roots());
+            collection.complete(
+                0,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            );
+            drop(collection);
+            assert_eq!(cycle_collection_status().roots, 1);
+            // Keeping a callback root is different from keeping its old mark
+            // forever. A later pass can retire it, followed by a real release.
+            let mut collection = begin_cycle_collection().unwrap();
+            collection.complete(
+                0,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+                std::time::Duration::ZERO,
+            );
+            drop(collection);
+            assert_eq!(cycle_collection_status().roots, 0);
+            drop(value.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+        });
+    }
+
+    #[test]
+    fn snapshots_and_startup_disabled_admission_do_not_hide_later_releases() {
+        in_request(|| {
+            initialize_cycle_collection(false);
+            let value = Value::array(PhpArray::new());
+            {
+                let _snapshot = suppress_cycle_snapshot_roots();
+                drop(value.clone());
+            }
+            assert!(unadmitted_cycle_root_snapshot().is_empty());
+            drop(value.clone());
+            assert_eq!(unadmitted_cycle_root_snapshot().len(), 1);
+            assert_eq!(cycle_collection_status().roots, 0);
+            set_automatic_cycle_collection_enabled(true);
+            assert_eq!(cycle_collection_status().roots, 0);
+            drop(value.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+        });
+    }
+
+    #[test]
+    fn array_cow_gets_new_admission_metadata() {
+        in_request(|| {
+            let original = Value::array(PhpArray::new());
+            drop(original.clone());
+            let mut copy = original.clone();
+            copy.as_array_mut().unwrap().push(Value::long(1));
+            assert_ne!(copy.array_identity(), original.array_identity());
+            drop(copy.clone());
+            assert_eq!(cycle_collection_status().roots, 2);
+            assert!(original.as_array().unwrap().is_empty());
+        });
+    }
+
+    #[test]
+    fn object_admission_does_not_borrow_its_mutable_php_contents() {
+        in_request(|| {
+            let value = Value::object(PhpObject::dynamic("BorrowedRoot".into(), 0, HashMap::new()));
+            let _contents = value.as_object_mut().unwrap();
+            drop(value.clone());
+            drop(value.clone());
+            assert_eq!(cycle_collection_status().roots, 1);
+        });
+    }
+
     #[test]
     fn weak_cycle_snapshot_does_not_retain_its_owner() {
         for value in [
@@ -1626,7 +1837,7 @@ mod repeated_cycle_root_tests {
         std::thread::spawn(|| {
             begin_object_handle_request();
             initialize_cycle_collection(false);
-            let owner = Rc::new(PhpArray::new());
+            let owner = Rc::new(CycleOwner::new(PhpArray::new()));
             let root = CycleCandidate::Array(Rc::downgrade(&owner));
             register_cycle_candidate(root.clone());
             assert_eq!(cycle_collection_status().roots, 0);
@@ -1652,9 +1863,9 @@ mod repeated_cycle_root_tests {
         std::thread::spawn(|| {
             begin_object_handle_request();
             CYCLE_ROOTS.with_borrow_mut(|state| state.admission.threshold = 3);
-            let first = Rc::new(PhpArray::new());
-            let second = Rc::new(PhpArray::new());
-            let incoming = Rc::new(PhpArray::new());
+            let first = Rc::new(CycleOwner::new(PhpArray::new()));
+            let second = Rc::new(CycleOwner::new(PhpArray::new()));
+            let incoming = Rc::new(CycleOwner::new(PhpArray::new()));
             for owner in [&first, &second, &incoming] {
                 register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(owner)));
             }
@@ -1695,7 +1906,9 @@ mod repeated_cycle_root_tests {
         std::thread::spawn(|| {
             begin_object_handle_request();
             CYCLE_ROOTS.with_borrow_mut(|state| state.admission.threshold = 3);
-            let owners: Vec<_> = (0..4).map(|_| Rc::new(PhpArray::new())).collect();
+            let owners: Vec<_> = (0..4)
+                .map(|_| Rc::new(CycleOwner::new(PhpArray::new())))
+                .collect();
             for owner in &owners[..3] {
                 register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(owner)));
             }
@@ -1728,8 +1941,8 @@ mod repeated_cycle_root_tests {
     #[test]
     fn repeated_roots_preserve_order_pruning_and_request_isolation() {
         std::thread::spawn(|| {
-            let first = Rc::new(PhpArray::new());
-            let second = Rc::new(PhpArray::new());
+            let first = Rc::new(CycleOwner::new(PhpArray::new()));
+            let second = Rc::new(CycleOwner::new(PhpArray::new()));
             let first_root = CycleCandidate::Array(Rc::downgrade(&first));
             let second_root = CycleCandidate::Array(Rc::downgrade(&second));
             register_cycle_candidate(first_root.clone());
@@ -1752,7 +1965,7 @@ mod repeated_cycle_root_tests {
             register_cycle_candidate(first_root.clone());
             assert_eq!(cycle_collection_status().roots, 1);
             let guard = begin_cycle_collection().unwrap();
-            let third = Rc::new(PhpArray::new());
+            let third = Rc::new(CycleOwner::new(PhpArray::new()));
             register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&third)));
             assert_eq!(cycle_collection_status().roots, 1);
             drop(guard);
@@ -1775,13 +1988,13 @@ mod repeated_cycle_root_tests {
         std::thread::spawn(|| {
             begin_object_handle_request();
             set_automatic_cycle_collection_enabled(false);
-            let first = Rc::new(PhpArray::new());
-            let second = Rc::new(PhpArray::new());
+            let first = Rc::new(CycleOwner::new(PhpArray::new()));
+            let second = Rc::new(CycleOwner::new(PhpArray::new()));
             for owner in [&first, &second] {
                 register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(owner)));
             }
             for _ in 0..100_000 {
-                let transient = Rc::new(PhpArray::new());
+                let transient = Rc::new(CycleOwner::new(PhpArray::new()));
                 register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&transient)));
             }
             CYCLE_ROOTS.with_borrow(|state| {
@@ -1805,9 +2018,9 @@ mod repeated_cycle_root_tests {
     fn collector_callbacks_keep_new_roots_but_not_ownership_snapshots() {
         std::thread::spawn(|| {
             CYCLE_ROOTS.with_borrow_mut(|state| state.active = true);
-            let old = Rc::new(PhpArray::new());
-            let created = Rc::new(PhpArray::new());
-            let snapshot = Rc::new(PhpArray::new());
+            let old = Rc::new(CycleOwner::new(PhpArray::new()));
+            let created = Rc::new(CycleOwner::new(PhpArray::new()));
+            let snapshot = Rc::new(CycleOwner::new(PhpArray::new()));
             register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&old)));
             let mut collector = begin_cycle_collection().unwrap();
             assert!(begin_cycle_collection().is_none());
@@ -1903,6 +2116,7 @@ impl Drop for CycleCollectionGuard {
             state.collecting = false;
             state.recording_callback_roots = false;
             if let Some((collected, collector_time, destructor_time, free_time)) = self.completed {
+                advance_cycle_root_generation();
                 state.collected = state.collected.saturating_add(collected);
                 state.collector_time = state.collector_time.saturating_add(collector_time);
                 state.destructor_time = state.destructor_time.saturating_add(destructor_time);
@@ -1911,6 +2125,9 @@ impl Drop for CycleCollectionGuard {
                 state.candidates.retain(|candidate| {
                     callback_roots.contains(&candidate.identity()) && candidate.strong_count() != 0
                 });
+                for candidate in &state.candidates {
+                    candidate.mark_admitted();
+                }
                 state.indices = state
                     .candidates
                     .iter()
@@ -1944,6 +2161,9 @@ pub(crate) struct CycleCallbackGuard(bool);
 
 pub(crate) fn record_cycle_callback_roots() -> CycleCallbackGuard {
     CYCLE_ROOTS.with_borrow_mut(|state| {
+        if !state.recording_callback_roots {
+            advance_cycle_root_generation();
+        }
         CycleCallbackGuard(std::mem::replace(&mut state.recording_callback_roots, true))
     })
 }
@@ -2367,7 +2587,7 @@ fn release_object_handle(identity: usize, handle: u32) {
 // and its unwind path in every inlined Value::drop, including scalar users.
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
-fn release_final_object(owner: Rc<RefCell<PhpObject>>, handle: u32) {
+fn release_final_object(owner: Rc<CycleOwner<RefCell<PhpObject>>>, handle: u32) {
     let identity = Rc::as_ptr(&owner) as usize;
     // Protect actual recursive storage retirement, including properties added
     // by a destructor. Walking the reachable graph before every PHP callback
@@ -2380,7 +2600,7 @@ fn release_final_object(owner: Rc<RefCell<PhpObject>>, handle: u32) {
 // captures retire before the closure's own handle is returned for reuse.
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zzobject_release"))]
-fn release_final_closure(owner: Rc<PhpClosure>) {
+fn release_final_closure(owner: Rc<CycleOwner<PhpClosure>>) {
     let identity = Rc::as_ptr(&owner) as usize;
     let handle = owner.object_handle;
     if owner.final_drop_may_release_cycle_child() {
@@ -2395,6 +2615,7 @@ fn release_final_closure(owner: Rc<PhpClosure>) {
 /// request has gone away. A still-live object means the caller intentionally
 /// reuses one ExecutorGlobals and its request-local state.
 pub(crate) fn begin_object_handle_request() {
+    advance_cycle_root_generation();
     with_object_handles(ObjectHandleState::begin_request);
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
@@ -2419,6 +2640,7 @@ pub(crate) fn begin_object_handle_request() {
 }
 
 pub(crate) fn end_object_handle_request() {
+    advance_cycle_root_generation();
     with_object_handles(|state| state.in_request = false);
     CYCLE_ROOTS.with(|state| {
         let mut state = state.borrow_mut();
@@ -2533,6 +2755,7 @@ impl PhpObject {
         Self {
             allocation: crate::request_memory::Allocation::new(
                 std::mem::size_of::<Self>()
+                    + std::mem::size_of::<u64>()
                     + 24
                     + property_values.capacity() * std::mem::size_of::<Value>(),
             ),
@@ -2563,7 +2786,7 @@ impl PhpObject {
     pub fn dynamic(class_name: String, class_id: u32, properties: HashMap<String, Value>) -> Self {
         Self {
             allocation: crate::request_memory::Allocation::new(
-                std::mem::size_of::<Self>() + 24 + class_name.len(),
+                std::mem::size_of::<Self>() + std::mem::size_of::<u64>() + 24 + class_name.len(),
             ),
             class_name: Rc::from(class_name.as_str()),
             class_id,
@@ -2591,7 +2814,9 @@ impl PhpObject {
         let (class_name, property_layout) =
             STD_CLASS_METADATA.with(|metadata| (Rc::clone(&metadata.0), Rc::clone(&metadata.1)));
         Self {
-            allocation: crate::request_memory::Allocation::new(std::mem::size_of::<Self>() + 24),
+            allocation: crate::request_memory::Allocation::new(
+                std::mem::size_of::<Self>() + std::mem::size_of::<u64>() + 24,
+            ),
             class_name,
             class_id: 0,
             lifecycle: 0,
@@ -4180,7 +4405,8 @@ impl PhpArray {
         } else {
             std::mem::size_of::<Value>()
         };
-        (std::mem::size_of::<Self>() + 16).saturating_add(capacity.saturating_mul(entry_size))
+        (std::mem::size_of::<CycleOwner<Self>>() + 16)
+            .saturating_add(capacity.saturating_mul(entry_size))
     }
 
     fn storage_allocation(capacity: usize, hash: bool) -> crate::request_memory::Allocation {
@@ -4194,7 +4420,9 @@ impl PhpArray {
 
     pub fn new() -> Self {
         Self {
-            allocation: crate::request_memory::Allocation::new(std::mem::size_of::<Self>() + 16),
+            allocation: crate::request_memory::Allocation::new(
+                std::mem::size_of::<CycleOwner<Self>>() + 16,
+            ),
             storage: ArrayStorage::Packed(Vec::new()),
             next_int_key: 0,
             cursor: Cell::new(ARRAY_CURSOR_PRISTINE),
@@ -6803,8 +7031,8 @@ pub struct PhpClosure {
 /// Value tag but participate in WeakReference and WeakMap as ordinary objects.
 #[derive(Clone)]
 pub(crate) enum WeakPhpObject {
-    Object(std::rc::Weak<RefCell<PhpObject>>),
-    Closure(std::rc::Weak<PhpClosure>),
+    Object(std::rc::Weak<CycleOwner<RefCell<PhpObject>>>),
+    Closure(std::rc::Weak<CycleOwner<PhpClosure>>),
 }
 
 impl WeakPhpObject {
@@ -7459,7 +7687,7 @@ impl Value {
     /// Mutation uses COW: detach if shared, mutate in place if sole owner.
     #[inline]
     pub fn array(arr: PhpArray) -> Self {
-        let rc = Rc::new(arr);
+        let rc = Rc::new(CycleOwner::new(arr));
         stats::inc_array_owner_allocation();
         Self {
             data: ValueData {
@@ -7491,7 +7719,7 @@ impl Value {
     /// Reconstitute an array value from the collector's weak owner without
     /// copying its COW storage or changing its allocation identity.
     #[inline]
-    fn from_array_owner(array: Rc<PhpArray>) -> Self {
+    fn from_array_owner(array: Rc<CycleOwner<PhpArray>>) -> Self {
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(array) as *mut u8,
@@ -7511,7 +7739,7 @@ impl Value {
         // monotonic deep-drop checkpoint proved on the source remains valid
         // for the clone's initially shared property graph.
         obj.lifecycle = (obj.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT) | handle;
-        let rc = Rc::new(RefCell::new(obj));
+        let rc = Rc::new(CycleOwner::new(RefCell::new(obj)));
         if is_declared {
             stats::inc_declared_object_owner_allocation();
         }
@@ -7533,7 +7761,7 @@ impl Value {
     #[inline]
     pub(crate) fn deferred_object(mut obj: PhpObject) -> Self {
         obj.lifecycle = 0;
-        let rc = Rc::new(RefCell::new(obj));
+        let rc = Rc::new(CycleOwner::new(RefCell::new(obj)));
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(rc) as *mut u8,
@@ -7546,7 +7774,7 @@ impl Value {
     /// Reconstitute a PHP object value from an existing strong owner without
     /// allocating a second object or changing its request-local identity.
     #[inline]
-    pub(crate) fn from_object_owner(object: Rc<RefCell<PhpObject>>) -> Self {
+    pub(crate) fn from_object_owner(object: Rc<CycleOwner<RefCell<PhpObject>>>) -> Self {
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(object) as *mut u8,
@@ -7559,7 +7787,7 @@ impl Value {
     /// Reconstitute a Closure value from a live weak upgrade without changing
     /// its object-store identity.
     #[inline]
-    fn from_closure_owner(closure: Rc<PhpClosure>) -> Self {
+    fn from_closure_owner(closure: Rc<CycleOwner<PhpClosure>>) -> Self {
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(closure) as *mut u8,
@@ -7571,7 +7799,7 @@ impl Value {
 
     /// Reconstitute a request-owned reference handle for a collector snapshot.
     #[inline]
-    fn from_reference_owner(reference: Rc<OwnedReference>) -> Self {
+    fn from_reference_owner(reference: Rc<CycleOwner<OwnedReference>>) -> Self {
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(reference) as *mut u8,
@@ -7590,7 +7818,9 @@ impl Value {
         // executable function pointer until a bind/invocation materializes it.
         // Bytecode and literals remain shared, never charged per closure.
         c.allocation.grow_to(
-            (std::mem::size_of::<PhpClosure>() + std::mem::size_of::<FunctionCommon>() + 16)
+            (std::mem::size_of::<CycleOwner<PhpClosure>>()
+                + std::mem::size_of::<FunctionCommon>()
+                + 16)
                 .saturating_add(
                     c.captures
                         .capacity()
@@ -7602,7 +7832,7 @@ impl Value {
         }
         let (handle, in_request) = allocate_object_handle();
         c.object_handle = handle;
-        let closure = Rc::new(c);
+        let closure = Rc::new(CycleOwner::new(c));
         stats::inc_closure_payload_allocation();
         let ptr = Rc::into_raw(closure) as *mut u8;
         if !in_request {
@@ -7640,7 +7870,7 @@ impl Value {
         // CreateClosure/ClosureUseVar sequence retains the only strong owner
         // until all captures are appended, and no weak handles are exposed.
         let mut owner = std::mem::ManuallyDrop::new(unsafe {
-            Rc::from_raw(self.data.ptr as *const PhpClosure)
+            Rc::from_raw(self.data.ptr as *const CycleOwner<PhpClosure>)
         });
         let closure = Rc::get_mut(&mut owner)
             .expect("ClosureUseVar requires a uniquely owned construction temporary");
@@ -7650,15 +7880,17 @@ impl Value {
         closure.captures.push(value);
     }
 
-    /// Get the Rc<RefCell<PhpObject>> for shared access.
+    /// Get the Rc<CycleOwner<RefCell<PhpObject>>> for shared access.
     /// Returns a temporary Rc handle without affecting the refcount.
     /// The caller must NOT drop the returned Rc (use for borrow/clone only).
     #[inline]
-    pub fn as_object_rc(&self) -> Option<std::mem::ManuallyDrop<Rc<RefCell<PhpObject>>>> {
+    pub fn as_object_rc(
+        &self,
+    ) -> Option<std::mem::ManuallyDrop<Rc<CycleOwner<RefCell<PhpObject>>>>> {
         if self.value_type() == ValueType::Object {
             Some(unsafe {
                 std::mem::ManuallyDrop::new(Rc::from_raw(
-                    self.data.ptr as *const RefCell<PhpObject>,
+                    self.data.ptr as *const CycleOwner<RefCell<PhpObject>>,
                 ))
             })
         } else {
@@ -7712,7 +7944,7 @@ impl Value {
     pub fn object_identity(&self) -> Option<usize> {
         (self.value_type() == ValueType::Object).then(|| {
             // SAFETY: the tag check above proves that the pointer union field
-            // contains the live `Rc<RefCell<PhpObject>>` allocation address.
+            // contains the live `Rc<CycleOwner<RefCell<PhpObject>>>` allocation address.
             unsafe { self.object_identity_unchecked() }
         })
     }
@@ -7721,7 +7953,9 @@ impl Value {
     /// an allocation address from being recycled while sidecar metadata still
     /// names it, without extending the PHP-visible lifetime of the object.
     #[inline]
-    pub(crate) fn object_weak(&self) -> Option<std::rc::Weak<std::cell::RefCell<PhpObject>>> {
+    pub(crate) fn object_weak(
+        &self,
+    ) -> Option<std::rc::Weak<CycleOwner<std::cell::RefCell<PhpObject>>>> {
         let object = self.as_object_rc()?;
         Some(Rc::downgrade(&object))
     }
@@ -7741,14 +7975,16 @@ impl Value {
     /// Temporarily reconstruct the existing Closure owner without consuming
     /// the strong handle stored by this Value.
     #[inline]
-    fn closure_owner(&self) -> Option<std::mem::ManuallyDrop<Rc<PhpClosure>>> {
+    fn closure_owner(&self) -> Option<std::mem::ManuallyDrop<Rc<CycleOwner<PhpClosure>>>> {
         if self.value_type() != ValueType::Closure {
             return None;
         }
         // SAFETY: the tag check proves that `Value::closure()` stored exactly
-        // this `Rc<PhpClosure>` raw pointer. ManuallyDrop retains that owner.
+        // this `Rc<CycleOwner<PhpClosure>>` raw pointer. ManuallyDrop retains that owner.
         Some(unsafe {
-            std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const PhpClosure))
+            std::mem::ManuallyDrop::new(Rc::from_raw(
+                self.data.ptr as *const CycleOwner<PhpClosure>,
+            ))
         })
     }
 
@@ -8049,14 +8285,14 @@ impl Value {
         }
     }
 
-    fn array_owner(&self) -> Option<std::mem::ManuallyDrop<Rc<PhpArray>>> {
+    fn array_owner(&self) -> Option<std::mem::ManuallyDrop<Rc<CycleOwner<PhpArray>>>> {
         if self.value_type() != ValueType::Array {
             return None;
         }
         // SAFETY: the Array tag proves that the pointer came from
-        // Rc<PhpArray>::into_raw; ManuallyDrop keeps the Value's owner.
+        // Rc<CycleOwner<PhpArray>>::into_raw; ManuallyDrop keeps the Value's owner.
         Some(std::mem::ManuallyDrop::new(unsafe {
-            Rc::from_raw(self.data.ptr as *const PhpArray)
+            Rc::from_raw(self.data.ptr as *const CycleOwner<PhpArray>)
         }))
     }
 
@@ -8671,15 +8907,16 @@ impl Value {
         let immutable_literal = self.is_immutable_array_literal();
         unsafe {
             let rc_ptr = self.data.ptr as *mut PhpArray;
-            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+            let rc =
+                std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr as *const CycleOwner<PhpArray>));
             let array = if Rc::strong_count(&rc) == 1 {
                 // Sole owner — mutate in place. No copy.
                 &mut *rc_ptr
             } else {
                 // Shared — COW detach: deep clone PhpArray, create new sole-owner Rc
                 let cloned = (*rc_ptr).clone();
-                Rc::decrement_strong_count(rc_ptr as *const PhpArray);
-                let new_rc = Rc::new(cloned);
+                Rc::decrement_strong_count(rc_ptr as *const CycleOwner<PhpArray>);
+                let new_rc = Rc::new(CycleOwner::new(cloned));
                 if new_rc.cursor.get() & ARRAY_REFERENCE_FOREACH != 0
                     && !reference_array_iteration::copied(
                         rc_ptr as usize,
@@ -8715,7 +8952,8 @@ impl Value {
         }
         unsafe {
             let rc_ptr = self.data.ptr as *mut PhpArray;
-            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+            let rc =
+                std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr as *const CycleOwner<PhpArray>));
             if Rc::strong_count(&rc) != 1 {
                 return None;
             }
@@ -9108,11 +9346,11 @@ impl Value {
     /// live while any owned reference handle can reach it.
     #[inline]
     pub(crate) fn owned_reference(value: Value) -> Self {
-        let target = Rc::new(OwnedReference {
+        let target = Rc::new(CycleOwner::new(OwnedReference {
             value: UnsafeCell::new(value),
             internal_aliases: Cell::new(0),
             property_constraints: RefCell::new(Vec::new()),
-        });
+        }));
         Self {
             data: ValueData {
                 ptr: Rc::into_raw(target) as *mut u8,
@@ -9245,11 +9483,15 @@ impl Value {
 
     /// Temporarily reconstruct the existing Rc owner without consuming it.
     #[inline]
-    fn owned_reference_rc(&self) -> std::mem::ManuallyDrop<Rc<OwnedReference>> {
+    fn owned_reference_rc(&self) -> std::mem::ManuallyDrop<Rc<CycleOwner<OwnedReference>>> {
         debug_assert!(self.is_owned_reference());
-        // SAFETY: `owned_reference()` stores exactly an `Rc<OwnedReference>`
+        // SAFETY: `owned_reference()` stores exactly an `Rc<CycleOwner<OwnedReference>>`
         // raw pointer, and ManuallyDrop leaves its existing strong owner intact.
-        unsafe { std::mem::ManuallyDrop::new(Rc::from_raw(self.data.ptr as *const OwnedReference)) }
+        unsafe {
+            std::mem::ManuallyDrop::new(Rc::from_raw(
+                self.data.ptr as *const CycleOwner<OwnedReference>,
+            ))
+        }
     }
 
     #[cold]
@@ -9688,7 +9930,7 @@ impl Clone for Value {
             ValueType::Array => {
                 // Clone = Rc refcount bump. No deep copy.
                 unsafe {
-                    Rc::increment_strong_count(self.data.ptr as *const PhpArray);
+                    Rc::increment_strong_count(self.data.ptr as *const CycleOwner<PhpArray>);
                 }
                 Self {
                     data: self.data,
@@ -9699,7 +9941,9 @@ impl Clone for Value {
             ValueType::Object => {
                 // Clone = Rc increment. No heap allocation.
                 unsafe {
-                    Rc::increment_strong_count(self.data.ptr as *const RefCell<PhpObject>);
+                    Rc::increment_strong_count(
+                        self.data.ptr as *const CycleOwner<RefCell<PhpObject>>,
+                    );
                 }
                 Self {
                     data: self.data,
@@ -9724,7 +9968,7 @@ impl Clone for Value {
                 // SAFETY: every closure pointer comes from `Rc::into_raw` in
                 // `Value::closure`; this clone creates the matching new owner.
                 unsafe {
-                    Rc::increment_strong_count(self.data.ptr as *const PhpClosure);
+                    Rc::increment_strong_count(self.data.ptr as *const CycleOwner<PhpClosure>);
                     Self {
                         data: self.data,
                         type_info: self.type_info & !Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG,
@@ -9836,16 +10080,18 @@ fn release_deep_container_iteratively(root_type: ValueType, root_pointer: *mut u
         let mut pending = Vec::new();
         match root_type {
             ValueType::Array => {
-                let owner = Rc::from_raw(root_pointer as *const PhpArray);
+                let owner = Rc::from_raw(root_pointer as *const CycleOwner<PhpArray>);
                 let array = Rc::try_unwrap(owner)
-                    .unwrap_or_else(|_| unreachable!("unique deep array changed owner count"));
+                    .unwrap_or_else(|_| unreachable!("unique deep array changed owner count"))
+                    .into_payload();
                 append_php_array_values(array, &mut pending);
             }
             ValueType::Object => {
-                let pointer = root_pointer as *const RefCell<PhpObject>;
+                let pointer = root_pointer as *const CycleOwner<RefCell<PhpObject>>;
                 let owner = Rc::from_raw(pointer);
                 let object = Rc::try_unwrap(owner)
                     .unwrap_or_else(|_| unreachable!("unique deep object changed owner count"))
+                    .into_payload()
                     .into_inner();
                 release_object_handle(pointer as usize, object.lifecycle & OBJECT_HANDLE_MASK);
                 append_php_object_values(object, &mut pending);
@@ -9857,24 +10103,24 @@ fn release_deep_container_iteratively(root_type: ValueType, root_pointer: *mut u
             let value = std::mem::ManuallyDrop::new(value);
             match value.value_type() {
                 ValueType::Array => {
-                    let pointer = value.data.ptr as *const PhpArray;
+                    let pointer = value.data.ptr as *const CycleOwner<PhpArray>;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     if Rc::strong_count(&owner) != 1 {
                         drop(std::mem::ManuallyDrop::into_inner(value));
                         continue;
                     }
-                    if (*pointer).cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+                    if (*pointer).inner.cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
                         reference_array_iteration::release_array(pointer as usize);
                     }
                     stats::inc_value_drop(ValueType::Array as usize);
                     let owner = std::mem::ManuallyDrop::into_inner(owner);
-                    let array = Rc::try_unwrap(owner).unwrap_or_else(|_| {
-                        unreachable!("unique nested array changed owner count")
-                    });
+                    let array = Rc::try_unwrap(owner)
+                        .unwrap_or_else(|_| unreachable!("unique nested array changed owner count"))
+                        .into_payload();
                     append_php_array_values(array, &mut pending);
                 }
                 ValueType::Object => {
-                    let pointer = value.data.ptr as *const RefCell<PhpObject>;
+                    let pointer = value.data.ptr as *const CycleOwner<RefCell<PhpObject>>;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     if Rc::strong_count(&owner) != 1 {
                         drop(std::mem::ManuallyDrop::into_inner(value));
@@ -9886,6 +10132,7 @@ fn release_deep_container_iteratively(root_type: ValueType, root_pointer: *mut u
                         .unwrap_or_else(|_| {
                             unreachable!("unique nested object changed owner count")
                         })
+                        .into_payload()
                         .into_inner();
                     release_object_handle(pointer as usize, object.lifecycle & OBJECT_HANDLE_MASK);
                     append_php_object_values(object, &mut pending);
@@ -9910,21 +10157,24 @@ impl Drop for Value {
                 // explicitly marked by a prior deep traversal enter the cold
                 // iterative teardown helper.
                 unsafe {
-                    let pointer = self.data.ptr as *const PhpArray;
+                    let pointer = self.data.ptr as *const CycleOwner<PhpArray>;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     let strong_count = Rc::strong_count(&owner);
-                    if strong_count == 1 && (*pointer).cursor.get() & ARRAY_REFERENCE_FOREACH != 0 {
+                    if strong_count == 1
+                        && (*pointer).inner.cursor.get() & ARRAY_REFERENCE_FOREACH != 0
+                    {
                         reference_array_iteration::release_array(pointer as usize);
                     }
-                    if strong_count == 1 && (*pointer).has_deep_drop_stack_checkpoint() {
+                    if strong_count == 1 && (*pointer).inner.has_deep_drop_stack_checkpoint() {
                         release_deep_container_iteratively(
                             ValueType::Array,
                             pointer.cast_mut().cast(),
                         );
                     } else {
                         if strong_count > 1
+                            && !cycle_root_is_admitted(&(*pointer).admitted_generation)
                             && self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0
-                            && !(self.is_immutable_array_literal() && (*pointer).is_empty())
+                            && !(self.is_immutable_array_literal() && (*pointer).inner.is_empty())
                         {
                             register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owner)));
                         }
@@ -9933,11 +10183,12 @@ impl Drop for Value {
                 }
             }
             ValueType::Object => unsafe {
-                let pointer = self.data.ptr as *const RefCell<PhpObject>;
+                let pointer = self.data.ptr as *const CycleOwner<RefCell<PhpObject>>;
                 let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                 let strong_count = Rc::strong_count(&owner);
                 let checkpoint = strong_count == 1
-                    && (*(*pointer).as_ptr()).lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT != 0;
+                    && (*(*pointer).inner.as_ptr()).lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT
+                        != 0;
                 if checkpoint {
                     release_deep_container_iteratively(
                         ValueType::Object,
@@ -9945,10 +10196,12 @@ impl Drop for Value {
                     );
                 } else {
                     if strong_count == 1 {
-                        let handle = (*(*pointer).as_ptr()).lifecycle & OBJECT_HANDLE_MASK;
+                        let handle = (*(*pointer).inner.as_ptr()).lifecycle & OBJECT_HANDLE_MASK;
                         release_final_object(std::mem::ManuallyDrop::into_inner(owner), handle);
                     } else {
-                        if self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0 {
+                        if !cycle_root_is_admitted(&(*pointer).admitted_generation)
+                            && self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0
+                        {
                             register_cycle_candidate(CycleCandidate::Object(Rc::downgrade(&owner)));
                         }
                         Rc::decrement_strong_count(pointer);
@@ -9963,12 +10216,14 @@ impl Drop for Value {
                 // SAFETY: closure construction stores the raw pointer returned
                 // by `Rc::into_raw`; each clone has incremented the same count.
                 unsafe {
-                    let pointer = self.data.ptr as *const PhpClosure;
+                    let pointer = self.data.ptr as *const CycleOwner<PhpClosure>;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     if Rc::strong_count(&owner) == 1 {
                         release_final_closure(std::mem::ManuallyDrop::into_inner(owner));
                     } else {
-                        if self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0 {
+                        if !cycle_root_is_admitted(&(*pointer).admitted_generation)
+                            && self.type_info & Self::INTERNAL_ARGUMENT_SNAPSHOT_FLAG == 0
+                        {
                             register_cycle_candidate(CycleCandidate::Closure(Rc::downgrade(
                                 &owner,
                             )));
@@ -9981,10 +10236,12 @@ impl Drop for Value {
                 // SAFETY: owned references store the raw pointer produced by
                 // `Rc::into_raw`; each owned alias increments the same count.
                 unsafe {
-                    let pointer = self.data.ptr as *const OwnedReference;
+                    let pointer = self.data.ptr as *const CycleOwner<OwnedReference>;
                     let owner = std::mem::ManuallyDrop::new(Rc::from_raw(pointer));
                     if Rc::strong_count(&owner) == 1 && self.is_reference_foreach_cursor() {
-                        reference_array_iteration::release_cursor((*pointer).value.get() as usize);
+                        reference_array_iteration::release_cursor(
+                            (*pointer).inner.value.get() as usize
+                        );
                     }
                     if self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG != 0 {
                         let reference = &*pointer;
@@ -9994,7 +10251,7 @@ impl Drop for Value {
                             reference.internal_aliases.set(internal_aliases - 1);
                         }
                     }
-                    let target = &*(*pointer).value.get();
+                    let target = &*(*pointer).inner.value.get();
                     // Reference cells holding scalars or the immutable empty
                     // array cannot close a cycle. Do not admit such a cell
                     // merely because an internal/closure alias was retired;
@@ -10013,6 +10270,7 @@ impl Drop for Value {
                     if self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG == 0
                         && Rc::strong_count(&owner) > 1
                         && collectable_target
+                        && !cycle_root_is_admitted(&(*pointer).admitted_generation)
                     {
                         register_cycle_candidate(CycleCandidate::Reference(Rc::downgrade(&owner)));
                     }

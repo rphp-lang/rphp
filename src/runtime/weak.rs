@@ -13,7 +13,7 @@ use super::ExecutorGlobals;
 
 struct WeakReferenceState {
     owner_identity: usize,
-    owner: Weak<RefCell<PhpObject>>,
+    owner: Weak<crate::value::CycleOwner<RefCell<PhpObject>>>,
     target: WeakPhpObject,
     cleared: bool,
 }
@@ -26,12 +26,12 @@ struct WeakMapEntry {
 }
 
 struct WeakMapState {
-    owner: Weak<RefCell<PhpObject>>,
+    owner: Weak<crate::value::CycleOwner<RefCell<PhpObject>>>,
     entries: Vec<WeakMapEntry>,
 }
 
 struct WeakIteratorState {
-    owner: Weak<RefCell<PhpObject>>,
+    owner: Weak<crate::value::CycleOwner<RefCell<PhpObject>>>,
     map: Value,
     keys: Vec<usize>,
     position: usize,

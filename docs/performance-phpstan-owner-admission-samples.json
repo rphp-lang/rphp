@@ -1,0 +1,850 @@
+{
+  "status": "accepted partial checkpoint; parity remains active",
+  "baseline_commit": "1c7a7e2e081937d27755eb98bf829cc35f8cc18f",
+  "candidate_source_sha256": "a69155320a7313fc3cd56dbfaff9dba1916c6c25917c50ab1cc0fcfad05b7b52",
+  "profile": "max-perf, default features, debug=line-tables-only on both sides",
+  "architecture": "x86_64; no ARM64 native timing claim",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "binaries": {
+    "baseline": "c523226efcccb8fde57c80f7c7b86a19940f4af04cde51000e22c1f88f47a023",
+    "candidate": "ceb9508f7aec4149e3f01d2aadddf4e5ff7b1510afbd64f6085e08e20ecc05a6",
+    "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "binary_sizes": {
+    "baseline": 83891656,
+    "candidate": 84037064
+  },
+  "application": [
+    {
+      "runtime": "php",
+      "round": 0,
+      "instructions": 15473957646,
+      "analysis_seconds": 0.920625925,
+      "wall_seconds": 1.3585153969979729,
+      "max_rss_kib": 177520,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "baseline",
+      "round": 1,
+      "instructions": 145539174502,
+      "analysis_seconds": 11.010828495,
+      "wall_seconds": 13.280357900002855,
+      "max_rss_kib": 592444,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "instructions": 138687358303,
+      "analysis_seconds": 10.686039448,
+      "wall_seconds": 12.890708585000539,
+      "max_rss_kib": 598664,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": 3,
+      "instructions": 138694865241,
+      "analysis_seconds": 10.649499178,
+      "wall_seconds": 12.87053557800391,
+      "max_rss_kib": 598996,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "baseline",
+      "round": 4,
+      "instructions": 145540745513,
+      "analysis_seconds": 10.950278521,
+      "wall_seconds": 13.217372116007027,
+      "max_rss_kib": 592488,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "php",
+      "round": 5,
+      "instructions": 15473963852,
+      "analysis_seconds": 0.918821812,
+      "wall_seconds": 1.3406057780011906,
+      "max_rss_kib": 177812,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    }
+  ],
+  "holdouts": [
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.13413953781128,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.11986327171326,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.13145422935486,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.11725401878357,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.12013816833496,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.13174939155579,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.032631635665894,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.034865140914917,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.032058715820312,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.033653974533081,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.034044981002808,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.032567024230957,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.246901512146,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.27652525901794,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.28649878501892,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.24235844612122,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.27688431739807,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.24278569221497,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.024456024169922,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.02471923828125,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.024395704269409,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.024736166000366,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.024252414703369,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.024517297744751,
+      "output": "50000040000000"
+    }
+  ],
+  "scalar_confirmation": {
+    "complete": true,
+    "iterations": 5000000,
+    "seed": 290932,
+    "environment": "same library path and CPU 2; no build overlap; all valid runs retained",
+    "zero": [
+      {
+        "runtime": "baseline",
+        "round": "zero-0",
+        "seconds": 4.5299530029297e-06,
+        "output": "0",
+        "instructions:u": 13933325,
+        "cycles:u": 11506427,
+        "branches:u": 2533557,
+        "branch-misses:u": 100066
+      },
+      {
+        "runtime": "candidate",
+        "round": "zero-1",
+        "seconds": 5.0067901611328e-06,
+        "output": "0",
+        "instructions:u": 13935713,
+        "cycles:u": 11754051,
+        "branches:u": 2534674,
+        "branch-misses:u": 100612
+      }
+    ],
+    "samples": [
+      {
+        "runtime": "baseline",
+        "round": "0-baseline",
+        "seconds": 0.33990621566772,
+        "output": "45000000",
+        "instructions:u": 8365646645,
+        "cycles:u": 1818506745,
+        "branches:u": 1727877127,
+        "branch-misses:u": 455990
+      },
+      {
+        "runtime": "candidate",
+        "round": "0-candidate",
+        "seconds": 0.36538910865784,
+        "output": "45000000",
+        "instructions:u": 8370642045,
+        "cycles:u": 1962268965,
+        "branches:u": 1732875968,
+        "branch-misses:u": 451721
+      },
+      {
+        "runtime": "baseline",
+        "round": "1-baseline",
+        "seconds": 0.34038209915161,
+        "output": "45000000",
+        "instructions:u": 8365644897,
+        "cycles:u": 1821943700,
+        "branches:u": 1727876599,
+        "branch-misses:u": 448666
+      },
+      {
+        "runtime": "candidate",
+        "round": "1-candidate",
+        "seconds": 0.34162878990173,
+        "output": "45000000",
+        "instructions:u": 8370645333,
+        "cycles:u": 1830672744,
+        "branches:u": 1732876889,
+        "branch-misses:u": 452988
+      },
+      {
+        "runtime": "candidate",
+        "round": "2-candidate",
+        "seconds": 0.35035610198975,
+        "output": "45000000",
+        "instructions:u": 8370643948,
+        "cycles:u": 1881126238,
+        "branches:u": 1732876580,
+        "branch-misses:u": 450270
+      },
+      {
+        "runtime": "baseline",
+        "round": "2-baseline",
+        "seconds": 0.33272957801819,
+        "output": "45000000",
+        "instructions:u": 8365644652,
+        "cycles:u": 1781409381,
+        "branches:u": 1727876556,
+        "branch-misses:u": 455655
+      },
+      {
+        "runtime": "baseline",
+        "round": "3-baseline",
+        "seconds": 0.33383631706238,
+        "output": "45000000",
+        "instructions:u": 8365644063,
+        "cycles:u": 1788811543,
+        "branches:u": 1727876322,
+        "branch-misses:u": 996708
+      },
+      {
+        "runtime": "candidate",
+        "round": "3-candidate",
+        "seconds": 0.3598644733429,
+        "output": "45000000",
+        "instructions:u": 8370643557,
+        "cycles:u": 1931390097,
+        "branches:u": 1732876496,
+        "branch-misses:u": 565713
+      },
+      {
+        "runtime": "baseline",
+        "round": "4-baseline",
+        "seconds": 0.33343410491943,
+        "output": "45000000",
+        "instructions:u": 8365644061,
+        "cycles:u": 1779234089,
+        "branches:u": 1727876327,
+        "branch-misses:u": 449912
+      },
+      {
+        "runtime": "candidate",
+        "round": "4-candidate",
+        "seconds": 0.34636378288269,
+        "output": "45000000",
+        "instructions:u": 8370647288,
+        "cycles:u": 1855478582,
+        "branches:u": 1732877585,
+        "branch-misses:u": 448764
+      }
+    ],
+    "medians": {
+      "baseline": {
+        "seconds": 0.33383631706238,
+        "instructions:u": 8365644652,
+        "cycles:u": 1788811543,
+        "branches:u": 1727876556,
+        "branch-misses:u": 455655
+      },
+      "candidate": {
+        "seconds": 0.35035610198975,
+        "instructions:u": 8370643948,
+        "cycles:u": 1881126238,
+        "branches:u": 1732876580,
+        "branch-misses:u": 451721
+      }
+    }
+  },
+  "differentials": [
+    {
+      "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "r0|d0:1|d1:1|c1:2|r1|d2:1|d3:1|c2:4|r2|d4:1|d5:1|c2:6|r3|c1:7|",
+      "stderr": ""
+    },
+    {
+      "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "r0|d0:1|d1:1|c1:2|r1|d2:1|d3:1|c2:4|r2|d4:1|d5:1|c2:6|r3|c1:7|",
+      "stderr": ""
+    },
+    {
+      "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "r0|d0:1|d1:1|c1:2|r1|d2:1|d3:1|c2:4|r2|d4:1|d5:1|c2:6|r3|c1:7|",
+      "stderr": ""
+    },
+    {
+      "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "parent|first:2:1|second:0:1|",
+      "stderr": ""
+    },
+    {
+      "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "parent|first:2:1|second:0:1|",
+      "stderr": ""
+    },
+    {
+      "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "parent|first:2:1|second:0:1|",
+      "stderr": ""
+    },
+    {
+      "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "release|first:2:1|second:0:1|",
+      "stderr": ""
+    },
+    {
+      "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "release|first:2:1|second:0:1|",
+      "stderr": ""
+    },
+    {
+      "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "release|first:2:1|second:0:1|",
+      "stderr": ""
+    },
+    {
+      "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "d0|d1|first:0:1|second:2|",
+      "stderr": ""
+    },
+    {
+      "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "d0|d1|first:0:1|second:2|",
+      "stderr": ""
+    },
+    {
+      "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "d0|d1|first:0:1|second:2|",
+      "stderr": ""
+    },
+    {
+      "case": "cyclic_owner",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "body|drop|",
+      "stderr": ""
+    },
+    {
+      "case": "cyclic_owner",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "body|drop|",
+      "stderr": ""
+    },
+    {
+      "case": "cyclic_owner",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "body|drop|",
+      "stderr": ""
+    },
+    {
+      "case": "array_child",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "body|leaf|",
+      "stderr": ""
+    },
+    {
+      "case": "array_child",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "body|leaf|",
+      "stderr": ""
+    },
+    {
+      "case": "array_child",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "body|leaf|",
+      "stderr": ""
+    },
+    {
+      "case": "enable_old",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "0|body|drop|",
+      "stderr": ""
+    },
+    {
+      "case": "enable_old",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "0|body|drop|",
+      "stderr": ""
+    },
+    {
+      "case": "enable_old",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "0|body|drop|",
+      "stderr": ""
+    },
+    {
+      "case": "weak_map",
+      "runtime": "php",
+      "passed": true,
+      "exit": 0,
+      "stdout": "0/1|0/1",
+      "stderr": ""
+    },
+    {
+      "case": "weak_map",
+      "runtime": "baseline",
+      "passed": true,
+      "exit": 0,
+      "stdout": "0/1|0/1",
+      "stderr": ""
+    },
+    {
+      "case": "weak_map",
+      "runtime": "candidate",
+      "passed": true,
+      "exit": 0,
+      "stdout": "0/1|0/1",
+      "stderr": ""
+    }
+  ],
+  "checks": [
+    {
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "HEAD"
+      ],
+      "exit": 0,
+      "seconds": 3.468319944004179,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--lib",
+        "repeated_cycle_root_tests"
+      ],
+      "exit": 0,
+      "seconds": 55.60362798799906,
+      "test_results": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 880 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--test",
+        "e2e_cycle_collection",
+        "--test",
+        "e2e_automatic_cycle_admission",
+        "--test",
+        "e2e_weak_objects",
+        "--test",
+        "e2e_gc_root_order",
+        "--test",
+        "e2e_gc_finalization_remainder",
+        "--test",
+        "e2e_object_store_owner_lifecycle"
+      ],
+      "exit": 0,
+      "seconds": 52.5001537959979,
+      "test_results": [
+        "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 18 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--test",
+        "cli_request_memory_limit",
+        "--test",
+        "e2e_frame_reference_cleanup"
+      ],
+      "exit": 0,
+      "seconds": 0.6148000250032055,
+      "test_results": [
+        "test result: ok. 13 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.07s",
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--no-default-features",
+        "--lib",
+        "repeated_cycle_root_tests"
+      ],
+      "exit": 0,
+      "seconds": 51.30186539999704,
+      "test_results": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 732 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--no-default-features",
+        "--test",
+        "e2e_cycle_collection",
+        "--test",
+        "e2e_weak_objects"
+      ],
+      "exit": 0,
+      "seconds": 48.24652807899838,
+      "test_results": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--lib",
+        "repeated_cycle_root_tests"
+      ],
+      "exit": 0,
+      "seconds": 55.556691728997976,
+      "test_results": [
+        "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 904 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_cycle_collection",
+        "--test",
+        "e2e_weak_objects",
+        "--test",
+        "e2e_fiber_execution_boundaries"
+      ],
+      "exit": 0,
+      "seconds": 57.313130593000096,
+      "test_results": [
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--profile",
+        "dev-fast",
+        "--all-targets",
+        "--all-features"
+      ],
+      "exit": 0,
+      "seconds": 18.34547872400435,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 2.4180835520019173,
+      "test_results": []
+    }
+  ],
+  "outlier_policy": "all valid samples retained",
+  "protocol": "CPU 2; exclusive benchmark lock; fresh PHPStan result cache; same PHAR and five analysed files; hardware instructions:u counts the whole command including the same time wrapper; phase timing excludes interpreter/PHAR bootstrap; perf counter running time 100 percent",
+  "memory_boundary": {
+    "parity-owner-build-01": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 292.33701474699774,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3821576192,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-owner-measure-01": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 59.05286341699684,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 623304704,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-owner-final-checks-01": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 233.8894812639992,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4071526400,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-owner-scalar-confirm-01": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 104.36479692199646,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 54259712,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  }
+}

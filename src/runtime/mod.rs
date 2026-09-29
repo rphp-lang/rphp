@@ -52,14 +52,14 @@ use generic_scopes::{ActiveReifiedBindingScope, PendingReifiedBindingScope};
 #[derive(Clone)]
 struct ReifiedObjectBinding {
     identity: usize,
-    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    object: std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     binding: ReifiedBinding,
 }
 
 #[cfg(feature = "php-generics-reified")]
 struct ReifiedNestedArgumentsBinding {
     identity: usize,
-    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    object: std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     owner_name_identity: usize,
     owner_name_len: usize,
     arguments: Box<[GenericType]>,
@@ -340,7 +340,9 @@ struct TraitCompositionMethod {
 struct StaticGenericPropertyContract {
     definition: *const PropertyDefinition,
     identity: std::cell::Cell<usize>,
-    object: std::cell::RefCell<std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>>,
+    object: std::cell::RefCell<
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
+    >,
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -666,7 +668,8 @@ pub(crate) enum LazyObjectStrategy {
 /// retain their existing compact layout; a weak owner also prevents a stale
 /// allocation identity from being reused while this entry exists.
 pub(crate) struct LazyObjectState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) strategy: LazyObjectStrategy,
     pub(crate) initializer_value: crate::value::Value,
     pub(crate) initializer: crate::stdlib::ResolvedCallback,
@@ -696,7 +699,8 @@ pub(crate) struct ReflectionAttributeDeclaration {
 }
 
 pub(crate) struct ReflectionAttributeState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) definition: crate::vm::function::AttributeDefinition,
     pub(crate) repeated: bool,
     /// Shared reflected property handles used to build Zend's AST-style
@@ -708,7 +712,8 @@ pub(crate) struct ReflectionAttributeState {
 /// ReflectionReference. The reference target itself remains owned by the
 /// inspected array; ReflectionReference exposes only an opaque stable ID.
 pub(crate) struct ReflectionReferenceState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) reference_identity: usize,
 }
 
@@ -728,7 +733,8 @@ pub(crate) struct ReflectionPropertyMetadata {
 }
 
 pub(crate) struct ReflectionPropertyState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) metadata: ReflectionPropertyMetadata,
 }
 
@@ -736,7 +742,8 @@ pub(crate) struct ReflectionPropertyState {
 /// Dynamic properties remain compatible with Zend while attributes on trait
 /// methods and bound closures still evaluate in their effective class scope.
 pub(crate) struct ReflectionParameterState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) attribute_scope_class: String,
 }
 

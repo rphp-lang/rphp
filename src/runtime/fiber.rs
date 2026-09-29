@@ -97,7 +97,7 @@ impl FiberSuspension {
 }
 
 struct FiberContext {
-    object: Weak<std::cell::RefCell<PhpObject>>,
+    object: Weak<crate::value::CycleOwner<std::cell::RefCell<PhpObject>>>,
     callback: ResolvedCallback,
     state: CoroutineExecutionState,
     status: FiberStatus,
@@ -113,7 +113,10 @@ struct FiberContext {
 }
 
 impl FiberContext {
-    fn new(object: Weak<std::cell::RefCell<PhpObject>>, callback: ResolvedCallback) -> Self {
+    fn new(
+        object: Weak<crate::value::CycleOwner<std::cell::RefCell<PhpObject>>>,
+        callback: ResolvedCallback,
+    ) -> Self {
         Self {
             object,
             callback,
@@ -230,7 +233,7 @@ impl FiberRuntime {
     pub(crate) fn register(
         &mut self,
         identity: usize,
-        object: Weak<std::cell::RefCell<PhpObject>>,
+        object: Weak<crate::value::CycleOwner<std::cell::RefCell<PhpObject>>>,
         callback: ResolvedCallback,
     ) -> bool {
         if self.contexts.contains_key(&identity) {

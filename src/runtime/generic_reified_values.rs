@@ -175,7 +175,7 @@ impl ExecutorGlobals {
     fn reified_object_weak(
         &self,
         value: &Value,
-    ) -> std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>> {
+    ) -> std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>> {
         let object = value
             .as_object_rc()
             .expect("nested reified matcher already proved an object");
