@@ -818,3 +818,87 @@ Each variant passed 62 focused checks and 53 direct PHP programs. The remaining
 feature matrix is deliberately not run after rejecting the performance
 hypothesis. All four bounded jobs completed without OOM or timeout; maximum
 aggregate memory was below 3.87 GB. No new unsafe block or ABI change was made.
+
+## Active checkpoint: measured compiler frequency optimization
+
+- Baseline: `cd2cecb9`, whose Rust source is identical to accepted `4ad0c998`.
+  Use the exact accepted binary and identical max-perf, target and alignment
+  flags. The executor is 341653 bytes; the exact native profile assigns 23.08%
+  of cycles to it. Independent prior controls expose time changes even when
+  normalized executor instructions do not change. These facts motivate a
+  compiler-layout experiment, without claiming that layout explains the whole
+  application gap.
+- Outcome/hypothesis: let measured branch/function frequencies guide LLVM
+  placement and inlining, reducing executed work or cycles across ordinary
+  interpreter behavior. Change no opcode, PHP semantic rule, frame layout or
+  source-level admission guard. Keep CPU targeting identical on both sides.
+- Scope/ownership: the integrating task owns the isolated build and evidence
+  pipeline. Use an LLVM profile tool matching the compiler. Train on a fixed
+  selection of existing array, string, object, callback, type and application
+  corpus programs. Exclude PHPStan and the existing scalar/shared/property/self
+  comparison programs from training. Record the selection before the build,
+  its source hashes, raw and merged profile hashes, and all compiler warnings.
+- Gates: identical direct PHP output, exact-source application instruction/time
+  A/B with a fresh cache, existing independent controls and native code size.
+  Retain every measured sample; confirm regressions and meaningful target wins
+  independently. All builds and training inherit the aggregate memory limit.
+  The source and JIT encoders are unchanged; native evidence remains x86-64.
+- Stop rule: reject on output differences, unusable/mismatched profile data,
+  unbounded build/training, or no repeatable target gain. Do not add the target
+  to training or change its workload merely to make the result favorable.
+
+### Compiler-frequency result: accepted build-only gain
+
+The [complete PGO packet](performance-phpstan-pgo-samples.json) identifies the
+unchanged Rust source, both executables, all 18 training inputs, raw/merged
+profiles and every valid sample. PHPStan and every measured control are excluded
+from training. CPU targeting remains the rustc default on both sides; this is
+not a native-CPU comparison. The matching profile tool is LLVM 22.1.8 from the
+Rust 1.98.1 toolchain.
+
+| Separate application window | Baseline analysis | PGO analysis | Baseline instructions | PGO instructions | PHP analysis |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| First, two samples per runtime | 10.0006 s | 9.5923 s | 125.8957 G | 122.7327 G | 0.9713 s |
+| Independent confirmation, two per runtime | 10.0700 s | 9.4804 s | 125.8959 G | 122.7432 G | 0.9876 s |
+
+These are medians within each window, never pooled. Counters cover the whole
+command; phase timers cover actual analysis. Every run has a fresh result cache,
+five analysed files, the same findings and full counter coverage. The confirmed
+instruction reduction is 2.50%, with analysis 5.85% faster in that window. PHP
+still uses only 15.4741 billion instructions. Median peak RSS is 598860 versus
+596236 KiB in the confirmation. This is a partial improvement, not PHP parity.
+
+Five long pairs improve shared-frame time by 0.85%, scalar-return time by 16.74%,
+property reads by 5.03% and relative-self return by 19.05%. Incremental shared
+iterations still require 2636.86 versus PHP's 516.00 instructions; scalar
+iterations require 1640.29 versus 395.50. Five pairs at each depth improve
+2048/16384-node release by about nine percent. The short mixed control is 0.54%
+slower, below the one-percent rejection threshold. Two additional untrained
+application holdouts agree with PHP; their short timings do not justify a
+broad speedup claim.
+
+All 53 direct differential programs and all 18 final training-output checks
+pass. No Rust source, ownership invariant, ABI, JIT encoder or feature behavior
+changes. The unchanged source already passed its accepted feature gates; no
+new full matrix is run for a compiler-profile change. Native evidence is x86-64
+only. The executor grows from 341653 to 395497 bytes, while `.text` shrinks from
+14837138 to 12130674 bytes and temporary release from 18429 to 14702 bytes.
+PGO's benefit cannot be reduced to making every function smaller.
+
+The first merge also contained 21 automatically emitted build-script profiles;
+that executable was not benchmarked. The measured rebuild uses exactly the 18
+recorded runtime profiles. Its 26 missing-function warnings all name
+`build_script_build`; there are no runtime mismatch warnings. The instrumented
+build took 263.71 s and the corrected profile-use build 203.15 s. Maximum
+aggregate memory across the jobs was 4.79 GB, without OOM or timeout.
+
+`scripts/pgo-build.sh` now encodes the measured default CPU/alignment policy,
+uses the fixed `scripts/pgo-workloads.txt` manifest, separates Cargo build
+profiles from runtime profiles, and retains artifacts in a fresh task directory.
+Run it inside the required aggregate memory boundary; set
+`CARGO_PROFILE_MAX_PERF_DEBUG=line-tables-only` to reproduce this checkpoint's
+debug setting. An explicit `RPHP_PGO_TARGET_CPU` changes CPU targeting for both
+stages and needs its own comparison. Shell syntax and manifest hashes pass;
+the equivalent two-stage commands produced the measured artifact, while the
+updated shell entrypoint has not received a second full rebuild. Cleanup ran in
+both local checkouts; no private benchmark host was configured.

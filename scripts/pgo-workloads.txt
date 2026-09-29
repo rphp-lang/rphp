@@ -1,0 +1,20 @@
+# Fixed representative training. Application and microbenchmark holdouts are
+# deliberately absent; do not add them in response to a failed comparison.
+benches/corpus_ledger_pipeline.php
+benches/corpus_order_pipeline.php
+benches/corpus_typed_ledger_pipeline.php
+benches/corpus_typed_order_pipeline.php
+benches/bench_array.php
+benches/bench_string.php
+benches/bench_type_function_params.php
+benches/bench_type_function_return.php
+benches/bench_type_method_return_fanout_typed.php
+benches/bench_type_chain_string_typed.php
+benches/bench_closure_invoke_array.php
+benches/bench_closure_storage.php
+benches/bench_callback_array_map_long.php
+benches/bench_declared_object_lifecycle.php
+benches/bench_json_decode_object_dynamic.php
+benches/bench_hash_string_array_loop.php
+benches/bench_regex_match_all.php
+benches/bench_regex_repeated_callback_groups.php
