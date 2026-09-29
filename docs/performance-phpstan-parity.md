@@ -1804,3 +1804,111 @@ peak is 4,799,823,872 bytes, with no OOM or timeout. Both local checkouts run
 cleanup; the exact executable and source are retained after disposable build
 removal. No private benchmark host is configured. Native measurements remain
 x86-64 only. The remaining analysis instruction gap is **8.46x**.
+
+## Accepted checkpoint: ownership bitmap for wide-frame prefixes
+
+- Outcome: the first 64 slots of every frame use the existing exact ownership
+  bitmap; only slots beyond that prefix retain value scanning. Frame size no
+  longer disables ownership metadata for an otherwise representable slot.
+- Baseline: clean `9da0a81d`, source
+  `5cee45d9441db00185b852ddab3c6fbae898e4179013cdb8ec2a797c44541db4`,
+  executable
+  `33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4`.
+  Analysis costs 87.4536 billion instructions versus PHP's 10.3366 billion.
+- Evidence: the retained exact `fcc3736f` profile, preceding only the accepted
+  scope deferral, records 23,589,875 wide-frame temporary-release visits versus
+  14,586,441 compact visits. Wide range discovery inspects 39,170,123 values.
+  TMP writes and return cleanup also discard the bitmap for the entire frame.
+  These counts select the representation hypothesis; they do not predict savings.
+- Hypothesis: maintain the already allocated header word for the first 64 slots
+  regardless of total frame size. Slot publication, transfer and retirement
+  share that rule. Prefix-only release intervals and committed frame cleanup
+  can then use ownership bits without constructing another temporary index.
+- Semantic envelope: no change to slot numbering, initialization, release order,
+  reference/borrow ownership, callbacks, exception handling, GC snapshot proofs,
+  coroutine roots or destructor policy. Keep existing small-frame late-static
+  encoding and all argument-borrow admission rules. Observe live ownership after
+  callbacks; no value/alias proof may persist across PHP re-entry.
+- Ownership: the sole integrator owns frame metadata and its existing publishers
+  in ordinary, macro and coroutine execution plus focused regressions. Header
+  and Value layouts, VM stack geometry, opcode/JIT formats and region admission
+  remain unchanged. No heap allocation or wider bitmap is introduced.
+- Gates: prefix/tail boundary writes and transfers, 32/64-slot late-static
+  boundaries, wide statements and returns, references, nested/callback cleanup,
+  fibers and suspended coroutine roots; focused feature and PHP differentials,
+  unchanged unsafe inventory, formatting and all-target compilation. Independent
+  PGO, whole/analysis-phase instructions, four controls, code size and memory.
+  Native ARM64 execution remains unavailable; shared lowered contracts stay fixed.
+- Stop rule: reject a missing/stale owner bit, changed callback or GC behavior,
+  dependence on a widened borrow/region admission, or no confirmed application
+  instruction reduction. Preserve failed gates and every measurement.
+
+
+### Prefix metadata audit before acceptance
+
+The first candidate passes the five PHP lifetime differentials, but a separate
+scope audit rejects it before acceptance. Four surplus-argument programs already
+fail on the baseline: a declared compact method can acquire a physically wider
+frame. Direct property access incorrectly reads its upper ownership word as a
+called-class ID. Tracking owners in a frame wider than 64 slots changes one of
+these diagnostics, so the initial candidate and all results remain failed
+evidence rather than an accepted speedup.
+
+The repair uses the existing geometry-aware class resolver for static reads and
+the embedded-scope accessor for the assignment cache. Deferred scalar fallback
+also transfers ownership bits separately from its embedded scope, republishing
+the latter for the destination frame. Focused tests cover surplus scalar/heap
+arguments, cache reuse, and materialization into 16/40/80/130-slot frames. All
+seven scope audit programs must now match PHP, including the four baseline
+failures. This is a correction to the existing metadata contract, with no new
+PHP behavior or widened execution admission.
+
+### Prefix ownership measurements
+
+The final candidate reduces analysis-only instructions from **87.4294 to
+85.8101 billion (-1.85%)**, against PHP's 10.3338 billion. Whole-command
+medians fall from 106.1909 to 104.4630 billion initially and 106.1931 to
+104.4681 billion in confirmation. Analysis times are 8.6329 versus 7.9881
+seconds initially and 9.0176 versus 8.7357 seconds in confirmation. PHP measures
+1.0274 seconds in the latter window. Confirmation RSS is 611270 versus 609950
+KiB. The phase counter and analysis timer measure the same analysis interval;
+whole-command instruction totals include startup. Every output, finding and
+exit status matches.
+
+All four controls use fewer instructions: shared frames -2.61%, scalar frames
+-2.42%, property reads -3.22%, and relative self -1.84%. Confirmed times change
+by -6.46%, **+3.80%**, -1.79%, and **+4.04%**, respectively. The scalar timing
+regression also occurs in the first window; relative self improves initially
+but regresses in confirmation. Their timing cause is not established. The
+integrating task accepts these explicit tradeoffs under instruction priority,
+not as evidence that every program becomes faster. All valid samples and both
+failed compile gates remain in
+[the prefix ownership packet](performance-phpstan-frame-prefix-samples.json).
+
+Validation records **223 focused test executions** across default, no-default
+and all features, five lifetime and seven static-scope PHP differentials,
+formatting, and all-target/all-feature compilation. Four pre-existing static
+scope failures now match PHP. The rejected variant and its different diagnostic
+remain failures in the packet. Production unsafe blocks decrease from 1749 to
+1748; no new unsafe operation is introduced. Small-frame scope bits, wide TMP
+initialization, callback retirement order, borrowing and region admission remain
+under the existing contracts.
+
+The exact source is
+`d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad`;
+the executable is
+`34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405`.
+Fresh PGO uses the same independent 18 programs. Instrumented and final builds
+take 274.72 and 221.39 seconds. Main executor size decreases from 392413 to
+390710 bytes; return retirement grows from 3467 to 3800 bytes. The repaired
+candidate's aggregate peak is 5,007,355,904 bytes, with no OOM or timeout. Both
+local checkouts run cleanup; the exact source and executable are retained after
+disposable build removal. No private benchmark host is configured. Native
+measurements remain x86-64 only. The remaining instruction gap is **8.30x**.
+
+A fresh analysis-only instruction sample of this exact candidate selects the
+next investigation. Roughly 30.6 billion sampled instructions belong to the
+main executor, with further costs in class/method lookup, value retirement and
+regular expressions. Three lost samples and unusable callchains prevent exact
+or inclusive attribution; this profile is selection evidence only. The hardware
+phase counters above remain the acceptance evidence.

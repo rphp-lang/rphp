@@ -3370,7 +3370,7 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         return Ok(result);
     }
     let class_id = dynamic_owner_value.as_ref().map_or_else(
-        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        || static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class),
         |(_, class_id)| *class_id,
     );
     if opline._pad & STATIC_PROP_REFERENCE_FETCH != 0 {
@@ -3472,7 +3472,6 @@ fn resolve_static_property_read_or_trait_cache<'a>(
 fn static_property_class_id<const LATE_STATIC: bool>(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
-    opline: &Instruction,
     cache: &crate::vm::instruction::InlineCache,
     raw_class: &str,
 ) -> u32 {
@@ -3482,14 +3481,10 @@ fn static_property_class_id<const LATE_STATIC: bool>(
         // which differs from the called class once a subclass forwards the
         // call, so only `static` may read the compact slot directly.
         if raw_class.eq_ignore_ascii_case("static") {
-            if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
-                // SAFETY: dispatch supplies the live executing frame, and the
-                // compiler sets this flag only for compact frames whose upper
-                // heap-bitmap word holds the published late-static class ID.
-                unsafe { ((*frame).heap_bitmap >> 32) as u32 }
-            } else {
-                late_static_call_class_id(eg, frame)
-            }
+            // Extra arguments can widen the physical frame beyond its
+            // declared layout. The canonical resolver checks live geometry
+            // before interpreting the upper ownership bits as a class ID.
+            late_static_call_class_id(eg, frame)
         } else if raw_class.eq_ignore_ascii_case("parent") {
             eg.class_by_id(caller_class_id(frame, eg))
                 .and_then(|class| class.parent.as_deref())
@@ -3695,7 +3690,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             })
             .unwrap_or_else(|| eg.class_id_of(raw_class))
     } else {
-        static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class)
+        static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class)
     };
     if class_id == 0 && scoped_owner {
         let keyword = raw_class.to_ascii_lowercase();
@@ -4145,9 +4140,9 @@ fn op_unset_static_prop<'a>(
     let class_id = dynamic_owner_value.as_ref().map_or_else(
         || {
             if late_static {
-                static_property_class_id::<true>(eg, frame, opline, cache, raw_class)
+                static_property_class_id::<true>(eg, frame, cache, raw_class)
             } else {
-                static_property_class_id::<false>(eg, frame, opline, cache, raw_class)
+                static_property_class_id::<false>(eg, frame, cache, raw_class)
             }
         },
         |(_, class_id)| *class_id,
@@ -4292,7 +4287,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         let cache = unsafe {
             &*(op_array.cache.as_ptr().add(ip) as *const crate::vm::instruction::InlineCache)
         };
-        let class_id = unsafe { ((*frame).heap_bitmap >> 32) as u32 };
+        let class_id = frame_embedded_late_static_class_id(frame);
         let flags = cache.property_flags();
         let exact_int = flags == 1
             && cache.typed_static_property_tag()
@@ -4353,7 +4348,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             as *mut crate::vm::instruction::InlineCache)
     };
     let class_id = dynamic_owner_value.as_ref().map_or_else(
-        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        || static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class),
         |(_, class_id)| *class_id,
     );
     if class_id == 0 {
@@ -4686,7 +4681,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     let cache = &mut *(op_array.cache.as_ptr().add(ip)
         as *mut crate::vm::instruction::InlineCache);
     let class_id = dynamic_owner_value.as_ref().map_or_else(
-        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        || static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class),
         |(_, class_id)| *class_id,
     );
     if let Some(result) = report_direct_static_trait_member_access(

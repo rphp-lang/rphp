@@ -3503,7 +3503,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 stats::inc_value_clone(kind as usize);
                                 let value = std::ptr::read(source);
                                 if (*frame).has_heap_slots
-                                    && ((*frame).num_cvs + (*frame).num_temps > 64
+                                    && (opline.result >= 64
                                         || (*frame).heap_bitmap
                                             & (1u64 << u32::from(opline.result)) != 0)
                                 {
@@ -5351,7 +5351,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let end = cv_count + (opline.extended_value >> 16) as usize;
                         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
                         debug_assert!(first < end && end <= total);
-                        let owned = if total <= 64 {
+                        let owned = if end <= 64 {
                             let below_end = if end == 64 {
                                 u64::MAX
                             } else {
@@ -6151,8 +6151,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                             }
                             dst.write(cloned);
                             (*call).has_heap_slots = true;
-                            let total = (*call).num_cvs + (*call).num_temps;
-                            if total <= 64 {
+                            if opline.op2 < 64 {
                                 (*call).heap_bitmap |= 1u64 << opline.op2;
                             }
                         }
@@ -6165,8 +6164,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     if unsafe { (*dst).needs_cleanup() } {
                         unsafe {
                             (*call).has_heap_slots = true;
-                            let total = (*call).num_cvs + (*call).num_temps;
-                            if total <= 64 {
+                            if opline.op2 < 64 {
                                 (*call).heap_bitmap |= 1u64 << opline.op2;
                             }
                         }
@@ -12060,14 +12058,14 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 let return_cleanup = opline._pad & RELEASE_TEMPS_ON_RETURN != 0;
                 let nested_objects = opline._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0;
                 // SAFETY: the compiler emits a bounded CV/TMP interval for the
-                // active frame. Compact frames maintain exact ownership bits;
-                // wide frames retain the existing slot-level fallback.
+                // active frame. Every frame tracks its first 64 slots;
+                // intervals beyond that prefix retain the initialized-slot fallback.
                 let range_owned = unsafe {
                     let first = opline.op1 as usize;
                     let end = opline.op2 as usize;
                     let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
                     debug_assert!(first <= end && end <= total);
-                    if total <= 64 {
+                    if end <= 64 {
                         let below_end = if end == 64 {
                             u64::MAX
                         } else {

@@ -69,7 +69,7 @@ fn reference_initial_value(value: Value) -> Value {
 // of scanning all. Bitmap ops are gated behind has_heap_slots — scalar-only frames
 // (like fib) skip bitmap entirely for zero overhead.
 //
-// For frames with > 64 total slots, bitmap path is skipped (u64 covers 64 bits).
+// Every frame tracks its first 64 slots. Later slots use initialized-value drops.
 // The has_heap_slots flag is always kept in sync as fallback.
 //
 // slot_set:              Overwrite any initialized slot. Drops old. No frame tracking.
@@ -125,9 +125,8 @@ fn assignment_slot_set(slot: &mut Value, val: Value) {
 #[inline(never)]
 #[cold]
 unsafe fn bitmap_drop_and_update(frame: *mut ExecuteData, ptr: *mut Value, heap: bool) {
-    let total = (*frame).num_cvs + (*frame).num_temps;
-    if total <= 64 {
-        let idx = slot_idx(frame, ptr);
+    let idx = slot_idx(frame, ptr);
+    if idx < 64 {
         let bit = 1u64 << idx;
         if (*frame).heap_bitmap & bit != 0 {
             std::ptr::drop_in_place(ptr);
@@ -146,9 +145,8 @@ unsafe fn bitmap_drop_and_update(frame: *mut ExecuteData, ptr: *mut Value, heap:
 #[inline(never)]
 #[cold]
 unsafe fn bitmap_drop_scalar(frame: *mut ExecuteData, ptr: *mut Value) {
-    let total = (*frame).num_cvs + (*frame).num_temps;
-    if total <= 64 {
-        let idx = slot_idx(frame, ptr);
+    let idx = slot_idx(frame, ptr);
+    if idx < 64 {
         let bit = 1u64 << idx;
         if (*frame).heap_bitmap & bit != 0 {
             std::ptr::drop_in_place(ptr);
@@ -164,9 +162,8 @@ unsafe fn bitmap_drop_scalar(frame: *mut ExecuteData, ptr: *mut Value) {
 #[cold]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 unsafe fn bitmap_mark_heap(frame: *mut ExecuteData, ptr: *const Value) {
-    let total = (*frame).num_cvs + (*frame).num_temps;
-    if total <= 64 {
-        let idx = slot_idx(frame, ptr);
+    let idx = slot_idx(frame, ptr);
+    if idx < 64 {
         (*frame).heap_bitmap |= 1u64 << idx;
     }
 }
@@ -178,11 +175,11 @@ unsafe fn bitmap_mark_heap(frame: *mut ExecuteData, ptr: *const Value) {
 unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     if (*frame).has_heap_slots {
-        // A clear small-frame bit proves that there is no live heap owner.
+        // A clear tracked-prefix bit proves that there is no live heap owner.
         // Do not inspect the old TMP bytes: they may be uninitialized. A
         // scalar replacement also leaves that bit clear, so no update is due.
         if heap
-            || (*frame).num_cvs + (*frame).num_temps > 64
+            || slot_idx(frame, ptr) >= 64
             || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0
         {
             bitmap_drop_and_update(frame, ptr, heap);
@@ -211,7 +208,7 @@ macro_rules! frame_tmp_set_indexed {
         debug_assert_eq!(slot_idx(frame, ptr), index);
         if value.needs_cleanup() {
             if (*frame).has_heap_slots
-                && (*frame).num_cvs + (*frame).num_temps <= 64
+                && index < 64
                 && (*frame).heap_bitmap & (1u64 << index) == 0
             {
                 // The bit proves that no prior owner needs retirement.
@@ -223,7 +220,7 @@ macro_rules! frame_tmp_set_indexed {
             }
         } else {
             if (*frame).has_heap_slots
-                && ((*frame).num_cvs + (*frame).num_temps > 64
+                && (index >= 64
                     || (*frame).heap_bitmap & (1u64 << index) != 0)
             {
                 bitmap_drop_scalar(frame, ptr);
@@ -239,7 +236,7 @@ mod indexed_tmp_write_tests {
 
     #[test]
     fn resolved_indices_preserve_first_write_owners_and_large_frame_fallback() {
-        for (total, index) in [(64u32, 63u32), (65, 64), (80, 2)] {
+        for (total, index) in [(32u32, 31u32), (64, 63), (65, 64), (80, 2), (130, 63), (130, 64), (130, 129)] {
             let mut code = crate::compiler::compile::Compiler::new()
                 .compile(&[]).unwrap().main;
             code.num_cvs = 1;
@@ -255,7 +252,9 @@ mod indexed_tmp_write_tests {
             // TMPs are initialized by the normal allocator. Cleanup retires
             // each remaining owned edge before the stack storage is popped.
             unsafe {
+                let embedded = (*frame).try_set_embedded_late_static_class_id(0x9abc_1234);
                 let slot = (*frame).slot_ptr(index);
+                let tracked = 1u64.checked_shl(index).unwrap_or(0);
                 let neighbor = (*frame).slot_ptr(1);
                 frame_tmp_set_indexed!(frame, slot, index, Value::double(-0.0));
                 assert_eq!((*slot).raw_double().to_bits(), (-0.0f64).to_bits());
@@ -264,6 +263,7 @@ mod indexed_tmp_write_tests {
                 // when a neighboring slot already made the frame heap-bearing.
                 frame_tmp_set(frame, slot, owner.clone());
                 assert_eq!(owner.cycle_strong_count(), Some(3));
+                assert_eq!((*frame).owned_heap_bitmap(), 2 | tracked);
                 frame_tmp_set(frame, slot, owner.clone());
                 assert_eq!(owner.cycle_strong_count(), Some(3));
                 frame_tmp_set_indexed!(frame, slot, index, owner.clone());
@@ -274,10 +274,17 @@ mod indexed_tmp_write_tests {
                 assert_eq!((*neighbor).array_identity(), owner.array_identity());
                 frame_tmp_set_indexed!(frame, slot, index, owner.clone());
                 assert_eq!(owner.cycle_strong_count(), Some(3));
+                let moved = take_assignment_heap_source(&mut *frame, &mut *slot, index as u16);
+                assert_eq!((*frame).owned_heap_bitmap(), 2);
+                assert_eq!(owner.cycle_strong_count(), Some(3));
+                frame_slot_set(frame, slot, moved);
+                assert_eq!((*frame).owned_heap_bitmap(), 2 | tracked);
                 frame_tmp_set_indexed!(frame, slot, index, Value::bool(false));
                 assert_eq!((*slot).value_type(), ValueType::False);
                 cleanup_frame_slots(frame);
                 assert_eq!(owner.cycle_strong_count(), Some(1));
+                assert_eq!((*frame).owned_heap_bitmap(), 0);
+                assert_eq!((*frame).embedded_late_static_class_id(), if embedded { 0x9abc_1234 } else { 0 });
                 stack.pop_call_frame(frame);
             }
         }
@@ -290,15 +297,15 @@ macro_rules! frame_tmp_take {
     ($frame:expr, $ptr:expr) => {{
         let mut value = std::mem::replace(&mut *$ptr, Value::undef());
         value.clear_internal_argument_snapshot();
-        if (*$frame).num_cvs + (*$frame).num_temps <= 64 {
-            let index = slot_idx($frame, $ptr);
+        let index = slot_idx($frame, $ptr);
+        if index < 64 {
             (*$frame).heap_bitmap &= !(1u64 << index);
         }
         value
     }};
 }
 
-/// Retire a moved assignment operand together with its compact-frame edge.
+/// Retire a moved assignment operand together with its tracked-prefix edge.
 /// Keep this heap-only bookkeeping out of the common dispatch body. The
 /// source is a disjoint slot after the frame header, not part of that header.
 #[cold]
@@ -315,7 +322,7 @@ fn take_assignment_heap_source(
     );
     let mut value = std::mem::replace(source, Value::undef());
     value.clear_internal_argument_snapshot();
-    if frame.num_cvs + frame.num_temps <= 64 {
+    if index < 64 {
         frame.heap_bitmap &= !(1u64 << index);
     }
     value
@@ -323,7 +330,7 @@ fn take_assignment_heap_source(
 
 /// Move an already-proven owning TMP into a primitive CV. The caller has
 /// excluded references, observable assignment results and release callbacks.
-/// Transfer the compact-frame edge with one bitmap update rather than first
+/// Transfer the tracked-prefix edge with one bitmap update rather than first
 /// retiring the source edge and then reclassifying/marking the destination.
 #[cold]
 #[inline(never)]
@@ -343,10 +350,9 @@ fn move_heap_source_to_primitive_cv(
     debug_assert!(matches!(source.value_type(), ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure | ValueType::Resource));
     *destination = std::mem::replace(source, Value::undef());
     destination.clear_internal_argument_snapshot();
-    if frame.num_cvs + frame.num_temps <= 64 {
-        frame.heap_bitmap = (frame.heap_bitmap & !(1u64 << source_index))
-            | (1u64 << destination_index);
-    }
+    let source_bit = 1u64.checked_shl(u32::from(source_index)).unwrap_or(0);
+    let destination_bit = 1u64.checked_shl(u32::from(destination_index)).unwrap_or(0);
+    frame.heap_bitmap = (frame.heap_bitmap & !source_bit) | destination_bit;
     frame.has_heap_slots = true;
     stats::inc_write_frame_slot(true);
 }
@@ -354,11 +360,11 @@ fn move_heap_source_to_primitive_cv(
 /// Write a Long value directly to a frame TMP slot. Zero overhead for scalar frames.
 #[inline(always)]
 pub(super) unsafe fn frame_tmp_set_long(frame: *mut ExecuteData, ptr: *mut Value, v: i64) {
-    // As in frame_tmp_set, a clear compact-frame bit proves no live heap
+    // As in frame_tmp_set, a clear tracked-prefix bit proves no live heap
     // owner without reading potentially uninitialized TMP bytes. Long keeps
-    // that bit clear; marked slots and large frames still need retirement.
+    // that bit clear; marked slots and slots beyond the prefix still need retirement.
     if (*frame).has_heap_slots
-        && ((*frame).num_cvs + (*frame).num_temps > 64
+        && (slot_idx(frame, ptr) >= 64
             || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0)
     {
         bitmap_drop_scalar(frame, ptr);
@@ -372,7 +378,7 @@ unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) 
     // Match the Long writer: the compact clear bit proves there is no owner
     // to retire, without reading uninitialized or stale TMP bytes.
     if (*frame).has_heap_slots
-        && ((*frame).num_cvs + (*frame).num_temps > 64
+        && (slot_idx(frame, ptr) >= 64
             || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0)
     {
         bitmap_drop_scalar(frame, ptr);
@@ -408,9 +414,9 @@ pub(super) unsafe fn frame_return_copy_scalar(
         slot_set(ptr, (*source).clone());
     } else {
         // A proven scalar copy cannot introduce a heap owner. Only an
-        // occupied compact slot (or the large-frame fallback) needs a drop.
+        // occupied tracked slot (or a slot beyond the prefix) needs a drop.
         if (*caller).has_heap_slots
-            && ((*caller).num_cvs + (*caller).num_temps > 64
+            && (slot_idx(caller, ptr) >= 64
                 || (*caller).heap_bitmap & (1u64 << slot_idx(caller, ptr)) != 0)
         {
             bitmap_drop_scalar(caller, ptr);
@@ -426,10 +432,10 @@ pub(super) unsafe fn frame_return_set_long(frame: *mut ExecuteData, ptr: *mut Va
     if caller.is_null() {
         slot_set(ptr, Value::long(value));
     } else {
-        // As with the TMP Long writer, a clear compact bit is sufficient;
+        // As with the TMP Long writer, a clear tracked bit is sufficient;
         // stale slot bytes are deliberately not read for this decision.
         if (*caller).has_heap_slots
-            && ((*caller).num_cvs + (*caller).num_temps > 64
+            && (slot_idx(caller, ptr) >= 64
                 || (*caller).heap_bitmap & (1u64 << slot_idx(caller, ptr)) != 0)
         {
             bitmap_drop_scalar(caller, ptr);
@@ -443,9 +449,9 @@ pub(super) unsafe fn frame_return_set_long(frame: *mut ExecuteData, ptr: *mut Va
 unsafe fn frame_tmp_prepare_external_write(frame: *mut ExecuteData, ptr: *mut Value) {
     // The internal handler needs an initialized result, not a retirement
     // call when the compact-frame bitmap proves the slot has no live owner.
-    // Large frames and marked slots retain the canonical drop path.
+    // Untracked and marked slots retain the canonical drop path.
     if (*frame).has_heap_slots
-        && ((*frame).num_cvs + (*frame).num_temps > 64
+        && (slot_idx(frame, ptr) >= 64
             || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0)
     {
         bitmap_drop_scalar(frame, ptr);
@@ -509,11 +515,11 @@ pub(super) unsafe fn frame_slot_set(frame: *mut ExecuteData, ptr: *mut Value, va
     let heap = val.needs_cleanup();
     stats::inc_write_frame_slot(heap);
     if (*frame).has_heap_slots {
-        // A clear compact-frame bit proves there is no previous owner to
+        // A clear tracked-prefix bit proves there is no previous owner to
         // retire, even when the incoming value owns a heap edge. Mark that
-        // new edge directly. Occupied slots and initialized large frames
+        // new edge directly. Occupied slots and initialized slots beyond the prefix
         // still take the canonical replacement/drop boundary.
-        if (*frame).num_cvs + (*frame).num_temps > 64
+        if slot_idx(frame, ptr) >= 64
             || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0
         {
             bitmap_drop_and_update(frame, ptr, heap);
@@ -554,7 +560,7 @@ unsafe fn callback_arg_init(frame: *mut ExecuteData, index: usize, val: Value) {
     ptr.write(val);
     if heap {
         (*frame).has_heap_slots = true;
-        if (*frame).num_cvs + (*frame).num_temps <= 64 {
+        if index < 64 {
             (*frame).heap_bitmap |= 1u64 << index;
         }
     }
@@ -580,10 +586,7 @@ unsafe fn frame_set_this(frame: *mut ExecuteData, val: Value) {
     ptr.write(val);
     if heap {
         (*frame).has_heap_slots = true;
-        let total = (*frame).num_cvs + (*frame).num_temps;
-        if total <= 64 {
-            (*frame).heap_bitmap |= 1u64;
-        }
+        (*frame).heap_bitmap |= 1u64;
     }
 }
 
@@ -642,9 +645,8 @@ unsafe fn materialize_reference_alias(eg: &mut ExecutorGlobals, frame: *mut Exec
         return Value::reference((*ptr).as_ref_ptr());
     }
 
-    let total = (*frame).num_cvs + (*frame).num_temps;
-    if total <= 64 && (*ptr).needs_cleanup() {
-        let idx = slot_idx(frame, ptr);
+    let idx = slot_idx(frame, ptr);
+    if idx < 64 && (*ptr).needs_cleanup() {
         let bit = 1u64 << idx;
         if (*frame).heap_bitmap & bit == 0 {
             let owned = (*ptr).clone();

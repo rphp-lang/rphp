@@ -121,49 +121,32 @@ fn prepare_catch_variable_assignment(
 
 /// Drop all heap-backed slot values in a frame before popping it.
 ///
-/// Three-tier cleanup:
-///   1. No heap values at all (has_heap_slots == false) → skip entirely
-///   2. Bitmap-driven (total slots <= 64) → iterate only heap bits via trailing_zeros
-///   3. Full scan fallback (total slots > 64) → scan all slots by value type
-///
+/// A clear prefix bit proves that its slot owns no value, including in wide
+/// frames. Only the initialized tail beyond bit 63 needs a value scan.
 /// After dropping, zeros the slot so reused stack space sees Undef.
 #[inline(always)]
 pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
-    let num_cvs = (*frame).num_cvs as usize;
-    let num_temps = (*frame).num_temps as usize;
-    let total = num_cvs + num_temps;
-
-    // Tier 1: no heap values written during this invocation.
+    let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
     if !(*frame).has_heap_slots {
         stats::inc_cleanup_frame(total, true);
         return;
     }
-
-    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-
-    // Tier 2: bitmap-driven — only drop slots with heap bit set.
-    if total <= 64 {
-        let bitmap = (*frame).owned_heap_bitmap();
-        if bitmap == 0 {
-            stats::inc_cleanup_frame(total, true);
-            return;
-        }
-        stats::inc_cleanup_frame(total, false);
-        for idx in HeapSlotIter::new(bitmap) {
-            let ptr = base.add(idx as usize);
-            std::ptr::drop_in_place(ptr);
-            std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
-        }
+    let bitmap = (*frame).owned_heap_bitmap();
+    if total <= 64 && bitmap == 0 {
+        stats::inc_cleanup_frame(total, true);
         return;
     }
-
-    // Tier 3: full scan fallback for large frames (> 64 slots).
     stats::inc_cleanup_frame(total, false);
-    for i in 0..total {
-        let ptr = base.add(i);
-        // Use the same ownership predicate as slot publication. Owned
-        // reference cells own their referent even though their tag is not an
-        // object/array tag; borrowed reference pointers own nothing.
+    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    for index in HeapSlotIter::new(bitmap) {
+        let ptr = base.add(index as usize);
+        std::ptr::drop_in_place(ptr);
+        std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
+    }
+    (*frame).heap_bitmap &= !bitmap;
+    for index in 64..total {
+        let ptr = base.add(index);
+        // Owned reference cells own their referents; borrowed references do not.
         if (*ptr).needs_cleanup() {
             std::ptr::drop_in_place(ptr);
             std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
@@ -2114,7 +2097,7 @@ fn run_frame_destructors_filtered(
                     let slot = base.cast_mut().add(index);
                     std::ptr::drop_in_place(slot);
                     std::ptr::write_bytes(slot as *mut u8, 0, std::mem::size_of::<Value>());
-                    if total <= 64 {
+                    if index < 64 {
                         (*frame).heap_bitmap &= !(1u64 << index);
                     }
                     progressed = true;
@@ -2218,36 +2201,40 @@ fn retire_return_frame_owners(
             if (*frame).has_heap_slots {
                 if total <= 64 {
                     for index in HeapSlotIter::new((*frame).owned_heap_bitmap()) {
-                        let owner =
-                            std::mem::replace(&mut *base.add(index as usize), Value::undef());
+                        let owner = std::mem::replace(&mut *base.add(index as usize), Value::undef());
                         (*frame).heap_bitmap &= !(1u64 << index);
                         retire_owned_frame_value(
-                            eg,
-                            owner,
-                            logical_caller,
-                            &mut pending,
-                            callback_retirement,
+                            eg, owner, logical_caller, &mut pending, callback_retirement,
                         )?;
-                        if callback_retirement == CallbackReturnPolicy::Shutdown
-                            && pending.is_some()
-                        {
+                        if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
                             return Ok(());
                         }
                     }
                 } else {
-                    for index in 0..total {
+                    let mut remaining = (*frame).owned_heap_bitmap();
+                    while remaining != 0 {
+                        let index = remaining.trailing_zeros();
+                        let owner = std::mem::replace(&mut *base.add(index as usize), Value::undef());
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                        retire_owned_frame_value(
+                            eg, owner, logical_caller, &mut pending, callback_retirement,
+                        )?;
+                        if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
+                            return Ok(());
+                        }
+                        // The former wide scan observed later slots after each
+                        // callback. Refresh their bits and keep ascending order;
+                        // a changed earlier slot is not revisited by that scan.
+                        let later = (u64::MAX << index) << 1;
+                        remaining = (*frame).owned_heap_bitmap() & later;
+                    }
+                    for index in 64..total {
                         if (*base.add(index)).needs_cleanup() {
                             let owner = std::mem::replace(&mut *base.add(index), Value::undef());
                             retire_owned_frame_value(
-                                eg,
-                                owner,
-                                logical_caller,
-                                &mut pending,
-                                callback_retirement,
+                                eg, owner, logical_caller, &mut pending, callback_retirement,
                             )?;
-                            if callback_retirement == CallbackReturnPolicy::Shutdown
-                                && pending.is_some()
-                            {
+                            if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
                                 return Ok(());
                             }
                         }
@@ -3277,8 +3264,7 @@ fn release_statement_temps(
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         debug_assert!(first <= end && end <= total);
         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-        let compact = total <= 64;
-        let bitmap = compact.then(|| (*frame).owned_heap_bitmap());
+        let bitmap = (end <= 64).then(|| (*frame).owned_heap_bitmap());
 
         // A range can contain many scalar slots but only one counted native
         // handle. Find that owned slot without scanning the surrounding values
@@ -3312,11 +3298,14 @@ fn release_statement_temps(
             }
         }
 
-        let is_owned = |index: usize| {
-            bitmap.map_or_else(
-                || (*base.add(index)).needs_cleanup(),
-                |bitmap| bitmap & (1u64 << index) != 0,
-            )
+        // Read current ownership at each pass: callback completion can change
+        // the live prefix just as it can change an initialized tail value.
+        let is_owned = move |index: usize| {
+            if index < 64 {
+                (*frame).heap_bitmap & (1u64 << index) != 0
+            } else {
+                (*base.add(index)).needs_cleanup()
+            }
         };
 
         // A single final object TMP has a completely owned native release
@@ -3355,7 +3344,8 @@ fn release_statement_temps(
                     snapshots.insert(index - first);
                 }
             };
-            if let Some(bitmap) = bitmap {
+            if end <= 64 {
+                let bitmap = (*frame).owned_heap_bitmap();
                 let below_end = u64::MAX.checked_shr((64 - end) as u32).unwrap_or(0);
                 let below_first = u64::MAX.checked_shr((64 - first) as u32).unwrap_or(0);
                 for index in HeapSlotIter::new(bitmap & below_end & !below_first) {
@@ -3417,7 +3407,7 @@ fn release_statement_temps(
                 let value = base.add(first);
                 drop_statement_temp!(value, first, read_snapshots(eg));
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                if compact {
+                if first < 64 {
                     (*frame).heap_bitmap &= !(1u64 << first);
                 }
                 return Ok(());
@@ -3470,7 +3460,7 @@ fn release_statement_temps(
                     let value = base.add(index);
                     drop_statement_temp!(value, index, snapshots);
                     std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                    if compact {
+                    if index < 64 {
                         (*frame).heap_bitmap &= !(1u64 << index);
                     }
                 }
@@ -3523,7 +3513,7 @@ fn release_statement_temps(
                 let value = base.add(index);
                 drop_statement_temp!(value, index, snapshots);
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                if compact {
+                if index < 64 {
                     (*frame).heap_bitmap &= !(1u64 << index);
                 }
             }
@@ -3545,7 +3535,7 @@ fn release_statement_temps(
                 let value = base.add(index);
                 drop_statement_temp!(value, index, snapshots);
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                if compact {
+                if index < 64 {
                     (*frame).heap_bitmap &= !(1u64 << index);
                 }
             }
@@ -3630,7 +3620,7 @@ fn release_statement_temps(
             let value = base.add(index);
             drop_statement_temp!(value, index, snapshots);
             std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-            if compact {
+            if index < 64 {
                 (*frame).heap_bitmap &= !(1u64 << index);
             }
         }
@@ -3789,7 +3779,11 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 
 #[cfg(test)]
 mod sparse_vm_frame_pop_tests {
-    use super::{ExecuteData, ExecutorGlobals, Value, VmError, pop_vm_call_frame};
+    use super::{
+        ExecuteData, ExecutorGlobals, PhpArray, Value, VmError, callback_arg_init,
+        cleanup_frame_slots, late_static_call_class_id, materialize_deferred_scalar_call,
+        pop_vm_call_frame, publish_late_static_call_class_id,
+    };
     use std::ptr::null_mut;
 
     fn empty_internal(
@@ -3798,6 +3792,39 @@ mod sparse_vm_frame_pop_tests {
         _: &mut ExecutorGlobals,
     ) -> Result<(), VmError> {
         Ok(())
+    }
+
+    #[test]
+    fn materialized_argument_owners_keep_scope_across_frame_geometries() {
+        for total in [16, 40, 80, 130] {
+            let mut code = crate::compiler::compile::Compiler::new()
+                .compile(&[]).unwrap().main;
+            code.num_cvs = 1;
+            code.num_temps = total - 1;
+            let function = crate::compiler::make_user_function(code);
+            let mut eg = ExecutorGlobals::new();
+            let retained = Value::array(PhpArray::new());
+            let compact = eg.pending_call_stack.push_deferred_scalar_call(
+                &function.common, 1, 1, null_mut(), null_mut(),
+            );
+            // SAFETY: this test owns the argument activation and publishes
+            // its only initialized slot before materialization. The transfer
+            // consumes compact storage; only the returned full frame is used
+            // afterwards and its ownership is retired before popping it.
+            unsafe {
+                callback_arg_init(compact, 0, retained.clone());
+                publish_late_static_call_class_id(&mut eg, compact, 83);
+                let full = materialize_deferred_scalar_call(&mut eg, compact);
+                assert_eq!((*full).owned_heap_bitmap(), 1);
+                assert_eq!(late_static_call_class_id(&eg, full), 83);
+                assert_eq!(retained.cycle_strong_count(), Some(2));
+                cleanup_frame_slots(full);
+                assert_eq!(retained.cycle_strong_count(), Some(1));
+                assert_eq!(late_static_call_class_id(&eg, full), 83);
+                pop_vm_call_frame(&mut eg, full);
+                assert_eq!(eg.late_static_scope_class_id(full as usize), 0);
+            }
+        }
     }
 
     #[test]
@@ -3818,11 +3845,13 @@ mod sparse_vm_frame_pop_tests {
                     let value = match index {
                         0 => Value::owned_reference(retained.clone()),
                         1 => Value::reference(&mut retained),
+                        63 | 64 if slots > 64 => Value::owned_reference(retained.clone()),
                         _ => Value::undef(),
                     };
                     super::callback_arg_init(frame, index as usize, value);
                 }
-                assert_eq!(retained.object_strong_count(), Some(2));
+                assert_eq!(retained.object_strong_count(), Some(if slots > 64 { 4 } else { 2 }));
+                assert_eq!((*frame).owned_heap_bitmap(), if slots > 64 { 1 | (1u64 << 63) } else { 1 });
                 super::cleanup_frame_slots(frame);
             }
             assert_eq!(retained.object_strong_count(), Some(1), "{slots} slots must relinquish the owned cell");
@@ -4077,9 +4106,8 @@ fn compact_explicit_closure_method_arguments(call: *mut ExecuteData, source_posi
         }
         for index in 0..source_positional {
             let source = (*call).cv_mut(index + 1) as *mut Value;
-            let total = (*call).num_cvs + (*call).num_temps;
-            let value = if total <= 64 && (*source).needs_cleanup() {
-                let source_index = slot_idx(call, source);
+            let source_index = index + 1;
+            let value = if source_index < 64 && (*source).needs_cleanup() {
                 if (*call).heap_bitmap & (1u64 << source_index) == 0 {
                     let owned = (*source).clone_closure_capture();
                     source.write(Value::undef());

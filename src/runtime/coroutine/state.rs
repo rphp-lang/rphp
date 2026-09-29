@@ -392,8 +392,7 @@ pub(super) unsafe fn initialize_value_slot(frame: *mut ExecuteData, index: u32, 
         slot.write(value);
         if (*slot).needs_cleanup() {
             (*frame).has_heap_slots = true;
-            let total = (*frame).num_cvs as usize + (*frame).num_temps as usize;
-            if total <= 64 {
+            if index < 64 {
                 (*frame).heap_bitmap |= 1_u64 << index;
             }
         }

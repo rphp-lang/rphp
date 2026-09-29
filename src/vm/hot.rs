@@ -1693,10 +1693,7 @@ pub fn execute_hot_frame(
                     } else {
                         this_ptr.write(obj_val.clone());
                         (*call).has_heap_slots = true;
-                        let total = (*call).num_cvs + (*call).num_temps;
-                        if total <= 64 {
-                            (*call).heap_bitmap |= 1u64;
-                        }
+                        (*call).heap_bitmap |= 1u64;
                     }
                 }
 

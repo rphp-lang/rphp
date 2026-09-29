@@ -1185,8 +1185,9 @@ fn op_new_obj_resolved<'a>(
         // The newly materialized Object necessarily owns a heap edge. Reuse
         // the canonical TMP retirement/bitmap boundaries with that proof,
         // without classifying it again as a possible scalar or reference.
-        if (*frame).num_cvs + (*frame).num_temps <= 64 {
-            let bit = 1u64 << slot_idx(frame, result_ptr);
+        let index = slot_idx(frame, result_ptr);
+        if index < 64 {
+            let bit = 1u64 << index;
             if (*frame).has_heap_slots && (*frame).heap_bitmap & bit != 0 {
                 bitmap_drop_and_update(frame, result_ptr, true);
             } else {
@@ -1198,7 +1199,7 @@ fn op_new_obj_resolved<'a>(
                 (*frame).has_heap_slots = true;
             }
         } else {
-            // Large frames keep initialized TMP storage but no per-slot map.
+            // Slots beyond the bitmap prefix retain initialized TMP storage.
             if (*frame).has_heap_slots {
                 bitmap_drop_and_update(frame, result_ptr, true);
             }

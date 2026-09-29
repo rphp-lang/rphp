@@ -1,0 +1,5080 @@
+{
+  "checkpoint": "Ownership bitmap for wide-frame prefixes",
+  "status": "accepted by integrating task under instruction-count priority",
+  "goal_complete": false,
+  "baseline_commit": "9da0a81d",
+  "baseline_runtime_commit": "9da0a81d",
+  "baseline_build": {
+    "source_sha256": "5cee45d9441db00185b852ddab3c6fbae898e4179013cdb8ec2a797c44541db4",
+    "binary_sha256": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+    "binary_bytes": 76274200,
+    "merged_profile_sha256": "16b461f021f689f5bd8c5cdeb42f7bb38c8cf04dc6c580f78826f766df090679"
+  },
+  "build": {
+    "complete": true,
+    "source_sha256": "d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad",
+    "baseline_commit": "9da0a81d",
+    "baseline_binary_sha256": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+    "profdata_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.98.1-stable\n  Optimized build.",
+    "training_selection": [
+      {
+        "path": "benches/corpus_ledger_pipeline.php",
+        "source_sha256": "ce7703e1c4ba6c86c1f7b54a0eb641299937be77df018d7017fea94b363dc207"
+      },
+      {
+        "path": "benches/corpus_order_pipeline.php",
+        "source_sha256": "c5f7b84b109a152e103b89db867c129f29bc814f8014cbe11c0b9aa8f587c4ee"
+      },
+      {
+        "path": "benches/corpus_typed_ledger_pipeline.php",
+        "source_sha256": "930fd5ba6dfcab96f8748399d4474e61ff8a3f503fb270e06b0221e898229c91"
+      },
+      {
+        "path": "benches/corpus_typed_order_pipeline.php",
+        "source_sha256": "d258cf3361b13a450123aaf5ba0e2530ab6319793e34d03709b24170fb58d72f"
+      },
+      {
+        "path": "benches/bench_array.php",
+        "source_sha256": "982a5b4f080ea9b3025066056aeb6a6b963c8ea0c2b46b0767115c6f5b643ea2"
+      },
+      {
+        "path": "benches/bench_string.php",
+        "source_sha256": "1c9e408330dbc1dfde85cd205a472551ad2d78b6f5727e5817ffceb0ac7dfe42"
+      },
+      {
+        "path": "benches/bench_type_function_params.php",
+        "source_sha256": "7687ae68c52ed6ef20ce9cdd1f0f538c71601ee3b2489da3a69fe320adf9c0fb"
+      },
+      {
+        "path": "benches/bench_type_function_return.php",
+        "source_sha256": "22912e2830ae83b6a73abc33043c4824fde0ee9b6d537311e0d086aa3ebc7206"
+      },
+      {
+        "path": "benches/bench_type_method_return_fanout_typed.php",
+        "source_sha256": "e41beff27da8bee058f74575711a2f408655bc85a311c1bce1e080145ecb4fc1"
+      },
+      {
+        "path": "benches/bench_type_chain_string_typed.php",
+        "source_sha256": "95d981bcf618bcdf19b2b5653366a6305f51ddd43b476023ddacc5f25c88aa4d"
+      },
+      {
+        "path": "benches/bench_closure_invoke_array.php",
+        "source_sha256": "96ef4c6b1955672312b54e19b5c16ff5d80673c9fb2af17131e9ae003c538c4c"
+      },
+      {
+        "path": "benches/bench_closure_storage.php",
+        "source_sha256": "d63498575f9c12a57c5883761248d65e57b40a003958f44dbc4fd8de6c988c3d"
+      },
+      {
+        "path": "benches/bench_callback_array_map_long.php",
+        "source_sha256": "cfb54ab09c9a6d1be77a51e4c7b7e3e87e9f1a9d1b7193bac633f4ea9ea610dc"
+      },
+      {
+        "path": "benches/bench_declared_object_lifecycle.php",
+        "source_sha256": "ff74f465e43327179f9ba9dd987995d3f56a9de8b6be7523988bf6c4455423f2"
+      },
+      {
+        "path": "benches/bench_json_decode_object_dynamic.php",
+        "source_sha256": "acd70e5106de29346246f58b442b82f5255885cc26f1e18eee57345c15b568cd"
+      },
+      {
+        "path": "benches/bench_hash_string_array_loop.php",
+        "source_sha256": "4adb68141550a71beaa65c7bb920cd07f866c4bdf9bd5b537bc431e8bda1d9ab"
+      },
+      {
+        "path": "benches/bench_regex_match_all.php",
+        "source_sha256": "a00ad05e245ea4dcd1d7bb0081b98f8c57f75cbeb1cf2a6c12fb363e75c15414"
+      },
+      {
+        "path": "benches/bench_regex_repeated_callback_groups.php",
+        "source_sha256": "a903fef9eb3e9cf1bfc33e426a63c348331e2dae0014a95fde81a705c38cea3c"
+      }
+    ],
+    "training": [
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.04834317299537361,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.008960859006037936,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.1187464389950037,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.014455002004979178,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.0646687669941457,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.012507324005127884,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.12346329999854788,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.010992074996465817,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "php",
+        "seconds": 0.02009921999706421,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "baseline",
+        "seconds": 0.014575469991541468,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "php",
+        "seconds": 0.014109847994404845,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "baseline",
+        "seconds": 0.006317090999800712,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "php",
+        "seconds": 0.07760012400103733,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "baseline",
+        "seconds": 0.08844098100962583,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "php",
+        "seconds": 0.07634197099832818,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "baseline",
+        "seconds": 0.08953218800888862,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "php",
+        "seconds": 0.12258074901183136,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "baseline",
+        "seconds": 0.27432817801309284,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "php",
+        "seconds": 0.04334741200727876,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "baseline",
+        "seconds": 0.13400588399963453,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "php",
+        "seconds": 0.022298845011391677,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "baseline",
+        "seconds": 0.025685909000458196,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "php",
+        "seconds": 0.015500512003200129,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "baseline",
+        "seconds": 0.015897733988822438,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "php",
+        "seconds": 0.02684261898684781,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "baseline",
+        "seconds": 0.026798525999765843,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "php",
+        "seconds": 0.034988013008842245,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "baseline",
+        "seconds": 0.008401048005907796,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "php",
+        "seconds": 0.054220992999034934,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "baseline",
+        "seconds": 0.06484971899772063,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "php",
+        "seconds": 0.08936118400015403,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "baseline",
+        "seconds": 0.6287549480039161,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "php",
+        "seconds": 0.012175415002275258,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "baseline",
+        "seconds": 0.00837271499040071,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "php",
+        "seconds": 0.012623272996279411,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "baseline",
+        "seconds": 0.008320977009134367,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.01588334199914243,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4865904,
+            "sha256": "63d766204cc20cc7e815368165a73b1d87dbfa69403831e75bfd6f4d692cda0b"
+          }
+        ]
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.017572441007359885,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4866608,
+            "sha256": "2ab8b89150303aae48361ece5e4c1e337d9dceba153b8232a530f0df6133eb0b"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.015269940995494835,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4865920,
+            "sha256": "3ba0c89500ca4cea5cf7d5239a5d9df3cbf523ee0a265c18fd07970dcec0f69b"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.01763673200912308,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4867072,
+            "sha256": "9f4e9c611ef8e933e25fe8b3e68177b79750489565f76bcf3594addffd7388e3"
+          }
+        ]
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "instrumented",
+        "seconds": 0.02265470300335437,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861696,
+            "sha256": "4d6d090b219d85942d8661ce90be2b9774a1b626ae1a33c813cbe7de9543a473"
+          }
+        ]
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "instrumented",
+        "seconds": 0.012944668997079134,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861744,
+            "sha256": "fb025042c5eeb92181d3b519f5a4f24024cf23b5e4e6e13dc5cd2ac65ea2c252"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "instrumented",
+        "seconds": 0.14384173099824693,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862256,
+            "sha256": "a7c07fcb30923f5429adab0ebad867c1097ba0fb540967e5ea6e9284eabbba38"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "instrumented",
+        "seconds": 0.14113652899686713,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862288,
+            "sha256": "9508ec58a34a25db2dd93a4804d9560dcba50ef7d454ff58b494733c0c92d9ff"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.4098697519948473,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863680,
+            "sha256": "7a2d66df3e5e96391a0d77d44c3707b4a53bede87c3e2e29d8b236bf3771a49f"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.256467880011769,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863648,
+            "sha256": "d6b0123364a678b69fa4f4f64547f17be64b8a637e9cf1b399a60b7d16f42644"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "instrumented",
+        "seconds": 0.045079610994434915,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862528,
+            "sha256": "7a7a34c6df1e85d2cacf5935a2e52b2f404a72e8dd6526f559c9f07667c12917"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "instrumented",
+        "seconds": 0.03423345599730965,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862960,
+            "sha256": "0ee4efe470347a9068fb0b559b9c4da27f8cd378207248bdec14748b2b6fb111"
+          }
+        ]
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "instrumented",
+        "seconds": 0.06861042299715336,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862672,
+            "sha256": "440ccbf94e500251086a4ac216c8ea888f9877301b5746286f839e762c685a4a"
+          }
+        ]
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "instrumented",
+        "seconds": 0.017972257002838887,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863552,
+            "sha256": "1943760b61a4f200c6c6729f27f12e1671002549e709af10f4348a8acf93d69d"
+          }
+        ]
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "instrumented",
+        "seconds": 0.22951738401025068,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862960,
+            "sha256": "02c456d537b004590eea32b2630afbb4c8df7b6e2a9f29e66adfe27b42db8a75"
+          }
+        ]
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "instrumented",
+        "seconds": 1.516929778008489,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861888,
+            "sha256": "276f988f174b7178ceac3d5cc5067ed7760ef10727cf1e8595edd68bc69684a6"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "instrumented",
+        "seconds": 0.020124553004279733,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862720,
+            "sha256": "ed5a8c4cf3f17c40c1ae5d8ca9fb2ba074f5f3fd2429e4d0d6c0207addc1226e"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "instrumented",
+        "seconds": 0.020707164992927574,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862752,
+            "sha256": "fb6176e15e123f2f1775622a7699a653024c8f964ab0611df02a72b00cb3cdba"
+          }
+        ]
+      }
+    ],
+    "builds": [
+      {
+        "stage": "instrumented",
+        "exit": 0,
+        "seconds": 274.7245118139981,
+        "log_sha256": "0243e67a987f93327701b85c7a1e4fb34a47a9f8037b8760ecf31cd833557a0f",
+        "warning_lines": 0
+      },
+      {
+        "stage": "profile-use",
+        "exit": 0,
+        "seconds": 221.3935831639974,
+        "log_sha256": "95743ddfa36ed9a2a822d9bc501b96f60b37deb446d09243292476ce135322d2",
+        "warning_lines": 27
+      }
+    ],
+    "profile_merge": {
+      "exit": 0,
+      "raw_count": 18,
+      "stderr": ""
+    },
+    "instrumented_binary_sha256": "4698d095bbc40e3276203e8f720ea8f5d111c1aa8654f1b1931c030269bbddb6",
+    "merged_profile_sha256": "30744bd0e067795d6548485b280dd45b338303bc8e6c29c3297c76f3a6cf6985",
+    "merged_profile_bytes": 6632088,
+    "binary_sha256": "34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405",
+    "binary_bytes": 76287312
+  },
+  "environment": {
+    "reference_packet": "performance-phpstan-deferred-type-scope-samples.json",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "native_architecture": "x86_64",
+    "affinity_cpu": 2
+  },
+  "build_policy": {
+    "profile": "max-perf",
+    "features": "default",
+    "cpu": "rustc default",
+    "debug": "line-tables-only",
+    "pgo": true,
+    "alignment": "-C llvm-args=--align-all-functions=6",
+    "training_manifest": "scripts/pgo-workloads.txt",
+    "target_and_controls_excluded_from_training": true
+  },
+  "checks": {
+    "complete": true,
+    "source_sha256": "d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad",
+    "baseline_commit": "9da0a81d",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.569170745991869,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "indexed_tmp_write_tests"
+        ],
+        "exit": 0,
+        "seconds": 61.07229175600514,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 902 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "sparse_vm_frame_pop_tests"
+        ],
+        "exit": 0,
+        "seconds": 0.11394973499409389,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 900 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_frame_prefix_ownership",
+          "--test",
+          "e2e_frame_retirement",
+          "--test",
+          "e2e_frame_reference_cleanup",
+          "--test",
+          "e2e_frame_cleanup",
+          "--test",
+          "e2e_frameless_call_cleanup",
+          "--test",
+          "e2e_assignment_temporary_ownership",
+          "--test",
+          "e2e_shared_release",
+          "--test",
+          "e2e_release_plan",
+          "--test",
+          "e2e_object_foreach_return_cleanup",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "e2e_automatic_cycle_admission",
+          "--test",
+          "e2e_call_local_state",
+          "--test",
+          "e2e_coroutine_context"
+        ],
+        "exit": 0,
+        "seconds": 59.41819934800151,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.16s",
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s",
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_inheritance",
+          "late_static_property"
+        ],
+        "exit": 0,
+        "seconds": 0.6149562729988247,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "cli_scalar_call_capture",
+          "--test",
+          "cli_static_call_cached_scope",
+          "--test",
+          "cli_static_call_name_ownership"
+        ],
+        "exit": 0,
+        "seconds": 0.26454952199128456,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.4685621230019024,
+        "test_results": []
+      }
+    ],
+    "php_cases": []
+  },
+  "feature_checks": {
+    "complete": true,
+    "source_sha256": "d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad",
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--lib",
+          "indexed_tmp_write_tests"
+        ],
+        "exit": 0,
+        "seconds": 58.218294432008406,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 754 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--lib",
+          "sparse_vm_frame_pop_tests"
+        ],
+        "exit": 0,
+        "seconds": 0.11404458800097927,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--test",
+          "e2e_inheritance",
+          "late_static_property"
+        ],
+        "exit": 0,
+        "seconds": 52.206256974997814,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--test",
+          "e2e_frame_prefix_ownership",
+          "--test",
+          "e2e_frame_retirement",
+          "--test",
+          "e2e_frame_reference_cleanup",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "e2e_coroutine_context",
+          "--test",
+          "e2e_call_local_state"
+        ],
+        "exit": 0,
+        "seconds": 1.2158309590013232,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--lib",
+          "indexed_tmp_write_tests"
+        ],
+        "exit": 0,
+        "seconds": 63.62655567000911,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 926 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--lib",
+          "sparse_vm_frame_pop_tests"
+        ],
+        "exit": 0,
+        "seconds": 0.11395214099320583,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 924 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_inheritance",
+          "late_static_property"
+        ],
+        "exit": 0,
+        "seconds": 57.76751109799079,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 44 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_frame_prefix_ownership",
+          "--test",
+          "e2e_frame_retirement",
+          "--test",
+          "e2e_frame_reference_cleanup",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "e2e_coroutine_context",
+          "--test",
+          "e2e_call_local_state"
+        ],
+        "exit": 0,
+        "seconds": 1.2160895279957913,
+        "test_results": [
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--profile",
+          "dev-fast",
+          "--all-targets",
+          "--all-features"
+        ],
+        "exit": 0,
+        "seconds": 19.448240240002633,
+        "test_results": []
+      },
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.77043476801191,
+        "test_results": []
+      }
+    ]
+  },
+  "differentials": {
+    "complete": true,
+    "cases": [
+      {
+        "case": "differential-compact.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-compact.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-compact.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-crossing.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+        "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-crossing.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+        "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-crossing.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+        "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-prefix.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-prefix.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-prefix.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-tail.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-tail.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-tail.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-throw.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+        "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-throw.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+        "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-throw.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+        "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      }
+    ]
+  },
+  "application": {
+    "first": {
+      "complete": true,
+      "source_sha256": "d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad",
+      "cpu": 2,
+      "event": "instructions:u",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "runtime": "php",
+          "round": 0,
+          "instructions": 15473919331,
+          "analysis_seconds": 1.046555042,
+          "wall_seconds": 1.529585873009637,
+          "max_rss_kib": 177396,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 98.05194805194805,
+            "cpu18": 4.635761589403973
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 106191386021,
+          "analysis_seconds": 9.025570869,
+          "wall_seconds": 11.3205304939911,
+          "max_rss_kib": 612292,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 2.933333333333333
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 2,
+          "instructions": 104460481353,
+          "analysis_seconds": 8.083427429,
+          "wall_seconds": 10.141410268988693,
+          "max_rss_kib": 612096,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 4.257425742574258
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 3,
+          "instructions": 104465446222,
+          "analysis_seconds": 7.892848015,
+          "wall_seconds": 9.895678757005953,
+          "max_rss_kib": 612228,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.4048582995951417
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 4,
+          "instructions": 106190365699,
+          "analysis_seconds": 8.240281343,
+          "wall_seconds": 10.320414340007119,
+          "max_rss_kib": 610204,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.90328820116054,
+            "cpu18": 0.7766990291262136
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 5,
+          "instructions": 15473915089,
+          "analysis_seconds": 1.03541398,
+          "wall_seconds": 1.5346137120068306,
+          "max_rss_kib": 177564,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 11.11111111111111
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+        "candidate": "34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    },
+    "confirmation": {
+      "complete": true,
+      "source_sha256": "d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad",
+      "cpu": 2,
+      "event": "{cycles:u,instructions:u,branches:u,branch-misses:u}",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "cycles:u": 57183179211,
+          "branches:u": 20294856464,
+          "branch-misses:u": 267056916,
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 104481916234,
+          "analysis_seconds": 8.710532665,
+          "wall_seconds": 10.930176174995722,
+          "max_rss_kib": 609644,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.81701738334858,
+            "cpu18": 1.4705882352941178
+          }
+        },
+        {
+          "cycles:u": 7386541613,
+          "branches:u": 3076251985,
+          "branch-misses:u": 40777186,
+          "runtime": "php",
+          "round": 1,
+          "instructions": 15473907897,
+          "analysis_seconds": 1.054726124,
+          "wall_seconds": 1.5236197390040616,
+          "max_rss_kib": 177500,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 4.666666666666667
+          }
+        },
+        {
+          "cycles:u": 59674886746,
+          "branches:u": 20494429365,
+          "branch-misses:u": 276659368,
+          "runtime": "baseline",
+          "round": 2,
+          "instructions": 106193192233,
+          "analysis_seconds": 9.143362999,
+          "wall_seconds": 11.410665566989337,
+          "max_rss_kib": 610372,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 6.561679790026247
+          }
+        },
+        {
+          "cycles:u": 58314193602,
+          "branches:u": 20494428408,
+          "branch-misses:u": 269250909,
+          "runtime": "baseline",
+          "round": 3,
+          "instructions": 106192924748,
+          "analysis_seconds": 8.891935825,
+          "wall_seconds": 11.131038038001861,
+          "max_rss_kib": 612168,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.7239819004524887
+          }
+        },
+        {
+          "cycles:u": 6985997985,
+          "branches:u": 3076260811,
+          "branch-misses:u": 37664482,
+          "runtime": "php",
+          "round": 4,
+          "instructions": 15473927308,
+          "analysis_seconds": 1.000134945,
+          "wall_seconds": 1.4450980919937138,
+          "max_rss_kib": 177524,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.6944444444444444
+          }
+        },
+        {
+          "cycles:u": 57683314134,
+          "branches:u": 20288466367,
+          "branch-misses:u": 268584892,
+          "runtime": "candidate",
+          "round": 5,
+          "instructions": 104454354378,
+          "analysis_seconds": 8.760929585,
+          "wall_seconds": 11.001208710003993,
+          "max_rss_kib": 610256,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 2.838827838827839
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+        "candidate": "34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    }
+  },
+  "controls": {
+    "first": {
+      "complete": true,
+      "seed": 291032,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.51654052734375,
+          "output": "45000000",
+          "cycles:u": 2758650909,
+          "instructions:u": 11933060456,
+          "branches:u": 2615423421,
+          "branch-misses:u": 557936
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.55201935768127,
+          "output": "45000000",
+          "cycles:u": 2959446834,
+          "instructions:u": 12253063299,
+          "branches:u": 2602923988,
+          "branch-misses:u": 554583
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.51203775405884,
+          "output": "45000000",
+          "cycles:u": 2736849848,
+          "instructions:u": 11933060714,
+          "branches:u": 2615423045,
+          "branch-misses:u": 550208
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.54686617851257,
+          "output": "45000000",
+          "cycles:u": 2926318723,
+          "instructions:u": 12253061397,
+          "branches:u": 2602923369,
+          "branch-misses:u": 549568
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.64067220687866,
+          "output": "45000000",
+          "cycles:u": 3431133136,
+          "instructions:u": 12253061705,
+          "branches:u": 2602923571,
+          "branch-misses:u": 551270
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.51999855041504,
+          "output": "45000000",
+          "cycles:u": 2777483419,
+          "instructions:u": 11933061468,
+          "branches:u": 2615423322,
+          "branch-misses:u": 551421
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.28217220306396,
+          "output": "45000000",
+          "cycles:u": 1507774191,
+          "instructions:u": 7252588650,
+          "branches:u": 1655360151,
+          "branch-misses:u": 446667
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.27495121955872,
+          "output": "45000000",
+          "cycles:u": 1466780026,
+          "instructions:u": 7432587225,
+          "branches:u": 1652859729,
+          "branch-misses:u": 447785
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.28232383728027,
+          "output": "45000000",
+          "cycles:u": 1504438813,
+          "instructions:u": 7432586340,
+          "branches:u": 1652859425,
+          "branch-misses:u": 447549
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.28182673454285,
+          "output": "45000000",
+          "cycles:u": 1508498225,
+          "instructions:u": 7252584021,
+          "branches:u": 1655359238,
+          "branch-misses:u": 446301
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.28090143203735,
+          "output": "45000000",
+          "cycles:u": 1500915533,
+          "instructions:u": 7252587565,
+          "branches:u": 1655359914,
+          "branch-misses:u": 446118
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.27084684371948,
+          "output": "45000000",
+          "cycles:u": 1444347357,
+          "instructions:u": 7432590348,
+          "branches:u": 1652860699,
+          "branch-misses:u": 447584
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.2082347869873,
+          "output": "48640000",
+          "cycles:u": 1116406688,
+          "instructions:u": 5593126611,
+          "branches:u": 1068560166,
+          "branch-misses:u": 305878
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.2036600112915,
+          "output": "48640000",
+          "cycles:u": 1090559016,
+          "instructions:u": 5413095856,
+          "branches:u": 1068579666,
+          "branch-misses:u": 306407
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.20824384689331,
+          "output": "48640000",
+          "cycles:u": 1114404426,
+          "instructions:u": 5593124610,
+          "branches:u": 1068559499,
+          "branch-misses:u": 306394
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.20580530166626,
+          "output": "48640000",
+          "cycles:u": 1102503639,
+          "instructions:u": 5413095690,
+          "branches:u": 1068579591,
+          "branch-misses:u": 306425
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.20840334892273,
+          "output": "48640000",
+          "cycles:u": 1114363000,
+          "instructions:u": 5413094951,
+          "branches:u": 1068579336,
+          "branch-misses:u": 307552
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.20955777168274,
+          "output": "48640000",
+          "cycles:u": 1121914175,
+          "instructions:u": 5593122977,
+          "branches:u": 1068559163,
+          "branch-misses:u": 307865
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.89719223976135,
+          "output": "5000000",
+          "cycles:u": 4805760908,
+          "instructions:u": 19280087828,
+          "branches:u": 3802818210,
+          "branch-misses:u": 477915
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.8634831905365,
+          "output": "5000000",
+          "cycles:u": 4623139060,
+          "instructions:u": 18925085047,
+          "branches:u": 3812817343,
+          "branch-misses:u": 477265
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.87168455123901,
+          "output": "5000000",
+          "cycles:u": 4669234635,
+          "instructions:u": 18925085871,
+          "branches:u": 3812817562,
+          "branch-misses:u": 476599
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 1.0154826641083,
+          "output": "5000000",
+          "cycles:u": 5416219840,
+          "instructions:u": 19280087697,
+          "branches:u": 3802818262,
+          "branch-misses:u": 480603
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.92503976821899,
+          "output": "5000000",
+          "cycles:u": 4954364513,
+          "instructions:u": 19280087818,
+          "branches:u": 3802818292,
+          "branch-misses:u": 477240
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.87205624580383,
+          "output": "5000000",
+          "cycles:u": 4669949028,
+          "instructions:u": 18925085380,
+          "branches:u": 3812817500,
+          "branch-misses:u": 477088
+        }
+      ]
+    },
+    "confirmation": {
+      "complete": true,
+      "seed": 291045,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.5539014339447,
+          "output": "45000000",
+          "cycles:u": 2956518310,
+          "instructions:u": 12253062889,
+          "branches:u": 2602923837,
+          "branch-misses:u": 553226
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.69570350646973,
+          "output": "45000000",
+          "cycles:u": 3748341212,
+          "instructions:u": 11933062447,
+          "branches:u": 2615423823,
+          "branch-misses:u": 565259
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.55505204200745,
+          "output": "45000000",
+          "cycles:u": 2968755372,
+          "instructions:u": 12253060966,
+          "branches:u": 2602923183,
+          "branch-misses:u": 550624
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.51810598373413,
+          "output": "45000000",
+          "cycles:u": 2766385476,
+          "instructions:u": 11933063491,
+          "branches:u": 2615423954,
+          "branch-misses:u": 557745
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.52213668823242,
+          "output": "45000000",
+          "cycles:u": 2788595230,
+          "instructions:u": 11933061073,
+          "branches:u": 2615423208,
+          "branch-misses:u": 563297
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.54689860343933,
+          "output": "45000000",
+          "cycles:u": 2921883991,
+          "instructions:u": 12253062563,
+          "branches:u": 2602923822,
+          "branch-misses:u": 549801
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.68452095985413,
+          "output": "45000000",
+          "cycles:u": 3636806354,
+          "instructions:u": 12253063310,
+          "branches:u": 2602924095,
+          "branch-misses:u": 559466
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.51076602935791,
+          "output": "45000000",
+          "cycles:u": 2727398486,
+          "instructions:u": 11933061784,
+          "branches:u": 2615423426,
+          "branch-misses:u": 548935
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.51639103889465,
+          "output": "45000000",
+          "cycles:u": 2757954665,
+          "instructions:u": 11933059754,
+          "branches:u": 2615422781,
+          "branch-misses:u": 559163
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.54920101165771,
+          "output": "45000000",
+          "cycles:u": 2940232698,
+          "instructions:u": 12253060825,
+          "branches:u": 2602923197,
+          "branch-misses:u": 552151
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.2685079574585,
+          "output": "45000000",
+          "cycles:u": 1432441971,
+          "instructions:u": 7432587189,
+          "branches:u": 1652859752,
+          "branch-misses:u": 450449
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.28862118721008,
+          "output": "45000000",
+          "cycles:u": 1543985218,
+          "instructions:u": 7252589049,
+          "branches:u": 1655360290,
+          "branch-misses:u": 447150
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.27732849121094,
+          "output": "45000000",
+          "cycles:u": 1479704008,
+          "instructions:u": 7432588701,
+          "branches:u": 1652860214,
+          "branch-misses:u": 448379
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.27647352218628,
+          "output": "45000000",
+          "cycles:u": 1476953552,
+          "instructions:u": 7252589289,
+          "branches:u": 1655360400,
+          "branch-misses:u": 448465
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.28479647636414,
+          "output": "45000000",
+          "cycles:u": 1517763069,
+          "instructions:u": 7432590054,
+          "branches:u": 1652860662,
+          "branch-misses:u": 448336
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.28164315223694,
+          "output": "45000000",
+          "cycles:u": 1503719988,
+          "instructions:u": 7252588785,
+          "branches:u": 1655360217,
+          "branch-misses:u": 455016
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.2894823551178,
+          "output": "45000000",
+          "cycles:u": 1547162171,
+          "instructions:u": 7252590157,
+          "branches:u": 1655360651,
+          "branch-misses:u": 468246
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.28051257133484,
+          "output": "45000000",
+          "cycles:u": 1494529001,
+          "instructions:u": 7432588462,
+          "branches:u": 1652860130,
+          "branch-misses:u": 449165
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.28864192962646,
+          "output": "45000000",
+          "cycles:u": 1546226495,
+          "instructions:u": 7252587031,
+          "branches:u": 1655359663,
+          "branch-misses:u": 448881
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.27805137634277,
+          "output": "45000000",
+          "cycles:u": 1482603350,
+          "instructions:u": 7432591241,
+          "branches:u": 1652860986,
+          "branch-misses:u": 447941
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.2077796459198,
+          "output": "48640000",
+          "cycles:u": 1114927159,
+          "instructions:u": 5593124717,
+          "branches:u": 1068559556,
+          "branch-misses:u": 306396
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.20287942886353,
+          "output": "48640000",
+          "cycles:u": 1087265018,
+          "instructions:u": 5413093608,
+          "branches:u": 1068579018,
+          "branch-misses:u": 310254
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.21150803565979,
+          "output": "48640000",
+          "cycles:u": 1134847391,
+          "instructions:u": 5413094399,
+          "branches:u": 1068579205,
+          "branch-misses:u": 310841
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.21269059181213,
+          "output": "48640000",
+          "cycles:u": 1140457755,
+          "instructions:u": 5593123477,
+          "branches:u": 1068559348,
+          "branch-misses:u": 310741
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.20107102394104,
+          "output": "48640000",
+          "cycles:u": 1080446668,
+          "instructions:u": 5413093818,
+          "branches:u": 1068579049,
+          "branch-misses:u": 311727
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.20798945426941,
+          "output": "48640000",
+          "cycles:u": 1115481428,
+          "instructions:u": 5593124717,
+          "branches:u": 1068559540,
+          "branch-misses:u": 311685
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.21327090263367,
+          "output": "48640000",
+          "cycles:u": 1147988410,
+          "instructions:u": 5593125664,
+          "branches:u": 1068559923,
+          "branch-misses:u": 312982
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.20457339286804,
+          "output": "48640000",
+          "cycles:u": 1098017731,
+          "instructions:u": 5413097210,
+          "branches:u": 1068580142,
+          "branch-misses:u": 312276
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.21139454841614,
+          "output": "48640000",
+          "cycles:u": 1130303147,
+          "instructions:u": 5413097671,
+          "branches:u": 1068580239,
+          "branch-misses:u": 311572
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.20830702781677,
+          "output": "48640000",
+          "cycles:u": 1117035133,
+          "instructions:u": 5593124410,
+          "branches:u": 1068559529,
+          "branch-misses:u": 311092
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.90925359725952,
+          "output": "5000000",
+          "cycles:u": 4868697294,
+          "instructions:u": 19280087572,
+          "branches:u": 3802818196,
+          "branch-misses:u": 499015
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.95100426673889,
+          "output": "5000000",
+          "cycles:u": 5115605628,
+          "instructions:u": 18925091522,
+          "branches:u": 3812819540,
+          "branch-misses:u": 503878
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.94175028800964,
+          "output": "5000000",
+          "cycles:u": 5057103392,
+          "instructions:u": 18925086315,
+          "branches:u": 3812817848,
+          "branch-misses:u": 478060
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.90314412117004,
+          "output": "5000000",
+          "cycles:u": 4821410039,
+          "instructions:u": 19280087053,
+          "branches:u": 3802818069,
+          "branch-misses:u": 489050
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.94359946250916,
+          "output": "5000000",
+          "cycles:u": 5065544701,
+          "instructions:u": 18925086900,
+          "branches:u": 3812818057,
+          "branch-misses:u": 494490
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.89651489257812,
+          "output": "5000000",
+          "cycles:u": 4799931197,
+          "instructions:u": 19280088668,
+          "branches:u": 3802818249,
+          "branch-misses:u": 499899
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.91725587844849,
+          "output": "5000000",
+          "cycles:u": 4891912999,
+          "instructions:u": 19280086069,
+          "branches:u": 3802817666,
+          "branch-misses:u": 500781
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.9522008895874,
+          "output": "5000000",
+          "cycles:u": 5113686669,
+          "instructions:u": 18925086245,
+          "branches:u": 3812817835,
+          "branch-misses:u": 495632
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.9459707736969,
+          "output": "5000000",
+          "cycles:u": 5086575650,
+          "instructions:u": 18925088278,
+          "branches:u": 3812818469,
+          "branch-misses:u": 488430
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.91204881668091,
+          "output": "5000000",
+          "cycles:u": 4882577678,
+          "instructions:u": 19280087034,
+          "branches:u": 3802818024,
+          "branch-misses:u": 490218
+        }
+      ]
+    }
+  },
+  "profile_evidence": {
+    "profile_commit": "fcc3736f",
+    "binary_sha256": "365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e",
+    "total_instructions": 108942084130,
+    "main_executor_instructions": 34564586016,
+    "release_dispatches": 38176316,
+    "compact_release_dispatches": 14586441,
+    "wide_release_dispatches": 23589875,
+    "wide_range_value_tests": 39170123,
+    "wide_range_loop_comparisons": 54209427,
+    "unique_release_body_instructions": 7246986683,
+    "unique_return_body_instructions": 3093499192,
+    "bitmap_drop_and_update_exclusive_instructions": 1545500000,
+    "note": "Selection evidence predates only deferred return-type scope. Main-body costs exclude shared tails and helpers; they are not a predicted additive saving."
+  },
+  "phase_counters": {
+    "complete": true,
+    "archive_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "source_probe_sha256": "ba96eb92779c9fe913d609e34c03c21dd4bf39f9d21505b6534460f98fc5e46b",
+    "counter_scope": "Events explicitly enabled at analysis entry and disabled at analysis completion using perf FIFO acknowledgements; startup excluded",
+    "samples": [
+      {
+        "runtime": "php",
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "instructions": 10333801835,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 1.5032311649993062,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "binary_sha256": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+        "instructions": 87429386199,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 11.263605599990115,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "binary_sha256": "34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405",
+        "instructions": 85810137151,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 10.679040424001869,
+        "output_equal": true
+      }
+    ]
+  },
+  "code_sizes": {
+    "baseline": {
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3806912,
+        "size": 392413
+      },
+      "rphp::vm::execute::bitmap_drop_scalar": {
+        "address": 9425024,
+        "size": 2042
+      },
+      "rphp::vm::execute::bitmap_drop_and_update": {
+        "address": 3740928,
+        "size": 2018
+      },
+      "rphp::vm::execute::release_statement_temps": {
+        "address": 9292224,
+        "size": 14238
+      },
+      "rphp::vm::execute::retire_return_frame_owners": {
+        "address": 4593216,
+        "size": 3467
+      }
+    },
+    "candidate": {
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3806528,
+        "size": 390710
+      },
+      "rphp::vm::execute::bitmap_drop_scalar": {
+        "address": 9424320,
+        "size": 2055
+      },
+      "rphp::vm::execute::bitmap_drop_and_update": {
+        "address": 3740544,
+        "size": 2025
+      },
+      "rphp::vm::execute::release_statement_temps": {
+        "address": 9291456,
+        "size": 13865
+      },
+      "rphp::vm::execute::retire_return_frame_owners": {
+        "address": 4591424,
+        "size": 3800
+      }
+    }
+  },
+  "boundaries": {
+    "parity-frame-prefix-fixtures": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.1039788329944713,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 48189440,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-frame-prefix-prepare": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 16.61460678000003,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 2024693760,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-frame-prefix-prepare-v2": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 634.6515073170012,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 5113085952,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-frame-prefix-prepare-v3": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 16.91713019400777,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 2029105152,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-frame-prefix-prepare-v4": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 687.5517809890007,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 5007355904,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-frame-prefix-finish": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 0.2635524919896852,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 51949568,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-frame-prefix-finish-v2": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 413.70803932299896,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4892618752,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "scope_test_compile_failure": {
+    "complete": false,
+    "source_sha256": "bd226ad0e7f642795a14f7e7795a7c3e349a803e11f5638fdc8b178b81db3ee4",
+    "baseline_commit": "9da0a81d",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.468669800000498,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "indexed_tmp_write_tests"
+        ],
+        "exit": 101,
+        "seconds": 13.286561952001648,
+        "test_results": []
+      }
+    ],
+    "php_cases": []
+  },
+  "initial_compile_failure": {
+    "complete": false,
+    "source_sha256": "b73213b50a625cf2149e799b0d7e6d478726488da1d1bf130f7127d44a2fce46",
+    "baseline_commit": "9da0a81d",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.5187385640019784,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "indexed_tmp_write_tests"
+        ],
+        "exit": 101,
+        "seconds": 12.936813242995413,
+        "test_results": []
+      }
+    ],
+    "php_cases": []
+  },
+  "scope_audit": [
+    {
+      "case": "deferred-static.php",
+      "source_sha256": "165500fa8b59fef7da2f2c51f861ba8c3a031c316e527ff40c21f2e47233dec6",
+      "baseline_php_equal": true,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": true,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "16bf7f69eea006e68fe06ecb086f5af3f9453a502e0fe421e147a8005ddbaa67",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 0,
+          "stdout_sha256": "16bf7f69eea006e68fe06ecb086f5af3f9453a502e0fe421e147a8005ddbaa67",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "16bf7f69eea006e68fe06ecb086f5af3f9453a502e0fe421e147a8005ddbaa67",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "case": "extra-2-heap.php",
+      "source_sha256": "b5d42c9e2b2f156151f334ca209e7bb584b702a935abc2028cf717638f2e49d0",
+      "baseline_php_equal": true,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": true,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "case": "extra-2-scalar.php",
+      "source_sha256": "7c5daca53f441fdb63bf6e469e7e788af5952d200fb3dcf1b6e89f9d8cfaa488",
+      "baseline_php_equal": true,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": true,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "case": "extra-40-heap.php",
+      "source_sha256": "e0657bd2ca229291332431673d1517193df3f4c95c84d98b14094dd88285eff3",
+      "baseline_php_equal": false,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": false,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 255,
+          "stdout_sha256": "28fd8b4b5b6bbdb8cc1a2fe55b0ccecdb5243dded009861343368c7b3886a080",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "case": "extra-40-scalar.php",
+      "source_sha256": "6a4532fb5ce42a995902e1b69588ab1ed2467ad877c2432b8ce4ca873f1ac3fe",
+      "baseline_php_equal": false,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": false,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 255,
+          "stdout_sha256": "569d6eea883524c32826433d8576841e05e41fef293bba7aed87d150a61b5b2f",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "case": "extra-80-heap.php",
+      "source_sha256": "15338a5c13f2128db1c33fc84fccc0c6baefeffad3bc03a52d054e91101f92e2",
+      "baseline_php_equal": false,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": false,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 255,
+          "stdout_sha256": "6694cabc8e983c30284a13e94afd5d5d457dbddd69b389de3c2a062b90d44534",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    },
+    {
+      "case": "extra-80-scalar.php",
+      "source_sha256": "4ca09e6728bbc091d13bb14f3099706fbddc4829dc0ccef3c70cae9a5664a468",
+      "baseline_php_equal": false,
+      "candidate_php_equal": true,
+      "candidate_baseline_equal": false,
+      "outputs": {
+        "php": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "baseline": {
+          "exit": 255,
+          "stdout_sha256": "725e8c6f8fb5fbef10ba75e651b9273d4854d49d9f065ded4bc8b9f8f4e2a6aa",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "candidate": {
+          "exit": 0,
+          "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        }
+      }
+    }
+  ],
+  "rejected_scope_variant": {
+    "build": {
+      "complete": true,
+      "source_sha256": "8884b765ee683e1656434a2305436f0c539319a51a86830460a4ddf7c6891ee8",
+      "baseline_commit": "9da0a81d",
+      "baseline_binary_sha256": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+      "profdata_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.98.1-stable\n  Optimized build.",
+      "training_selection": [
+        {
+          "path": "benches/corpus_ledger_pipeline.php",
+          "source_sha256": "ce7703e1c4ba6c86c1f7b54a0eb641299937be77df018d7017fea94b363dc207"
+        },
+        {
+          "path": "benches/corpus_order_pipeline.php",
+          "source_sha256": "c5f7b84b109a152e103b89db867c129f29bc814f8014cbe11c0b9aa8f587c4ee"
+        },
+        {
+          "path": "benches/corpus_typed_ledger_pipeline.php",
+          "source_sha256": "930fd5ba6dfcab96f8748399d4474e61ff8a3f503fb270e06b0221e898229c91"
+        },
+        {
+          "path": "benches/corpus_typed_order_pipeline.php",
+          "source_sha256": "d258cf3361b13a450123aaf5ba0e2530ab6319793e34d03709b24170fb58d72f"
+        },
+        {
+          "path": "benches/bench_array.php",
+          "source_sha256": "982a5b4f080ea9b3025066056aeb6a6b963c8ea0c2b46b0767115c6f5b643ea2"
+        },
+        {
+          "path": "benches/bench_string.php",
+          "source_sha256": "1c9e408330dbc1dfde85cd205a472551ad2d78b6f5727e5817ffceb0ac7dfe42"
+        },
+        {
+          "path": "benches/bench_type_function_params.php",
+          "source_sha256": "7687ae68c52ed6ef20ce9cdd1f0f538c71601ee3b2489da3a69fe320adf9c0fb"
+        },
+        {
+          "path": "benches/bench_type_function_return.php",
+          "source_sha256": "22912e2830ae83b6a73abc33043c4824fde0ee9b6d537311e0d086aa3ebc7206"
+        },
+        {
+          "path": "benches/bench_type_method_return_fanout_typed.php",
+          "source_sha256": "e41beff27da8bee058f74575711a2f408655bc85a311c1bce1e080145ecb4fc1"
+        },
+        {
+          "path": "benches/bench_type_chain_string_typed.php",
+          "source_sha256": "95d981bcf618bcdf19b2b5653366a6305f51ddd43b476023ddacc5f25c88aa4d"
+        },
+        {
+          "path": "benches/bench_closure_invoke_array.php",
+          "source_sha256": "96ef4c6b1955672312b54e19b5c16ff5d80673c9fb2af17131e9ae003c538c4c"
+        },
+        {
+          "path": "benches/bench_closure_storage.php",
+          "source_sha256": "d63498575f9c12a57c5883761248d65e57b40a003958f44dbc4fd8de6c988c3d"
+        },
+        {
+          "path": "benches/bench_callback_array_map_long.php",
+          "source_sha256": "cfb54ab09c9a6d1be77a51e4c7b7e3e87e9f1a9d1b7193bac633f4ea9ea610dc"
+        },
+        {
+          "path": "benches/bench_declared_object_lifecycle.php",
+          "source_sha256": "ff74f465e43327179f9ba9dd987995d3f56a9de8b6be7523988bf6c4455423f2"
+        },
+        {
+          "path": "benches/bench_json_decode_object_dynamic.php",
+          "source_sha256": "acd70e5106de29346246f58b442b82f5255885cc26f1e18eee57345c15b568cd"
+        },
+        {
+          "path": "benches/bench_hash_string_array_loop.php",
+          "source_sha256": "4adb68141550a71beaa65c7bb920cd07f866c4bdf9bd5b537bc431e8bda1d9ab"
+        },
+        {
+          "path": "benches/bench_regex_match_all.php",
+          "source_sha256": "a00ad05e245ea4dcd1d7bb0081b98f8c57f75cbeb1cf2a6c12fb363e75c15414"
+        },
+        {
+          "path": "benches/bench_regex_repeated_callback_groups.php",
+          "source_sha256": "a903fef9eb3e9cf1bfc33e426a63c348331e2dae0014a95fde81a705c38cea3c"
+        }
+      ],
+      "training": [
+        {
+          "case": "corpus_ledger_pipeline.php",
+          "stage": "php",
+          "seconds": 0.04965560100390576,
+          "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+          "exit": 0
+        },
+        {
+          "case": "corpus_ledger_pipeline.php",
+          "stage": "baseline",
+          "seconds": 0.007929517989396118,
+          "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+          "exit": 0
+        },
+        {
+          "case": "corpus_order_pipeline.php",
+          "stage": "php",
+          "seconds": 0.11103177499899175,
+          "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+          "exit": 0
+        },
+        {
+          "case": "corpus_order_pipeline.php",
+          "stage": "baseline",
+          "seconds": 0.01056353299645707,
+          "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+          "exit": 0
+        },
+        {
+          "case": "corpus_typed_ledger_pipeline.php",
+          "stage": "php",
+          "seconds": 0.046245206001913175,
+          "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+          "exit": 0
+        },
+        {
+          "case": "corpus_typed_ledger_pipeline.php",
+          "stage": "baseline",
+          "seconds": 0.007873651993577369,
+          "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+          "exit": 0
+        },
+        {
+          "case": "corpus_typed_order_pipeline.php",
+          "stage": "php",
+          "seconds": 0.11245486800908111,
+          "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+          "exit": 0
+        },
+        {
+          "case": "corpus_typed_order_pipeline.php",
+          "stage": "baseline",
+          "seconds": 0.01069600299524609,
+          "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+          "exit": 0
+        },
+        {
+          "case": "bench_array.php",
+          "stage": "php",
+          "seconds": 0.019678964992635883,
+          "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+          "exit": 0
+        },
+        {
+          "case": "bench_array.php",
+          "stage": "baseline",
+          "seconds": 0.012671964010223746,
+          "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+          "exit": 0
+        },
+        {
+          "case": "bench_string.php",
+          "stage": "php",
+          "seconds": 0.011240494000958279,
+          "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+          "exit": 0
+        },
+        {
+          "case": "bench_string.php",
+          "stage": "baseline",
+          "seconds": 0.005900436997762881,
+          "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_function_params.php",
+          "stage": "php",
+          "seconds": 0.07584531900647562,
+          "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_function_params.php",
+          "stage": "baseline",
+          "seconds": 0.08963269300875254,
+          "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_function_return.php",
+          "stage": "php",
+          "seconds": 0.07461904799856711,
+          "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_function_return.php",
+          "stage": "baseline",
+          "seconds": 0.08717231800255831,
+          "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_method_return_fanout_typed.php",
+          "stage": "php",
+          "seconds": 0.12066739200963639,
+          "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_method_return_fanout_typed.php",
+          "stage": "baseline",
+          "seconds": 0.2648841240006732,
+          "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_chain_string_typed.php",
+          "stage": "php",
+          "seconds": 0.041243610001401976,
+          "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+          "exit": 0
+        },
+        {
+          "case": "bench_type_chain_string_typed.php",
+          "stage": "baseline",
+          "seconds": 0.13300690599135123,
+          "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+          "exit": 0
+        },
+        {
+          "case": "bench_closure_invoke_array.php",
+          "stage": "php",
+          "seconds": 0.020886892001726665,
+          "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+          "exit": 0
+        },
+        {
+          "case": "bench_closure_invoke_array.php",
+          "stage": "baseline",
+          "seconds": 0.02486577299714554,
+          "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+          "exit": 0
+        },
+        {
+          "case": "bench_closure_storage.php",
+          "stage": "php",
+          "seconds": 0.013812301986035891,
+          "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+          "exit": 0
+        },
+        {
+          "case": "bench_closure_storage.php",
+          "stage": "baseline",
+          "seconds": 0.01409399599651806,
+          "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+          "exit": 0
+        },
+        {
+          "case": "bench_callback_array_map_long.php",
+          "stage": "php",
+          "seconds": 0.025117979006608948,
+          "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+          "exit": 0
+        },
+        {
+          "case": "bench_callback_array_map_long.php",
+          "stage": "baseline",
+          "seconds": 0.02492954301123973,
+          "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+          "exit": 0
+        },
+        {
+          "case": "bench_declared_object_lifecycle.php",
+          "stage": "php",
+          "seconds": 0.03378142698784359,
+          "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+          "exit": 0
+        },
+        {
+          "case": "bench_declared_object_lifecycle.php",
+          "stage": "baseline",
+          "seconds": 0.007165561997680925,
+          "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+          "exit": 0
+        },
+        {
+          "case": "bench_json_decode_object_dynamic.php",
+          "stage": "php",
+          "seconds": 0.05189016999793239,
+          "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+          "exit": 0
+        },
+        {
+          "case": "bench_json_decode_object_dynamic.php",
+          "stage": "baseline",
+          "seconds": 0.06424451299244538,
+          "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+          "exit": 0
+        },
+        {
+          "case": "bench_hash_string_array_loop.php",
+          "stage": "php",
+          "seconds": 0.08694448599999305,
+          "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+          "exit": 0
+        },
+        {
+          "case": "bench_hash_string_array_loop.php",
+          "stage": "baseline",
+          "seconds": 0.6215360429923749,
+          "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+          "exit": 0
+        },
+        {
+          "case": "bench_regex_match_all.php",
+          "stage": "php",
+          "seconds": 0.011419283007853664,
+          "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+          "exit": 0
+        },
+        {
+          "case": "bench_regex_match_all.php",
+          "stage": "baseline",
+          "seconds": 0.008068409995757975,
+          "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+          "exit": 0
+        },
+        {
+          "case": "bench_regex_repeated_callback_groups.php",
+          "stage": "php",
+          "seconds": 0.01030770898796618,
+          "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+          "exit": 0
+        },
+        {
+          "case": "bench_regex_repeated_callback_groups.php",
+          "stage": "baseline",
+          "seconds": 0.00771232700208202,
+          "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+          "exit": 0
+        },
+        {
+          "case": "corpus_ledger_pipeline.php",
+          "stage": "instrumented",
+          "seconds": 0.014768191002076492,
+          "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4865912,
+              "sha256": "ba33cc7673701d8504ed54c29a5ee110ab8c19a368b743592de62fdb70adef26"
+            }
+          ]
+        },
+        {
+          "case": "corpus_order_pipeline.php",
+          "stage": "instrumented",
+          "seconds": 0.016757757010054775,
+          "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4866600,
+              "sha256": "e8e36c799d584dc28b89bff4f96bbe139491419f5a8722385ed852f640c0b621"
+            }
+          ]
+        },
+        {
+          "case": "corpus_typed_ledger_pipeline.php",
+          "stage": "instrumented",
+          "seconds": 0.013912642010836862,
+          "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4865896,
+              "sha256": "a0b122ff71bc484c1bf0a71cb8400f577cd356af85d4dc7e52ad0d3adafd9ee2"
+            }
+          ]
+        },
+        {
+          "case": "corpus_typed_order_pipeline.php",
+          "stage": "instrumented",
+          "seconds": 0.01613219299179036,
+          "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4867096,
+              "sha256": "1b4e0cc65c122702480f6c877ae8962ad143f8fbe808f38de29743d13c35ad21"
+            }
+          ]
+        },
+        {
+          "case": "bench_array.php",
+          "stage": "instrumented",
+          "seconds": 0.022071955012506805,
+          "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4861688,
+              "sha256": "01bcaa483c7b299182b3d018cd7b122198facbe8c49f6f534154f2dbf3bccbfb"
+            }
+          ]
+        },
+        {
+          "case": "bench_string.php",
+          "stage": "instrumented",
+          "seconds": 0.011891045010997914,
+          "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4861752,
+              "sha256": "b8789c405b2f45c5341e89f51b01d45740dd3a60c5f44136a923abe92a276095"
+            }
+          ]
+        },
+        {
+          "case": "bench_type_function_params.php",
+          "stage": "instrumented",
+          "seconds": 0.13682691800931934,
+          "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862264,
+              "sha256": "d2343ef0c005782a84cf94070c62f079afd9af923fde59419eeeb931bb36d3d5"
+            }
+          ]
+        },
+        {
+          "case": "bench_type_function_return.php",
+          "stage": "instrumented",
+          "seconds": 0.14012748599634506,
+          "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862280,
+              "sha256": "e5f10d645ce32a767ed97e1520022fa03ce34dc669e2e3c9504d8c144a94a3fc"
+            }
+          ]
+        },
+        {
+          "case": "bench_type_method_return_fanout_typed.php",
+          "stage": "instrumented",
+          "seconds": 0.3856877209909726,
+          "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4863656,
+              "sha256": "8c176eb90aa9e49f2b5a683cf080682374535e44d99423e80709a06be3558072"
+            }
+          ]
+        },
+        {
+          "case": "bench_type_chain_string_typed.php",
+          "stage": "instrumented",
+          "seconds": 0.20786995999515057,
+          "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4863656,
+              "sha256": "34c516f3d7e09947175db0cff0c817ac550ef6f39562b9f43b5cdb5d2824c6fd"
+            }
+          ]
+        },
+        {
+          "case": "bench_closure_invoke_array.php",
+          "stage": "instrumented",
+          "seconds": 0.038788723992183805,
+          "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862552,
+              "sha256": "69d5406f7ebe6604e6cf4181b4e23b838e69e17554292baf4d9ff727d85f8fd0"
+            }
+          ]
+        },
+        {
+          "case": "bench_closure_storage.php",
+          "stage": "instrumented",
+          "seconds": 0.021815379994222894,
+          "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862968,
+              "sha256": "c30d477f5f18e5b95439097938b34835a452de9cc22be09b8b787df4502407dc"
+            }
+          ]
+        },
+        {
+          "case": "bench_callback_array_map_long.php",
+          "stage": "instrumented",
+          "seconds": 0.043871014000615105,
+          "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862680,
+              "sha256": "e7c177000571c6f3b62b26f7fe25c2ed8392db4906b10a1fac38f98777173086"
+            }
+          ]
+        },
+        {
+          "case": "bench_declared_object_lifecycle.php",
+          "stage": "instrumented",
+          "seconds": 0.012037843000143766,
+          "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4863560,
+              "sha256": "c3a98d946673226ae49e894105ce6dde81e2e39bd575d81e70564b3551dd78d9"
+            }
+          ]
+        },
+        {
+          "case": "bench_json_decode_object_dynamic.php",
+          "stage": "instrumented",
+          "seconds": 0.13651883498823736,
+          "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862952,
+              "sha256": "e6dbc656b8ecd1c47bf6449f323f14bcad0bfa7bb731349a5c7c2a612c461e60"
+            }
+          ]
+        },
+        {
+          "case": "bench_hash_string_array_loop.php",
+          "stage": "instrumented",
+          "seconds": 0.8859192739910213,
+          "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4861880,
+              "sha256": "13aeaf5a8f4601e5b761722c3f9ea65ce2ea8cdecc85b4cf1edd2c0067135d22"
+            }
+          ]
+        },
+        {
+          "case": "bench_regex_match_all.php",
+          "stage": "instrumented",
+          "seconds": 0.014394072990398854,
+          "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862728,
+              "sha256": "e20a005cfa39c1d7b1b0b39aa2d0ce4250924ef9929abddf78d3566f46f684c9"
+            }
+          ]
+        },
+        {
+          "case": "bench_regex_repeated_callback_groups.php",
+          "stage": "instrumented",
+          "seconds": 0.014444809989072382,
+          "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+          "exit": 0,
+          "raw_profiles": [
+            {
+              "index": 0,
+              "bytes": 4862760,
+              "sha256": "ff023d2cd8fedf7a278dfd97c57a18b67a183aae181d90ca1c7ad4b53df712f9"
+            }
+          ]
+        }
+      ],
+      "builds": [
+        {
+          "stage": "instrumented",
+          "exit": 0,
+          "seconds": 259.2495478980127,
+          "log_sha256": "50dd795cf20e370d324a5a3d5bb0f4bd45f1e8bdd5e47b1bda5c11ec57e186fa",
+          "warning_lines": 0
+        },
+        {
+          "stage": "profile-use",
+          "exit": 0,
+          "seconds": 198.501489672999,
+          "log_sha256": "6262002686fd839cce4200ad46cf2c883ac26604dde10722b9afbfa1a967ba81",
+          "warning_lines": 27
+        }
+      ],
+      "profile_merge": {
+        "exit": 0,
+        "raw_count": 18,
+        "stderr": ""
+      },
+      "instrumented_binary_sha256": "667d7232f63fab830e06fdbfc923e435ff2574b3c5db1b47f569567d3f4e1f1e",
+      "merged_profile_sha256": "1e5de5510aaca1ab15b9fe4e31d2e65450b2535733da93e514aab986c2c35ca7",
+      "merged_profile_bytes": 6632016,
+      "binary_sha256": "d70ac2c1d47914a846c224d493ff38ca846733c4b412f8730baf8e72ba572dfe",
+      "binary_bytes": 76285984
+    },
+    "checks": {
+      "complete": true,
+      "source_sha256": "8884b765ee683e1656434a2305436f0c539319a51a86830460a4ddf7c6891ee8",
+      "baseline_commit": "9da0a81d",
+      "checks": [
+        {
+          "command": [
+            "scripts/check-unsafe-policy.sh",
+            "--diff-base",
+            "HEAD"
+          ],
+          "exit": 0,
+          "seconds": 3.518732391996309,
+          "test_results": []
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--profile",
+            "test-fast",
+            "--lib",
+            "indexed_tmp_write_tests"
+          ],
+          "exit": 0,
+          "seconds": 56.60987641700194,
+          "test_results": [
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 901 filtered out; finished in 0.00s"
+          ]
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--profile",
+            "test-fast",
+            "--lib",
+            "sparse_vm_frame_pop_tests"
+          ],
+          "exit": 0,
+          "seconds": 0.06381219401373528,
+          "test_results": [
+            "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 900 filtered out; finished in 0.00s"
+          ]
+        },
+        {
+          "command": [
+            "cargo",
+            "test",
+            "--offline",
+            "--locked",
+            "--profile",
+            "test-fast",
+            "--test",
+            "e2e_frame_prefix_ownership",
+            "--test",
+            "e2e_frame_retirement",
+            "--test",
+            "e2e_frame_reference_cleanup",
+            "--test",
+            "e2e_frame_cleanup",
+            "--test",
+            "e2e_frameless_call_cleanup",
+            "--test",
+            "e2e_assignment_temporary_ownership",
+            "--test",
+            "e2e_shared_release",
+            "--test",
+            "e2e_release_plan",
+            "--test",
+            "e2e_object_foreach_return_cleanup",
+            "--test",
+            "e2e_fiber_execution_boundaries",
+            "--test",
+            "e2e_automatic_cycle_admission",
+            "--test",
+            "e2e_call_local_state",
+            "--test",
+            "e2e_coroutine_context"
+          ],
+          "exit": 0,
+          "seconds": 54.05610122499638,
+          "test_results": [
+            "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 33 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.15s",
+            "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+            "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 26 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.20s",
+            "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+            "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+          ]
+        },
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit": 0,
+          "seconds": 2.367360242991708,
+          "test_results": []
+        }
+      ],
+      "php_cases": []
+    },
+    "application": {
+      "complete": true,
+      "source_sha256": "8884b765ee683e1656434a2305436f0c539319a51a86830460a4ddf7c6891ee8",
+      "cpu": 2,
+      "event": "instructions:u",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "runtime": "php",
+          "round": 0,
+          "instructions": 15473919579,
+          "analysis_seconds": 0.924706936,
+          "wall_seconds": 1.3614814890024718,
+          "max_rss_kib": 177552,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 106185178720,
+          "analysis_seconds": 8.102784872,
+          "wall_seconds": 10.157986707999953,
+          "max_rss_kib": 610080,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.19743336623889438
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 2,
+          "instructions": 104478961786,
+          "analysis_seconds": 7.754286766,
+          "wall_seconds": 9.756683883999358,
+          "max_rss_kib": 612444,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 3,
+          "instructions": 104474105516,
+          "analysis_seconds": 7.884157181,
+          "wall_seconds": 10.054845281003509,
+          "max_rss_kib": 612120,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.90069513406156,
+            "cpu18": 6.118355065195587
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 4,
+          "instructions": 106184212575,
+          "analysis_seconds": 7.968012094,
+          "wall_seconds": 10.066704400000162,
+          "max_rss_kib": 610176,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 2.3928215353938187
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 5,
+          "instructions": 15473894768,
+          "analysis_seconds": 0.911797047,
+          "wall_seconds": 1.3412887239974225,
+          "max_rss_kib": 177652,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.25925925925925,
+            "cpu18": 0.7407407407407407
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4",
+        "candidate": "d70ac2c1d47914a846c224d493ff38ca846733c4b412f8730baf8e72ba572dfe",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    },
+    "controls": {
+      "complete": true,
+      "seed": 291032,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.51088666915894,
+          "output": "45000000",
+          "cycles:u": 2740993319,
+          "instructions:u": 11933063740,
+          "branches:u": 2615424123,
+          "branch-misses:u": 575828
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.54502701759338,
+          "output": "45000000",
+          "cycles:u": 2925697091,
+          "instructions:u": 12253062249,
+          "branches:u": 2602923685,
+          "branch-misses:u": 549198
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.51270008087158,
+          "output": "45000000",
+          "cycles:u": 2750177834,
+          "instructions:u": 11933061809,
+          "branches:u": 2615423500,
+          "branch-misses:u": 579161
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.54693841934204,
+          "output": "45000000",
+          "cycles:u": 2939152836,
+          "instructions:u": 12253061709,
+          "branches:u": 2602923455,
+          "branch-misses:u": 555655
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.54607939720154,
+          "output": "45000000",
+          "cycles:u": 2937714728,
+          "instructions:u": 12253062691,
+          "branches:u": 2602923825,
+          "branch-misses:u": 553244
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.51419425010681,
+          "output": "45000000",
+          "cycles:u": 2758884981,
+          "instructions:u": 11933062162,
+          "branches:u": 2615423493,
+          "branch-misses:u": 548641
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.2788872718811,
+          "output": "45000000",
+          "cycles:u": 1499245824,
+          "instructions:u": 7252589219,
+          "branches:u": 1655360348,
+          "branch-misses:u": 448398
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.26918792724609,
+          "output": "45000000",
+          "cycles:u": 1439104854,
+          "instructions:u": 7432587432,
+          "branches:u": 1652859787,
+          "branch-misses:u": 447651
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.27004075050354,
+          "output": "45000000",
+          "cycles:u": 1440902634,
+          "instructions:u": 7432586896,
+          "branches:u": 1652859665,
+          "branch-misses:u": 446874
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.27852988243103,
+          "output": "45000000",
+          "cycles:u": 1491710011,
+          "instructions:u": 7252588401,
+          "branches:u": 1655360115,
+          "branch-misses:u": 447494
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.27106142044067,
+          "output": "45000000",
+          "cycles:u": 1453216324,
+          "instructions:u": 7252587594,
+          "branches:u": 1655359836,
+          "branch-misses:u": 446454
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.27713489532471,
+          "output": "45000000",
+          "cycles:u": 1484551583,
+          "instructions:u": 7432589827,
+          "branches:u": 1652860484,
+          "branch-misses:u": 446012
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.20741510391235,
+          "output": "48640000",
+          "cycles:u": 1114959028,
+          "instructions:u": 5593122378,
+          "branches:u": 1068558896,
+          "branch-misses:u": 305775
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.2339551448822,
+          "output": "48640000",
+          "cycles:u": 1262138464,
+          "instructions:u": 5413095868,
+          "branches:u": 1068579829,
+          "branch-misses:u": 307080
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.20581960678101,
+          "output": "48640000",
+          "cycles:u": 1106753556,
+          "instructions:u": 5593125827,
+          "branches:u": 1068559917,
+          "branch-misses:u": 305210
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.20172381401062,
+          "output": "48640000",
+          "cycles:u": 1085754853,
+          "instructions:u": 5413093408,
+          "branches:u": 1068578950,
+          "branch-misses:u": 304775
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.20166850090027,
+          "output": "48640000",
+          "cycles:u": 1079272909,
+          "instructions:u": 5413098747,
+          "branches:u": 1068580564,
+          "branch-misses:u": 304957
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.20791816711426,
+          "output": "48640000",
+          "cycles:u": 1108066832,
+          "instructions:u": 5593124710,
+          "branches:u": 1068559627,
+          "branch-misses:u": 306614
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.89465975761414,
+          "output": "5000000",
+          "cycles:u": 4769349602,
+          "instructions:u": 19280087638,
+          "branches:u": 3802818219,
+          "branch-misses:u": 475744
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.80929136276245,
+          "output": "5000000",
+          "cycles:u": 4309269089,
+          "instructions:u": 18930086597,
+          "branches:u": 3812817729,
+          "branch-misses:u": 475498
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.80431866645813,
+          "output": "5000000",
+          "cycles:u": 4285546111,
+          "instructions:u": 18930088201,
+          "branches:u": 3812818272,
+          "branch-misses:u": 476464
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.90190434455872,
+          "output": "5000000",
+          "cycles:u": 4824501783,
+          "instructions:u": 19280086631,
+          "branches:u": 3802817943,
+          "branch-misses:u": 477998
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 1.0285160541534,
+          "output": "5000000",
+          "cycles:u": 5511618687,
+          "instructions:u": 19280090453,
+          "branches:u": 3802819237,
+          "branch-misses:u": 482595
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.80350589752197,
+          "output": "5000000",
+          "cycles:u": 4303770259,
+          "instructions:u": 18930088028,
+          "branches:u": 3812818247,
+          "branch-misses:u": 475866
+        }
+      ]
+    },
+    "differentials": {
+      "complete": true,
+      "cases": [
+        {
+          "case": "differential-compact.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-compact.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-compact.php",
+          "runtime": "candidate",
+          "exit": 0,
+          "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-crossing.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+          "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-crossing.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+          "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-crossing.php",
+          "runtime": "candidate",
+          "exit": 0,
+          "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+          "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-prefix.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-prefix.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-prefix.php",
+          "runtime": "candidate",
+          "exit": 0,
+          "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-tail.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-tail.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-tail.php",
+          "runtime": "candidate",
+          "exit": 0,
+          "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+          "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-throw.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+          "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-throw.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+          "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "differential-throw.php",
+          "runtime": "candidate",
+          "exit": 0,
+          "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+          "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        }
+      ]
+    },
+    "scope_audit": [
+      {
+        "case": "deferred-static.php",
+        "source_sha256": "165500fa8b59fef7da2f2c51f861ba8c3a031c316e527ff40c21f2e47233dec6",
+        "baseline_php_equal": true,
+        "candidate_php_equal": true,
+        "candidate_baseline_equal": true,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "16bf7f69eea006e68fe06ecb086f5af3f9453a502e0fe421e147a8005ddbaa67",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 0,
+            "stdout_sha256": "16bf7f69eea006e68fe06ecb086f5af3f9453a502e0fe421e147a8005ddbaa67",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 0,
+            "stdout_sha256": "16bf7f69eea006e68fe06ecb086f5af3f9453a502e0fe421e147a8005ddbaa67",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "extra-2-heap.php",
+        "source_sha256": "b5d42c9e2b2f156151f334ca209e7bb584b702a935abc2028cf717638f2e49d0",
+        "baseline_php_equal": true,
+        "candidate_php_equal": true,
+        "candidate_baseline_equal": true,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "extra-2-scalar.php",
+        "source_sha256": "7c5daca53f441fdb63bf6e469e7e788af5952d200fb3dcf1b6e89f9d8cfaa488",
+        "baseline_php_equal": true,
+        "candidate_php_equal": true,
+        "candidate_baseline_equal": true,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "extra-40-heap.php",
+        "source_sha256": "e0657bd2ca229291332431673d1517193df3f4c95c84d98b14094dd88285eff3",
+        "baseline_php_equal": false,
+        "candidate_php_equal": false,
+        "candidate_baseline_equal": true,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 255,
+            "stdout_sha256": "28fd8b4b5b6bbdb8cc1a2fe55b0ccecdb5243dded009861343368c7b3886a080",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 255,
+            "stdout_sha256": "28fd8b4b5b6bbdb8cc1a2fe55b0ccecdb5243dded009861343368c7b3886a080",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "extra-40-scalar.php",
+        "source_sha256": "6a4532fb5ce42a995902e1b69588ab1ed2467ad877c2432b8ce4ca873f1ac3fe",
+        "baseline_php_equal": false,
+        "candidate_php_equal": false,
+        "candidate_baseline_equal": true,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 255,
+            "stdout_sha256": "569d6eea883524c32826433d8576841e05e41fef293bba7aed87d150a61b5b2f",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 255,
+            "stdout_sha256": "569d6eea883524c32826433d8576841e05e41fef293bba7aed87d150a61b5b2f",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "extra-80-heap.php",
+        "source_sha256": "15338a5c13f2128db1c33fc84fccc0c6baefeffad3bc03a52d054e91101f92e2",
+        "baseline_php_equal": false,
+        "candidate_php_equal": false,
+        "candidate_baseline_equal": false,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 255,
+            "stdout_sha256": "6694cabc8e983c30284a13e94afd5d5d457dbddd69b389de3c2a062b90d44534",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 255,
+            "stdout_sha256": "0bc3298a23aa311a84197efd9ae1becdc1d35496c839b97e672a3bf8d136d6f5",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      },
+      {
+        "case": "extra-80-scalar.php",
+        "source_sha256": "4ca09e6728bbc091d13bb14f3099706fbddc4829dc0ccef3c70cae9a5664a468",
+        "baseline_php_equal": false,
+        "candidate_php_equal": false,
+        "candidate_baseline_equal": true,
+        "outputs": {
+          "php": {
+            "exit": 0,
+            "stdout_sha256": "59ab620c517813d87450e31ba209c5072ab251bc5e40481cd0cbeab205d7422b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "baseline": {
+            "exit": 255,
+            "stdout_sha256": "725e8c6f8fb5fbef10ba75e651b9273d4854d49d9f065ded4bc8b9f8f4e2a6aa",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          "candidate": {
+            "exit": 255,
+            "stdout_sha256": "725e8c6f8fb5fbef10ba75e651b9273d4854d49d9f065ded4bc8b9f8f4e2a6aa",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        }
+      }
+    ],
+    "reason": "Rejected before acceptance: direct upper-word reads confuse live ownership and class scope when surplus arguments widen a declared compact method. Four baseline programs already fail; one diagnostic changed. The repair must match PHP on all seven audit programs."
+  },
+  "fixture_baseline": {
+    "complete": true,
+    "cases": [
+      {
+        "case": "differential-compact.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-compact.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "2580f306dafaa2a4ec525141f4beab73637fca28ddc968b1d800b696e91dfd26",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-crossing.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+        "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-crossing.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "b334ba4a50f5b3534e80f906330a439459cd84790e8e7deb07a98ed6d28ab636",
+        "output_sha256": "ba331c7e48f2c1922d663d315601e258c181874c77c26d73f898a6956cf4f6bd",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-prefix.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-prefix.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "02a2dfea913c5e8d5102833bda30a1456f7d5ae01c0c2ca6e6715c98bb609e37",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-tail.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-tail.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "518c62666e13c83ab8964b1a8b368b8e3e65b9f775db9baac21ec4b27061c570",
+        "output_sha256": "3ae6a5b9f699de34c15c3a69f7b0ffc8e00b7fe24e9a1c43bd706ff85f7cd815",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-throw.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+        "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "differential-throw.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "921fa385db5ef56a89f26ae644e4ce6ce4d90551edcb01172369da13e32d3115",
+        "output_sha256": "c815ec4417f0ca4d4dad50d0240c68f06abf6047dc99d917ff102563eb810b8d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      }
+    ]
+  },
+  "fixtures": {
+    "e2e_frame_prefix_ownership.rs": "bc4b7a77aa512ec8d9370a428786c24f8de326cf39035df8eccd6baa578ce9f8"
+  },
+  "limitations": [
+    "The PHP parity goal remains open.",
+    "Native measurements are available only on x86-64; there is no native lowering or region admission change.",
+    "Whole-command instructions and analysis-only time have different scopes; phase counters are reported separately.",
+    "The existing prefix word is reused without changing Value, frame, executor, coroutine root or JIT layout. Wide TMP initialization and all borrowing admission rules stay in place.",
+    "The initial failed compile gate and rejected scope-collision variant remain failures; all measurements are retained. Four baseline scope audit failures are corrected by the final candidate.",
+    "Every valid sample is retained under instruction-count priority."
+  ],
+  "focused_test_executions": 223,
+  "acceptance": {
+    "analysis_instructions_percent": -1.85206498,
+    "remaining_php_instruction_ratio": 8.30383033,
+    "control_timing_tradeoffs_percent": {
+      "scalar_frame_return": 3.80138772,
+      "relative_self_return": 4.03816675
+    },
+    "reason": "Confirmed lower application instructions and lower budgets for all controls; timing regressions remain explicit, and PHP parity is incomplete."
+  },
+  "fresh_selection_profile": {
+    "complete": true,
+    "source_sha256": "d5fa352d4c3a83a53f858e274e8dbc800cb4104ed5ef2b4047056bf20c6966ad",
+    "binary_sha256": "34ada5d931f1a4163c8444295914d538698348cbba42ad5c2a69cfa0d31d1405",
+    "scope": "Analysis only; perf event enable/disable follows FIFO acknowledgements",
+    "event": "instructions:u",
+    "sample_period": 1000003,
+    "stack_bytes": 8192,
+    "cycle_timing_is_not_acceptance_evidence": true,
+    "exit": 1,
+    "wall_seconds": 13.62319844099693,
+    "output_equal": true,
+    "bytes": 724309912,
+    "total_lost_samples": 3,
+    "lost_chunks": 1,
+    "processed_events": 105401,
+    "callchain_quality": "Unusable for inclusive attribution: parent and self totals coincide for nearly all symbols; only sampled leaf attribution is used.",
+    "sampling_limitation": "Approximate instruction sampling with skid and three lost samples; phase-only perf stat remains the acceptance counter.",
+    "leaves": [
+      {
+        "symbol": "rphp::vm::execute::execute_ex_inner",
+        "sampled_period": 30619091857,
+        "percent": 35.69
+      },
+      {
+        "symbol": "__memmove_avx512_unaligned_erms",
+        "sampled_period": 2265006795,
+        "percent": 2.64
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_class",
+        "sampled_period": 2114006342,
+        "percent": 2.46
+      },
+      {
+        "symbol": "__memcmp_evex_movbe",
+        "sampled_period": 1844005532,
+        "percent": 2.15
+      },
+      {
+        "symbol": "rphp::vm::execute::op_instanceof",
+        "sampled_period": 1816005448,
+        "percent": 2.12
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_method_info",
+        "sampled_period": 1812005436,
+        "percent": 2.11
+      },
+      {
+        "symbol": "rphp::vm::execute::retire_return_frame_owners",
+        "sampled_period": 1441004323,
+        "percent": 1.68
+      },
+      {
+        "symbol": "rphp::vm::execute::value_tree_requires_vm_release",
+        "sampled_period": 1246003738,
+        "percent": 1.45
+      },
+      {
+        "symbol": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>",
+        "sampled_period": 1071003213,
+        "percent": 1.25
+      },
+      {
+        "symbol": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+        "sampled_period": 1011003033,
+        "percent": 1.18
+      },
+      {
+        "symbol": "rphp::regex::match_seq_from",
+        "sampled_period": 1002003006,
+        "percent": 1.17
+      },
+      {
+        "symbol": "rphp::vm::execute::op_fetch_class_const_impl::<false>::{closure#0}",
+        "sampled_period": 759002277,
+        "percent": 0.88
+      },
+      {
+        "symbol": "rphp::runtime::method_names_equal",
+        "sampled_period": 719002157,
+        "percent": 0.84
+      },
+      {
+        "symbol": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+        "sampled_period": 686002058,
+        "percent": 0.8
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<rphp::value::Value>",
+        "sampled_period": 664001992,
+        "percent": 0.77
+      },
+      {
+        "symbol": "rphp::stdlib::native_process::invoke_native",
+        "sampled_period": 638001914,
+        "percent": 0.74
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::try_push",
+        "sampled_period": 631001893,
+        "percent": 0.74
+      },
+      {
+        "symbol": "<rphp::value::Value>::string::<alloc::string::String>",
+        "sampled_period": 585001755,
+        "percent": 0.68
+      },
+      {
+        "symbol": "rphp::vm::execute::caller_scope",
+        "sampled_period": 561001683,
+        "percent": 0.65
+      },
+      {
+        "symbol": "<rphp::regex::Node as core::clone::Clone>::clone",
+        "sampled_period": 543001629,
+        "percent": 0.63
+      },
+      {
+        "symbol": "rphp::value::register_cycle_candidate_with_admission",
+        "sampled_period": 543001629,
+        "percent": 0.63
+      },
+      {
+        "symbol": "rphp::vm::execute::retire_owned_frame_value",
+        "sampled_period": 534001602,
+        "percent": 0.62
+      },
+      {
+        "symbol": "rphp::vm::execute::execute_full_call",
+        "sampled_period": 520001560,
+        "percent": 0.61
+      },
+      {
+        "symbol": "rphp::vm::execute::check_type_hint_with_scope",
+        "sampled_period": 514001542,
+        "percent": 0.6
+      },
+      {
+        "symbol": "rphp::vm::execute::op_foreach_next::<false, false>",
+        "sampled_period": 470001410,
+        "percent": 0.55
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::prepare_string_key_for_write",
+        "sampled_period": 465001395,
+        "percent": 0.54
+      },
+      {
+        "symbol": "<rphp::regex::Node as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>",
+        "sampled_period": 463001389,
+        "percent": 0.54
+      },
+      {
+        "symbol": "__rustc::__rust_alloc",
+        "sampled_period": 459001377,
+        "percent": 0.54
+      },
+      {
+        "symbol": "<hashbrown::raw::RawTable<(usize, ())>>::reserve_rehash::<hashbrown::map::make_hasher<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+        "sampled_period": 453001359,
+        "percent": 0.53
+      },
+      {
+        "symbol": "rphp::vm::execute::bitmap_drop_and_update",
+        "sampled_period": 453001359,
+        "percent": 0.53
+      },
+      {
+        "symbol": "rphp::vm::execute::op_assign_obj_prop_completion",
+        "sampled_period": 445001335,
+        "percent": 0.52
+      },
+      {
+        "symbol": "rphp::request_memory::reserve_string",
+        "sampled_period": 436001308,
+        "percent": 0.51
+      },
+      {
+        "symbol": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>>::insert",
+        "sampled_period": 410001230,
+        "percent": 0.48
+      },
+      {
+        "symbol": "rphp::vm::execute::op_fetch_class_const",
+        "sampled_period": 409001227,
+        "percent": 0.48
+      },
+      {
+        "symbol": "rphp::vm::execute::release_statement_temps::{closure#3}",
+        "sampled_period": 406001218,
+        "percent": 0.47
+      },
+      {
+        "symbol": "rphp::vm::execute::retained_temp_containers::add",
+        "sampled_period": 404001212,
+        "percent": 0.47
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_return_type_value",
+        "sampled_period": 390001170,
+        "percent": 0.45
+      },
+      {
+        "symbol": "rphp::vm::execute::finish_foreach_step",
+        "sampled_period": 379001137,
+        "percent": 0.44
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::class_ancestors",
+        "sampled_period": 345001035,
+        "percent": 0.4
+      },
+      {
+        "symbol": "rphp::vm::execute::op_init_static_call",
+        "sampled_period": 341001023,
+        "percent": 0.4
+      },
+      {
+        "symbol": "rphp::vm::execute::op_init_dynamic_call",
+        "sampled_period": 340001020,
+        "percent": 0.4
+      },
+      {
+        "symbol": "rphp::regex::match_quantifier",
+        "sampled_period": 332000996,
+        "percent": 0.39
+      },
+      {
+        "symbol": "<rphp::request_memory::Allocation>::new",
+        "sampled_period": 330000990,
+        "percent": 0.38
+      },
+      {
+        "symbol": "rphp::vm::execute::collect_destructor_children",
+        "sampled_period": 330000990,
+        "percent": 0.38
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_function",
+        "sampled_period": 310000930,
+        "percent": 0.36
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::normalize_missing_function_name",
+        "sampled_period": 309000927,
+        "percent": 0.36
+      },
+      {
+        "symbol": "<hashbrown::map::HashMap<rphp::value::SharedStringKey, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+        "sampled_period": 308000924,
+        "percent": 0.36
+      },
+      {
+        "symbol": "rphp::vm::execute::op_fetch_static_prop",
+        "sampled_period": 299000897,
+        "percent": 0.35
+      },
+      {
+        "symbol": "rphp::vm::execute::pop_vm_call_frame",
+        "sampled_period": 298000894,
+        "percent": 0.35
+      },
+      {
+        "symbol": "rphp::regex::chars_equal",
+        "sampled_period": 296000888,
+        "percent": 0.35
+      },
+      {
+        "symbol": "rphp::vm::execute::bind_foreach_value_cv",
+        "sampled_period": 286000858,
+        "percent": 0.33
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_reference_assignment_scalar",
+        "sampled_period": 277000831,
+        "percent": 0.32
+      },
+      {
+        "symbol": "rphp::vm::execute::finish_cached_object_array_container",
+        "sampled_period": 271000813,
+        "percent": 0.32
+      },
+      {
+        "symbol": "alloc::fmt::format::format_inner",
+        "sampled_period": 263000789,
+        "percent": 0.31
+      },
+      {
+        "symbol": "rphp::heap::realloc_copy",
+        "sampled_period": 257000771,
+        "percent": 0.3
+      },
+      {
+        "symbol": "rphp::vm::execute::op_init_method_call",
+        "sampled_period": 250000750,
+        "percent": 0.29
+      },
+      {
+        "symbol": "__rustc::__rust_dealloc",
+        "sampled_period": 245000735,
+        "percent": 0.29
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<rphp::value::ArrayStorage>",
+        "sampled_period": 243000729,
+        "percent": 0.28
+      },
+      {
+        "symbol": "<alloc::raw_vec::RawVecInner>::finish_grow",
+        "sampled_period": 242000726,
+        "percent": 0.28
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<rphp::regex::Node>",
+        "sampled_period": 240000720,
+        "percent": 0.28
+      },
+      {
+        "symbol": "__memset_avx512_unaligned_erms",
+        "sampled_period": 237000711,
+        "percent": 0.28
+      },
+      {
+        "symbol": "<alloc::raw_vec::RawVecInner>::finish_grow",
+        "sampled_period": 224000672,
+        "percent": 0.26
+      },
+      {
+        "symbol": "<rphp::value::PhpObject>::with_layout_from_defaults",
+        "sampled_period": 224000672,
+        "percent": 0.26
+      },
+      {
+        "symbol": "core::str::converts::from_utf8",
+        "sampled_period": 223000669,
+        "percent": 0.26
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::declaring_class_of",
+        "sampled_period": 222000666,
+        "percent": 0.26
+      },
+      {
+        "symbol": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+        "sampled_period": 218000654,
+        "percent": 0.25
+      },
+      {
+        "symbol": "rphp::runtime::resolve_property_key",
+        "sampled_period": 212000636,
+        "percent": 0.25
+      },
+      {
+        "symbol": "rphp::stdlib::md5_digest",
+        "sampled_period": 209000627,
+        "percent": 0.24
+      },
+      {
+        "symbol": "rphp::vm::execute::op_runtime_call_property_argument",
+        "sampled_period": 206000618,
+        "percent": 0.24
+      },
+      {
+        "symbol": "rphp::vm::execute::op_foreach_init",
+        "sampled_period": 204000612,
+        "percent": 0.24
+      },
+      {
+        "symbol": "rphp::regex::collect_match_states_from",
+        "sampled_period": 203000609,
+        "percent": 0.24
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::get_str",
+        "sampled_period": 199000597,
+        "percent": 0.23
+      },
+      {
+        "symbol": "<rphp::value::Value>::object",
+        "sampled_period": 198000594,
+        "percent": 0.23
+      },
+      {
+        "symbol": "rphp::vm::execute::set_foreach_iteration_state",
+        "sampled_period": 182000546,
+        "percent": 0.21
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_replaced_value_tree_destructor_with_references",
+        "sampled_period": 181000543,
+        "percent": 0.21
+      },
+      {
+        "symbol": "rphp::vm::execute::value_tree_requires_vm_release::queue_cycle_child",
+        "sampled_period": 180000540,
+        "percent": 0.21
+      },
+      {
+        "symbol": "<alloc::rc::Rc<rphp::value::CycleOwner<rphp::value::PhpArray>>>::drop_slow",
+        "sampled_period": 179000537,
+        "percent": 0.21
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::has_weak_object_release_work",
+        "sampled_period": 179000537,
+        "percent": 0.21
+      },
+      {
+        "symbol": "<rphp::request_memory::Budget>::collect_strings",
+        "sampled_period": 177000531,
+        "percent": 0.21
+      },
+      {
+        "symbol": "<rphp::value::Value>::cycle_child_handles",
+        "sampled_period": 176000528,
+        "percent": 0.21
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_property_visibility",
+        "sampled_period": 175000525,
+        "percent": 0.2
+      },
+      {
+        "symbol": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>::{closure#0}>",
+        "sampled_period": 171000513,
+        "percent": 0.2
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_replaced_value_destructor_with_references",
+        "sampled_period": 171000513,
+        "percent": 0.2
+      },
+      {
+        "symbol": "<hashbrown::raw::RawTable<(usize, usize)>>::insert_no_grow",
+        "sampled_period": 170000510,
+        "percent": 0.2
+      },
+      {
+        "symbol": "<rphp::value::Value>::as_array_mut",
+        "sampled_period": 166000498,
+        "percent": 0.19
+      },
+      {
+        "symbol": "rphp::vm::execute::release_return_foreach_sources",
+        "sampled_period": 166000498,
+        "percent": 0.19
+      },
+      {
+        "symbol": "<alloc::string::String as core::fmt::Write>::write_str.82",
+        "sampled_period": 161000483,
+        "percent": 0.19
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::set_str_value",
+        "sampled_period": 159000477,
+        "percent": 0.19
+      },
+      {
+        "symbol": "rphp::stdlib::call_resolved_with_source_unpack",
+        "sampled_period": 159000477,
+        "percent": 0.19
+      },
+      {
+        "symbol": "<alloc::rc::Rc<rphp::value::CycleOwner<core::cell::RefCell<rphp::value::PhpObject>>>>::drop_slow",
+        "sampled_period": 157000471,
+        "percent": 0.18
+      },
+      {
+        "symbol": "rphp::stdlib::source_unpack_argument",
+        "sampled_period": 153000459,
+        "percent": 0.18
+      },
+      {
+        "symbol": "core::fmt::write",
+        "sampled_period": 151000453,
+        "percent": 0.18
+      },
+      {
+        "symbol": "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>",
+        "sampled_period": 150000450,
+        "percent": 0.17
+      },
+      {
+        "symbol": "rphp::heap::alloc_other",
+        "sampled_period": 150000450,
+        "percent": 0.17
+      },
+      {
+        "symbol": "rphp::vm::execute::value_may_require_vm_release_tree",
+        "sampled_period": 148000444,
+        "percent": 0.17
+      },
+      {
+        "symbol": "rphp::vm::execute::assign_foreach_cv",
+        "sampled_period": 147000441,
+        "percent": 0.17
+      },
+      {
+        "symbol": "<rphp::regex::BacktrackState as core::clone::Clone>::clone",
+        "sampled_period": 139000417,
+        "percent": 0.16
+      },
+      {
+        "symbol": "rphp::vm::execute::op_bind_obj_prop_ref",
+        "sampled_period": 133000399,
+        "percent": 0.16
+      },
+      {
+        "symbol": "<core::str::pattern::StrSearcher as core::str::pattern::ReverseSearcher>::next_match_back",
+        "sampled_period": 131000393,
+        "percent": 0.15
+      },
+      {
+        "symbol": "<alloc::vec::Vec<alloc::borrow::Cow<str>> as core::clone::Clone>::clone",
+        "sampled_period": 129000387,
+        "percent": 0.15
+      },
+      {
+        "symbol": "<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>> as core::iter::traits::iterator::Iterator>::next",
+        "sampled_period": 128000384,
+        "percent": 0.15
+      },
+      {
+        "symbol": "<alloc::vec::Vec<char>>::extend_desugared::<core::str::iter::Chars>",
+        "sampled_period": 126000378,
+        "percent": 0.15
+      },
+      {
+        "symbol": "rphp::vm::execute::publish_detached_scope_globals",
+        "sampled_period": 125000375,
+        "percent": 0.15
+      },
+      {
+        "symbol": "<rphp::value::CycleRootState>::prune_dead_candidates",
+        "sampled_period": 124000372,
+        "percent": 0.14
+      },
+      {
+        "symbol": "rphp::vm::execute::bitmap_drop_scalar",
+        "sampled_period": 123000369,
+        "percent": 0.14
+      },
+      {
+        "symbol": "rphp::vm::execute::op_new_obj",
+        "sampled_period": 119000357,
+        "percent": 0.14
+      },
+      {
+        "symbol": "rphp::vm::execute::value_is_shallow_plain_drop",
+        "sampled_period": 119000357,
+        "percent": 0.14
+      },
+      {
+        "symbol": "rphp::vm::execute::initialize_trait_class_scope",
+        "sampled_period": 118000354,
+        "percent": 0.14
+      },
+      {
+        "symbol": "<hashbrown::map::HashMap<usize, (), std::hash::random::RandomState>>::insert",
+        "sampled_period": 115000345,
+        "percent": 0.13
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::discard_late_static_scope",
+        "sampled_period": 114000342,
+        "percent": 0.13
+      },
+      {
+        "symbol": "<rphp::value::PhpArray as core::clone::Clone>::clone",
+        "sampled_period": 114000342,
+        "percent": 0.13
+      },
+      {
+        "symbol": "rphp::regex::match_class_item",
+        "sampled_period": 112000336,
+        "percent": 0.13
+      },
+      {
+        "symbol": "rphp::vm::execute::value_to_array_key_ref",
+        "sampled_period": 111000333,
+        "percent": 0.13
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::set_str",
+        "sampled_period": 110000330,
+        "percent": 0.13
+      },
+      {
+        "symbol": "<core::str::pattern::StrSearcher>::new",
+        "sampled_period": 107000321,
+        "percent": 0.12
+      },
+      {
+        "symbol": "rphp::vm::execute::release_statement_temps::{closure#3}::{closure#0}",
+        "sampled_period": 100000300,
+        "percent": 0.12
+      },
+      {
+        "symbol": "rphp::vm::execute::op_add_call_unpack::{closure#0}",
+        "sampled_period": 97000291,
+        "percent": 0.11
+      },
+      {
+        "symbol": "rphp::vm::execute::value_requires_vm_release",
+        "sampled_period": 96000288,
+        "percent": 0.11
+      },
+      {
+        "symbol": "<rphp::value::PhpArray as core::ops::drop::Drop>::drop",
+        "sampled_period": 95000285,
+        "percent": 0.11
+      },
+      {
+        "symbol": "rphp::stdlib::typed_internal_string_value_argument_with_null_expected",
+        "sampled_period": 95000285,
+        "percent": 0.11
+      },
+      {
+        "symbol": "rphp::vm::execute::exact_call_argument_matches_in_scopes",
+        "sampled_period": 95000285,
+        "percent": 0.11
+      },
+      {
+        "symbol": "<core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher> as core::hash::BuildHasher>::hash_one::<&str>",
+        "sampled_period": 94000282,
+        "percent": 0.11
+      },
+      {
+        "symbol": "<alloc::raw_vec::RawVecInner>::grow_amortized",
+        "sampled_period": 92000276,
+        "percent": 0.11
+      },
+      {
+        "symbol": "<core::str::pattern::StrSearcher as core::str::pattern::Searcher>::next_match",
+        "sampled_period": 91000273,
+        "percent": 0.11
+      },
+      {
+        "symbol": "rphp::stdlib::resolve_callback_with_cache",
+        "sampled_period": 91000273,
+        "percent": 0.11
+      },
+      {
+        "symbol": "<rphp::regex::BacktrackState>::install",
+        "sampled_period": 90000270,
+        "percent": 0.1
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<alloc::vec::Vec<rphp::regex::Node>>",
+        "sampled_period": 90000270,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::stdlib::resolve_callback",
+        "sampled_period": 90000270,
+        "percent": 0.1
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::class_is_a",
+        "sampled_period": 89000267,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named_from<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>, false>",
+        "sampled_period": 89000267,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::vm::execute::compact_explicit_closure_method_arguments",
+        "sampled_period": 89000267,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::vm::execute::op_foreach_next::<true, false>",
+        "sampled_period": 89000267,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rust_psm_stack_pointer",
+        "sampled_period": 88000264,
+        "percent": 0.1
+      },
+      {
+        "symbol": "<rphp::value::SharedStringKey>::from_owned",
+        "sampled_period": 87000261,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::vm::execute::execute_ex",
+        "sampled_period": 87000261,
+        "percent": 0.1
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::with_packed_capacity",
+        "sampled_period": 84000252,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::vm::execute::resolve_static_call_class",
+        "sampled_period": 84000252,
+        "percent": 0.1
+      },
+      {
+        "symbol": "rphp::vm::execute::op_assign_obj_prop_inner",
+        "sampled_period": 83000249,
+        "percent": 0.1
+      },
+      {
+        "symbol": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+        "sampled_period": 82000246,
+        "percent": 0.1
+      },
+      {
+        "symbol": "<rphp::vm::function::FunctionCommon>::supports_fast_long_signature",
+        "sampled_period": 82000246,
+        "percent": 0.1
+      },
+      {
+        "symbol": "<rphp::regex::Regex>::captures_with_limits",
+        "sampled_period": 81000243,
+        "percent": 0.09
+      },
+      {
+        "symbol": "rphp::vm::execute::run_prepared_value_destructor_with_context",
+        "sampled_period": 80000240,
+        "percent": 0.09
+      },
+      {
+        "symbol": "rphp::vm::execute::try_memoized_fetch_obj_r::<false>",
+        "sampled_period": 80000240,
+        "percent": 0.09
+      },
+      {
+        "symbol": "<hashbrown::raw::RawTable<(usize, usize)>>::remove_entry::<hashbrown::map::equivalent_key<usize, usize, usize>::{closure#0}>",
+        "sampled_period": 78000234,
+        "percent": 0.09
+      },
+      {
+        "symbol": "<alloc::string::String as core::clone::Clone>::clone",
+        "sampled_period": 77000231,
+        "percent": 0.09
+      },
+      {
+        "symbol": "<rphp::value::Value>::string::<&str>",
+        "sampled_period": 77000231,
+        "percent": 0.09
+      },
+      {
+        "symbol": "rphp::vm::execute::displayed_function_name",
+        "sampled_period": 77000231,
+        "percent": 0.09
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<hashbrown::raw::RawTable<(usize, ())>>",
+        "sampled_period": 76000228,
+        "percent": 0.09
+      },
+      {
+        "symbol": "rphp::vm::execute::init_resolved_user_call_mode",
+        "sampled_period": 76000228,
+        "percent": 0.09
+      },
+      {
+        "symbol": "rphp::vm::execute::known_scalar_satisfies_type_hint",
+        "sampled_period": 73000219,
+        "percent": 0.09
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_property_assignment_with_diagnostic",
+        "sampled_period": 73000219,
+        "percent": 0.09
+      },
+      {
+        "symbol": "<rphp::value::Value>::set_reference_foreach_position",
+        "sampled_period": 71000213,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::stdlib::find_method_in_class_hierarchy",
+        "sampled_period": 71000213,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::vm::execute::op_create_closure",
+        "sampled_period": 71000213,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<alloc::rc::Rc<alloc::string::String>>::drop_slow",
+        "sampled_period": 70000210,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::argument_unpack_reference_at",
+        "sampled_period": 70000210,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::take_with_position",
+        "sampled_period": 70000210,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::vm::execute::op_invoke_prepared_constructor",
+        "sampled_period": 69000207,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::vm::execute::release_statement_temps",
+        "sampled_period": 69000207,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_property_set_visibility",
+        "sampled_period": 68000204,
+        "percent": 0.08
+      },
+      {
+        "symbol": "tolower",
+        "sampled_period": 68000204,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<rphp::lexer::Lexer>::tokenize",
+        "sampled_period": 67000201,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<rphp::value::PhpObject>::get_property",
+        "sampled_period": 66000198,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::stdlib::sha256::compress",
+        "sampled_period": 65000195,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::stdlib::typed_internal_bool_argument",
+        "sampled_period": 65000195,
+        "percent": 0.08
+      },
+      {
+        "symbol": "rphp::vm::execute::op_new_obj_resolved",
+        "sampled_period": 65000195,
+        "percent": 0.08
+      },
+      {
+        "symbol": "<rphp::value::PhpArrayIter as core::iter::traits::iterator::Iterator>::next",
+        "sampled_period": 64000192,
+        "percent": 0.07
+      },
+      {
+        "symbol": "rphp::vm::execute::fetch_object_array_container",
+        "sampled_period": 64000192,
+        "percent": 0.07
+      },
+      {
+        "symbol": "rphp::vm::execute::move_heap_source_to_primitive_cv",
+        "sampled_period": 64000192,
+        "percent": 0.07
+      },
+      {
+        "symbol": "rphp::vm::execute::param_hint_mentions_callable",
+        "sampled_period": 63000189,
+        "percent": 0.07
+      },
+      {
+        "symbol": "rphp::regex::branch_may_start_at",
+        "sampled_period": 61000183,
+        "percent": 0.07
+      },
+      {
+        "symbol": "rphp::vm::execute::run_collected_value_destructors",
+        "sampled_period": 60000180,
+        "percent": 0.07
+      },
+      {
+        "symbol": "<core::option::Option<rphp::regex::Match> as <[_]>::to_vec_in::ConvertVec>::to_vec::<alloc::alloc::Global>",
+        "sampled_period": 59000177,
+        "percent": 0.07
+      },
+      {
+        "symbol": "rphp::vm::execute::take_pending_invoke_this",
+        "sampled_period": 58000174,
+        "percent": 0.07
+      },
+      {
+        "symbol": "<core::hash::sip::Hasher<core::hash::sip::Sip13Rounds> as core::hash::Hasher>::write",
+        "sampled_period": 55000165,
+        "percent": 0.06
+      },
+      {
+        "symbol": "<rphp::compiler::compile::Compiler>::eval_const_expr_with_context_and_enum_classes",
+        "sampled_period": 55000165,
+        "percent": 0.06
+      },
+      {
+        "symbol": "rphp::regex::match_seq_from_with_group",
+        "sampled_period": 55000165,
+        "percent": 0.06
+      },
+      {
+        "symbol": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>, false>",
+        "sampled_period": 55000165,
+        "percent": 0.06
+      },
+      {
+        "symbol": "<rphp::regex::Regex>::replace_limit_with_limits",
+        "sampled_period": 53000159,
+        "percent": 0.06
+      },
+      {
+        "symbol": "rphp::stdlib::pcre_capture_value",
+        "sampled_period": 52000156,
+        "percent": 0.06
+      },
+      {
+        "symbol": "rphp::vm::execute::collect_final_destructor_children",
+        "sampled_period": 52000156,
+        "percent": 0.06
+      },
+      {
+        "symbol": "rphp::vm::execute::try_memoized_assign_obj_prop",
+        "sampled_period": 52000156,
+        "percent": 0.06
+      },
+      {
+        "symbol": "<str>::split_once::<char>",
+        "sampled_period": 50000150,
+        "percent": 0.06
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::set_int",
+        "sampled_period": 48000144,
+        "percent": 0.06
+      },
+      {
+        "symbol": "rphp::stdlib::fn_strtolower",
+        "sampled_period": 48000144,
+        "percent": 0.06
+      },
+      {
+        "symbol": "<rphp::value::Value>::reference_property_constraints",
+        "sampled_period": 47000141,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::regex::capture_needs_streaming_continuation",
+        "sampled_period": 47000141,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::vm::execute::op_fetch_obj_r_slow",
+        "sampled_period": 47000141,
+        "percent": 0.05
+      },
+      {
+        "symbol": "<alloc::string::String as core::fmt::Write>::write_str.353",
+        "sampled_period": 46000138,
+        "percent": 0.05
+      },
+      {
+        "symbol": "<core::fmt::Formatter>::pad",
+        "sampled_period": 46000138,
+        "percent": 0.05
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::with_hash_capacity",
+        "sampled_period": 46000138,
+        "percent": 0.05
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<alloc::vec::Vec<rphp::value::ReferencePropertyConstraint>>",
+        "sampled_period": 46000138,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::vm::execute::property_type_matches_exact",
+        "sampled_period": 46000138,
+        "percent": 0.05
+      },
+      {
+        "symbol": "<alloc::vec::Vec<rphp::regex::Node>>::extend_trusted::<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::regex::Node>>>",
+        "sampled_period": 45000135,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::regex::match_quantifier_preferred_path",
+        "sampled_period": 45000135,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::stdlib::fn_get_class",
+        "sampled_period": 45000135,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::vm::execute::finally_jump_state",
+        "sampled_period": 45000135,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::vm::execute::run_final_object_destructor_tree::{closure#0}",
+        "sampled_period": 44000132,
+        "percent": 0.05
+      },
+      {
+        "symbol": "rphp::stdlib::collect_debug_backtrace",
+        "sampled_period": 43000129,
+        "percent": 0.05
+      }
+    ]
+  }
+}

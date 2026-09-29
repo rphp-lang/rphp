@@ -525,8 +525,7 @@ pub unsafe fn execute_macro(
                     let cloned = src_val.clone();
                     dst.write(cloned);
                     (*call).has_heap_slots = true;
-                    let total = (*call).num_cvs + (*call).num_temps;
-                    if total <= 64 {
+                    if *arg_idx < 64 {
                         (*call).heap_bitmap |= 1u64 << *arg_idx;
                     }
                 }
