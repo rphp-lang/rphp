@@ -1278,3 +1278,100 @@ Optimizing startup therefore cannot close the main gap. A phase-only native
 cycle/caller profile of the property-container baseline is retained separately
 to choose the next structural change. It is diagnostic evidence, not a new
 timing comparison or proof that the parity goal is complete.
+
+## Active investigation: repeated class and scope resolution
+
+The analysis-only cycle sample has 6.67% in class lookup, 2.33% in lexical scope
+resolution and 1.99% in method metadata lookup. The central executor accounts
+for 32.80%, spanning many different operations. The recorded DWARF stacks do
+not reliably recover callers for the main Rust functions; therefore the flat
+profile cannot assign these costs to particular callers.
+
+An isolated diagnostic source copy counted exact call sites of class, method
+and scope resolution, with identical PHP output. Object type matching made
+8,668,922 target lookups, class constants made 3,058,407 lookups before their
+cache, and lexical scope resolution was called 7,026,626 times through its
+string-returning wrapper. Whole-command counts include startup and are not
+phase-only instruction budgets. The instrumented copy is never an acceptance
+binary. The next checkpoint targets immutable type declarations, the largest
+counted class-lookup caller; class constants and lexical scope remain separate.
+
+
+## Rejected checkpoint: resolve immutable named type metadata
+
+- Outcome: repeated parameter, return and property checks reuse the published
+  target class identity and classify built-in named hints once at construction.
+- Baseline: `5e9b0b38`, source SHA-256
+  `854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565`.
+  An isolated call-site probe records 8,668,922 class lookups from object type
+  matching and 3,058,407 before class-constant caching. These are whole-command
+  counts, not instruction budgets. Probe output matches PHP. This checkpoint
+  addresses named type metadata only; class-constant dispatch remains separate.
+- Hypothesis: type declarations keep immutable spelling but currently hash and
+  resolve that spelling for every check. An owned, shared descriptor can retain
+  a positive class ID, guarded by a never-reused executor identity, without
+  increasing the size of the general type-hint enum or frame/signature layout.
+- Semantic envelope: misses and unpublished classes retain canonical lookup;
+  aliases share published class identity. Relative `self`/`parent`/`static`
+  continue to use their lexical/called scopes. No cache owns an executor or
+  class pointer. Cloned hints may share metadata, including across requests,
+  because every cached ID checks its executor identity. Reflection, spelling,
+  equality, unions, intersections, coercions and diagnostics remain unchanged.
+- Ownership: the sole integrating agent owns runtime, type metadata, VM type
+  checking and the mechanical constructor conversions in compiler/stdlib.
+- Gates: focused PHP differentials for late aliases, relative scopes and type
+  failures; cross-executor shared-hint tests; relevant default/no-default/all
+  feature tests and all-target compilation; unchanged unsafe policy; identical
+  independent PGO training; interleaved PHPStan and retained controls, RSS,
+  compile cost and code sizes. Native measurements are available on x86-64;
+  the implementation remains safe portable Rust with no new native lowering.
+- Stop rule: reject stale identity reuse, changed observable behavior, excessive
+  metadata allocation/RSS, or no justified native application improvement.
+  Preserve all failing measurements. No source/class/workload recognition.
+
+
+### Named type descriptor result: rejected
+
+The prototype preserves all 232 focused tests and three exact PHP differential
+programs. Positive class identities are guarded by a unique executor ID;
+relative names keep their lexical/called scopes. Type-hint size stays unchanged,
+and the type checker shrinks from 2669 to 1428 machine-code bytes. The prototype
+adds no unsafe operation. The complete source, binary and patch are retained
+privately; all measured samples are in
+[the named-type packet](performance-phpstan-named-types-samples.json).
+
+Whole-command instructions fall from 113.5345 to 112.5220 billion (-0.89%) in
+independent confirmation. The separate analysis-only counters fall from
+94.0861 to 93.1415 billion (-1.00%), compared with PHP's 10.3326 billion.
+However, application timing changes from 8.2677 to 8.3555 seconds (+1.06%) in
+the first window and from 8.3674 to 8.2774 seconds (-1.08%) in confirmation.
+A consistent application timing gain is not established. Confirmation RSS
+increases from 609930 to 612414 KiB, approximately 2.4 MiB.
+
+Shared-frame control time regresses 2.36% initially and 1.50% in independent
+five-pair confirmation. Other confirmed controls change by -1.91% for scalar
+returns, +0.88% for property reads and -9.69% for relative-self returns. All
+instruction and branch counts remain visible. The integrating task declines a
+tradeoff exception for this candidate: its approximately one-percent application
+instruction reduction does not justify the confirmed shared-frame regression
+without a consistent application time gain. Broader feature-test execution is
+not pursued after rejection. Production source is restored exactly to the
+accepted `5e9b0b38` fingerprint; no prototype metadata remains in the runtime.
+
+## Active investigation: exact executor instruction costs
+
+The new analysis-only retired-instruction sample places 36.57% inside the central
+executor but only 2.56% inside class lookup. These differ from cycle percentages:
+lookup can cost more elapsed cycles than its instruction share. The rejected
+prototype reduces the class-lookup sample share to 1.83%, consistent with its
+small total instruction reduction; it cannot explain or eliminate the remaining
+roughly ninefold gap.
+
+Instruction samples also accumulate at value cleanup classification, operand
+access, pointer writes and frame bookkeeping. Inlining and sampling skid prevent
+those source-line samples from being treated as exact budgets. One full
+Callgrind run of the accepted executable will provide exact function, source and
+instruction-address costs before another implementation is selected. It uses the
+unmodified archive, verifies ordinary output against PHP, and retains the same
+6 GiB aggregate memory boundary and exclusive lock. This is profiling, not a
+new native timing claim or completion of the parity goal.
