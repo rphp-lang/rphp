@@ -1621,3 +1621,81 @@ can therefore reject an unrelated call. These counts do not prove how many
 calls satisfy every later admission check. The full-call body itself costs
 2,796,446,015 exclusive instructions, before its helpers; per-call metadata and
 ownership are the next structural hypothesis, not a promised saving.
+
+## Accepted checkpoint: call-local side-state admission
+
+- Outcome: a pending receiver, magic name or late-static record belonging to
+  another activation does not reject an ordinary callee's existing call ABI.
+- Baseline: `123ba34b`, documentation-only successor of `d3132526`; production
+  source remains `487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626`,
+  binary `a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f`.
+- Evidence: the exact nonempty-sidecar branch counts above, 8,736,018 full-call
+  entries and 17,472,089 pending-receiver probes. Full-call entry can repeat
+  generic preparation even when its side record belongs to an outer frame.
+- Hypothesis: replace request-wide presence with the same current-record key
+  interpretation used by receiver/magic extraction and late-static lookup.
+  Reuse existing call strategies and their complete arity, type, effect and
+  ownership checks; do not add another execution path or recognizer.
+- Semantic envelope: any current-callee record, including late-static state,
+  still forces full preparation. Malformed/opaque side state conservatively
+  retains the existing full path. Another activation's record is only observed,
+  never popped or mutated. LIFO semantics remain identical to existing readers.
+  Named arguments and closure-capture tables retain their current checks.
+- Ownership: the sole integrator owns the common side-record query and the four
+  existing call admission sites. No Value, frame, executor layout, coroutine
+  root representation, PHP array storage, unsafe operation or JIT ABI changes.
+- Gates: nested invokable/magic argument evaluation, current and outer wide
+  late-static scopes, callable checks, named arguments, default/coercive types,
+  exceptions and suspended Fiber state; focused feature gates and exact PHP
+  differentials, formatting, unchanged unsafe inventory, all-target checks;
+  same-manifest independent PGO, full and phase-only instruction A/B, retained
+  controls, memory and code size. Native ARM64 measurement is unavailable.
+- Stop rule: reject loss of receiver/scope, changed evaluation or diagnostics,
+  current-call state admitted without preparation, or no confirmed application
+  instruction reduction. Reject rather than broaden type/call strategies.
+
+### Call-local admission result
+
+The existing call strategies now query the key of the current side record.
+Records owned by another activation no longer force full preparation; a record
+owned by this callee still does. The broader native side-stack representation
+considered during investigation was not implemented. The query changes no
+owner, array, frame layout, coroutine root or unsafe operation.
+
+Analysis-only instructions fall from **89.9827 to 88.3232 billion (-1.84%)**,
+with PHP at 10.3364 billion. Whole-command medians fall from 109.1513 to
+107.1336 billion in the first window and from 109.1526 to 107.1495 billion in
+independent confirmation. All counters run for their complete enabled interval;
+all five files, twenty findings, stderr and exit status match. Exact builds and
+all samples are in [the admission packet](performance-phpstan-call-local-state-samples.json).
+
+Analysis times are 8.3260 versus 8.2777 seconds initially and 8.3857 versus
+8.2009 seconds in confirmation. The latter reference PHP median is 0.9253
+seconds. Confirmation RSS is 610094 versus 610184 KiB. These time and whole-
+command instruction scopes remain separate from the phase-only counters.
+
+The integrating task accepts explicit control tradeoffs under the user's
+instruction priority. Shared-frame instructions increase 0.29% and scalar-frame
+instructions 0.47%; property-read instructions are unchanged and relative-self
+instructions decrease 0.08%. Confirmed times change by +0.66%, +3.25%, +1.98%
+and -6.79%, respectively. The first scalar timing regression is +6.67%, also
+retained. This checkpoint improves the application instruction budget and does
+not claim a speedup for every control. Main-executor code grows from 391247 to
+392365 bytes; the shared key-query helper is 304 bytes.
+
+Validation records **318 successful focused test executions** across default,
+no-default and all features, three exact PHP differential programs, formatting,
+unchanged unsafe inventory and all-target/all-feature compilation. Existing
+ignored coroutine tests remain identified as ignored. Two initial fixture tests
+failed because the embedding helper omitted source context required for TypeError
+trace frames. The unchanged programs match PHP and baseline through the CLI;
+the corrected source-aware helper keeps the original output assertions. The
+failed gate is retained separately and is not counted as a pass.
+
+PGO uses the unchanged independent 18-case manifest. Instrumented and final
+builds take 288.56 and 219.89 seconds. The largest aggregate peak is 4,494,381,056
+bytes, with no OOM or timeout. Both checkouts run cleanup, the disposable Cargo
+build is removed after its saved executable is verified, and no private benchmark
+host is configured. Native evidence remains x86-64 only. The remaining phase
+instruction ratio is **8.54x**; parity is still open. A fresh exact profile of
+this accepted executable will attribute the remaining work before another edit.

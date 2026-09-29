@@ -6591,7 +6591,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     && !has_generic_member_contract
                     && unsafe { (*call).num_args } == 1
                     && !unsafe { (*call).named_args_used }
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                     && matches!(opline.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
@@ -6665,7 +6665,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 if func_common_fast.fn_type == FunctionType::Internal
                     && !suppressed_call
                     && func_common_fast.plan.call == CallStrategy::Fast
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                 {
@@ -6775,7 +6775,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     // argument. The required public count is therefore the
                     // exact arity, excluding the hidden method `$this`.
                     && unsafe { (*call).num_args } == func_common_fast.sig.required_num_args
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                 {
@@ -6861,7 +6861,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         func_common_fast.plan.call,
                         CallStrategy::Fast | CallStrategy::FastTypedScalar
                     )
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                 {

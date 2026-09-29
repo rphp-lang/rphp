@@ -3952,6 +3952,80 @@ fn take_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize) -> Option
 // sidecar. Magic-call metadata uses the next disjoint non-pointer tag.
 const PENDING_MAGIC_CALL_TAG: usize = 1usize << (usize::BITS - 2);
 
+/// The packed side stack can remain populated by an outer pending call or a
+/// live late-static scope. Only its current record can be consumed by this
+/// callee: receiver extraction and late-static lookup use that same LIFO key.
+/// Preserve full preparation for every current-callee kind and for opaque
+/// embedding state; inspecting another activation never removes its owner.
+#[inline]
+fn has_pending_state_for_call(eg: &ExecutorGlobals, call_key: usize) -> bool {
+    let Some(pending) = eg.pending_invoke_this.as_ref() else {
+        return false;
+    };
+    let Some(stack) = pending.as_array() else {
+        return true;
+    };
+    if stack.len() % 2 != 0 {
+        return true;
+    }
+    let Some(key_index) = stack.len().checked_sub(2) else {
+        return true;
+    };
+    let Some(key) = stack.get_value_at(key_index).and_then(Value::as_long) else {
+        return true;
+    };
+    const LATE_STATIC_TAG: usize = 1usize << (usize::BITS - 1);
+    (key as usize & !(LATE_STATIC_TAG | PENDING_MAGIC_CALL_TAG)) == call_key
+}
+
+#[cfg(test)]
+mod call_side_state_admission_tests {
+    use super::*;
+
+    #[test]
+    fn nested_side_records_preserve_kind_and_actual_owners() {
+        let mut eg = ExecutorGlobals::new();
+        let receiver = Value::object(crate::value::PhpObject::dynamic(
+            "CallOwner".into(), 0, std::collections::HashMap::new(),
+        ));
+        assert!(!has_pending_state_for_call(&eg, 16));
+        push_pending_invoke_this(&mut eg, 16, receiver.clone());
+        assert_eq!(receiver.object_strong_count(), Some(2));
+        assert!(has_pending_state_for_call(&eg, 16));
+        assert!(!has_pending_state_for_call(&eg, 32));
+        assert!(take_pending_invoke_this(&mut eg, 32).is_none());
+
+        push_pending_magic_call(&mut eg, 32, Value::string("missing"));
+        assert!(has_pending_state_for_call(&eg, 32));
+        assert!(!has_pending_state_for_call(&eg, 48));
+        eg.push_late_static_scope(48, 7);
+        assert!(has_pending_state_for_call(&eg, 48));
+        assert!(!has_pending_state_for_call(&eg, 64));
+        assert_eq!(eg.late_static_scope_class_id(48), 7);
+        eg.discard_late_static_scope(64);
+        assert_eq!(eg.late_static_scope_class_id(48), 7);
+        eg.discard_late_static_scope(48);
+        assert_eq!(take_pending_magic_call(&mut eg, 32).unwrap().as_str(), Some("missing"));
+        assert!(has_pending_state_for_call(&eg, 16));
+        drop(take_pending_invoke_this(&mut eg, 16));
+        assert_eq!(receiver.object_strong_count(), Some(1));
+        assert!(eg.pending_invoke_this.is_none());
+    }
+
+    #[test]
+    fn opaque_and_incomplete_side_records_keep_full_preparation() {
+        let mut eg = ExecutorGlobals::new();
+        eg.pending_invoke_this = Some(Value::long(55));
+        assert!(has_pending_state_for_call(&eg, 16));
+        for values in [vec![], vec![Value::long(32)], vec![Value::string("key"), Value::null()]] {
+            let mut array = PhpArray::new();
+            for value in values { array.push(value); }
+            eg.pending_invoke_this = Some(Value::array(array));
+            assert!(has_pending_state_for_call(&eg, 16));
+        }
+    }
+}
+
 #[cold]
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]

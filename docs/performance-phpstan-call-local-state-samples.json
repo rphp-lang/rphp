@@ -1,0 +1,2279 @@
+{
+  "checkpoint": "Call-local side-state admission",
+  "status": "accepted by integrating task under instruction priority",
+  "goal_complete": false,
+  "baseline_commit": "123ba34b",
+  "baseline_runtime_commit": "d3132526",
+  "baseline_build": {
+    "source_sha256": "487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626",
+    "binary_sha256": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+    "binary_bytes": 76265056,
+    "merged_profile_sha256": "b1cb8762dfef41704a44faade6c79769c214ac883fcdb28af7bcb73790819b4c"
+  },
+  "build": {
+    "complete": true,
+    "source_sha256": "c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52",
+    "baseline_commit": "123ba34b",
+    "baseline_binary_sha256": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+    "profdata_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.98.1-stable\n  Optimized build.",
+    "training_selection": [
+      {
+        "path": "benches/corpus_ledger_pipeline.php",
+        "source_sha256": "ce7703e1c4ba6c86c1f7b54a0eb641299937be77df018d7017fea94b363dc207"
+      },
+      {
+        "path": "benches/corpus_order_pipeline.php",
+        "source_sha256": "c5f7b84b109a152e103b89db867c129f29bc814f8014cbe11c0b9aa8f587c4ee"
+      },
+      {
+        "path": "benches/corpus_typed_ledger_pipeline.php",
+        "source_sha256": "930fd5ba6dfcab96f8748399d4474e61ff8a3f503fb270e06b0221e898229c91"
+      },
+      {
+        "path": "benches/corpus_typed_order_pipeline.php",
+        "source_sha256": "d258cf3361b13a450123aaf5ba0e2530ab6319793e34d03709b24170fb58d72f"
+      },
+      {
+        "path": "benches/bench_array.php",
+        "source_sha256": "982a5b4f080ea9b3025066056aeb6a6b963c8ea0c2b46b0767115c6f5b643ea2"
+      },
+      {
+        "path": "benches/bench_string.php",
+        "source_sha256": "1c9e408330dbc1dfde85cd205a472551ad2d78b6f5727e5817ffceb0ac7dfe42"
+      },
+      {
+        "path": "benches/bench_type_function_params.php",
+        "source_sha256": "7687ae68c52ed6ef20ce9cdd1f0f538c71601ee3b2489da3a69fe320adf9c0fb"
+      },
+      {
+        "path": "benches/bench_type_function_return.php",
+        "source_sha256": "22912e2830ae83b6a73abc33043c4824fde0ee9b6d537311e0d086aa3ebc7206"
+      },
+      {
+        "path": "benches/bench_type_method_return_fanout_typed.php",
+        "source_sha256": "e41beff27da8bee058f74575711a2f408655bc85a311c1bce1e080145ecb4fc1"
+      },
+      {
+        "path": "benches/bench_type_chain_string_typed.php",
+        "source_sha256": "95d981bcf618bcdf19b2b5653366a6305f51ddd43b476023ddacc5f25c88aa4d"
+      },
+      {
+        "path": "benches/bench_closure_invoke_array.php",
+        "source_sha256": "96ef4c6b1955672312b54e19b5c16ff5d80673c9fb2af17131e9ae003c538c4c"
+      },
+      {
+        "path": "benches/bench_closure_storage.php",
+        "source_sha256": "d63498575f9c12a57c5883761248d65e57b40a003958f44dbc4fd8de6c988c3d"
+      },
+      {
+        "path": "benches/bench_callback_array_map_long.php",
+        "source_sha256": "cfb54ab09c9a6d1be77a51e4c7b7e3e87e9f1a9d1b7193bac633f4ea9ea610dc"
+      },
+      {
+        "path": "benches/bench_declared_object_lifecycle.php",
+        "source_sha256": "ff74f465e43327179f9ba9dd987995d3f56a9de8b6be7523988bf6c4455423f2"
+      },
+      {
+        "path": "benches/bench_json_decode_object_dynamic.php",
+        "source_sha256": "acd70e5106de29346246f58b442b82f5255885cc26f1e18eee57345c15b568cd"
+      },
+      {
+        "path": "benches/bench_hash_string_array_loop.php",
+        "source_sha256": "4adb68141550a71beaa65c7bb920cd07f866c4bdf9bd5b537bc431e8bda1d9ab"
+      },
+      {
+        "path": "benches/bench_regex_match_all.php",
+        "source_sha256": "a00ad05e245ea4dcd1d7bb0081b98f8c57f75cbeb1cf2a6c12fb363e75c15414"
+      },
+      {
+        "path": "benches/bench_regex_repeated_callback_groups.php",
+        "source_sha256": "a903fef9eb3e9cf1bfc33e426a63c348331e2dae0014a95fde81a705c38cea3c"
+      }
+    ],
+    "training": [
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.04679474800650496,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.008660592997330241,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.11044665500230622,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.011979967006482184,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.0478059719898738,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.009500553001998924,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.11776806300622411,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.011345535996952094,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "php",
+        "seconds": 0.020665909003582783,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "baseline",
+        "seconds": 0.013592499002697878,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "php",
+        "seconds": 0.013355720991967246,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "baseline",
+        "seconds": 0.008014972001546994,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "php",
+        "seconds": 0.07794279800145887,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "baseline",
+        "seconds": 0.08986961499613244,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "php",
+        "seconds": 0.07602405599027406,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "baseline",
+        "seconds": 0.09054768799978774,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "php",
+        "seconds": 0.12061332899611443,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "baseline",
+        "seconds": 0.26888064500235487,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "php",
+        "seconds": 0.04343842499656603,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "baseline",
+        "seconds": 0.13726406800560653,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "php",
+        "seconds": 0.02183189599600155,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "baseline",
+        "seconds": 0.02696791799098719,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "php",
+        "seconds": 0.014774818002479151,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "baseline",
+        "seconds": 0.015321020997362211,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "php",
+        "seconds": 0.0271588189934846,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "baseline",
+        "seconds": 0.026710670994361863,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "php",
+        "seconds": 0.03354364501137752,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "baseline",
+        "seconds": 0.007995495005161501,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "php",
+        "seconds": 0.054544205995625816,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "baseline",
+        "seconds": 0.06831905100261793,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "php",
+        "seconds": 0.08844970600330271,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "baseline",
+        "seconds": 0.5666978440131061,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "php",
+        "seconds": 0.011773846999858506,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "baseline",
+        "seconds": 0.008062491993769072,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "php",
+        "seconds": 0.01136245799716562,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "baseline",
+        "seconds": 0.008578297987696715,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.015607813009410165,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4867224,
+            "sha256": "99ded860b8255c085b04fa31b72529f820f9a1e5922209d0bb6d53f8de0512dd"
+          }
+        ]
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.01774016000854317,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4867928,
+            "sha256": "0e47d65fb8f9b57cd44b250cf837e9a6c26bf234689dfab83dc66ef77f7bb989"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.01406131598923821,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4867208,
+            "sha256": "3e42d42e7d259361133ec966ddaaa6232378da8161ab823ed37a5402e08656d5"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.016698788007488474,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4868408,
+            "sha256": "0d1024d0f8da914385f8a44cb1ad6fd47de81fc0347c47b9b9cc20db811d499b"
+          }
+        ]
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "instrumented",
+        "seconds": 0.02372900598857086,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863000,
+            "sha256": "30faaffa292be8e31c5c96ea312a293b3dc3207fe22f8415e72756f22d4559de"
+          }
+        ]
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "instrumented",
+        "seconds": 0.012353252997854725,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863096,
+            "sha256": "af97280dc11d6cc5169c8e9b1997d44901868674a87998a420d44bceecf19410"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "instrumented",
+        "seconds": 0.14398746800725348,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863560,
+            "sha256": "b31721251d7675d00b5fa04a18d092417bc78fb7c3f9b9708b4184720cf96338"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "instrumented",
+        "seconds": 0.14460733100713696,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863576,
+            "sha256": "c06072321c0f16c0c793469562ac47bfe77baa89b009d34922713b0fced2d7eb"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.39731006100191735,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864968,
+            "sha256": "a3c66ac954220d64cbcdff769acb46e5cb12b8cfc689369749a757507ad50426"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.2186453840113245,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864968,
+            "sha256": "94e8172bc59a6d386a7227abd9fcf65d245cb06784d66a99052b36b5a2c31116"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "instrumented",
+        "seconds": 0.040295554004842415,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863864,
+            "sha256": "6fd1b7b0aa9e42c27d483d09f644105d3dda89d29d8ad71a58d0d05841b1e0f7"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "instrumented",
+        "seconds": 0.02269994698872324,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864280,
+            "sha256": "76e1a9ff221051dc576cdf1a80093fe768379783a86d1d81abbbb92ad6f83c68"
+          }
+        ]
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "instrumented",
+        "seconds": 0.04492646000289824,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863992,
+            "sha256": "bcb23d149b8d4fc4366bbdb4870f0bd7e45877b2590fa0fb7f59a370729b9bec"
+          }
+        ]
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "instrumented",
+        "seconds": 0.013201046996982768,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864872,
+            "sha256": "d53a5aee6361a45061ff7bd2de7aff34a45f421b0afef52547c545806bbf334b"
+          }
+        ]
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "instrumented",
+        "seconds": 0.13587123299657833,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864264,
+            "sha256": "b4be81ae248700499abd04721b942cc7104782beacf929584fa7d211d990c7fa"
+          }
+        ]
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "instrumented",
+        "seconds": 0.8939679820032325,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4863160,
+            "sha256": "cf5bebc8c19117481448f2d8b1f797ea2affef9f408a18f4ec7c9604401b146f"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "instrumented",
+        "seconds": 0.016376218001823872,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864072,
+            "sha256": "3624585892ce7505a7f73a97b534e8b9727df6f03f0f34ed065a2f628b8a279d"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "instrumented",
+        "seconds": 0.016072212005383335,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4864056,
+            "sha256": "45fc3c89f3d30751408642c0879c7c7d28dcc84a8105c112a9577a91e4b2217f"
+          }
+        ]
+      }
+    ],
+    "builds": [
+      {
+        "stage": "instrumented",
+        "exit": 0,
+        "seconds": 288.5596376839967,
+        "log_sha256": "b392a3479612e6c4cb3577cb64aeca08269efba85c17215db9b343e61390e2e1",
+        "warning_lines": 0
+      },
+      {
+        "stage": "profile-use",
+        "exit": 0,
+        "seconds": 219.88845987599052,
+        "log_sha256": "086e78615e9c63b9a2244a759b2604658422a8d7a7c68bed4ce96839ce6f5f55",
+        "warning_lines": 27
+      }
+    ],
+    "profile_merge": {
+      "exit": 0,
+      "raw_count": 18,
+      "stderr": ""
+    },
+    "instrumented_binary_sha256": "c4bf7d52fd0729ef60676ea6f36c774944ced1f9206fa9bacda3b313b7c796aa",
+    "merged_profile_sha256": "0bc5e9a71ed9675f5718bda45aa694f093960776fbdd8885bb7031401b89778b",
+    "merged_profile_bytes": 6633216,
+    "binary_sha256": "365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e",
+    "binary_bytes": 76274320
+  },
+  "environment": {
+    "reference_packet": "performance-phpstan-gc-pending-samples.json",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "native_architecture": "x86_64",
+    "affinity_cpu": 2
+  },
+  "build_policy": {
+    "profile": "max-perf",
+    "features": "default",
+    "cpu": "rustc default",
+    "debug": "line-tables-only",
+    "pgo": true,
+    "alignment": "-C llvm-args=--align-all-functions=6",
+    "training_manifest": "scripts/pgo-workloads.txt",
+    "target_and_controls_excluded_from_training": true
+  },
+  "checks": {
+    "complete": true,
+    "source_sha256": "c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52",
+    "baseline_commit": "123ba34b",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.6199149029998807,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "call_side_state_admission_tests"
+        ],
+        "exit": 0,
+        "seconds": 0.11411570000927895,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 900 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_call_local_state",
+          "--test",
+          "e2e_magic_call_named_arguments",
+          "--test",
+          "e2e_callable_invocation_contracts",
+          "--test",
+          "e2e_callable_return_contracts",
+          "--test",
+          "e2e_coroutine_context",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "cli_static_call_cached_scope",
+          "--test",
+          "e2e_type_hints"
+        ],
+        "exit": 0,
+        "seconds": 0.7151146140095079,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 175 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.417826120989048,
+        "test_results": []
+      }
+    ],
+    "php_cases": []
+  },
+  "feature_checks": {
+    "complete": true,
+    "source_sha256": "c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52",
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--test",
+          "e2e_call_local_state",
+          "--test",
+          "e2e_magic_call_named_arguments",
+          "--test",
+          "e2e_callable_invocation_contracts",
+          "--test",
+          "e2e_callable_return_contracts",
+          "--test",
+          "e2e_coroutine_context",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "cli_static_call_cached_scope"
+        ],
+        "exit": 0,
+        "seconds": 48.94676623400301,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--lib",
+          "call_side_state_admission_tests"
+        ],
+        "exit": 0,
+        "seconds": 52.002372759001446,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 752 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_call_local_state",
+          "--test",
+          "e2e_magic_call_named_arguments",
+          "--test",
+          "e2e_callable_invocation_contracts",
+          "--test",
+          "e2e_callable_return_contracts",
+          "--test",
+          "e2e_coroutine_context",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "cli_static_call_cached_scope"
+        ],
+        "exit": 0,
+        "seconds": 53.99856859500869,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 6 passed; 0 failed; 2 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+          "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--lib",
+          "call_side_state_admission_tests"
+        ],
+        "exit": 0,
+        "seconds": 58.914250194007764,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 924 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--profile",
+          "dev-fast",
+          "--all-targets",
+          "--all-features"
+        ],
+        "exit": 0,
+        "seconds": 17.693792457997915,
+        "test_results": []
+      },
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.5188540009985445,
+        "test_results": []
+      }
+    ]
+  },
+  "differentials": {
+    "complete": true,
+    "cases": [
+      {
+        "case": "fiber.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+        "output_sha256": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "fiber.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+        "output_sha256": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "fiber.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+        "output_sha256": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "nested.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+        "output_sha256": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "nested.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+        "output_sha256": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "nested.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+        "output_sha256": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "wide_scopes.php",
+        "runtime": "php",
+        "exit": 0,
+        "source_sha256": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+        "output_sha256": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "wide_scopes.php",
+        "runtime": "baseline",
+        "exit": 0,
+        "source_sha256": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+        "output_sha256": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      },
+      {
+        "case": "wide_scopes.php",
+        "runtime": "candidate",
+        "exit": 0,
+        "source_sha256": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+        "output_sha256": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "php_equal": true
+      }
+    ]
+  },
+  "application": {
+    "first": {
+      "complete": true,
+      "source_sha256": "c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52",
+      "cpu": 2,
+      "event": "instructions:u",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "runtime": "php",
+          "round": 0,
+          "instructions": 15474072119,
+          "analysis_seconds": 0.947010994,
+          "wall_seconds": 1.4004680330108386,
+          "max_rss_kib": 177364,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.28571428571429,
+            "cpu18": 3.5714285714285716
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 109158972339,
+          "analysis_seconds": 8.319765091,
+          "wall_seconds": 10.420926873994176,
+          "max_rss_kib": 609920,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.6750241080038573
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 2,
+          "instructions": 107141117481,
+          "analysis_seconds": 8.358199596,
+          "wall_seconds": 10.398669265006902,
+          "max_rss_kib": 610052,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 1.348747591522158
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 3,
+          "instructions": 107126059161,
+          "analysis_seconds": 8.197174788,
+          "wall_seconds": 10.22392145601043,
+          "max_rss_kib": 612120,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.09784735812133072
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 4,
+          "instructions": 109143610979,
+          "analysis_seconds": 8.332321167,
+          "wall_seconds": 10.405817548991763,
+          "max_rss_kib": 609836,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.09615384615384616
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 5,
+          "instructions": 15474066838,
+          "analysis_seconds": 0.927189112,
+          "wall_seconds": 1.3546717240096768,
+          "max_rss_kib": 177652,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.27536231884058,
+            "cpu18": 0.0
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "candidate": "365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    },
+    "confirmation": {
+      "complete": true,
+      "source_sha256": "c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52",
+      "cpu": 2,
+      "event": "{cycles:u,instructions:u,branches:u,branch-misses:u}",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "cycles:u": 53882486545,
+          "branches:u": 20669563144,
+          "branch-misses:u": 267499647,
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 107150648399,
+          "analysis_seconds": 8.148363113,
+          "wall_seconds": 10.279186725994805,
+          "max_rss_kib": 610296,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.90281827016521,
+            "cpu18": 1.3631937682570594
+          }
+        },
+        {
+          "cycles:u": 6563815150,
+          "branches:u": 3076276421,
+          "branch-misses:u": 37468477,
+          "runtime": "php",
+          "round": 1,
+          "instructions": 15474011381,
+          "analysis_seconds": 0.924870014,
+          "wall_seconds": 1.3547840910032392,
+          "max_rss_kib": 177632,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.27007299270073,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "cycles:u": 55001512034,
+          "branches:u": 21074430616,
+          "branch-misses:u": 271886358,
+          "runtime": "baseline",
+          "round": 2,
+          "instructions": 109150275813,
+          "analysis_seconds": 8.383138657,
+          "wall_seconds": 10.473726930998964,
+          "max_rss_kib": 610152,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 1.3358778625954197
+          }
+        },
+        {
+          "cycles:u": 54953072707,
+          "branches:u": 21075083418,
+          "branch-misses:u": 269788087,
+          "runtime": "baseline",
+          "round": 3,
+          "instructions": 109154852623,
+          "analysis_seconds": 8.388271809,
+          "wall_seconds": 10.454305722989375,
+          "max_rss_kib": 610036,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.09560229445506692
+          }
+        },
+        {
+          "cycles:u": 6579691049,
+          "branches:u": 3076275730,
+          "branch-misses:u": 37398420,
+          "runtime": "php",
+          "round": 4,
+          "instructions": 15473985880,
+          "analysis_seconds": 0.925828934,
+          "wall_seconds": 1.3590774859912926,
+          "max_rss_kib": 177476,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "cycles:u": 54103132947,
+          "branches:u": 20669258276,
+          "branch-misses:u": 270600878,
+          "runtime": "candidate",
+          "round": 5,
+          "instructions": 107148376498,
+          "analysis_seconds": 8.253467321,
+          "wall_seconds": 10.29144013900077,
+          "max_rss_kib": 610072,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "candidate": "365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    }
+  },
+  "controls": {
+    "first": {
+      "complete": true,
+      "seed": 291032,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.5465304851532,
+          "output": "45000000",
+          "cycles:u": 2930556273,
+          "instructions:u": 12253062659,
+          "branches:u": 2602923753,
+          "branch-misses:u": 558733
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.5460193157196,
+          "output": "45000000",
+          "cycles:u": 2928150349,
+          "instructions:u": 12218064693,
+          "branches:u": 2587924276,
+          "branch-misses:u": 549196
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.54602837562561,
+          "output": "45000000",
+          "cycles:u": 2928656020,
+          "instructions:u": 12253061442,
+          "branches:u": 2602923288,
+          "branch-misses:u": 556520
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.54183673858643,
+          "output": "45000000",
+          "cycles:u": 2904023696,
+          "instructions:u": 12218063985,
+          "branches:u": 2587923980,
+          "branch-misses:u": 553938
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.54253554344177,
+          "output": "45000000",
+          "cycles:u": 2910040913,
+          "instructions:u": 12218061573,
+          "branches:u": 2587923231,
+          "branch-misses:u": 552626
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.54422569274902,
+          "output": "45000000",
+          "cycles:u": 2919679148,
+          "instructions:u": 12253062565,
+          "branches:u": 2602923718,
+          "branch-misses:u": 555501
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.28931093215942,
+          "output": "45000000",
+          "cycles:u": 1549379617,
+          "instructions:u": 7432590028,
+          "branches:u": 1652860658,
+          "branch-misses:u": 446146
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.27692604064941,
+          "output": "45000000",
+          "cycles:u": 1481042573,
+          "instructions:u": 7397588482,
+          "branches:u": 1637860008,
+          "branch-misses:u": 446629
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.27121138572693,
+          "output": "45000000",
+          "cycles:u": 1450019160,
+          "instructions:u": 7397588423,
+          "branches:u": 1637860474,
+          "branch-misses:u": 447968
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.28694558143616,
+          "output": "45000000",
+          "cycles:u": 1535318152,
+          "instructions:u": 7432590656,
+          "branches:u": 1652860836,
+          "branch-misses:u": 446262
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.28993558883667,
+          "output": "45000000",
+          "cycles:u": 1545265477,
+          "instructions:u": 7432589308,
+          "branches:u": 1652860437,
+          "branch-misses:u": 445648
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.26983380317688,
+          "output": "45000000",
+          "cycles:u": 1440162644,
+          "instructions:u": 7397590468,
+          "branches:u": 1637860629,
+          "branch-misses:u": 447615
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.20994138717651,
+          "output": "48640000",
+          "cycles:u": 1126880753,
+          "instructions:u": 5593124993,
+          "branches:u": 1068559316,
+          "branch-misses:u": 305666
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.20572900772095,
+          "output": "48640000",
+          "cycles:u": 1103552402,
+          "instructions:u": 5593125426,
+          "branches:u": 1068559500,
+          "branch-misses:u": 304967
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.20919442176819,
+          "output": "48640000",
+          "cycles:u": 1122772553,
+          "instructions:u": 5593124578,
+          "branches:u": 1068559045,
+          "branch-misses:u": 305151
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.20936107635498,
+          "output": "48640000",
+          "cycles:u": 1123908697,
+          "instructions:u": 5593127368,
+          "branches:u": 1068560169,
+          "branch-misses:u": 305986
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.20917749404907,
+          "output": "48640000",
+          "cycles:u": 1122904947,
+          "instructions:u": 5593125505,
+          "branches:u": 1068559355,
+          "branch-misses:u": 305444
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.20706415176392,
+          "output": "48640000",
+          "cycles:u": 1111258661,
+          "instructions:u": 5593125198,
+          "branches:u": 1068559165,
+          "branch-misses:u": 306032
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.90730571746826,
+          "output": "5000000",
+          "cycles:u": 4877284938,
+          "instructions:u": 19220088995,
+          "branches:u": 3802818534,
+          "branch-misses:u": 478842
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.85196876525879,
+          "output": "5000000",
+          "cycles:u": 4568310558,
+          "instructions:u": 19300088664,
+          "branches:u": 3817818492,
+          "branch-misses:u": 485462
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.84789371490479,
+          "output": "5000000",
+          "cycles:u": 4542184931,
+          "instructions:u": 19205085882,
+          "branches:u": 3802817583,
+          "branch-misses:u": 478736
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.90827488899231,
+          "output": "5000000",
+          "cycles:u": 4886614042,
+          "instructions:u": 19220090309,
+          "branches:u": 3802818909,
+          "branch-misses:u": 477791
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.95780348777771,
+          "output": "5000000",
+          "cycles:u": 5164534479,
+          "instructions:u": 19220085251,
+          "branches:u": 3802817751,
+          "branch-misses:u": 5443953
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.86604237556458,
+          "output": "5000000",
+          "cycles:u": 4644793256,
+          "instructions:u": 19205087168,
+          "branches:u": 3802818057,
+          "branch-misses:u": 478314
+        }
+      ]
+    },
+    "confirmation": {
+      "complete": true,
+      "seed": 291045,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.54209017753601,
+          "output": "45000000",
+          "cycles:u": 2906914648,
+          "instructions:u": 12218061445,
+          "branches:u": 2587923182,
+          "branch-misses:u": 558003
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.54203391075134,
+          "output": "45000000",
+          "cycles:u": 2908815841,
+          "instructions:u": 12253062310,
+          "branches:u": 2602923604,
+          "branch-misses:u": 549280
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.54482579231262,
+          "output": "45000000",
+          "cycles:u": 2925672190,
+          "instructions:u": 12218062725,
+          "branches:u": 2587923636,
+          "branch-misses:u": 551103
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.54692101478577,
+          "output": "45000000",
+          "cycles:u": 2938112893,
+          "instructions:u": 12253062709,
+          "branches:u": 2602923821,
+          "branch-misses:u": 556750
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.56392979621887,
+          "output": "45000000",
+          "cycles:u": 3036524453,
+          "instructions:u": 12253062796,
+          "branches:u": 2602923770,
+          "branch-misses:u": 550740
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.53809499740601,
+          "output": "45000000",
+          "cycles:u": 2887318256,
+          "instructions:u": 12218061622,
+          "branches:u": 2587923243,
+          "branch-misses:u": 550547
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.54057097434998,
+          "output": "45000000",
+          "cycles:u": 2900477387,
+          "instructions:u": 12218062289,
+          "branches:u": 2587923448,
+          "branch-misses:u": 551635
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.54388618469238,
+          "output": "45000000",
+          "cycles:u": 2918892446,
+          "instructions:u": 12253062627,
+          "branches:u": 2602923661,
+          "branch-misses:u": 553539
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.54567241668701,
+          "output": "45000000",
+          "cycles:u": 2925679360,
+          "instructions:u": 12253060964,
+          "branches:u": 2602923195,
+          "branch-misses:u": 554605
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.54262757301331,
+          "output": "45000000",
+          "cycles:u": 2908300819,
+          "instructions:u": 12218064836,
+          "branches:u": 2587924323,
+          "branch-misses:u": 548747
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.27811789512634,
+          "output": "45000000",
+          "cycles:u": 1489209339,
+          "instructions:u": 7397591310,
+          "branches:u": 1637860884,
+          "branch-misses:u": 446610
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.28996658325195,
+          "output": "45000000",
+          "cycles:u": 1553977429,
+          "instructions:u": 7432591100,
+          "branches:u": 1652861074,
+          "branch-misses:u": 445680
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.27478885650635,
+          "output": "45000000",
+          "cycles:u": 1471011514,
+          "instructions:u": 7397589931,
+          "branches:u": 1637860507,
+          "branch-misses:u": 445844
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.28373312950134,
+          "output": "45000000",
+          "cycles:u": 1520093389,
+          "instructions:u": 7432587530,
+          "branches:u": 1652859809,
+          "branch-misses:u": 445499
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.27135109901428,
+          "output": "45000000",
+          "cycles:u": 1453228561,
+          "instructions:u": 7397591120,
+          "branches:u": 1637860875,
+          "branch-misses:u": 445863
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.28343367576599,
+          "output": "45000000",
+          "cycles:u": 1517582512,
+          "instructions:u": 7432590138,
+          "branches:u": 1652860667,
+          "branch-misses:u": 445879
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.28723692893982,
+          "output": "45000000",
+          "cycles:u": 1540435506,
+          "instructions:u": 7432589546,
+          "branches:u": 1652860467,
+          "branch-misses:u": 445720
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.28298664093018,
+          "output": "45000000",
+          "cycles:u": 1515504078,
+          "instructions:u": 7397589435,
+          "branches:u": 1637860307,
+          "branch-misses:u": 445782
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.2850923538208,
+          "output": "45000000",
+          "cycles:u": 1526335921,
+          "instructions:u": 7432589390,
+          "branches:u": 1652860437,
+          "branch-misses:u": 447066
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.27610635757446,
+          "output": "45000000",
+          "cycles:u": 1472567993,
+          "instructions:u": 7397591193,
+          "branches:u": 1637860857,
+          "branch-misses:u": 446174
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.20502519607544,
+          "output": "48640000",
+          "cycles:u": 1102499206,
+          "instructions:u": 5593127858,
+          "branches:u": 1068560069,
+          "branch-misses:u": 305475
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.20559453964233,
+          "output": "48640000",
+          "cycles:u": 1103968960,
+          "instructions:u": 5593125252,
+          "branches:u": 1068559389,
+          "branch-misses:u": 304920
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.3221116065979,
+          "output": "48640000",
+          "cycles:u": 1755530192,
+          "instructions:u": 5593126097,
+          "branches:u": 1068559708,
+          "branch-misses:u": 306966
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.20784783363342,
+          "output": "48640000",
+          "cycles:u": 1117302494,
+          "instructions:u": 5593126071,
+          "branches:u": 1068559498,
+          "branch-misses:u": 306968
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.20927262306213,
+          "output": "48640000",
+          "cycles:u": 1124653245,
+          "instructions:u": 5593124167,
+          "branches:u": 1068558999,
+          "branch-misses:u": 305122
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.20529389381409,
+          "output": "48640000",
+          "cycles:u": 1103065055,
+          "instructions:u": 5593124449,
+          "branches:u": 1068559063,
+          "branch-misses:u": 305511
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.2052149772644,
+          "output": "48640000",
+          "cycles:u": 1102714903,
+          "instructions:u": 5593126652,
+          "branches:u": 1068559661,
+          "branch-misses:u": 304678
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.2082314491272,
+          "output": "48640000",
+          "cycles:u": 1117621671,
+          "instructions:u": 5593126098,
+          "branches:u": 1068559613,
+          "branch-misses:u": 305905
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.27716517448425,
+          "output": "48640000",
+          "cycles:u": 1502157862,
+          "instructions:u": 5593123995,
+          "branches:u": 1068559031,
+          "branch-misses:u": 307826
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.20467925071716,
+          "output": "48640000",
+          "cycles:u": 1100036472,
+          "instructions:u": 5593124141,
+          "branches:u": 1068558955,
+          "branch-misses:u": 305835
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.93247604370117,
+          "output": "5000000",
+          "cycles:u": 4999117894,
+          "instructions:u": 19315086075,
+          "branches:u": 3817817577,
+          "branch-misses:u": 477050
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.84941434860229,
+          "output": "5000000",
+          "cycles:u": 4547508243,
+          "instructions:u": 19205086835,
+          "branches:u": 3802817859,
+          "branch-misses:u": 475860
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.89492201805115,
+          "output": "5000000",
+          "cycles:u": 4812566468,
+          "instructions:u": 19205087356,
+          "branches:u": 3802818102,
+          "branch-misses:u": 475943
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.90376830101013,
+          "output": "5000000",
+          "cycles:u": 4864032915,
+          "instructions:u": 19220089440,
+          "branches:u": 3802818706,
+          "branch-misses:u": 477837
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.84373545646667,
+          "output": "5000000",
+          "cycles:u": 4536933665,
+          "instructions:u": 19205089898,
+          "branches:u": 3802818864,
+          "branch-misses:u": 479076
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.90844392776489,
+          "output": "5000000",
+          "cycles:u": 4888416459,
+          "instructions:u": 19220090789,
+          "branches:u": 3802819093,
+          "branch-misses:u": 476753
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.9112594127655,
+          "output": "5000000",
+          "cycles:u": 4901196236,
+          "instructions:u": 19220087032,
+          "branches:u": 3802817912,
+          "branch-misses:u": 482007
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.87345433235168,
+          "output": "5000000",
+          "cycles:u": 4697032371,
+          "instructions:u": 19205089690,
+          "branches:u": 3802818819,
+          "branch-misses:u": 494590
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.84570169448853,
+          "output": "5000000",
+          "cycles:u": 4548156911,
+          "instructions:u": 19205087824,
+          "branches:u": 3802818215,
+          "branch-misses:u": 475981
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.93011784553528,
+          "output": "5000000",
+          "cycles:u": 4972376847,
+          "instructions:u": 19315087965,
+          "branches:u": 3817818206,
+          "branch-misses:u": 476758
+        }
+      ]
+    }
+  },
+  "prior_profile_evidence": {
+    "status": "read-only next-candidate investigation; not implemented",
+    "profile_source_sha256": "854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565",
+    "profile_binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+    "facts": {
+      "full_call_entries": 8736018,
+      "full_call_own_instructions": 2796446015,
+      "pending_receiver_take_entries": 17472089,
+      "simple_user_guard_executed": 7672980,
+      "simple_user_sidecar_nonempty_branch": 4433669,
+      "simple_internal_guard_executed": 4034799,
+      "simple_internal_sidecar_nonempty_branch": 2725326
+    },
+    "caveat": "Counts show rejection by globally nonempty side state. They do not prove how many calls would satisfy every subsequent guard. PHP side effects of invocation/magic receivers must still run.",
+    "source_cause": "ExecutorGlobals.pending_invoke_this shares a PHP array for receiver, magic-name and late-static class metadata. Four admission paths require the entire request side stack to be None, even while its entries belong to an outer frame.",
+    "hypothesis": "Use typed native per-call side entries, separate lookup by call identity and kind, and let ordinary calls proceed independently of outer-frame metadata. Preserve LIFO extraction, class scoping, actual receiver ownership, cleanup order and suspended coroutine GC roots. No source/type/name recognizers.",
+    "ownership": "Sole integrator after current statement ownership experiment is accepted or rejected",
+    "read_files": [
+      "src/runtime/mod.rs",
+      "src/runtime/coroutine/state.rs",
+      "src/vm/execute/call_frames.rs",
+      "src/vm/execute/baseline_dispatch.rs"
+    ],
+    "required_proofs": [
+      "same-size native side-state wrapper if field layout would otherwise move",
+      "pending nested arguments and named/magic/invokable receivers",
+      "late-static/self/parent and wide-frame scopes",
+      "coroutine state exchange, abandoned frames and inactive Fiber GC roots",
+      "same PHPStan output with phase and whole-command retired instructions"
+    ],
+    "selected_slice_note": "The selected implementation is only a keyed query over the existing PHP array; the broader typed-native side-state representation was not implemented."
+  },
+  "phase_counters": {
+    "complete": true,
+    "archive_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "source_probe_sha256": "ba96eb92779c9fe913d609e34c03c21dd4bf39f9d21505b6534460f98fc5e46b",
+    "counter_scope": "Events explicitly enabled at analysis entry and disabled at analysis completion using perf FIFO acknowledgements; startup excluded",
+    "samples": [
+      {
+        "runtime": "php",
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "instructions": 10336390703,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 1.368253801992978,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "binary_sha256": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "instructions": 89982712237,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 10.529224120997242,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "binary_sha256": "365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e",
+        "instructions": 88323198986,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 10.20468289400742,
+        "output_equal": true
+      }
+    ]
+  },
+  "code_sizes": {
+    "baseline": {
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3808384,
+        "size": 391247
+      },
+      "rphp::vm::execute::execute_full_call": {
+        "address": 7528192,
+        "size": 44902
+      },
+      "rphp::vm::execute::pop_vm_call_frame": {
+        "address": 3753600,
+        "size": 1744
+      },
+      "rphp::vm::execute::take_pending_invoke_this": {
+        "address": 16116224,
+        "size": 571
+      }
+    },
+    "candidate": {
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3808640,
+        "size": 392365
+      },
+      "rphp::vm::execute::execute_full_call": {
+        "address": 7529728,
+        "size": 44906
+      },
+      "rphp::vm::execute::pop_vm_call_frame": {
+        "address": 3753856,
+        "size": 1744
+      },
+      "rphp::vm::execute::take_pending_invoke_this": {
+        "address": 16117760,
+        "size": 571
+      },
+      "rphp::vm::execute::has_pending_state_for_call": {
+        "address": 7526656,
+        "size": 304
+      }
+    }
+  },
+  "boundaries": {
+    "parity-call-local-state-fixtures": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.07594867999432608,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 47079424,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-call-local-state-prepare": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 124.18061713599309,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3114606592,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-call-local-state-cli-probe": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.1043790810072096,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 47853568,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-call-local-state-prepare-v2": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 577.3148795190064,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4494381056,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-call-local-state-finish": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 323.89686177199474,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4217430016,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "initial_harness_failure": {
+    "complete": false,
+    "source_sha256": "c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52",
+    "baseline_commit": "123ba34b",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.6700085070042405,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "call_side_state_admission_tests"
+        ],
+        "exit": 0,
+        "seconds": 61.22275205900951,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 900 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_call_local_state",
+          "--test",
+          "e2e_magic_call_named_arguments",
+          "--test",
+          "e2e_callable_invocation_contracts",
+          "--test",
+          "e2e_callable_return_contracts",
+          "--test",
+          "e2e_coroutine_context",
+          "--test",
+          "e2e_fiber_execution_boundaries",
+          "--test",
+          "cli_static_call_cached_scope",
+          "--test",
+          "e2e_type_hints"
+        ],
+        "exit": 101,
+        "seconds": 59.117304219005746,
+        "test_results": [
+          "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: FAILED. 1 passed; 2 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      }
+    ],
+    "php_cases": [],
+    "explanation": {
+      "cause": "Embedding test lacked source context, so TypeError trace frame was absent. All three unchanged fixture programs match PHP and accepted baseline through both candidate and baseline CLI. Tests now compile the same fixture with source context; output assertions unchanged.",
+      "cli_evidence": "fixture-cli-probe.json",
+      "assertions_weakened": false
+    },
+    "cli_probe": {
+      "complete": true,
+      "cases": [
+        {
+          "case": "fiber.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+          "output_sha256": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "fiber.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+          "output_sha256": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "fiber.php",
+          "runtime": "candidate-test-fast",
+          "exit": 0,
+          "source_sha256": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+          "output_sha256": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "nested.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+          "output_sha256": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "nested.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+          "output_sha256": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "nested.php",
+          "runtime": "candidate-test-fast",
+          "exit": 0,
+          "source_sha256": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+          "output_sha256": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "wide_scopes.php",
+          "runtime": "php",
+          "exit": 0,
+          "source_sha256": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+          "output_sha256": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "wide_scopes.php",
+          "runtime": "baseline",
+          "exit": 0,
+          "source_sha256": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+          "output_sha256": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        },
+        {
+          "case": "wide_scopes.php",
+          "runtime": "candidate-test-fast",
+          "exit": 0,
+          "source_sha256": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+          "output_sha256": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "php_equal": true
+        }
+      ],
+      "binaries": {
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "baseline": "a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f",
+        "candidate-test-fast": "78c2e826255b5a13a140997f13e5f237d7f38a3b910cecdffdced01912dbffbf"
+      }
+    }
+  },
+  "fixtures": {
+    "nested.out": "f130f9e1b8684f188833365136c89fd595dc625e85d34d388111479175f00a2a",
+    "wide_scopes.out": "324e8be600088f99a9cda1b6197041f1d9b3960853da07c2c74ae13ec35f9fcc",
+    "nested.php": "1ba16fa54742556804a84d3bce71ccb4862d08089f9f6f208f86aca97a9d87ba",
+    "wide_scopes.php": "30f09cc8874f82433d6391ceff9abac3fc62bdcc47626af55175aee6a2a18c54",
+    "fiber.php": "1f82d0deedf7bee5e28e85ec8b52daaf0d36a5ee492c656aa016e8591de5bc4d",
+    "fiber.out": "a8b2f75170d259b47f2f6eb01361b8624aa5b5a192ca383979c819ff7d008a11"
+  },
+  "limitations": [
+    "The PHP parity goal remains open.",
+    "Native measurements are available only on x86-64; there is no native lowering change.",
+    "Whole-command instructions and analysis-only time have different scopes; phase counters are reported separately.",
+    "No Value, frame, executor, coroutine root or JIT layout changes; no additional unsafe operations.",
+    "Prior exact source and branch attribution predates the accepted baseline and selects the hypothesis only; current gains use fresh exact-baseline measurements.",
+    "Two initial fixture tests failed because the embedding helper had no source context for exception traces. The unchanged programs match PHP and baseline through the CLI; source-aware embedding now uses unchanged expected output.",
+    "Every valid sample and the initial failed gate are retained under instruction-count priority."
+  ],
+  "integrating_review": {
+    "compatibility": "318 successful focused test executions, three exact PHP differential programs; unchanged assertions after source-context harness repair",
+    "instruction_gate": "analysis-only reduction 1.8443%; both whole-command windows confirm reduction",
+    "tradeoff": "Shared-frame and scalar-frame instructions increase 0.2865% and 0.4731%. Confirmed scalar and property times regress 3.2545% and 1.9773%; explicitly accepted for verified application instruction reduction under the user priority. All samples retained.",
+    "unsafe": "unchanged operations and inventory",
+    "layout": "no Value/frame/executor/coroutine/JIT layout change",
+    "scope": "existing four call strategies; no workload recognizer or new ABI",
+    "goal": "open, candidate uses 8.5449 times reference phase instructions"
+  },
+  "cleanup": {
+    "complete": true,
+    "removed_disposable_cargo_target": true,
+    "saved_candidate_sha256": "365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e",
+    "source_snapshot_preserved": true,
+    "private_benchmark_host_configured": false
+  }
+}

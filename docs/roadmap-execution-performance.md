@@ -48,13 +48,14 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. The latest pending-only collection
-boundary reduces analysis-only instructions from 91.8334 to 89.9791 billion;
-reference PHP uses 10.3365 billion. This is an accepted instruction reduction
-under the user's explicit priority, with every timing sample and the shared-frame
-and relative-self control regressions retained in the report. The 129 focused
-feature checks, six PHP differentials and all-target compilation pass. This branch
-checkpoint is not yet merged to main and does not complete PHP parity.
+continues on its isolated performance branch. The latest call-local side-state
+admission reduces analysis-only instructions from 89.9827 to 88.3232 billion;
+reference PHP uses 10.3364 billion. Confirmation analysis time falls from 8.3857
+to 8.2009 seconds. This is an accepted instruction reduction under the user's
+explicit priority; shared/scalar instruction regressions of 0.29%/0.47% and all
+timing tradeoffs remain in the report. The 318 focused feature checks, three PHP
+differentials and all-target compilation pass. This branch checkpoint is not yet
+merged to main and the remaining 8.54x instruction gap does not complete parity.
 
 ## Mission
 
