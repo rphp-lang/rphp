@@ -1551,3 +1551,73 @@ left unattributed to individual opcodes. That profile predates cleanup metadata
 and this boundary extraction, so it identifies the next investigation family
 rather than claiming the same budget for the newly accepted source. Repeated
 ownership, alias and snapshot scans are the next candidate; parity remains open.
+
+## Rejected checkpoint: reusable statement ownership enumeration
+
+- Outcome: statement retirement enumerates owned temporaries once and reuses
+  that result while proving aliases, capturing GC snapshots and releasing slots.
+- Baseline: `d3132526`, source fingerprint
+  `487803d132f2fe4ba07ecf46c1277e04a7436a6887c846f009041704a4716626`,
+  executable `a66c09104063216ca695d1736a1bbfb8531d7765d473537aef81279993c69f6f`.
+  Analysis costs 89.9791 billion instructions versus PHP's 10.3365 billion.
+- Evidence: the retained exact opcode attribution isolates 7.900 billion
+  main-executor instructions to temporary retirement, plus separately counted
+  helper calls. Repeated ownership checks appear in range existence, shallow
+  retirement, identity counting, snapshot capture and final drop. This profile
+  predates the two accepted representation changes; current instruction
+  improvement must be established by a fresh exact-source A/B.
+- Hypothesis: use a relative word of ownership bits for the first 64 slots of
+  each release interval, including wide frames. All passes consume the same
+  ordered enumeration. Longer intervals retain their existing live tail scan,
+  so no allocation, frame-layout change or unbounded metadata is introduced.
+- Semantic envelope: preserve compact-frame borrowed-slot exclusion, ascending
+  release order, pending calls, original destructor/exception boundaries and
+  snapshot proofs before any source is dropped. Re-read wide-frame prefix
+  ownership after PHP callbacks. Alias counts and values still read current
+  storage; the bitmap never carries a destructor or identity proof.
+- Ownership: the sole integrator owns statement retirement and focused tests.
+  No compiler, allocator, opcode/JIT format, collection cadence or public API
+  change is admitted. Existing raw-pointer obligations and unsafe count remain.
+- Gates: compact/wide/over-64-slot ranges, references, nested alias lifetimes,
+  callback mutation, exceptions, GC snapshots and suspendable release; focused
+  default/no-default/all-feature gates, exact PHP differentials, formatting,
+  unsafe and all-target checks; independent PGO, phase/application instructions,
+  all four controls, memory and code sizes. ARM64 native evidence is unavailable.
+- Stop rule: reject stale ownership across re-entry, changed release/GC ordering,
+  added ordinary allocation or no confirmed application instruction reduction.
+  Timing remains visible under the user's instruction-first criterion.
+
+The prototype passes 77 default-feature tests and four PHP differentials, but
+fails the primary instruction gate. Analysis-only instructions increase from
+**89.9931 to 90.2876 billion (+0.33%)**. Both independent whole-command windows
+also increase, approximately 109.147 to 109.509 billion and 109.148 to 109.504
+billion. Confirmation time improves from 8.3220 to 8.1979 seconds, which does
+not override the instruction rejection. Every sample is retained in
+[the rejected enumeration packet](performance-phpstan-statement-owners-samples.json).
+
+The native prefix capture and combined prefix/tail iteration added work despite
+reducing the number of source-level scans. Main-executor code grows from 391247
+to 393246 bytes and the separate cleanup helper from 14238 to 15906 bytes.
+All four controls also use more instructions. No new allocation or unsafe block
+was introduced, and neither bounded measurement service hit OOM or timeout.
+The remaining feature configurations were not run after independent rejection.
+All prototype production and test edits are removed; the accepted runtime stays
+at `d3132526`. Exact source, patch, test, executable and failed measurements are
+preserved for reproducibility.
+
+An initial reference probe exposes a pre-existing lifetime mismatch: when a
+temporary destructor reads an object stored only through `$GLOBALS`, accepted
+RPHP omits that object's later destructor after explicit unset. The prototype
+has the same mismatch. This failed baseline probe remains separate from the
+four successful PHP-equivalence cases and is not counted as a pass or fixed by
+this checkpoint. The parity goal remains open.
+
+The next read-only investigation concerns call metadata. In the archived exact
+profile, 4,433,669 of 7,672,980 ordinary user-call admission visits encounter a
+nonempty request-wide pending sidecar, as do 2,725,326 of 4,034,799 internal-call
+visits. That sidecar combines invocation receivers, magic names and late-static
+scope for multiple frames in a PHP array. Metadata belonging to an outer frame
+can therefore reject an unrelated call. These counts do not prove how many
+calls satisfy every later admission check. The full-call body itself costs
+2,796,446,015 exclusive instructions, before its helpers; per-call metadata and
+ownership are the next structural hypothesis, not a promised saving.
