@@ -1587,6 +1587,93 @@ fn convert_object_property_name<'a>(
     ))
 }
 
+/// Retain writable array storage without making the read/modify temporary
+/// a second array owner. Visibility and write capability are checked by the
+/// caller; hooks and richer reified contracts keep their canonical writeback.
+/// The engine alias is excluded from PHP reference cardinality, so object
+/// clones and ordinary reads still separate according to PHP value semantics.
+fn fetch_object_array_container(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    slot: Option<usize>,
+    key: &str,
+) -> Option<Value> {
+    {
+        let object = receiver.as_object()?;
+        if slot
+            .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+            .is_some_and(|definition| {
+                definition.has_get_hook
+                    || definition.has_set_hook
+                    || definition.requires_reified_check
+            })
+        {
+            return None;
+        }
+        let property = match slot {
+            Some(slot) => object.get_property_slot(slot),
+            None => object.get_dynamic_property_with_position(key).map(|(value, _)| value),
+        }?;
+        if property.dereferenced().value_type() != ValueType::Array
+            || (property.is_reference() && !property.is_owned_reference())
+        {
+            return None;
+        }
+    }
+    // No PHP operation occurs between lookup and mutation. Dynamic storage
+    // enters its ordinary lazy-rollback write boundary before promotion.
+    let mut object = receiver.as_object_mut()?;
+    let property = match slot {
+        Some(slot) => object.get_property_slot_mut(slot),
+        None => object.get_dynamic_property_mut(key),
+    }
+    .expect("validated property remains live without re-entry");
+    if !property.is_owned_reference() {
+        let value = std::mem::replace(property, Value::undef());
+        *property = Value::owned_reference(value);
+    }
+    let mut alias = property.clone_owned_reference_alias();
+    alias.mark_internal_reference_alias();
+    alias.mark_indirect_property_modification_reference();
+    Some(alias)
+}
+
+#[inline(always)]
+fn object_property_fetch_result_slot(frame: *mut ExecuteData, opline: &Instruction) -> *mut Value {
+    // SAFETY: both result forms name live compiler-owned frame storage.
+    // TMP/VAR offsets are absolute; CV results follow canonical references.
+    unsafe {
+        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+            (*frame).slot_ptr(opline.result as u32)
+        } else {
+            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        }
+    }
+}
+
+/// Mutable container acquisition has a distinct ownership protocol from a
+/// value read. Keep that protocol outside the inlined ordinary read body.
+#[inline(never)]
+fn finish_cached_object_array_container(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    slot: Option<usize>,
+    key: &str,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    property_ptr: *const Value,
+) -> CachedFetchObjResult {
+    if let Some(value) = fetch_object_array_container(eg, receiver, slot, key) {
+        let result = object_property_fetch_result_slot(frame, opline);
+        write_fetch_dim_result(frame, result, value);
+        CachedFetchObjResult::Complete
+    } else {
+        // A declined acquisition leaves storage and its cached pointer intact.
+        finish_cached_fetch_obj_r::<false>(frame, op_array, opline, property_ptr)
+    }
+}
+
 #[inline(always)]
 fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
     frame: *mut ExecuteData,
@@ -1631,16 +1718,7 @@ fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
         }
     }
 
-    let result_ptr = unsafe {
-        // SAFETY: TMP/VAR indices are absolute after resolve_tmp_offsets.
-        // CV results still require canonical reference following; neither
-        // route reads the old (possibly uninitialized) temporary contents.
-        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
-            (*frame).slot_ptr(opline.result as u32)
-        } else {
-            (*frame).get_op_mut(opline.result as u32, opline.result_type)
-        }
-    };
+    let result_ptr = object_property_fetch_result_slot(frame, opline);
     // An exact Long copied into a compiler-owned temporary cannot carry an
     // alias or a heap edge. Reuse the scalar slot lifecycle primitive instead
     // of cloning/tag-classifying a generic Value and updating a heap bit that
@@ -1861,6 +1939,14 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
         if property_ptr.is_null() {
             return CachedFetchObjResult::Miss;
         }
+        if !FUNC_ARG
+            && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND)
+                == (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE)
+        {
+            return finish_cached_object_array_container(
+                eg, obj_val, None, name, frame, op_array, opline, property_ptr,
+            );
+        }
         return finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr);
     }
 
@@ -1914,6 +2000,14 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
                 property_ptr,
             );
         }
+    }
+    if !FUNC_ARG
+        && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND)
+            == (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE)
+    {
+        return finish_cached_object_array_container(
+            eg, obj_val, Some(cache.property_slot()), "", frame, op_array, opline, property_ptr,
+        );
     }
     finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr)
 }
@@ -2901,7 +2995,16 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 set_result(current_incdec_value());
                 return Ok(ColdResult::Done);
             }
-            set_result(val);
+            if !FUNC_ARG
+                && indirect_modify
+                && opline._pad & FETCH_OBJ_REFERENCE_SOURCE != 0
+                && !has_property_hook
+                && let Some(container) = fetch_object_array_container(eg, obj_val, declared_slot, &key)
+            {
+                set_result(container);
+            } else {
+                set_result(val);
+            }
         } else {
             // An intermediate property in `isset($object->a->b)` first asks
             // `__isset(a)` and invokes `__get(a)` only when it returns true.
@@ -5104,6 +5207,25 @@ fn finish_plain_object_static_notice_assignment<'a>(
     })
 }
 
+/// An error handler can unset a property while its writable container remains
+/// in a compiler TMP. Retire that detached final cell before consuming the
+/// synthetic writeback; other handles still own their own storage normally.
+#[cold]
+#[inline(never)]
+fn retire_detached_property_container<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    owner: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    let mut pending = eg.exception.take();
+    let retired = retire_owned_frame_value(
+        eg, owner, frame, &mut pending, CallbackReturnPolicy::Function,
+    );
+    eg.exception = pending;
+    retired?;
+    Ok(take_magic_exception(eg, frame)?.unwrap_or(ColdResult::Done))
+}
+
 fn op_assign_obj_prop_inner<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -5142,6 +5264,12 @@ fn op_assign_obj_prop_inner<'a>(
         {
             if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
                 let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                if (*source).is_internal_reference_alias()
+                    && (*source).owned_reference_handle_count() == 1
+                {
+                    let owner = frame_tmp_take!(frame, source);
+                    return retire_detached_property_container(eg, frame, owner);
+                }
                 frame_slot_set(frame, source, Value::undef());
             }
             return Ok(ColdResult::Done);

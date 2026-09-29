@@ -9579,6 +9579,23 @@ impl Value {
     }
 
     #[inline]
+    pub(crate) fn is_internal_reference_alias(&self) -> bool {
+        self.is_owned_reference() && self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG != 0
+    }
+
+    /// A reentrant callback can remove every PHP slot while engine temporaries
+    /// still retain the storage cell. Such a cell is no longer a writable PHP
+    /// destination, even when more than one internal handle remains live.
+    #[inline]
+    pub(crate) fn owned_reference_has_php_owner(&self) -> bool {
+        if !self.is_owned_reference() {
+            return false;
+        }
+        let reference = self.owned_reference_rc();
+        Rc::strong_count(&reference) > reference.internal_aliases.get()
+    }
+
+    #[inline]
     pub(crate) fn unmark_internal_reference_alias(&mut self) {
         if !self.is_owned_reference() || self.type_info & Self::INTERNAL_REFERENCE_ALIAS_FLAG == 0 {
             return;

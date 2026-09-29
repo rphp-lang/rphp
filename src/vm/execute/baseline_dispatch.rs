@@ -148,6 +148,15 @@ fn enum_comparison_result(eg: &ExecutorGlobals, left: &Value, right: &Value) -> 
 }
 
 enum DiagnosticFrameAction {
+    CloneIndirectArrayContainer {
+        operand: u16,
+        op_type: OpType,
+        require_php_owner: bool,
+    },
+    TakeDetachedIndirectArrayContainer {
+        operand: u16,
+        op_type: OpType,
+    },
     CloneOperand {
         operand: u16,
         op_type: OpType,
@@ -200,6 +209,34 @@ fn diagnostic_frame_action(
     // Store/Refresh destinations are compiler-retained live TMP/CV slots.
     unsafe {
         match action {
+            DiagnosticFrameAction::TakeDetachedIndirectArrayContainer { operand, op_type } => {
+                if !matches!(op_type, OpType::Tmp | OpType::Var) {
+                    return None;
+                }
+                let slot = (*frame).get_op_mut(operand as u32, op_type);
+                let value = &*slot;
+                if !value.is_internal_reference_alias()
+                    || !value.is_indirect_property_modification_result()
+                    || value.owned_reference_has_php_owner()
+                {
+                    return None;
+                }
+                let owner = frame_tmp_take!(frame, slot);
+                // Preserve completed-writeback state after detaching the last
+                // private cell, including when its destructor recreates the
+                // property. This is the same sentinel used by silent unset.
+                let mut completed = Value::undef();
+                completed.mark_indirect_property_modification_result();
+                frame_tmp_set(frame, slot, completed);
+                Some(owner)
+            }
+            DiagnosticFrameAction::CloneIndirectArrayContainer { operand, op_type, require_php_owner } => {
+                let value = &*(*frame).get_op_ptr(operand as u32, op_type, op_array);
+                (value.is_internal_reference_alias()
+                    && value.is_indirect_property_modification_result()
+                    && (!require_php_owner || value.owned_reference_has_php_owner()))
+                    .then(|| value.dereferenced().clone())
+            }
             DiagnosticFrameAction::CloneOperand { operand, op_type } => {
                 Some((&*(*frame).get_op_ptr(operand as u32, op_type, op_array)).clone())
             }
@@ -1872,6 +1909,161 @@ fn array_access_offset_error(value: &Value, isset_or_empty: bool) -> String {
             value.diagnostic_type_name()
         )
     }
+}
+
+enum MutationArrayKey<'a> {
+    Key(ArrayKey),
+    Clobbered,
+    Throw(ThrowResult<'a>),
+}
+
+/// Diagnostic key conversion may enter PHP and replace or publish its array
+/// container. Ordinary normalized keys never enter this completion boundary.
+#[cold]
+#[inline(never)]
+fn mutation_array_key_after_diagnostic<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    source: Value,
+    error: ArrayKeyError,
+) -> Result<MutationArrayKey<'a>, VmError> {
+    // The canonical operand slot owns the key through exception cleanup. Do
+    // not retain a Rust-only mirror while that cleanup proves final owners.
+    let unsetting = opline.opcode == OpCode::UnsetDim;
+    let rendered = match &error {
+        ArrayKeyError::DeprecatedFloat(_) | ArrayKeyError::NonRepresentableFloat { .. } => {
+            source.echo_to_string_with_precision(-1)
+        }
+        ArrayKeyError::Illegal => source.diagnostic_type_name().into_owned(),
+        _ => String::new(),
+    };
+    drop(source);
+    if matches!(error, ArrayKeyError::Illegal) {
+        let instruction_index = (opline as *const Instruction as usize
+            - op_array.instructions.as_ptr() as usize) / std::mem::size_of::<Instruction>();
+        return Ok(MutationArrayKey::Throw(throw_illegal_offset_type(
+            eg, frame, op_array, instruction_index,
+            &format!("Cannot {} offset of type {rendered} on array", if unsetting { "unset" } else { "access" }),
+        )?));
+    }
+    let report_conversion = if unsetting {
+        !matches!(error, ArrayKeyError::DeprecatedNull)
+    } else {
+        opline._pad & ASSIGN_DIM_KEY_ALREADY_NORMALIZED == 0
+    };
+    let snapshot = report_conversion.then(|| diagnostic_frame_action(
+        frame,
+        op_array,
+        DiagnosticFrameAction::CloneIndirectArrayContainer {
+            operand: opline.op1,
+            op_type: opline.op1_type,
+            require_php_owner: false,
+        },
+    )).flatten();
+    let snapshot_owners = snapshot.as_ref().and_then(Value::cycle_strong_count);
+    macro_rules! finish_diagnostic {
+        () => {
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+        };
+    }
+    let conversion: Result<Option<ArrayKey>, VmError> = (|| {
+    let key = match error {
+        ArrayKeyError::Resource(resource) => {
+            if report_conversion {
+                report_php_warning(eg, frame, op_array, opline,
+                    &format!("Resource ID#{resource} used as offset, casting to integer ({resource})"), false)?;
+                finish_diagnostic!();
+            }
+            ArrayKey::Int(resource)
+        }
+        ArrayKeyError::DeprecatedNull => {
+            if report_conversion {
+                report_php_deprecation(eg, frame, op_array, opline,
+                    "Using null as an array offset is deprecated, use an empty string instead")?;
+                finish_diagnostic!();
+            }
+            ArrayKey::String(String::new())
+        }
+        ArrayKeyError::DeprecatedFloat(integer) => {
+            if report_conversion {
+                report_php_deprecation(eg, frame, op_array, opline,
+                    &format!("Implicit conversion from float {rendered} to int loses precision"))?;
+                finish_diagnostic!();
+            }
+            ArrayKey::Int(integer)
+        }
+        ArrayKeyError::NonRepresentableFloat { integer, also_deprecated } => {
+            if report_conversion {
+                report_php_warning(eg, frame, op_array, opline,
+                    &format!("The float {rendered} is not representable as an int, cast occurred"), false)?;
+                finish_diagnostic!();
+                if also_deprecated {
+                    report_php_deprecation(eg, frame, op_array, opline,
+                        &format!("Implicit conversion from float {rendered} to int loses precision"))?;
+                    finish_diagnostic!();
+                }
+            }
+            ArrayKey::Int(integer)
+        }
+        ArrayKeyError::Illegal => unreachable!("illegal keys are rejected before retaining a guard"),
+    };
+    Ok(Some(key))
+    })();
+    let mut clobbered = false;
+    if let Some(snapshot) = snapshot {
+        let live = diagnostic_frame_action(frame, op_array, DiagnosticFrameAction::CloneIndirectArrayContainer {
+            operand: opline.op1,
+            op_type: opline.op1_type,
+            require_php_owner: true,
+        });
+        // The live observation adds one owner. Further retained owners were
+        // published by the handler; PHP keeps those snapshots unchanged too.
+        let externally_shared = snapshot_owners.is_some_and(|owners| {
+            snapshot.cycle_strong_count().is_some_and(|current| current > owners + 1)
+        });
+        clobbered = live.as_ref().and_then(Value::array_identity) != snapshot.array_identity()
+            || externally_shared;
+        drop(live);
+        // A handler may have removed the last PHP owner of this old array.
+        // Retire the guard through the normal destructor protocol before
+        // unwinding the frame or replacing its catch variable. Raw Rust Drop
+        // cannot invoke PHP destructors or preserve a throwing destructor.
+        let mut pending = eg.exception.take();
+        let retired = (|| {
+            // An aborted unset may also retain compiler transaction mirrors.
+            // Consume the detached lvalue now, while this guard still owns its
+            // old payload, rather than relying on later exception cleanup to
+            // infer which private mirrors retire together.
+            if let Some(owner) = diagnostic_frame_action(
+                frame, op_array, DiagnosticFrameAction::TakeDetachedIndirectArrayContainer {
+                    operand: opline.op1,
+                    op_type: opline.op1_type,
+                },
+            ) {
+                retire_owned_frame_value(
+                    eg, owner, frame, &mut pending, CallbackReturnPolicy::Function,
+                )?;
+            }
+            retire_owned_frame_value(
+                eg, snapshot, frame, &mut pending, CallbackReturnPolicy::Function,
+            )
+        })();
+        eg.exception = pending;
+        retired?;
+    }
+    let key = conversion?;
+    if let Some(exception) = eg.exception.take() {
+        return Ok(MutationArrayKey::Throw(throw_in_frame(eg, frame, exception)?));
+    }
+    Ok(if clobbered {
+        MutationArrayKey::Clobbered
+    } else {
+        MutationArrayKey::Key(key.expect("key conversion completed without an exception"))
+    })
 }
 
 #[cold]
@@ -8519,9 +8711,12 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         }
                     };
                 }
-                // SAFETY: arr_ptr was resolved from the active frame after
-                // any reentrant callback and remains owned by its operand.
-                let arr = unsafe { &mut *arr_ptr };
+                // SAFETY: arr_ptr belongs to the retained operand. Each
+                // borrow ends before diagnostic re-entry; acquire a fresh
+                // borrow only after its completion guard succeeds. An internal
+                // property alias retains the cell even if the member is unset.
+                let array_slot = || unsafe { &mut *arr_ptr };
+                let arr = array_slot();
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     if opline._pad
                         & (ASSIGN_DIM_INDIRECT_REBUILD
@@ -8688,16 +8883,22 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 if arr.value_type() != ValueType::Array {
                     throw_operator!("Error", "Cannot use a scalar value as an array");
                 }
-                let mut key = array_key_owned_or_throw!(
-                    idx_val,
-                    &format!(
-                        "Cannot access offset of type {} on array",
-                        idx_val.diagnostic_type_name()
-                    ),
-                    false
-                    ,
-                    opline._pad & ASSIGN_DIM_KEY_ALREADY_NORMALIZED == 0
-                );
+                let mut key = match value_to_array_key(idx_val) {
+                    Ok(key) => key,
+                    Err(error) => match mutation_array_key_after_diagnostic(
+                        eg, frame, op_array, opline, idx_val.clone(), error,
+                    )? {
+                        MutationArrayKey::Key(key) => key,
+                        MutationArrayKey::Clobbered => break 'assign_dim,
+                        MutationArrayKey::Throw(ThrowResult::Handled(new_frame, new_op_array)) => {
+                            resume_activation!(new_frame, new_op_array);
+                        }
+                        MutationArrayKey::Throw(ThrowResult::Unhandled(exception)) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    },
+                };
                 if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
                     && let Some((target, _, _)) =
                         diagnostic_write_guard_target(eg, frame, op_array, opline)
@@ -8710,6 +8911,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     continue 'vm;
                 }
                 let mut replaced_value_release = None;
+                let arr = array_slot();
                 if let Some(php_arr) = arr.as_array_mut() {
                     key = php_arr.prepare_string_key_for_write(key, idx_val);
                     if let Some(element) = php_arr.get_key_mut_for_replacement(&key, &cloned_val) {
@@ -9292,7 +9494,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 }
             }
 
-            OpCode::UnsetDim => {
+            OpCode::UnsetDim => 'unset_dim: {
                 // Remove key op2 from array op1
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 // SAFETY: `frame` is the active activation for `opline`; the
@@ -9366,19 +9568,22 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let original_array_identity = arr
                             .array_identity()
                             .expect("validated unset target remains an array before diagnostics");
-                        let report_conversion = !matches!(
-                            value_to_array_key(idx_val),
-                            Err(ArrayKeyError::DeprecatedNull)
-                        );
-                        let mut key = array_key_owned_or_throw!(
-                            idx_val,
-                            &format!(
-                                "Cannot unset offset of type {} on array",
-                                idx_val.diagnostic_type_name()
-                            ),
-                            false,
-                            report_conversion
-                        );
+                        let mut key = match value_to_array_key(idx_val) {
+                            Ok(key) => key,
+                            Err(error) => match mutation_array_key_after_diagnostic(
+                                eg, frame, op_array, opline, idx_val.clone(), error,
+                            )? {
+                                MutationArrayKey::Key(key) => key,
+                                MutationArrayKey::Clobbered => break 'unset_dim,
+                                MutationArrayKey::Throw(ThrowResult::Handled(new_frame, new_op_array)) => {
+                                    resume_activation!(new_frame, new_op_array);
+                                }
+                                MutationArrayKey::Throw(ThrowResult::Unhandled(exception)) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            },
+                        };
                         // Key normalization can invoke a synchronous error
                         // handler. PHP abandons this unset when that callback
                         // replaces the destination, regardless of the new

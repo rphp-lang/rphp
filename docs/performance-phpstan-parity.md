@@ -1011,3 +1011,193 @@ The instruction difference is negligible and these short timing distributions
 do not establish a performance gain. This is a correctness repair enabling the
 application-work diagnostic. Earlier PGO results use another build policy and
 are not mixed into this source-change comparison. PHP parity remains open.
+
+## Active checkpoint: writable property-array ownership
+
+- Baseline: clean `7ab760c0`, exact non-PGO repair executable and source hashes
+  in the preceding packet. A hardware-counter growth probe writes integer and
+  string keys to local arrays and declared object arrays with identical output.
+  At 4000/8000 string-key entries, the property form takes 0.8133/3.1604 billion
+  RPHP instructions versus PHP's 31.5914/35.0982 million. The RPHP local-array
+  control takes 32.1782/55.2092 million. Previous application Callgrind data
+  attributes 1.891 million array copies to mutable array access; it motivates
+  this boundary but does not establish the current application's saving.
+- Hypothesis: the canonical writable property fetch makes an ordinary array
+  snapshot, leaving the property as a second owner. Each later dimension write
+  consequently copies the entire growing array. Expose stable storage through
+  the existing engine-internal reference protocol instead. PHP-visible copies
+  must still separate, while a compiler temporary must not create a PHP alias.
+- Scope: initialized ordinary array properties after existing visibility,
+  readonly and hook validation. Keep hook/overloaded results, scalar auto-init
+  and richer reified contracts canonical. Reuse one storage-cell protocol in
+  cold and cached reads; no workload recognition, new opcode, ABI or JIT rule.
+  The integrating task owns the property executor and any necessary diagnostic
+  completion changes in this worktree.
+- Semantics: preserve explicit aliases, object-clone and array COW, observable
+  reference cardinality, typed writes, lazy rollback, exception/destructor
+  order and synthetic writeback retirement. A baseline diagnostic reducer also
+  proves that current writeback overwrites an error handler's replacement or
+  unset. Reference PHP retains those callback effects. Establish and test this
+  completion boundary before accepting an in-place representation.
+- Gates: focused PHP differential reducers and existing affected property,
+  array and reference tests; relevant feature builds, formatting, unsafe policy
+  and all-target checking; exact non-PGO application A/B with fresh caches,
+  growth probe and independent controls. Preserve all valid samples. Native
+  evidence is x86-64; no architecture encoder changes are proposed.
+- Stop rule: reject if internal aliases escape into PHP-visible sharing, any
+  callback or hook effect changes incorrectly, the growth remains quadratic,
+  or the real application/control measurements reject the tradeoff. Do not
+  equate a synthetic asymptotic fix with achieving PHPStan parity.
+
+### First property-container candidate: not accepted
+
+The first candidate passes 40 focused tests and the original direct PHP
+reducers. Its 8000-entry string-key property control falls from 3.1604 billion
+to 60.8835 million instructions, removing the observed quadratic growth. The
+six ordinary application samples retain matching output: median instructions
+fall from 125.8801 to 116.5892 billion (-7.38%), while median analysis changes
+from 10.4233 to 9.1542 seconds. Both individual baseline times (10.0590 and
+10.7877 seconds) remain in the packet; they are not filtered. Peak RSS grows
+from 598812 to 614766 KiB as mutable properties retain stable reference cells.
+
+This source is not accepted. Three long pairs expose shared-frame time +7.40%
+and relative-self return +12.56%; the latter also executes 470 million more
+instructions over five million iterations. The inline property-reader change
+has therefore affected unrelated execution. A 14-case diagnostic expansion
+also finds three remaining baseline discrepancies when a handler publishes an
+array copy or a non-aliased object clone. The revised candidate restores the
+ordinary cached-read body, outlines container acquisition, and tracks newly
+published owners on the diagnostic completion edge. It must pass the same
+application/control gates with its own exact source and executable hashes.
+
+The outlined-acquisition revision matches all 14 diagnostic combinations and
+owner/clone/cycle lifetime output. Its confirmed whole-command application
+counts are approximately 116.01 versus 125.88 billion. Independent five-pair
+controls nevertheless confirm shared-frame +5.10%, scalar +2.36% and
+relative-self +5.77% time despite fewer instructions, so it remains unaccepted.
+A separate three-pair hardware frontend probe records shared-frame instruction
+cache misses 8.423 to 19.743 million and decoded-operation cache misses 36.293
+to 76.938 million. Scalar instruction cache misses grow 2.168 to 7.741 million.
+The next revision moves diagnostic key conversion/completion out of the main
+executor, retaining the same semantic protocol and normal conversion branch.
+
+The first diagnostic extraction is rejected before performance measurement.
+Its cloned illegal key remained a Rust local during exception cleanup, hiding
+the final temporary object owner from the VM's destructor proof. A separate
+payload reducer also exposes missing destructors when the error handler
+replaces or unsets the array. The corrected completion renders diagnostic
+text and relinquishes the key mirror before any callback or throw. Array
+guards use canonical owner retirement before frame unwinding; a detached final
+property cell uses the same protocol before synthetic writeback is consumed.
+The added regressions check destructor order before catch-variable rebinding
+and twelve replacement/unset/copy/exception combinations with nested objects.
+These lifetime corrections are required for acceptance, not performance gains.
+
+The completed lifetime revision passes 54 focused tests and all direct PHP
+reducers, including twelve throwing, resurrecting and reentrant destructor
+completions. A further correction discards the write when every PHP owner of
+the private cell has disappeared; otherwise replacing an element of an already
+detached array changed the child-destructor order.
+
+The non-PGO performance gate still rejects this revision. Its independent
+application pair reduces median analysis from 10.6735 to 9.6263 seconds and
+instructions from 125.8861 to 116.0464 billion. Five independent control pairs
+show shared frames +0.66%, scalar returns +8.12%, ordinary property reads
+-0.73% and relative-self returns +10.60%. Scalar instruction-cache misses grow
+from 2.225 to 14.040 million despite fewer executed instructions. Neither this
+control failure nor the earlier source variants are discarded.
+
+The next comparison changes only the build policy to the already accepted PGO
+pipeline. Train the exact repaired baseline and this exact source separately
+on the unchanged 18-program manifest, excluding PHPStan and all acceptance
+controls. Preserve their distinct profiles, source hashes and binaries. This
+checks whether compiler frequency information resolves the measured layout
+regression; it does not grant acceptance to an ordinary non-PGO build or permit
+adding the failed controls to training.
+
+### Shared assignment and unset completion
+
+The fifth revision's PGO build was stopped before measurement after extending
+the same diagnostic reducer to `unset`. Assignment had passed, but unset still
+used its old completion boundary: payload destructors could run inside the
+handler or disappear during exception cleanup. One reentrant destructor case
+terminated with a PHP fatal error (exit 255), not a native segmentation fault.
+The complete independently trained baseline was retained; the interrupted
+candidate and its profile were not reused for the final source.
+
+Assignment and unset now share cold key-diagnostic completion. Diagnostic
+guards retain the array through the handler and retire actual owners through
+the canonical destructor protocol before exception unwinding. When a handler
+removes every PHP owner, completion consumes the private operand cell and
+leaves a completed-writeback sentinel. A destructor that recreates the property
+must not cause the old synthetic writeback to overwrite it. An initial shared
+implementation still failed three unset/throw cases; its failed gate is retained.
+The final revision passes all twelve unset completion cases and the 55-test
+focused default-feature packet.
+
+A separate nested-dimension reducer exposes an existing limitation in the
+baseline transaction machinery: replacing or unsetting the containing property
+inside a diagnostic can lose nested payload retirement. The old baseline and
+the final candidate are both checked and reported separately. This checkpoint
+does not claim to repair nested transaction semantics; no previously passing
+case in this reducer becomes a failure.
+
+### Independently trained PGO comparison
+
+The final source fingerprint is
+`1a35c2f38b9ae02404c798d4a5f742beae10f9ef9a13988585d003c8b1bc302c`.
+Baseline and candidate use separate fresh profiles from the unchanged
+18-program training manifest, with PHPStan and the acceptance controls excluded.
+Both use `max-perf`, default features, the compiler's default CPU target,
+line tables and the same function-alignment setting. The baseline build takes
+276.7 + 216.7 seconds; the candidate takes 264.6 + 202.3 seconds. Profile-use
+warnings concern build-script functions, with no runtime profile mismatch.
+
+Two fresh-cache application samples per runtime in the first window give
+9.7383 to 8.7517 seconds and 122.7254 to 113.8993 billion instructions. An
+independent reversed-order window confirms:
+
+| Runtime | Analysis median | Whole-command instructions | Peak RSS median |
+| --- | ---: | ---: | ---: |
+| PHP | 0.9750 s | 15.4741 G | 177774 KiB |
+| Baseline RPHP | 9.5289 s | 122.7315 G | 595918 KiB |
+| Candidate RPHP | 8.8385 s | 113.8939 G | 610104 KiB |
+
+The confirmed reduction is 7.25% analysis time and 7.20% instructions. The
+additional stable property cells cost about 13.9 MiB peak RSS (+2.38%). Every
+sample analyzes five files with twenty identical findings, ordinary stderr and
+exit status. Counters run throughout their enabled interval. Instructions count
+the whole command; analysis timers exclude startup. The two windows remain
+separate, with no sample filtering.
+
+Independent five-pair controls retain shared-frame time +1.76%, relative-self
+return +8.62%, scalar return -1.02% and ordinary property reads -2.94%. The two
+regressing controls execute fewer instructions (-0.13% and -0.15% respectively).
+PGO reduces some earlier layout regressions but does not remove all of them.
+This result is a bounded application tradeoff, not an all-workloads speedup;
+the shared-frame and relative-self controls remain mandatory follow-up evidence.
+The non-PGO failures above remain separate evidence and are not replaced by
+these PGO numbers.
+
+The integrating task accepts this partial checkpoint with those two explicit
+control regressions and the measured memory increase. Removing quadratic array
+copying and 8.84 billion whole-application instructions justifies that bounded
+tradeoff; further arbitrary source rearrangement is not an acceptance tactic.
+All samples, rejected revisions, build identities and diagnostic differences
+are retained in [the property-array evidence packet](performance-phpstan-property-array-samples.json).
+
+Validation passes: 55 focused default tests, seven new regressions in each of
+the no-default and all-feature configurations, all-target/all-feature checking,
+formatting and the unchanged unsafe inventory. Three focused Valgrind programs
+cover re-entry, destructor completion, object clone and GC lifetime with zero
+reported memory errors and exact PHP output. Build/check jobs remain within
+their verified 6 GiB aggregate boundaries without OOM or timeout. The PGO main
+executor grows from 395479 to 398522 bytes; the executable grows by 13432 bytes.
+ARM64 native performance is unavailable, and no architecture-specific code is
+introduced.
+
+The full parity goal remains open: this candidate still needs roughly 7.36 times
+PHP's instructions and 9.07 times its analysis time. A fresh instruction-sample
+profile puts 32.39% in the main executor and 5.33% in class lookup, with other
+frame, method and ownership costs distributed across helpers. These samples
+guide the next bounded investigation; they are not exact per-function budgets.

@@ -707,8 +707,9 @@ fn write_array_union_result(
 
 #[inline]
 fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value: Value) {
-    // SAFETY: FetchDimR always publishes into its compiler-owned TMP result in
-    // this live frame; frame_tmp_set handles first write and later overwrite.
+    // SAFETY: dimension reads and mutable property-container fetches publish
+    // compiler-owned TMP/VAR results in this live frame. frame_tmp_set handles
+    // both first write and later overwrite; no PHP-visible CV alias is passed.
     unsafe { frame_tmp_set(frame, result_ptr, value) }
 }
 
