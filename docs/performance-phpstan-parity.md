@@ -306,3 +306,157 @@ whole-command instructions. A fresh native profile still charges about 22% of
 cycles to the main executor, 5% to class lookup and several percent to temporary
 release and its snapshot/graph machinery. Continue from those general costs;
 this accepted checkpoint does not complete the parity goal.
+
+
+## Rejected checkpoint: resolve type scopes when consumed
+
+- Outcome: concrete/scalar return contracts do not allocate and resolve unused
+  lexical class metadata. Relative contracts keep exact existing resolution.
+- Baseline: `895941b2446631149dc2ffc32481f62e2ba08466`. The source profile counts
+  4.105 million return-check calls into caller scope, costing 1.181 billion
+  inclusive instructions before checking a type. The latest native profile
+  still charges 2.09% of cycles to caller scope and 5.02% to class lookup.
+- Hypothesis: a shared type-check context carries either supplied class names
+  or a live return frame. Only the existing self/parent/static type cases
+  project the scope they consume; recursion retains the same context.
+- Semantics: preserve union/intersection order, aliases, strict/weak conversion,
+  closures, traits, lexical versus late-static scope, diagnostics and fallback
+  names for unresolved relative contracts. No additional workload/type admission
+  path or preemptive scope-string creation is introduced.
+- Ownership: integrating task owns the canonical VM type checker. Frame
+  retirement and allocator metadata are already accepted and remain baseline.
+- Gates: focused relative return, trait, closure, argument and coercion tests;
+  direct PHP differentials; relevant feature checks; fresh identical-output
+  PHPStan instruction/time comparison and existing ownership/scalar controls.
+- Reject on a changed PHP result or if application work does not decrease;
+  investigate every independent holdout regression before acceptance.
+
+### Scope-context result: rejected
+
+The candidate preserves the focused PHP results and removes 0.987 billion
+whole-command instructions (130.610 to 129.623 billion, 0.76%). Analysis medians
+are 10.09469 and 9.99448 seconds. However, independent five-pair confirmation
+at five million iterations gives 594.742 versus 639.114 ms for shared frames
+(+7.46%), 319.835 versus 326.467 ms for scalar frames (+2.07%), and 1079.030
+versus 1176.009 ms for relative `self` returns (+8.99%). Property-foreach
+controls also regress 1.62%. All valid samples are retained in private evidence.
+The compiler changes generated layout even in untyped controls; their instruction
+and branch-miss counts barely change. The small application gain does not justify
+these regressions. The implementation is removed; the trait/closure/relative-type
+PHP differential remains useful regression coverage. The accepted runtime stays
+at the committed-frame-retirement checkpoint. This rejection does not complete
+the parity goal.
+
+## Rejected checkpoint: automatic-collection instruction boundary
+
+- Outcome: ordinary bytecode dispatch does not materialize exception/collection
+  state before a collection has been requested; collection remains at precisely
+  the same per-instruction boundary.
+- Baseline: `895941b2446631149dc2ffc32481f62e2ba08466`. The main executor accounts
+  for 22.21% of native cycles and roughly 30 billion instructions in the prior
+  source profile. Exact baseline disassembly loads executor exception state and
+  combines it with the TLS collection flag on every opcode. The collector body,
+  admission vectors and destructor handling are inlined into this same function.
+- Hypothesis: a cold, non-inlined boundary handles existing exception exclusion,
+  origin publication, collection and throw dispatch only after the pending flag
+  is set. The ordinary loop needs only the pending-flag probe.
+- Semantics: preserve opcode-by-opcode polling, interrupt cadence, prior-opcode
+  exception origin, pending-exception exclusion, frame restoration before a VM
+  error propagates, and handled/unhandled collection exceptions. No GC batching,
+  workload detection, frame-layout change or JIT change.
+- Ownership: integrating task owns the baseline dispatcher and the extracted
+  frame-access boundary. One additional annotated unsafe block separates the
+  existing raw-frame accesses into two functions; its invariant is unchanged.
+- Gates: existing cycle, finalization and interrupt checks; direct automatic-GC
+  PHP differentials; exact-source interleaved PHPStan and ordinary-call controls;
+  relevant feature checks, formatting and unsafe inventory. Native evidence is
+  x86-64; this architecture-neutral extraction has no new encoder or ABI.
+- Reject if results or callback order change, ordinary instruction counts do
+  not improve, or independently confirmed holdout regressions remain unexplained.
+
+### First boundary layout and origin representation
+
+The first extraction removes 1.890 billion PHPStan instructions but leaves
+analysis timing effectively unchanged. Five-pair confirmation shows scalar
+frames regressing from 328.035 to 349.680 ms (+6.60%), despite 108 fewer
+instructions per iteration. Branch misses rise from 451,720 to 817,030. Shared
+frames regress 1.30%, property foreach improves 1.79%, and relative self-return
+improves 6.71%. This version is not accepted.
+
+Disassembly also exposes redundant live state: the previous instruction is an
+`Option<*const Instruction>`, which carries a separate discriminant even though
+valid instruction pointers are non-null. The revised boundary carries
+`Option<NonNull<Instruction>>`. This preserves the initial no-previous state,
+uses the existing live-instruction proof, and removes its separate tag from
+ordinary dispatch without changing collection timing. Re-run the same gate
+against the original accepted baseline; do not pool the two implementations.
+
+### Compact boundary result: rejected
+
+The revised source removes 2.075 billion application instructions and lowers
+shared-frame instructions from 2754.941 to 2595.441 per iteration. However,
+independent confirmation still regresses relative self-return from 1.07111 to
+1.13747 seconds (+6.20%); scalar medians are 325.909 versus 330.906 ms (+1.53%,
+with overlapping spread). The small deep-release control also regresses while
+the larger control is equivalent. Shared frames improve 3.47% and property
+foreach 1.33%. PHPStan medians are 10.19427 and 10.10724 seconds. All valid
+samples and the passing semantic gates remain preserved as rejected evidence.
+Both GC-boundary implementations and their unsafe-inventory increase are removed.
+The executor remains the accepted frame-retirement implementation.
+
+## Accepted instruction checkpoint: integer identity hashing for weak sidecars
+
+- Outcome: weak-object release membership uses the existing request-seeded
+  integer identity hasher rather than SipHash byte-stream processing.
+- Baseline: `895941b2446631149dc2ffc32481f62e2ba08466`. The source profile records
+  18.404 million weak-release identity hashes and 2.705 billion inclusive
+  instructions in the generic hash function. The current native profile still
+  attributes 0.82% of cycles to that hash specialization.
+- Hypothesis: use the already tested function-identity hasher for the five
+  request-local weak identity maps/sets. Keys are engine-created allocation
+  addresses; exact key equality, seeds, ownership and sidecar behavior remain.
+  Map/set and enclosing sidecar sizes must stay unchanged.
+- Semantics: retain weak target/owner distinction, key counts, reference clearing,
+  cloning, iterator ownership, GC ephemerons, destructor ordering and replacement.
+  No new membership shortcuts, release scheduling or VM dispatch changes.
+- Ownership: integrating task owns `runtime/weak.rs`; no other implementation
+  is active. The prior two dispatch variants remain rejected.
+- Gates: focused weak/GC tests and direct PHP differentials, default/no-default/
+  all-feature checks, same-output PHPStan hardware/time/RSS, and the established
+  independent call, property and deep-release controls. No new unsafe code.
+- Reject on changed behavior, unbounded sidecar cost or independently confirmed
+  unexplained regressions. This is a partial cost reduction, not PHP parity.
+
+### Weak-identity result and native timing tradeoff
+
+The exact candidate source is
+`b7d00904d58d205207e9a7bcbb6d609002a18eee4f2edd749d2fa62f25239d47`.
+[All valid samples and investigation results](performance-phpstan-weak-identity-samples.json)
+remain available. An observable WeakReference/WeakMap lifecycle improves from
+978.395 to 859.385 ms (-12.16%) and from 16.324 to 13.292 billion instructions
+(-18.57%) over five shuffled pairs. An earlier unobserved object loop was
+virtualized; it is retained only as excluded attribution evidence.
+
+Independent PHPStan confirmation reduces whole-command instructions from
+130.6175 to 128.4230 billion (-1.68%). Actual analysis changes from 10.24875
+to 10.31784 seconds (+0.67%), against PHP's 0.94292 seconds and 15.4740 billion
+instructions. All outputs, five files and twenty findings agree; memory remains
+equivalent. This is an instruction-cost improvement, not a PHPStan time win.
+
+Five-pair independent holdouts regress 2.21% for shared frames, 3.64% for scalar
+frames and 4.64% for relative self returns. These controls execute essentially
+identical instruction counts. Normalized disassembly confirms all 73,261 main
+executor instructions and its 341,653-byte size are unchanged, but link placement
+differs. Hardware counters show increased empty frontend slots; branch misses,
+opcode-cache misses and instruction-cache misses do not increase. Using the same
+executable path preserves the slowdown. This supports native layout sensitivity
+without establishing the exact hardware cause.
+
+The integrating task accepts the measured weak-sidecar and application instruction
+reduction with this explicit timing tradeoff. The unconditional performance gate
+has not passed; retain all three regressed controls for the next checkpoint.
+The exact source passes 41 focused test executions, six direct PHP differential
+programs, all-target/all-feature compilation, formatting and unsafe enforcement.
+No unsafe invariant, value/frame ABI or JIT lowering changes. Native evidence is
+x86-64 only. All aggregate jobs completed within 6 GiB without OOM or timeout;
+cleanup ran in both checkouts and no private benchmark host was configured.

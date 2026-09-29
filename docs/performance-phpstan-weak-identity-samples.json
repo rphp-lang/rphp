@@ -1,0 +1,2131 @@
+{
+  "machine": {
+    "cpu": "AMD Ryzen 9 7950X",
+    "architecture": "x86_64",
+    "os": "Linux 7.0.0-34-generic",
+    "memory_bytes": 32699998208,
+    "governor": "performance",
+    "boost": "1"
+  },
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "php_configuration": {
+    "version": "8.5.11",
+    "zts": false,
+    "debug": false,
+    "opcache.enable_cli": "0",
+    "opcache.jit": "disable",
+    "extensions": [
+      "Core",
+      "date",
+      "lexbor",
+      "openssl",
+      "pcre",
+      "zlib",
+      "filter",
+      "hash",
+      "json",
+      "uri",
+      "Zend OPcache",
+      "pcntl",
+      "random",
+      "Reflection",
+      "SPL",
+      "session",
+      "standard",
+      "sodium",
+      "libxml",
+      "PDO",
+      "calendar",
+      "ctype",
+      "exif",
+      "FFI",
+      "fileinfo",
+      "ftp",
+      "gettext",
+      "iconv",
+      "Phar",
+      "posix",
+      "readline",
+      "shmop",
+      "sockets",
+      "sysvmsg",
+      "sysvsem",
+      "sysvshm",
+      "tokenizer"
+    ]
+  },
+  "build_flags": {
+    "profile": "max-perf",
+    "lto": "fat",
+    "codegen_units": 1,
+    "debug": "line-tables-only",
+    "function_alignment": "llvm-args=--align-all-functions=6",
+    "features": "default",
+    "tree_at_build": "baseline named commit; candidate dirty against that commit and identified by complete Rust source fingerprint; verified source is committed by this checkpoint"
+  },
+  "profile": "max-perf, default features, debug=line-tables-only on both sides",
+  "architecture": "x86_64; ARM64 native timing unavailable",
+  "status": "accepted instruction-cost checkpoint with explicit native control tradeoff; PHP parity remains open",
+  "baseline_commit": "895941b2446631149dc2ffc32481f62e2ba08466",
+  "candidate_tree": "dirty candidate based on baseline; source fingerprint identifies exact measured Rust files",
+  "candidate_source_sha256": "b7d00904d58d205207e9a7bcbb6d609002a18eee4f2edd749d2fa62f25239d47",
+  "build": {
+    "complete": true,
+    "source_sha256": "b7d00904d58d205207e9a7bcbb6d609002a18eee4f2edd749d2fa62f25239d47",
+    "baseline_commit": "895941b2446631149dc2ffc32481f62e2ba08466",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.518671115998586,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_weak_objects"
+        ],
+        "exit": 0,
+        "seconds": 51.5033236829986,
+        "test_results": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_gc_finalization_remainder"
+        ],
+        "exit": 0,
+        "seconds": 0.5146204900011071,
+        "test_results": [
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      }
+    ],
+    "build_seconds": 183.00385697799356,
+    "binary_sha256": "d31f2c118bd0dfa15034b8e9c57f48404e19ee14876ce804692d399f0579acfd",
+    "binary_bytes": 84274776
+  },
+  "final_checks": {
+    "complete": true,
+    "source_sha256": "b7d00904d58d205207e9a7bcbb6d609002a18eee4f2edd749d2fa62f25239d47",
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--no-default-features",
+          "--test",
+          "e2e_weak_objects"
+        ],
+        "exit": 0,
+        "seconds": 49.046666535999975,
+        "test_results": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_weak_objects"
+        ],
+        "exit": 0,
+        "seconds": 55.36097177099873,
+        "test_results": [
+          "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_gc_finalization_remainder"
+        ],
+        "exit": 0,
+        "seconds": 0.5148246689932421,
+        "test_results": [
+          "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--all-features",
+          "--test",
+          "e2e_cycle_collection"
+        ],
+        "exit": 0,
+        "seconds": 0.5647379419970093,
+        "test_results": [
+          "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "check",
+          "--offline",
+          "--locked",
+          "--profile",
+          "dev-fast",
+          "--all-targets",
+          "--all-features"
+        ],
+        "exit": 0,
+        "seconds": 18.391207156004384,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.4170836019984563,
+        "test_results": []
+      },
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.5181906770012574,
+        "test_results": []
+      }
+    ]
+  },
+  "measurements": {
+    "complete": true,
+    "source_sha256": "b7d00904d58d205207e9a7bcbb6d609002a18eee4f2edd749d2fa62f25239d47",
+    "cpu": 2,
+    "event": "instructions:u",
+    "outlier_policy": "retain all valid measured samples",
+    "samples": [
+      {
+        "runtime": "php",
+        "round": 0,
+        "instructions": 15473984537,
+        "analysis_seconds": 0.997040987,
+        "wall_seconds": 1.4434576909989119,
+        "max_rss_kib": 177800,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "instructions": 130626027093,
+        "analysis_seconds": 10.413540363,
+        "wall_seconds": 12.716605417997926,
+        "max_rss_kib": 598388,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "instructions": 128456996713,
+        "analysis_seconds": 10.738174677,
+        "wall_seconds": 12.992716934997588,
+        "max_rss_kib": 598592,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "instructions": 128416494769,
+        "analysis_seconds": 10.37264514,
+        "wall_seconds": 12.677148542003124,
+        "max_rss_kib": 598404,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "instructions": 130597842245,
+        "analysis_seconds": 10.484412432,
+        "wall_seconds": 12.765956450995873,
+        "max_rss_kib": 598440,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "php",
+        "round": 5,
+        "instructions": 15473954435,
+        "analysis_seconds": 0.92634511,
+        "wall_seconds": 1.3533045520016458,
+        "max_rss_kib": 177648,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      }
+    ],
+    "holdouts": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.059538602828979,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.061043500900269,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.059052467346191,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.063521146774292,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.060330867767334,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.059812545776367,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.032240629196167,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.033106565475464,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.03214955329895,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.033575057983398,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.033440589904785,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.03199291229248,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.22292423248291,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.21893763542175,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.2191162109375,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.22347259521484,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.23279762268066,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.23470544815063,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.025108575820923,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.02482271194458,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.024957656860352,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.024635314941406,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.025112152099609,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.024426460266113,
+        "output": "50000040000000"
+      }
+    ],
+    "binaries": {
+      "baseline": "75e42cf3d31b455e9a617ac6931b78fd0f545aa1d588add160796d21c71eae44",
+      "candidate": "d31f2c118bd0dfa15034b8e9c57f48404e19ee14876ce804692d399f0579acfd",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    }
+  },
+  "application_confirmation": {
+    "complete": true,
+    "source_sha256": "b7d00904d58d205207e9a7bcbb6d609002a18eee4f2edd749d2fa62f25239d47",
+    "cpu": 2,
+    "event": "instructions:u",
+    "outlier_policy": "retain all valid measured samples",
+    "samples": [
+      {
+        "runtime": "php",
+        "round": 0,
+        "instructions": 15473965901,
+        "analysis_seconds": 0.970525026,
+        "wall_seconds": 1.4017362320009852,
+        "max_rss_kib": 177704,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 2.142857142857143
+        }
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "instructions": 130625978458,
+        "analysis_seconds": 10.32143712,
+        "wall_seconds": 12.59355202599545,
+        "max_rss_kib": 598512,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.4792332268370607
+        }
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "instructions": 128426256851,
+        "analysis_seconds": 10.320825815,
+        "wall_seconds": 12.579048476000025,
+        "max_rss_kib": 598464,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.39904229848363926
+        }
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "instructions": 128419757285,
+        "analysis_seconds": 10.314855099,
+        "wall_seconds": 12.713247222003702,
+        "max_rss_kib": 598392,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.870253164556962
+        }
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "instructions": 130609102314,
+        "analysis_seconds": 10.17606473,
+        "wall_seconds": 12.427465631000814,
+        "max_rss_kib": 598412,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.0
+        }
+      },
+      {
+        "runtime": "php",
+        "round": 5,
+        "instructions": 15473997420,
+        "analysis_seconds": 0.915306091,
+        "wall_seconds": 1.3417444209990208,
+        "max_rss_kib": 177668,
+        "counter_running_percent": 100.0,
+        "output_equal": true,
+        "cpu_busy_percent": {
+          "cpu2": 100.0,
+          "cpu18": 0.0
+        }
+      }
+    ],
+    "holdouts": [],
+    "binaries": {
+      "baseline": "75e42cf3d31b455e9a617ac6931b78fd0f545aa1d588add160796d21c71eae44",
+      "candidate": "d31f2c118bd0dfa15034b8e9c57f48404e19ee14876ce804692d399f0579acfd",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    }
+  },
+  "confirmation": {
+    "complete": true,
+    "seed": 291032,
+    "outlier_rule": "retain every valid sample",
+    "samples": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.61306238174438,
+        "output": "45000000",
+        "cycles:u": 3287706320,
+        "instructions:u": 13788659403,
+        "branches:u": 2732979893,
+        "branch-misses:u": 554201
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.5982403755188,
+        "output": "45000000",
+        "cycles:u": 3203711331,
+        "instructions:u": 13788657689,
+        "branches:u": 2732979279,
+        "branch-misses:u": 559052
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.61347842216492,
+        "output": "45000000",
+        "cycles:u": 3289870466,
+        "instructions:u": 13788658712,
+        "branches:u": 2732979618,
+        "branch-misses:u": 554743
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.6007251739502,
+        "output": "45000000",
+        "cycles:u": 3223369703,
+        "instructions:u": 13788656262,
+        "branches:u": 2732978833,
+        "branch-misses:u": 554885
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.59651064872742,
+        "output": "45000000",
+        "cycles:u": 3196854835,
+        "instructions:u": 13788658064,
+        "branches:u": 2732979462,
+        "branch-misses:u": 553569
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.64751029014587,
+        "output": "45000000",
+        "cycles:u": 3481822568,
+        "instructions:u": 13788657729,
+        "branches:u": 2732979394,
+        "branch-misses:u": 3057647
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 3,
+        "seconds": 0.61667633056641,
+        "output": "45000000",
+        "cycles:u": 3307232340,
+        "instructions:u": 13788665328,
+        "branches:u": 2732981137,
+        "branch-misses:u": 569549
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 3,
+        "seconds": 0.60322880744934,
+        "output": "45000000",
+        "cycles:u": 3232716371,
+        "instructions:u": 13788659503,
+        "branches:u": 2732979896,
+        "branch-misses:u": 560046
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 4,
+        "seconds": 0.60062265396118,
+        "output": "45000000",
+        "cycles:u": 3222326417,
+        "instructions:u": 13788658635,
+        "branches:u": 2732979654,
+        "branch-misses:u": 552914
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 4,
+        "seconds": 0.61387491226196,
+        "output": "45000000",
+        "cycles:u": 3289728726,
+        "instructions:u": 13788658605,
+        "branches:u": 2732979640,
+        "branch-misses:u": 555659
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.33647727966309,
+        "output": "45000000",
+        "cycles:u": 1808840201,
+        "instructions:u": 8285646354,
+        "branches:u": 1727877257,
+        "branch-misses:u": 446657
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.32759022712708,
+        "output": "45000000",
+        "cycles:u": 1757050901,
+        "instructions:u": 8285646116,
+        "branches:u": 1727877257,
+        "branch-misses:u": 448656
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.3249135017395,
+        "output": "45000000",
+        "cycles:u": 1741880133,
+        "instructions:u": 8285644382,
+        "branches:u": 1727876750,
+        "branch-misses:u": 446697
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.39795875549316,
+        "output": "45000000",
+        "cycles:u": 2148208338,
+        "instructions:u": 8285650338,
+        "branches:u": 1727878149,
+        "branch-misses:u": 5447938
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.32474660873413,
+        "output": "45000000",
+        "cycles:u": 1742398793,
+        "instructions:u": 8285645241,
+        "branches:u": 1727877016,
+        "branch-misses:u": 453258
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.33429598808289,
+        "output": "45000000",
+        "cycles:u": 1795098091,
+        "instructions:u": 8285644225,
+        "branches:u": 1727876511,
+        "branch-misses:u": 461908
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 3,
+        "seconds": 0.33990383148193,
+        "output": "45000000",
+        "cycles:u": 1828743763,
+        "instructions:u": 8285644650,
+        "branches:u": 1727876772,
+        "branch-misses:u": 446691
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 3,
+        "seconds": 0.32958292961121,
+        "output": "45000000",
+        "cycles:u": 1769537476,
+        "instructions:u": 8285646187,
+        "branches:u": 1727877231,
+        "branch-misses:u": 448067
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 4,
+        "seconds": 0.32641530036926,
+        "output": "45000000",
+        "cycles:u": 1751120580,
+        "instructions:u": 8285644329,
+        "branches:u": 1727876563,
+        "branch-misses:u": 447912
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 4,
+        "seconds": 0.33829689025879,
+        "output": "45000000",
+        "cycles:u": 1818604958,
+        "instructions:u": 8285646045,
+        "branches:u": 1727877218,
+        "branch-misses:u": 448873
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.22434687614441,
+        "output": "48640000",
+        "cycles:u": 1204538247,
+        "instructions:u": 6047240063,
+        "branches:u": 1135537957,
+        "branch-misses:u": 306421
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.22506189346313,
+        "output": "48640000",
+        "cycles:u": 1208044343,
+        "instructions:u": 6047259956,
+        "branches:u": 1135537880,
+        "branch-misses:u": 306788
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.22507810592651,
+        "output": "48640000",
+        "cycles:u": 1209163287,
+        "instructions:u": 6047257086,
+        "branches:u": 1135536885,
+        "branch-misses:u": 306994
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.22353076934814,
+        "output": "48640000",
+        "cycles:u": 1203588705,
+        "instructions:u": 6047236534,
+        "branches:u": 1135536837,
+        "branch-misses:u": 307059
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.22535514831543,
+        "output": "48640000",
+        "cycles:u": 1212526036,
+        "instructions:u": 6047257529,
+        "branches:u": 1135537134,
+        "branch-misses:u": 306863
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.22305798530579,
+        "output": "48640000",
+        "cycles:u": 1199538280,
+        "instructions:u": 6047235346,
+        "branches:u": 1135536464,
+        "branch-misses:u": 306832
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 3,
+        "seconds": 0.22408485412598,
+        "output": "48640000",
+        "cycles:u": 1206604290,
+        "instructions:u": 6047237319,
+        "branches:u": 1135537252,
+        "branch-misses:u": 306052
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 3,
+        "seconds": 0.22276830673218,
+        "output": "48640000",
+        "cycles:u": 1200239379,
+        "instructions:u": 6047256095,
+        "branches:u": 1135536783,
+        "branch-misses:u": 306829
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 4,
+        "seconds": 0.22483730316162,
+        "output": "48640000",
+        "cycles:u": 1209774979,
+        "instructions:u": 6047239510,
+        "branches:u": 1135537761,
+        "branch-misses:u": 306599
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 4,
+        "seconds": 0.22416400909424,
+        "output": "48640000",
+        "cycles:u": 1206458707,
+        "instructions:u": 6047259087,
+        "branches:u": 1135537716,
+        "branch-misses:u": 306172
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 1.1267294883728,
+        "output": "5000000",
+        "cycles:u": 6089578158,
+        "instructions:u": 21425702268,
+        "branches:u": 3927893780,
+        "branch-misses:u": 479937
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 1.0774967670441,
+        "output": "5000000",
+        "cycles:u": 5821883775,
+        "instructions:u": 21425700063,
+        "branches:u": 3927893100,
+        "branch-misses:u": 479497
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 1.0824568271637,
+        "output": "5000000",
+        "cycles:u": 5852280808,
+        "instructions:u": 21425704108,
+        "branches:u": 3927894168,
+        "branch-misses:u": 478633
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 1.1402170658112,
+        "output": "5000000",
+        "cycles:u": 6157871412,
+        "instructions:u": 21545703049,
+        "branches:u": 3937894013,
+        "branch-misses:u": 479644
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 1.1335606575012,
+        "output": "5000000",
+        "cycles:u": 6127353368,
+        "instructions:u": 21425702710,
+        "branches:u": 3927893898,
+        "branch-misses:u": 478550
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 1.0767724514008,
+        "output": "5000000",
+        "cycles:u": 5819930970,
+        "instructions:u": 21425702767,
+        "branches:u": 3927893886,
+        "branch-misses:u": 483477
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "baseline",
+        "round": 3,
+        "seconds": 1.0724551677704,
+        "output": "5000000",
+        "cycles:u": 5798576484,
+        "instructions:u": 21425704239,
+        "branches:u": 3927894319,
+        "branch-misses:u": 480073
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "candidate",
+        "round": 3,
+        "seconds": 1.1180231571198,
+        "output": "5000000",
+        "cycles:u": 6056860765,
+        "instructions:u": 21425702316,
+        "branches:u": 3927893728,
+        "branch-misses:u": 477921
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "baseline",
+        "round": 4,
+        "seconds": 1.0681071281433,
+        "output": "5000000",
+        "cycles:u": 5775511437,
+        "instructions:u": 21425702720,
+        "branches:u": 3927893867,
+        "branch-misses:u": 477764
+      },
+      {
+        "case": "return-self.php",
+        "runtime": "candidate",
+        "round": 4,
+        "seconds": 1.1253998279572,
+        "output": "5000000",
+        "cycles:u": 6086776453,
+        "instructions:u": 21425701989,
+        "branches:u": 3927893659,
+        "branch-misses:u": 477996
+      }
+    ]
+  },
+  "micro_counts": {
+    "complete": true,
+    "raw": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 0,
+        "runtime": "baseline",
+        "instructions": 13954397,
+        "seconds": 9.2983245849609e-06
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 0,
+        "runtime": "candidate",
+        "instructions": 13954443,
+        "seconds": 4.2915344238281e-06
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 0,
+        "runtime": "php",
+        "instructions": 28080942,
+        "seconds": 6.5088272094727e-05
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 5000000,
+        "runtime": "baseline",
+        "instructions": 13788664516,
+        "seconds": 0.61910247802734
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 5000000,
+        "runtime": "candidate",
+        "instructions": 13788658420,
+        "seconds": 0.65386700630188
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 5000000,
+        "runtime": "php",
+        "instructions": 2608077867,
+        "seconds": 0.12215781211853
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 0,
+        "runtime": "baseline",
+        "instructions": 13935549,
+        "seconds": 3.0994415283203e-06
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 0,
+        "runtime": "candidate",
+        "instructions": 13934835,
+        "seconds": 1.0013580322266e-05
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 0,
+        "runtime": "php",
+        "instructions": 28074678,
+        "seconds": 5.3882598876953e-05
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 5000000,
+        "runtime": "baseline",
+        "instructions": 8285642945,
+        "seconds": 0.32457756996155
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 5000000,
+        "runtime": "candidate",
+        "instructions": 8285645723,
+        "seconds": 0.33974361419678
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 5000000,
+        "runtime": "php",
+        "instructions": 2005580115,
+        "seconds": 0.085052967071533
+      }
+    ],
+    "incremental": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "instructions_per_iteration": 2754.9420238
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "instructions_per_iteration": 2754.9407954
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "php",
+        "instructions_per_iteration": 515.999385
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "instructions_per_iteration": 1654.3414792
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "instructions_per_iteration": 1654.3421776
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "php",
+        "instructions_per_iteration": 395.5010874
+      }
+    ],
+    "protocol": "One native instructions:u count at zero and five million iterations; same source except loop bound; CPU 2 and identical environment; not a timing distribution"
+  },
+  "deep_controls": {
+    "complete": true,
+    "seed": 290998,
+    "deep": [
+      {
+        "runtime": "candidate",
+        "round": 0,
+        "nodes": 2048,
+        "build_seconds": 0.00081443786621094,
+        "release_seconds": 0.0030937194824219
+      },
+      {
+        "runtime": "baseline",
+        "round": 0,
+        "nodes": 2048,
+        "build_seconds": 0.00083065032958984,
+        "release_seconds": 0.0031712055206299
+      },
+      {
+        "runtime": "candidate",
+        "round": 1,
+        "nodes": 2048,
+        "build_seconds": 0.00092267990112305,
+        "release_seconds": 0.0031991004943848
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "nodes": 2048,
+        "build_seconds": 0.00084137916564941,
+        "release_seconds": 0.0030977725982666
+      },
+      {
+        "runtime": "baseline",
+        "round": 2,
+        "nodes": 2048,
+        "build_seconds": 0.00082087516784668,
+        "release_seconds": 0.0031442642211914
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "nodes": 2048,
+        "build_seconds": 0.0012423992156982,
+        "release_seconds": 0.0031282901763916
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "nodes": 2048,
+        "build_seconds": 0.00084042549133301,
+        "release_seconds": 0.0037887096405029
+      },
+      {
+        "runtime": "baseline",
+        "round": 3,
+        "nodes": 2048,
+        "build_seconds": 0.00082635879516602,
+        "release_seconds": 0.0031981468200684
+      },
+      {
+        "runtime": "candidate",
+        "round": 4,
+        "nodes": 2048,
+        "build_seconds": 0.00081849098205566,
+        "release_seconds": 0.0032322406768799
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "nodes": 2048,
+        "build_seconds": 0.0012748241424561,
+        "release_seconds": 0.0037364959716797
+      },
+      {
+        "runtime": "baseline",
+        "round": 0,
+        "nodes": 16384,
+        "build_seconds": 0.0060265064239502,
+        "release_seconds": 0.027947425842285
+      },
+      {
+        "runtime": "candidate",
+        "round": 0,
+        "nodes": 16384,
+        "build_seconds": 0.0054976940155029,
+        "release_seconds": 0.028502225875854
+      },
+      {
+        "runtime": "candidate",
+        "round": 1,
+        "nodes": 16384,
+        "build_seconds": 0.0067791938781738,
+        "release_seconds": 0.026486396789551
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "nodes": 16384,
+        "build_seconds": 0.0054962635040283,
+        "release_seconds": 0.027730226516724
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "nodes": 16384,
+        "build_seconds": 0.0058817863464355,
+        "release_seconds": 0.025353670120239
+      },
+      {
+        "runtime": "baseline",
+        "round": 2,
+        "nodes": 16384,
+        "build_seconds": 0.0055086612701416,
+        "release_seconds": 0.026496887207031
+      },
+      {
+        "runtime": "baseline",
+        "round": 3,
+        "nodes": 16384,
+        "build_seconds": 0.0055394172668457,
+        "release_seconds": 0.025906085968018
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "nodes": 16384,
+        "build_seconds": 0.0056338310241699,
+        "release_seconds": 0.025617599487305
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "nodes": 16384,
+        "build_seconds": 0.0055015087127686,
+        "release_seconds": 0.026004552841187
+      },
+      {
+        "runtime": "candidate",
+        "round": 4,
+        "nodes": 16384,
+        "build_seconds": 0.0054681301116943,
+        "release_seconds": 0.02586817741394
+      }
+    ]
+  },
+  "observed_target": {
+    "complete": true,
+    "seed": 290975,
+    "target": [
+      {
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.8593852519989,
+        "cycles:u": 4679662840,
+        "instructions:u": 13291206722
+      },
+      {
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 1.0097296237946,
+        "cycles:u": 5481711126,
+        "instructions:u": 16324338290
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.97839450836182,
+        "cycles:u": 5310778642,
+        "instructions:u": 16322872060
+      },
+      {
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.86208581924438,
+        "cycles:u": 4695479948,
+        "instructions:u": 13291845141
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.85906362533569,
+        "cycles:u": 4674014312,
+        "instructions:u": 13292773462
+      },
+      {
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.97910070419312,
+        "cycles:u": 5320147447,
+        "instructions:u": 16323836674
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "seconds": 0.8629355430603,
+        "cycles:u": 4694784708,
+        "instructions:u": 13291511842
+      },
+      {
+        "runtime": "baseline",
+        "round": 3,
+        "seconds": 0.97092437744141,
+        "cycles:u": 5269708841,
+        "instructions:u": 16322476305
+      },
+      {
+        "runtime": "candidate",
+        "round": 4,
+        "seconds": 0.85934901237488,
+        "cycles:u": 4674815691,
+        "instructions:u": 13292031361
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "seconds": 0.97730541229248,
+        "cycles:u": 5305407466,
+        "instructions:u": 16325623186
+      }
+    ],
+    "same_path": []
+  },
+  "scalar_cycles": {
+    "complete": true,
+    "rows": [
+      {
+        "group": 0,
+        "run": 0,
+        "runtime": "baseline",
+        "seconds": 0.65666532516479,
+        "counts": {
+          "cycles": 3508852123,
+          "instructions": 16557357164,
+          "branches": 3453220111,
+          "branch-misses": 797908
+        }
+      },
+      {
+        "group": 0,
+        "run": 1,
+        "runtime": "candidate",
+        "seconds": 0.68408608436584,
+        "counts": {
+          "cycles": 3663856064,
+          "instructions": 16557353490,
+          "branches": 3453218984,
+          "branch-misses": 795467
+        }
+      },
+      {
+        "group": 1,
+        "run": 0,
+        "runtime": "baseline",
+        "seconds": 0.64311242103577,
+        "counts": {
+          "cycles": 3439083416,
+          "op_cache_hit_miss.op_cache_hit": 3177345516,
+          "op_cache_hit_miss.op_cache_miss": 758781,
+          "de_src_op_disp.decoder": 4146569
+        }
+      },
+      {
+        "group": 1,
+        "run": 1,
+        "runtime": "candidate",
+        "seconds": 0.66993451118469,
+        "counts": {
+          "cycles": 3591870999,
+          "op_cache_hit_miss.op_cache_hit": 3175625714,
+          "op_cache_hit_miss.op_cache_miss": 695017,
+          "de_src_op_disp.decoder": 3929966
+        }
+      },
+      {
+        "group": 2,
+        "run": 0,
+        "runtime": "baseline",
+        "seconds": 0.63774538040161,
+        "counts": {
+          "cycles": 3413983721,
+          "ic_tag_hit_miss.instruction_cache_miss": 20176256,
+          "bp_l1_tlb_miss_l2_tlb_hit": 14838,
+          "bp_l1_tlb_miss_l2_tlb_miss.all": 2315
+        }
+      },
+      {
+        "group": 2,
+        "run": 1,
+        "runtime": "candidate",
+        "seconds": 0.66255402565002,
+        "counts": {
+          "cycles": 3551140792,
+          "ic_tag_hit_miss.instruction_cache_miss": 11295895,
+          "bp_l1_tlb_miss_l2_tlb_hit": 13942,
+          "bp_l1_tlb_miss_l2_tlb_miss.all": 2274
+        }
+      },
+      {
+        "group": 3,
+        "run": 0,
+        "runtime": "baseline",
+        "seconds": 0.64320659637451,
+        "counts": {
+          "cycles": 3434362089,
+          "de_no_dispatch_per_slot.no_ops_from_frontend": 4113272997,
+          "de_no_dispatch_per_slot.backend_stalls": 956299436,
+          "ex_no_retire.empty": 5023120
+        }
+      },
+      {
+        "group": 3,
+        "run": 1,
+        "runtime": "candidate",
+        "seconds": 0.68097877502441,
+        "counts": {
+          "cycles": 3635927353,
+          "de_no_dispatch_per_slot.no_ops_from_frontend": 5289883218,
+          "de_no_dispatch_per_slot.backend_stalls": 915830203,
+          "ex_no_retire.empty": 5814708
+        }
+      }
+    ]
+  },
+  "main_code_comparison": {
+    "protocol": "Compare main-executor mnemonic/operand sequences after removing instruction addresses, resolved branch addresses and RIP-relative relocation displacements; retain symbolic target names and offsets",
+    "baseline_instructions": 73261,
+    "candidate_instructions": 73261,
+    "identical": true,
+    "sha256": {
+      "parity-frame-entry": "fac3b90406a32b68a1b44e12085ae863615740b7fb5cbc217b3df0ade906b50c",
+      "parity-weak-identities": "fac3b90406a32b68a1b44e12085ae863615740b7fb5cbc217b3df0ade906b50c"
+    }
+  },
+  "code_size": {
+    "parity-frame-entry": [
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::has_weak_object_release_work",
+        "bytes": 917,
+        "address": "00000000006891c0"
+      },
+      {
+        "symbol": "rphp::vm::execute::execute_ex_inner",
+        "bytes": 341653,
+        "address": "00000000006d4240"
+      }
+    ],
+    "parity-weak-identities": [
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::has_weak_object_release_work",
+        "bytes": 1074,
+        "address": "0000000000689e40"
+      },
+      {
+        "symbol": "rphp::vm::execute::execute_ex_inner",
+        "bytes": 341653,
+        "address": "00000000006d4d80"
+      }
+    ]
+  },
+  "differentials": {
+    "complete": true,
+    "cases": [
+      {
+        "case": "weak_reference_caches_wrappers_and_clears_objects_and_closures",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "6dacf39027616108868d96acb78592f37ee9a585d2e1201a0ed8d19d79671dee"
+      },
+      {
+        "case": "weak_reference_caches_wrappers_and_clears_objects_and_closures",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "6dacf39027616108868d96acb78592f37ee9a585d2e1201a0ed8d19d79671dee"
+      },
+      {
+        "case": "weak_reference_caches_wrappers_and_clears_objects_and_closures",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "6dacf39027616108868d96acb78592f37ee9a585d2e1201a0ed8d19d79671dee"
+      },
+      {
+        "case": "weak_map_preserves_aliases_and_clones_unaliased_entries",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "03c6b967fa6b2a3811d5984e17b6138707b9226f8c6b4323bd43096de322f347"
+      },
+      {
+        "case": "weak_map_preserves_aliases_and_clones_unaliased_entries",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "03c6b967fa6b2a3811d5984e17b6138707b9226f8c6b4323bd43096de322f347"
+      },
+      {
+        "case": "weak_map_preserves_aliases_and_clones_unaliased_entries",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "03c6b967fa6b2a3811d5984e17b6138707b9226f8c6b4323bd43096de322f347"
+      },
+      {
+        "case": "weak_map_iteration_removes_dead_keys_and_allows_reference_values",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "517a04c25b989f7bea8e45aa1c3aad2121b78a9211b14fa8c453ae22a6cab718"
+      },
+      {
+        "case": "weak_map_iteration_removes_dead_keys_and_allows_reference_values",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "517a04c25b989f7bea8e45aa1c3aad2121b78a9211b14fa8c453ae22a6cab718"
+      },
+      {
+        "case": "weak_map_iteration_removes_dead_keys_and_allows_reference_values",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "517a04c25b989f7bea8e45aa1c3aad2121b78a9211b14fa8c453ae22a6cab718"
+      },
+      {
+        "case": "weak_map_releases_values_after_the_key_destructor",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "9c6e78294d7f850295c989f01f009130230d4db9c8d8f2a6fd61addab5a8c1a7"
+      },
+      {
+        "case": "weak_map_releases_values_after_the_key_destructor",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "9c6e78294d7f850295c989f01f009130230d4db9c8d8f2a6fd61addab5a8c1a7"
+      },
+      {
+        "case": "weak_map_releases_values_after_the_key_destructor",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "9c6e78294d7f850295c989f01f009130230d4db9c8d8f2a6fd61addab5a8c1a7"
+      },
+      {
+        "case": "weak_objects_reject_append_dynamic_properties_and_serialization",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "0edb33371f25af8b62e90e1dc8a79940341c22dcc311ee495911c3d85c7c938e"
+      },
+      {
+        "case": "weak_objects_reject_append_dynamic_properties_and_serialization",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "0edb33371f25af8b62e90e1dc8a79940341c22dcc311ee495911c3d85c7c938e"
+      },
+      {
+        "case": "weak_objects_reject_append_dynamic_properties_and_serialization",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "0edb33371f25af8b62e90e1dc8a79940341c22dcc311ee495911c3d85c7c938e"
+      },
+      {
+        "case": "weak_notification_precedes_destructors_nested_inside_properties",
+        "runtime": "php",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "a911d995dbf542b1972dbabc98a5a93ffe56344556188a27c3faa8959f7da175"
+      },
+      {
+        "case": "weak_notification_precedes_destructors_nested_inside_properties",
+        "runtime": "baseline",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "a911d995dbf542b1972dbabc98a5a93ffe56344556188a27c3faa8959f7da175"
+      },
+      {
+        "case": "weak_notification_precedes_destructors_nested_inside_properties",
+        "runtime": "candidate",
+        "exit": 0,
+        "output_equal": true,
+        "stdout_sha256": "a911d995dbf542b1972dbabc98a5a93ffe56344556188a27c3faa8959f7da175"
+      }
+    ]
+  },
+  "same_executable_path_control": [
+    {
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.69743156433105
+    },
+    {
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.67794013023376
+    },
+    {
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.65788578987122
+    },
+    {
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.85320329666138
+    },
+    {
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.65446996688843
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.66245722770691
+    },
+    {
+      "runtime": "candidate",
+      "round": 3,
+      "seconds": 0.69548559188843
+    },
+    {
+      "runtime": "baseline",
+      "round": 3,
+      "seconds": 0.65948081016541
+    },
+    {
+      "runtime": "baseline",
+      "round": 4,
+      "seconds": 0.6540744304657
+    },
+    {
+      "runtime": "candidate",
+      "round": 4,
+      "seconds": 0.67276978492737
+    }
+  ],
+  "excluded_attribution_experiment": {
+    "reason": "An initial unobserved allocation loop was virtualized, so it did not exercise weak release membership. Its semantically valid timings are retained but are not evidence of weak-sidecar speedup.",
+    "samples": [
+      {
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.0010600090026855,
+        "cycles:u": 17417229,
+        "instructions:u": 30094651
+      },
+      {
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.0010817050933838,
+        "cycles:u": 17880678,
+        "instructions:u": 30105274
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.0010538101196289,
+        "cycles:u": 18105286,
+        "instructions:u": 30109151
+      },
+      {
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.0010490417480469,
+        "cycles:u": 17085476,
+        "instructions:u": 30094134
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.0010478496551514,
+        "cycles:u": 17099329,
+        "instructions:u": 30094745
+      },
+      {
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.0010817050933838,
+        "cycles:u": 17338383,
+        "instructions:u": 30105091
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "seconds": 0.001054048538208,
+        "cycles:u": 16739874,
+        "instructions:u": 30094707
+      },
+      {
+        "runtime": "baseline",
+        "round": 3,
+        "seconds": 0.0011105537414551,
+        "cycles:u": 18046622,
+        "instructions:u": 30103241
+      },
+      {
+        "runtime": "candidate",
+        "round": 4,
+        "seconds": 0.001084566116333,
+        "cycles:u": 17443197,
+        "instructions:u": 30095339
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "seconds": 0.0011167526245117,
+        "cycles:u": 16422592,
+        "instructions:u": 30111487
+      }
+    ]
+  },
+  "protocol": {
+    "application": "Separate first and confirmation windows; each PHP, baseline, candidate, candidate, baseline, PHP. Fresh result-cache directory per run, warm OS caches, fixed CPU 2. Match output, exit, stderr, five files and twenty findings. Report actual analysis phase separately from whole-command user instructions.",
+    "controls": "One warmup per binary; all measured valid samples retained. Five seeded shuffled pairs in confirmation; application windows are not pooled. Observed target uses WeakReference create/get and WeakMap to retain observable object identity.",
+    "benchmark_source": "benches/bench_weak_object_lifecycle.php",
+    "outliers": "No valid samples discarded",
+    "limits": "6 GiB aggregate, no swap, exclusive benchmark lock; no native ARM64 result. No layout/ABI/JIT change."
+  },
+  "tradeoff": {
+    "authority": "Integrating task review under existing user-authorized performance goal; no separate user approval inferred.",
+    "unconditional_performance_gate_passed": false,
+    "accepted_for": "Measured 18.57% instruction and 12.16% time reduction in observed weak lifecycle, 2.195 billion fewer application instructions with equivalent memory and exact PHP semantics.",
+    "regressions": "Independent controls: shared +2.21%, scalar +3.64%, relative self returns +4.64%; PHPStan confirmation time +0.67%. Keep these controls in subsequent checkpoints.",
+    "investigation": "Main executor has identical normalized 73261 instructions and size, with different link placement; untyped controls execute essentially identical instruction counts. Frontend empty slots grow while branch misses and opcode/instruction cache misses do not. Same executable path preserves slowdown. This supports native layout sensitivity but does not prove its exact microarchitectural cause. No claim of faster PHPStan."
+  },
+  "aggregate_boundaries": {
+    "parity-weak-identities-investigate-boundary.json": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 58.946775259006245,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 629665792,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-weak-identities-target-boundary.json": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 7.629820879999897,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 130711552,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-weak-identities-gate-boundary.json": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 129.8773256340064,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4095643648,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-weak-identities-build-boundary.json": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 238.66863863800245,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3686195200,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-weak-identities-measure-boundary.json": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 84.52965240200137,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 837402624,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-weak-identities-observed-target-boundary.json": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 11.403316900999926,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 58576896,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "focused_test_executions": 41,
+  "application_summary": {
+    "measurements": {
+      "baseline": {
+        "instructions": {
+          "n": 2,
+          "median": 130611934669.0,
+          "min": 130597842245,
+          "q1": 130604888457.0,
+          "q3": 130618980881.0,
+          "max": 130626027093
+        },
+        "analysis_seconds": {
+          "n": 2,
+          "median": 10.4489763975,
+          "min": 10.413540363,
+          "q1": 10.43125838025,
+          "q3": 10.466694414749998,
+          "max": 10.484412432
+        },
+        "max_rss_kib": {
+          "n": 2,
+          "median": 598414.0,
+          "min": 598388,
+          "q1": 598401.0,
+          "q3": 598427.0,
+          "max": 598440
+        }
+      },
+      "candidate": {
+        "instructions": {
+          "n": 2,
+          "median": 128436745741.0,
+          "min": 128416494769,
+          "q1": 128426620255.0,
+          "q3": 128446871227.0,
+          "max": 128456996713
+        },
+        "analysis_seconds": {
+          "n": 2,
+          "median": 10.5554099085,
+          "min": 10.37264514,
+          "q1": 10.46402752425,
+          "q3": 10.64679229275,
+          "max": 10.738174677
+        },
+        "max_rss_kib": {
+          "n": 2,
+          "median": 598498.0,
+          "min": 598404,
+          "q1": 598451.0,
+          "q3": 598545.0,
+          "max": 598592
+        }
+      },
+      "php": {
+        "instructions": {
+          "n": 2,
+          "median": 15473969486.0,
+          "min": 15473954435,
+          "q1": 15473961960.5,
+          "q3": 15473977011.5,
+          "max": 15473984537
+        },
+        "analysis_seconds": {
+          "n": 2,
+          "median": 0.9616930484999999,
+          "min": 0.92634511,
+          "q1": 0.94401907925,
+          "q3": 0.97936701775,
+          "max": 0.997040987
+        },
+        "max_rss_kib": {
+          "n": 2,
+          "median": 177724.0,
+          "min": 177648,
+          "q1": 177686.0,
+          "q3": 177762.0,
+          "max": 177800
+        }
+      }
+    },
+    "application_confirmation": {
+      "baseline": {
+        "instructions": {
+          "n": 2,
+          "median": 130617540386.0,
+          "min": 130609102314,
+          "q1": 130613321350.0,
+          "q3": 130621759422.0,
+          "max": 130625978458
+        },
+        "analysis_seconds": {
+          "n": 2,
+          "median": 10.248750925,
+          "min": 10.17606473,
+          "q1": 10.2124078275,
+          "q3": 10.285094022500001,
+          "max": 10.32143712
+        },
+        "max_rss_kib": {
+          "n": 2,
+          "median": 598462.0,
+          "min": 598412,
+          "q1": 598437.0,
+          "q3": 598487.0,
+          "max": 598512
+        }
+      },
+      "candidate": {
+        "instructions": {
+          "n": 2,
+          "median": 128423007068.0,
+          "min": 128419757285,
+          "q1": 128421382176.5,
+          "q3": 128424631959.5,
+          "max": 128426256851
+        },
+        "analysis_seconds": {
+          "n": 2,
+          "median": 10.317840456999999,
+          "min": 10.314855099,
+          "q1": 10.316347778,
+          "q3": 10.319333136,
+          "max": 10.320825815
+        },
+        "max_rss_kib": {
+          "n": 2,
+          "median": 598428.0,
+          "min": 598392,
+          "q1": 598410.0,
+          "q3": 598446.0,
+          "max": 598464
+        }
+      },
+      "php": {
+        "instructions": {
+          "n": 2,
+          "median": 15473981660.5,
+          "min": 15473965901,
+          "q1": 15473973780.75,
+          "q3": 15473989540.25,
+          "max": 15473997420
+        },
+        "analysis_seconds": {
+          "n": 2,
+          "median": 0.9429155585,
+          "min": 0.915306091,
+          "q1": 0.9291108247500001,
+          "q3": 0.95672029225,
+          "max": 0.970525026
+        },
+        "max_rss_kib": {
+          "n": 2,
+          "median": 177686.0,
+          "min": 177668,
+          "q1": 177677.0,
+          "q3": 177695.0,
+          "max": 177704
+        }
+      }
+    }
+  },
+  "confirmed_holdout_summary": {
+    "bench_foreach_declared_property_reads.php": {
+      "baseline": {
+        "n": 5,
+        "median": 0.22506189346313,
+        "min": 0.22276830673218,
+        "q1": 0.22416400909424,
+        "q3": 0.22507810592651,
+        "max": 0.22535514831543
+      },
+      "candidate": {
+        "n": 5,
+        "median": 0.22408485412598,
+        "min": 0.22305798530579,
+        "q1": 0.22353076934814,
+        "q3": 0.22434687614441,
+        "max": 0.22483730316162
+      }
+    },
+    "bench_scalar_frame_return.php": {
+      "baseline": {
+        "n": 5,
+        "median": 0.32641530036926,
+        "min": 0.32474660873413,
+        "q1": 0.3249135017395,
+        "q3": 0.32759022712708,
+        "max": 0.32958292961121
+      },
+      "candidate": {
+        "n": 5,
+        "median": 0.33829689025879,
+        "min": 0.33429598808289,
+        "q1": 0.33647727966309,
+        "q3": 0.33990383148193,
+        "max": 0.39795875549316
+      }
+    },
+    "bench_shared_frame_release.php": {
+      "baseline": {
+        "n": 5,
+        "median": 0.60062265396118,
+        "min": 0.59651064872742,
+        "q1": 0.5982403755188,
+        "q3": 0.6007251739502,
+        "max": 0.60322880744934
+      },
+      "candidate": {
+        "n": 5,
+        "median": 0.61387491226196,
+        "min": 0.61306238174438,
+        "q1": 0.61347842216492,
+        "q3": 0.61667633056641,
+        "max": 0.64751029014587
+      }
+    },
+    "return-self.php": {
+      "baseline": {
+        "n": 5,
+        "median": 1.0767724514008,
+        "min": 1.0681071281433,
+        "q1": 1.0724551677704,
+        "q3": 1.0774967670441,
+        "max": 1.0824568271637
+      },
+      "candidate": {
+        "n": 5,
+        "median": 1.1267294883728,
+        "min": 1.1180231571198,
+        "q1": 1.1253998279572,
+        "q3": 1.1335606575012,
+        "max": 1.1402170658112
+      }
+    }
+  },
+  "cleanup": {
+    "local_checkouts": true,
+    "private_host_configured": false,
+    "source_and_exact_binary_evidence_retained": true
+  }
+}
