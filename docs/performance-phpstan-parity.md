@@ -1699,3 +1699,108 @@ build is removed after its saved executable is verified, and no private benchmar
 host is configured. Native evidence remains x86-64 only. The remaining phase
 instruction ratio is **8.54x**; parity is still open. A fresh exact profile of
 this accepted executable will attribute the remaining work before another edit.
+
+### Fresh instruction attribution
+
+An exact Callgrind run of `fcc3736f`'s accepted executable completes with
+identical PHP output and **108,942,084,130 whole-command instructions**. This is
+a profiler total, separate from native analysis-only counters. Full-call entries
+fall to 1,897,830 and receiver-side probes to 3,795,713. Their exclusive costs are
+794,901,528 and 144,368,018 instructions. The main executor still accounts for
+34,564,586,016 instructions over 274,043,536 central dispatches.
+
+Conservative machine-CFG attribution assigns 7,246,986,683 exclusive main-body
+instructions to `ReleaseTemps`, 3,093,499,192 to `Return`, 2,899,427,354 to
+`DoFcall`, 2,852,389,706 to property reads and 2,373,652,669 to CV assignment.
+Called helpers and shared tails are not included in these opcode costs. The
+38,176,316 temporary-release dispatches remain a separate structural problem;
+compiler TMP numbering is monotonic and frames above 64 slots use scanning.
+No temporary reuse or wide-frame ownership change is implemented here.
+
+The same profile counts 4,078,058 return-check calls into lexical scope,
+charging 1,014,553,077 inclusive instructions before type matching. The canonical
+return checker eagerly materializes that scope even when the visited contract
+does not consume a relative class name. The previous deferred-scope prototype
+was rejected under the former timing-first criterion despite fewer instructions;
+the next bounded slice reevaluates that general context boundary on this exact
+baseline under the current instruction priority.
+
+## Accepted checkpoint: deferred return-type scope
+
+- Outcome: absolute and scalar return checks do not derive unused lexical class
+  strings. Existing relative members acquire their lexical/called scope at use.
+- Baseline: clean `fcc3736f`, source
+  `c7764a71db1cd337aa5cc7b635b4f30db93a7808e125d572f71fc8840fdb4d52`, binary
+  `365a810a6d146c4aa28b5d239217e017ec4c032821d567f1c8f137357f49fb0e`.
+- Hypothesis: carry the supplied names or live return frame through the canonical
+  recursive type checker. Only its existing `self`, `parent` and `static` cases
+  project that context. This replaces eager work, adding no signature admission,
+  workload recognition, class-ID cache or temporary-slot optimization.
+- Semantics: retain member order, null/union/intersection behavior, coercion,
+  references, trait composition, bound closures, late-static calls, fallback
+  spelling and diagnostics. No scope borrow crosses mutation or PHP re-entry.
+- Ownership: the sole integrating task owns the canonical type-check context
+  and focused regression cases. No Value/frame/executor layout or JIT ABI change;
+  existing live-frame unsafe operations move with their original invariants.
+- Gates: existing focused return/type/callable/relative-scope cases, direct PHP
+  fixtures, relevant default/no-default/all-feature checks, all-target checks,
+  formatting and unchanged unsafe inventory. Fresh independent PGO, whole and
+  phase-only instruction comparisons, controls, code size and memory; all timing
+  regressions remain evidence. Native ARM64 measurements remain unavailable.
+- Stop rule: reject changed observable behavior, eager scope work merely moved
+  elsewhere, or no confirmed application instruction reduction. Scope allocation
+  and named-type resolution remain separate costs; this does not complete parity.
+
+The initial full-message fixture exposes pre-existing PHP diagnostic differences
+in the accepted baseline: trait methods use the trait name instead of the
+composing class, and a nullable late-static type uses union spelling. Its failed
+gate, original source and exact outputs are retained. A separate fixture checks
+scope acceptance, exception class, late alias publication and reference identity
+against PHP. The original full-message probe also remains a baseline/candidate
+equality gate; passing that gate does not resolve or count as a PHP diagnostic
+pass. Existing exact-message type tests remain unchanged. All three return-check
+callers already provide dereferenced snapshots, so deferring context does not
+change which referenced value is checked.
+
+### Deferred scope measurements
+
+The canonical checker now carries either supplied class names or the live return
+frame. Only a visited relative-name member derives its lexical/called class.
+Absolute names, scalar members and an accepted null member do not materialize
+unneeded scope strings. The checker retains recursive member order and the
+same reference, trait and bound-closure behavior; there is no class cache.
+
+Analysis-only instructions fall from **88.3428 to 87.4536 billion (-1.01%)**,
+against PHP's 10.3366 billion. Whole-command medians fall from 107.1564 to
+106.1890 billion initially and 107.1460 to 106.1858 billion in confirmation.
+Analysis times are 8.3268 versus 8.1831 seconds initially and 8.1863 versus
+8.1133 seconds in confirmation; PHP measures 0.9451 seconds in the latter
+window. Confirmation RSS is 610164 versus 610192 KiB. These are separate
+measurement scopes. All five files, twenty findings, stderr and status match.
+
+The relative-self control spends 0.39% more instructions because it does consume
+scope; the other three instruction budgets stay effectively unchanged. Confirmed
+times change by -13.54% for shared frames, -8.02% for scalar frames, +0.67% for
+property reads and -1.65% for relative self. The unchanged instruction budgets
+and varying native times remain distinct evidence; they do not multiply the
+application's roughly one-percent instruction win. All samples are retained in
+[the deferred-scope packet](performance-phpstan-deferred-type-scope-samples.json).
+
+The integrating task accepts this instruction reduction and its explicit
+relative-self tradeoff. Validation records **343 focused test executions**
+across default, no-default and all features, two exact PHP differential programs,
+unchanged baseline full-message diagnostics, formatting, unchanged unsafe
+inventory and all-target/all-feature compilation. The initial PHP diagnostic
+failure remains unresolved evidence and is not counted as a pass.
+
+The exact source is
+`5cee45d9441db00185b852ddab3c6fbae898e4179013cdb8ec2a797c44541db4`;
+the executable is
+`33e760c108946c16830069e255c89f3fdce754893e71eff4e9854b1c21984cf4`.
+Main executor size changes from 392365 to 392413 bytes; return preparation
+shrinks from 878 to 387 bytes. Fresh PGO uses the same independent 18 programs;
+instrumented and final builds take 259.85 and 197.50 seconds. The aggregate
+peak is 4,799,823,872 bytes, with no OOM or timeout. Both local checkouts run
+cleanup; the exact executable and source are retained after disposable build
+removal. No private benchmark host is configured. Native measurements remain
+x86-64 only. The remaining analysis instruction gap is **8.46x**.

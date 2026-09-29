@@ -1014,6 +1014,91 @@ fn check_type_hint_in_scopes(
     callee_class: Option<&str>,
     called_class: Option<&str>,
 ) -> bool {
+    check_type_hint_with_scope(
+        val,
+        hint,
+        eg,
+        strict,
+        &TypeCheckScope::Classes {
+            lexical: callee_class,
+            called: called_class,
+        },
+    )
+}
+
+/// Scope is an input to relative class names, not to every type check. Carry
+/// its source through nullable/union/intersection recursion without resolving
+/// names that no visited member consumes.
+enum TypeCheckScope<'a> {
+    Classes {
+        lexical: Option<&'a str>,
+        called: Option<&'a str>,
+    },
+    Return {
+        frame: *mut ExecuteData,
+        fallback: Option<&'a str>,
+    },
+}
+
+impl TypeCheckScope<'_> {
+    fn lexical_class(&self, eg: &ExecutorGlobals) -> Option<Cow<'_, str>> {
+        match self {
+            Self::Classes { lexical, .. } => lexical.map(Cow::Borrowed),
+            Self::Return { frame, fallback } => get_caller_class(*frame, eg)
+                .map(Cow::Owned)
+                .or_else(|| fallback.map(Cow::Borrowed)),
+        }
+    }
+
+    fn called_class<'a>(&'a self, eg: &'a ExecutorGlobals) -> Option<&'a str> {
+        let frame = match self {
+            Self::Classes { called, .. } => return *called,
+            Self::Return { frame, .. } => *frame,
+        };
+        // SAFETY: return checks carry the same live callee frame as canonical
+        // Return execution. No scope probe invokes PHP or retires that frame.
+        let common = unsafe { &*(*frame).func };
+        let receiver_cv = if common.sig.this_offset == 1 {
+            Some(0)
+        } else if common.fn_type == FunctionType::User {
+            // SAFETY: the checked tag identifies the request-owned user
+            // function whose common header is stored in this live frame.
+            let function = unsafe { &*((*frame).func as *const UserFunction) };
+            function
+                .op_array
+                .all_cvs
+                .iter()
+                .find(|(_, name)| name == "this")
+                .map(|(index, _)| *index)
+        } else {
+            None
+        };
+        let receiver_scope = receiver_cv.and_then(|index| {
+            // SAFETY: the signature or compiler CV table proves this slot is
+            // part of the live frame. The probe is immutable and non-reentrant.
+            let receiver = unsafe { &*(*frame).cv(index) };
+            match receiver.value_type() {
+                // SAFETY: the Object tag guarantees a live object payload;
+                // its immutable class name outlives this synchronous check.
+                ValueType::Object => Some(unsafe { receiver.object_class_name_unchecked() }),
+                ValueType::Closure => Some("Closure"),
+                _ => None,
+            }
+        });
+        receiver_scope.or_else(|| {
+            eg.class_by_id(late_static_call_class_id(eg, frame))
+                .map(|class| class.name.as_str())
+        })
+    }
+}
+
+fn check_type_hint_with_scope(
+    val: &Value,
+    hint: &ParamTypeHint,
+    eg: &ExecutorGlobals,
+    strict: bool,
+    scope: &TypeCheckScope<'_>,
+) -> bool {
     use crate::vm::function::ParamTypeHint;
     match hint {
         ParamTypeHint::None => true,
@@ -1066,23 +1151,22 @@ fn check_type_hint_in_scopes(
                     return true;
                 }
                 // `self`/`parent` are lexical; `static` is the runtime called class.
-                let resolved = match class_name.as_str() {
-                    "self" => callee_class.unwrap_or(class_name.as_str()),
-                    "static" => called_class.unwrap_or(class_name.as_str()),
-                    "parent" => {
-                        if let Some(decl) = callee_class {
-                            if let Some(class_def) = eg.class_table.get(decl) {
-                                class_def.parent.as_deref().unwrap_or(class_name.as_str())
-                            } else {
-                                class_name.as_str()
-                            }
-                        } else {
-                            class_name.as_str()
-                        }
+                match class_name.as_str() {
+                    "self" => {
+                        let lexical = scope.lexical_class(eg);
+                        eg.object_is_a(&obj, lexical.as_deref().unwrap_or(class_name))
                     }
-                    _ => class_name.as_str(),
-                };
-                eg.object_is_a(&obj, resolved)
+                    "static" => eg.object_is_a(&obj, scope.called_class(eg).unwrap_or(class_name)),
+                    "parent" => {
+                        let lexical = scope.lexical_class(eg);
+                        let parent = lexical
+                            .as_deref()
+                            .and_then(|decl| eg.class_table.get(decl))
+                            .and_then(|class| class.parent.as_deref());
+                        eg.object_is_a(&obj, parent.unwrap_or(class_name))
+                    }
+                    _ => eg.object_is_a(&obj, class_name),
+                }
             } else {
                 false
             }
@@ -1093,7 +1177,7 @@ fn check_type_hint_in_scopes(
             } else if matches!(inner.as_ref(), ParamTypeHint::None) {
                 false
             } else {
-                check_type_hint_in_scopes(val, inner, eg, strict, callee_class, called_class)
+                check_type_hint_with_scope(val, inner, eg, strict, scope)
             }
         }
         ParamTypeHint::Void => false,
@@ -1101,10 +1185,10 @@ fn check_type_hint_in_scopes(
         ParamTypeHint::Never => false,
         ParamTypeHint::Union(types) => types
             .iter()
-            .any(|t| check_type_hint_in_scopes(val, t, eg, strict, callee_class, called_class)),
+            .any(|t| check_type_hint_with_scope(val, t, eg, strict, scope)),
         ParamTypeHint::Intersection(types) => types
             .iter()
-            .all(|t| check_type_hint_in_scopes(val, t, eg, strict, callee_class, called_class)),
+            .all(|t| check_type_hint_with_scope(val, t, eg, strict, scope)),
     }
 }
 
@@ -2123,41 +2207,16 @@ fn check_return_type_hint(
     frame: *mut ExecuteData,
     callee_class: Option<&str>,
 ) -> bool {
-    let lexical_scope = get_caller_class(frame, eg);
-    let lexical_scope = lexical_scope.as_deref().or(callee_class);
-    if !hint.uses_late_static() {
-        return check_type_hint(value, hint, eg, strict, lexical_scope);
-    }
-    let common = unsafe { &*(*frame).func };
-    let receiver_cv = if common.sig.this_offset == 1 {
-        Some(0)
-    } else if common.fn_type == FunctionType::User {
-        // SAFETY: `frame` is the live callee frame already dereferenced above,
-        // and the checked function tag guarantees its common header belongs to
-        // a request-owned `UserFunction` for the duration of this return check.
-        let function = unsafe { &*((*frame).func as *const UserFunction) };
-        function
-            .op_array
-            .all_cvs
-            .iter()
-            .find(|(_, name)| name == "this")
-            .map(|(index, _)| *index)
-    } else {
-        None
-    };
-    let receiver_scope = receiver_cv.and_then(|index| {
-        let receiver = unsafe { &*(*frame).cv(index) };
-        match receiver.value_type() {
-            ValueType::Object => Some(unsafe { receiver.object_class_name_unchecked() }),
-            ValueType::Closure => Some("Closure"),
-            _ => None,
-        }
-    });
-    let called_scope = receiver_scope.or_else(|| {
-        eg.class_by_id(late_static_call_class_id(eg, frame))
-            .map(|class| class.name.as_str())
-    });
-    check_type_hint_in_scopes(value, hint, eg, strict, lexical_scope, called_scope)
+    check_type_hint_with_scope(
+        value.dereferenced(),
+        hint,
+        eg,
+        strict,
+        &TypeCheckScope::Return {
+            frame,
+            fallback: callee_class,
+        },
+    )
 }
 
 /// Validate exact argument storage for the compact scalar call protocol.
