@@ -227,8 +227,17 @@ fn invoke(
                 }
             }
             let arguments: Vec<_> = arguments.values().cloned().collect();
-            call_resolved_with_values_from(eg, &resolved, &arguments, caller, file, line, true)
-                .map(|_| ())
+            call_resolved_with_values_from(
+                eg,
+                &resolved,
+                &arguments,
+                caller,
+                file,
+                line,
+                true,
+                crate::vm::execute::CallbackReturnPolicy::Function,
+            )
+            .map(|_| ())
         }
         None => Ok(()),
     }

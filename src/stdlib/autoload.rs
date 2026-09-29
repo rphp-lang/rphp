@@ -520,6 +520,7 @@ fn invoke_entry(
             &source.file,
             source.line,
             false,
+            crate::vm::execute::CallbackReturnPolicy::Function,
         )?
     } else {
         call_resolved_with_values(eg, &resolved, std::slice::from_ref(class_name))?

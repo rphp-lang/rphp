@@ -9,6 +9,10 @@ starts again from the unchanged baseline. This experiment starts from
 [reusable-workspace variants](performance-release-workspace.md) are preserved
 separately and their runtime changes were removed before this implementation.
 
+The later corrected redesign is accepted separately in
+[the parity checkpoint](performance-phpstan-parity.md#accepted-checkpoint-committed-frame-owner-retirement).
+The three variants described here remain rejected historical evidence.
+
 ## Measured problem and change
 
 The [ordinary-call reproduction](performance-ordinary-value-flow.md) pays

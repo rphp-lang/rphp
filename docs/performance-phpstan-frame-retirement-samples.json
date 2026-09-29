@@ -1,0 +1,1502 @@
+{
+  "status": "accepted partial checkpoint with explicit deep-release phase tradeoff; parity remains active",
+  "baseline_commit": "3290af6b61439ac31e1e68efae18134bf14aefe5",
+  "candidate_source_sha256": "b8cb2c2f7ff7bd18c40e53fb8e7d43cc573ad61995fe96578c6daa9da4f863db",
+  "profile": "max-perf, default features, debug=line-tables-only on both sides",
+  "architecture": "x86_64; ARM64 native timing unavailable",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "binaries": {
+    "baseline": "ceb9508f7aec4149e3f01d2aadddf4e5ff7b1510afbd64f6085e08e20ecc05a6",
+    "candidate": "75e42cf3d31b455e9a617ac6931b78fd0f545aa1d588add160796d21c71eae44",
+    "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "binary_sizes": {
+    "baseline": 84037064,
+    "candidate": 84238496
+  },
+  "protocol": {
+    "cpu": 2,
+    "hardware_event": "instructions:u",
+    "application": "PHP, baseline, candidate, candidate, baseline, PHP; each receives fresh analysis storage; warm OS file cache",
+    "phase": "analysis timer excludes startup; hardware instructions include whole command and common time wrapper",
+    "output": "Five files, twenty findings, stdout, stderr and exit 1 match",
+    "holdouts": "One warmup per RPHP variant and three seeded interleaved pairs",
+    "confirmation": "Five seeded interleaved pairs; all valid samples retained",
+    "outliers": "none excluded"
+  },
+  "application": [
+    {
+      "runtime": "php",
+      "round": 0,
+      "instructions": 15473856972,
+      "analysis_seconds": 0.913316011,
+      "wall_seconds": 1.3337189520025277,
+      "max_rss_kib": 177812,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "baseline",
+      "round": 1,
+      "instructions": 138709433493,
+      "analysis_seconds": 10.81938076,
+      "wall_seconds": 13.071189777001564,
+      "max_rss_kib": 598976,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "instructions": 130607815737,
+      "analysis_seconds": 10.285128593,
+      "wall_seconds": 12.510677290003514,
+      "max_rss_kib": 598760,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": 3,
+      "instructions": 130585907310,
+      "analysis_seconds": 10.114682674,
+      "wall_seconds": 12.320917546996498,
+      "max_rss_kib": 598640,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "baseline",
+      "round": 4,
+      "instructions": 138694094172,
+      "analysis_seconds": 10.737963676,
+      "wall_seconds": 12.998883615000523,
+      "max_rss_kib": 598968,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    },
+    {
+      "runtime": "php",
+      "round": 5,
+      "instructions": 15473853888,
+      "analysis_seconds": 0.930224895,
+      "wall_seconds": 1.355975190999743,
+      "max_rss_kib": 177712,
+      "counter_running_percent": 100.0,
+      "output_equal": true
+    }
+  ],
+  "holdouts": [
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.11648797988892,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.059538125991821,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.12293910980225,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.059698104858398,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.059398412704468,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.11982846260071,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.034077882766724,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.032154321670532,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.03347110748291,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.036029577255249,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.032512903213501,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.034144163131714,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.25732636451721,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.2443208694458,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.2433762550354,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.21917915344238,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.24882411956787,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.21732664108276,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.024500370025635,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.024685144424438,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.024700164794922,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.024481773376465,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.024207830429077,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.024760723114014,
+      "output": "50000040000000"
+    }
+  ],
+  "micro_instructions": {
+    "complete": true,
+    "raw": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 0,
+        "runtime": "baseline",
+        "instructions": 13954124,
+        "seconds": 4.5299530029297e-06
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 0,
+        "runtime": "candidate",
+        "instructions": 13952613,
+        "seconds": 5.7220458984375e-06
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 0,
+        "runtime": "php",
+        "instructions": 28080302,
+        "seconds": 7.4148178100586e-05
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 5000000,
+        "runtime": "baseline",
+        "instructions": 24888660916,
+        "seconds": 1.1911013126373
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 5000000,
+        "runtime": "candidate",
+        "instructions": 13788657168,
+        "seconds": 0.60487031936646
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "iterations": 5000000,
+        "runtime": "php",
+        "instructions": 2608083362,
+        "seconds": 0.120521068573
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 0,
+        "runtime": "baseline",
+        "instructions": 13937562,
+        "seconds": 4.7683715820312e-06
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 0,
+        "runtime": "candidate",
+        "instructions": 13935453,
+        "seconds": 5.7220458984375e-06
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 0,
+        "runtime": "php",
+        "instructions": 28073433,
+        "seconds": 4.4107437133789e-05
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 5000000,
+        "runtime": "baseline",
+        "instructions": 8370646595,
+        "seconds": 0.3376030921936
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 5000000,
+        "runtime": "candidate",
+        "instructions": 8285644249,
+        "seconds": 0.32296180725098
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "iterations": 5000000,
+        "runtime": "php",
+        "instructions": 2005577191,
+        "seconds": 0.085153102874756
+      }
+    ],
+    "incremental": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "instructions_per_iteration": 4974.9413584
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "instructions_per_iteration": 2754.940911
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "php",
+        "instructions_per_iteration": 516.000612
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "instructions_per_iteration": 1671.3418066
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "instructions_per_iteration": 1654.3417592
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "php",
+        "instructions_per_iteration": 395.5007516
+      }
+    ],
+    "protocol": "One native instructions:u count at zero and five million iterations; same source except loop bound; CPU 2 and identical environment; not a timing distribution"
+  },
+  "scalar_confirmation": [
+    {
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.34743618965149,
+      "cycles:u": 1862926886,
+      "instructions:u": 8370645150,
+      "branches:u": 1732876751,
+      "branch-misses:u": 446875
+    },
+    {
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.32149696350098,
+      "cycles:u": 1722111359,
+      "instructions:u": 8285644410,
+      "branches:u": 1727876684,
+      "branch-misses:u": 446529
+    },
+    {
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.3180832862854,
+      "cycles:u": 1702308300,
+      "instructions:u": 8285647417,
+      "branches:u": 1727877647,
+      "branch-misses:u": 446288
+    },
+    {
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.33617305755615,
+      "cycles:u": 1803887684,
+      "instructions:u": 8370647042,
+      "branches:u": 1732877444,
+      "branch-misses:u": 445570
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.32848167419434,
+      "cycles:u": 1759863846,
+      "instructions:u": 8285644297,
+      "branches:u": 1727876660,
+      "branch-misses:u": 447485
+    },
+    {
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.33905863761902,
+      "cycles:u": 1822103912,
+      "instructions:u": 8370641586,
+      "branches:u": 1732876164,
+      "branch-misses:u": 446579
+    },
+    {
+      "runtime": "candidate",
+      "round": 3,
+      "seconds": 0.32498455047607,
+      "cycles:u": 1743623609,
+      "instructions:u": 8285643875,
+      "branches:u": 1727876520,
+      "branch-misses:u": 446758
+    },
+    {
+      "runtime": "baseline",
+      "round": 3,
+      "seconds": 0.3402259349823,
+      "cycles:u": 1822059179,
+      "instructions:u": 8370647549,
+      "branches:u": 1732877675,
+      "branch-misses:u": 664113
+    },
+    {
+      "runtime": "candidate",
+      "round": 4,
+      "seconds": 0.3239381313324,
+      "cycles:u": 1735413272,
+      "instructions:u": 8285646975,
+      "branches:u": 1727877413,
+      "branch-misses:u": 454838
+    },
+    {
+      "runtime": "baseline",
+      "round": 4,
+      "seconds": 0.34380602836609,
+      "cycles:u": 1848860789,
+      "instructions:u": 8370645745,
+      "branches:u": 1732876965,
+      "branch-misses:u": 446544
+    }
+  ],
+  "deep_controls": [
+    {
+      "runtime": "candidate",
+      "round": 0,
+      "nodes": 2048,
+      "build_seconds": 0.0008385181427002,
+      "release_seconds": 0.0031781196594238
+    },
+    {
+      "runtime": "baseline",
+      "round": 0,
+      "nodes": 2048,
+      "build_seconds": 0.00089454650878906,
+      "release_seconds": 0.0029916763305664
+    },
+    {
+      "runtime": "baseline",
+      "round": 1,
+      "nodes": 2048,
+      "build_seconds": 0.00088906288146973,
+      "release_seconds": 0.0029788017272949
+    },
+    {
+      "runtime": "candidate",
+      "round": 1,
+      "nodes": 2048,
+      "build_seconds": 0.00096774101257324,
+      "release_seconds": 0.0032150745391846
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "nodes": 2048,
+      "build_seconds": 0.00079798698425293,
+      "release_seconds": 0.0031335353851318
+    },
+    {
+      "runtime": "baseline",
+      "round": 2,
+      "nodes": 2048,
+      "build_seconds": 0.00088906288146973,
+      "release_seconds": 0.003105640411377
+    },
+    {
+      "runtime": "baseline",
+      "round": 3,
+      "nodes": 2048,
+      "build_seconds": 0.00087189674377441,
+      "release_seconds": 0.0030407905578613
+    },
+    {
+      "runtime": "candidate",
+      "round": 3,
+      "nodes": 2048,
+      "build_seconds": 0.00081968307495117,
+      "release_seconds": 0.0031411647796631
+    },
+    {
+      "runtime": "baseline",
+      "round": 4,
+      "nodes": 2048,
+      "build_seconds": 0.00088167190551758,
+      "release_seconds": 0.0029900074005127
+    },
+    {
+      "runtime": "candidate",
+      "round": 4,
+      "nodes": 2048,
+      "build_seconds": 0.00078845024108887,
+      "release_seconds": 0.0031049251556396
+    },
+    {
+      "runtime": "baseline",
+      "round": 0,
+      "nodes": 8192,
+      "build_seconds": 0.0031652450561523,
+      "release_seconds": 0.012753248214722
+    },
+    {
+      "runtime": "candidate",
+      "round": 0,
+      "nodes": 8192,
+      "build_seconds": 0.0026969909667969,
+      "release_seconds": 0.01313853263855
+    },
+    {
+      "runtime": "baseline",
+      "round": 1,
+      "nodes": 8192,
+      "build_seconds": 0.0030460357666016,
+      "release_seconds": 0.012716770172119
+    },
+    {
+      "runtime": "candidate",
+      "round": 1,
+      "nodes": 8192,
+      "build_seconds": 0.0026698112487793,
+      "release_seconds": 0.012894630432129
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "nodes": 8192,
+      "build_seconds": 0.0025858879089355,
+      "release_seconds": 0.012760400772095
+    },
+    {
+      "runtime": "baseline",
+      "round": 2,
+      "nodes": 8192,
+      "build_seconds": 0.0030124187469482,
+      "release_seconds": 0.012340068817139
+    },
+    {
+      "runtime": "baseline",
+      "round": 3,
+      "nodes": 8192,
+      "build_seconds": 0.0030107498168945,
+      "release_seconds": 0.012159109115601
+    },
+    {
+      "runtime": "candidate",
+      "round": 3,
+      "nodes": 8192,
+      "build_seconds": 0.0027124881744385,
+      "release_seconds": 0.012895107269287
+    },
+    {
+      "runtime": "baseline",
+      "round": 4,
+      "nodes": 8192,
+      "build_seconds": 0.0029666423797607,
+      "release_seconds": 0.012526750564575
+    },
+    {
+      "runtime": "candidate",
+      "round": 4,
+      "nodes": 8192,
+      "build_seconds": 0.0027360916137695,
+      "release_seconds": 0.013053178787231
+    }
+  ],
+  "deep_confirmation": {
+    "complete": true,
+    "cpu": 2,
+    "seed": 290948,
+    "samples": [
+      {
+        "runtime": "baseline",
+        "round": 0,
+        "nodes": 16384,
+        "build_seconds": 0.0062353610992432,
+        "release_seconds": 0.02470850944519,
+        "instructions:u": 384922506,
+        "cycles:u": 140722200
+      },
+      {
+        "runtime": "candidate",
+        "round": 0,
+        "nodes": 16384,
+        "build_seconds": 0.0055179595947266,
+        "release_seconds": 0.025387525558472,
+        "instructions:u": 378684874,
+        "cycles:u": 140057369
+      },
+      {
+        "runtime": "candidate",
+        "round": 1,
+        "nodes": 16384,
+        "build_seconds": 0.0058188438415527,
+        "release_seconds": 0.025405168533325,
+        "instructions:u": 378679992,
+        "cycles:u": 140143304
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "nodes": 16384,
+        "build_seconds": 0.0061464309692383,
+        "release_seconds": 0.024772882461548,
+        "instructions:u": 384922402,
+        "cycles:u": 141532973
+      },
+      {
+        "runtime": "baseline",
+        "round": 2,
+        "nodes": 16384,
+        "build_seconds": 0.0061881542205811,
+        "release_seconds": 0.024851083755493,
+        "instructions:u": 384904011,
+        "cycles:u": 143168874
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "nodes": 16384,
+        "build_seconds": 0.005608081817627,
+        "release_seconds": 0.025137424468994,
+        "instructions:u": 378673791,
+        "cycles:u": 138470478
+      },
+      {
+        "runtime": "baseline",
+        "round": 3,
+        "nodes": 16384,
+        "build_seconds": 0.0062568187713623,
+        "release_seconds": 0.023998975753784,
+        "instructions:u": 384915290,
+        "cycles:u": 139134485
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "nodes": 16384,
+        "build_seconds": 0.0063948631286621,
+        "release_seconds": 0.025307178497314,
+        "instructions:u": 378680666,
+        "cycles:u": 145033132
+      },
+      {
+        "runtime": "candidate",
+        "round": 4,
+        "nodes": 16384,
+        "build_seconds": 0.0055208206176758,
+        "release_seconds": 0.025505542755127,
+        "instructions:u": 378686742,
+        "cycles:u": 141492187
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "nodes": 16384,
+        "build_seconds": 0.0062611103057861,
+        "release_seconds": 0.025400638580322,
+        "instructions:u": 384906962,
+        "cycles:u": 145408304
+      }
+    ]
+  },
+  "checks": [
+    {
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "HEAD"
+      ],
+      "exit": 0,
+      "seconds": 3.518853463996493,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--test",
+        "e2e_frame_retirement",
+        "--test",
+        "e2e_release_plan"
+      ],
+      "exit": 0,
+      "seconds": 51.95354722200136,
+      "test_results": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--no-default-features",
+        "--test",
+        "e2e_frame_retirement",
+        "--test",
+        "e2e_release_plan",
+        "--test",
+        "e2e_object_release_boundaries"
+      ],
+      "exit": 0,
+      "seconds": 47.94735431200388,
+      "test_results": [
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_frame_retirement",
+        "--test",
+        "e2e_release_plan",
+        "--test",
+        "e2e_object_release_boundaries",
+        "--test",
+        "e2e_frameless_call_cleanup",
+        "--test",
+        "e2e_object_foreach_return_cleanup",
+        "--test",
+        "e2e_fiber_execution_boundaries"
+      ],
+      "exit": 0,
+      "seconds": 54.0095877309941,
+      "test_results": [
+        "test result: ok. 11 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 7 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+        "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_generators",
+        "force_close"
+      ],
+      "exit": 0,
+      "seconds": 0.5646497830020962,
+      "test_results": [
+        "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 66 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--profile",
+        "dev-fast",
+        "--all-targets",
+        "--all-features"
+      ],
+      "exit": 0,
+      "seconds": 17.243554971995763,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 2.317722230000072,
+      "test_results": []
+    },
+    {
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "HEAD"
+      ],
+      "exit": 0,
+      "seconds": 3.5182586000009906,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_user_stream_filters",
+        "resource_callbacks_follow_alias_container_and_exception_boundaries",
+        "--",
+        "--exact"
+      ],
+      "exit": 0,
+      "seconds": 0.514523776997521,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_user_stream_filters",
+        "callback_resources_in_shallow_objects_keep_last_alias_order",
+        "--",
+        "--exact"
+      ],
+      "exit": 0,
+      "seconds": 0.11407450900151161,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_user_stream_filters",
+        "closing_inside_filter_is_rejected_without_invalidating_stream",
+        "--",
+        "--exact"
+      ],
+      "exit": 0,
+      "seconds": 0.11390322400256991,
+      "test_results": [
+        "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 36 filtered out; finished in 0.00s"
+      ]
+    }
+  ],
+  "test_executions": 95,
+  "php_differentials": {
+    "cases": 22,
+    "candidate_matches": true,
+    "baseline_failures": [
+      "aliases.php",
+      "array.php",
+      "direct.php",
+      "fixture-10.php",
+      "fixture-12.php",
+      "fixture-13.php",
+      "fixture-14.php",
+      "fixture-15.php",
+      "fixture-2.php",
+      "fixture-3.php",
+      "fixture-5.php",
+      "fixture-6.php",
+      "fixture-9.php",
+      "nested.php"
+    ]
+  },
+  "aggregate_boundaries": {
+    "build": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 239.65188543200202,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3682291712,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "gate": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 200.26512788899709,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4225437696,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "controls": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 124.02572843199596,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 185606144,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "accounting": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 7.2906278949958505,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 179707904,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "cleanup": {
+    "local": true,
+    "private_host_configured": false,
+    "active_cargo_targets": "Only the reusable exact-comparison build and focused-test targets retained; source snapshots and evidence preserved"
+  },
+  "code_size": {
+    "main_executor_baseline_bytes": 341816,
+    "main_executor_candidate_bytes": 341653
+  },
+  "rejected_entry": {
+    "source_sha256": "ed80013bf7ed58099d0d238e930ba1e899c0f881d2796de841dc9a6e94f5adbe",
+    "binary_sha256": "4640d062d2c022142ac6ed22cd4b17b24205218934cf46c7d61f77bff0070f5b",
+    "reason": "Scalar time regression 15-24% despite unchanged instructions; hardware frontend, op-cache and branch counters attribute native execution loss",
+    "application": [
+      {
+        "runtime": "php",
+        "round": 0,
+        "instructions": 15474004036,
+        "analysis_seconds": 0.93370986,
+        "wall_seconds": 1.3650725390034495,
+        "max_rss_kib": 177616,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "instructions": 138694135550,
+        "analysis_seconds": 10.74692893,
+        "wall_seconds": 13.001879920004285,
+        "max_rss_kib": 598708,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "instructions": 130837909746,
+        "analysis_seconds": 10.04179883,
+        "wall_seconds": 12.268171715993958,
+        "max_rss_kib": 598692,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "instructions": 130835382681,
+        "analysis_seconds": 10.139829636,
+        "wall_seconds": 12.393736308004009,
+        "max_rss_kib": 598656,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "instructions": 138705221544,
+        "analysis_seconds": 10.851089716,
+        "wall_seconds": 13.117270806003944,
+        "max_rss_kib": 598744,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "php",
+        "round": 5,
+        "instructions": 15474003419,
+        "analysis_seconds": 0.939280033,
+        "wall_seconds": 1.3660009320010431,
+        "max_rss_kib": 177460,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      }
+    ],
+    "holdouts": [
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.11628246307373,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.062179565429688,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.11604738235474,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.062299728393555,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.06211519241333,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_shared_frame_release.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.11628079414368,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.033420085906982,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.0397789478302,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.034727573394775,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.040078163146973,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.040923595428467,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_scalar_frame_return.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.034653425216675,
+        "output": "4500000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.2271523475647,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.2429187297821,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.24694061279297,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.22709989547729,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.24274063110352,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_foreach_declared_property_reads.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.2263035774231,
+        "output": "48640000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "candidate",
+        "round": 0,
+        "seconds": 0.024514436721802,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "baseline",
+        "round": 0,
+        "seconds": 0.024471759796143,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "candidate",
+        "round": 1,
+        "seconds": 0.024457931518555,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "baseline",
+        "round": 1,
+        "seconds": 0.024919033050537,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "candidate",
+        "round": 2,
+        "seconds": 0.024529218673706,
+        "output": "50000040000000"
+      },
+      {
+        "case": "bench_scalar_method_mixed_native_loop.php",
+        "runtime": "baseline",
+        "round": 2,
+        "seconds": 0.02431058883667,
+        "output": "50000040000000"
+      }
+    ],
+    "scalar_hardware": {
+      "complete": true,
+      "rows": [
+        {
+          "group": 0,
+          "run": 0,
+          "runtime": "baseline",
+          "seconds": 0.68590521812439,
+          "counts": {
+            "cycles": 3681364679,
+            "instructions": 16727353650,
+            "branches": 3463218882,
+            "branch-misses": 1164469
+          }
+        },
+        {
+          "group": 0,
+          "run": 1,
+          "runtime": "candidate",
+          "seconds": 0.82999420166016,
+          "counts": {
+            "cycles": 4479538537,
+            "instructions": 16727360642,
+            "branches": 3463220858,
+            "branch-misses": 5468087
+          }
+        },
+        {
+          "group": 1,
+          "run": 0,
+          "runtime": "baseline",
+          "seconds": 0.69574427604675,
+          "counts": {
+            "cycles": 3726255327,
+            "op_cache_hit_miss.op_cache_hit": 3376938364,
+            "op_cache_hit_miss.op_cache_miss": 881538,
+            "de_src_op_disp.decoder": 5115628
+          }
+        },
+        {
+          "group": 1,
+          "run": 1,
+          "runtime": "candidate",
+          "seconds": 0.80755472183228,
+          "counts": {
+            "cycles": 4351599799,
+            "op_cache_hit_miss.op_cache_hit": 3426340119,
+            "op_cache_hit_miss.op_cache_miss": 11788836,
+            "de_src_op_disp.decoder": 93567706
+          }
+        },
+        {
+          "group": 2,
+          "run": 0,
+          "runtime": "baseline",
+          "seconds": 0.68513631820679,
+          "counts": {
+            "cycles": 3675426323,
+            "ic_tag_hit_miss.instruction_cache_miss": 22338794,
+            "bp_l1_tlb_miss_l2_tlb_hit": 23573,
+            "bp_l1_tlb_miss_l2_tlb_miss.all": 2333
+          }
+        },
+        {
+          "group": 2,
+          "run": 1,
+          "runtime": "candidate",
+          "seconds": 0.82914733886719,
+          "counts": {
+            "cycles": 4480682583,
+            "ic_tag_hit_miss.instruction_cache_miss": 1727885,
+            "bp_l1_tlb_miss_l2_tlb_hit": 20187,
+            "bp_l1_tlb_miss_l2_tlb_miss.all": 2318
+          }
+        },
+        {
+          "group": 3,
+          "run": 0,
+          "runtime": "baseline",
+          "seconds": 0.6779305934906,
+          "counts": {
+            "cycles": 3631891239,
+            "de_no_dispatch_per_slot.no_ops_from_frontend": 5125978225,
+            "de_no_dispatch_per_slot.backend_stalls": 975837122,
+            "ex_no_retire.empty": 5257301
+          }
+        },
+        {
+          "group": 3,
+          "run": 1,
+          "runtime": "candidate",
+          "seconds": 0.82318949699402,
+          "counts": {
+            "cycles": 4433523895,
+            "de_no_dispatch_per_slot.no_ops_from_frontend": 9186717777,
+            "de_no_dispatch_per_slot.backend_stalls": 1036653507,
+            "ex_no_retire.empty": 261609840
+          }
+        }
+      ]
+    }
+  },
+  "tradeoff": "Deep destructor release phase is 2.48% slower at 16384 nodes; build plus release median is 0.27% slower, and whole-program instructions improve 1.62%. Correctly completing each detached destructor callback now costs 233 instructions per node in the 2048-node Callgrind profile; the baseline omitted that semantic boundary. Retain this control in later work.",
+  "machine": {
+    "cpu": "AMD Ryzen 9 7950X",
+    "architecture": "x86_64",
+    "os": "Linux 7.0.0-34-generic",
+    "memory_bytes": 32699998208,
+    "governor": "performance",
+    "boost": "1"
+  },
+  "php_configuration": {
+    "version": "8.5.11",
+    "zts": false,
+    "debug": false,
+    "opcache.enable_cli": "0",
+    "opcache.jit": "disable",
+    "extensions": [
+      "Core",
+      "date",
+      "lexbor",
+      "openssl",
+      "pcre",
+      "zlib",
+      "filter",
+      "hash",
+      "json",
+      "uri",
+      "Zend OPcache",
+      "pcntl",
+      "random",
+      "Reflection",
+      "SPL",
+      "session",
+      "standard",
+      "sodium",
+      "libxml",
+      "PDO",
+      "calendar",
+      "ctype",
+      "exif",
+      "FFI",
+      "fileinfo",
+      "ftp",
+      "gettext",
+      "iconv",
+      "Phar",
+      "posix",
+      "readline",
+      "shmop",
+      "sockets",
+      "sysvmsg",
+      "sysvsem",
+      "sysvshm",
+      "tokenizer"
+    ]
+  },
+  "build_flags": {
+    "profile": "max-perf",
+    "lto": "fat",
+    "codegen_units": 1,
+    "debug": "line-tables-only",
+    "function_alignment": "llvm-args=--align-all-functions=6",
+    "features": "default",
+    "tree_at_build": "baseline named commit; candidate dirty against that commit and identified by complete Rust source fingerprint; verified source is committed by this checkpoint"
+  },
+  "application_summary": {
+    "baseline": {
+      "instructions": {
+        "n": 2,
+        "median": 138701763832.5,
+        "p10": 138695628104.1,
+        "p90": 138707899560.9
+      },
+      "analysis_seconds": {
+        "n": 2,
+        "median": 10.778672218,
+        "p10": 10.7461053844,
+        "p90": 10.8112390516
+      },
+      "wall_seconds": {
+        "n": 2,
+        "median": 13.035036696001043,
+        "p10": 13.006114231200627,
+        "p90": 13.06395916080146
+      },
+      "max_rss_kib": {
+        "n": 2,
+        "median": 598972.0,
+        "p10": 598968.8,
+        "p90": 598975.2
+      }
+    },
+    "candidate": {
+      "instructions": {
+        "n": 2,
+        "median": 130596861523.5,
+        "p10": 130588098152.7,
+        "p90": 130605624894.3
+      },
+      "analysis_seconds": {
+        "n": 2,
+        "median": 10.1999056335,
+        "p10": 10.1317272659,
+        "p90": 10.2680840011
+      },
+      "wall_seconds": {
+        "n": 2,
+        "median": 12.415797418500006,
+        "p10": 12.3398935212972,
+        "p90": 12.491701315702812
+      },
+      "max_rss_kib": {
+        "n": 2,
+        "median": 598700.0,
+        "p10": 598652.0,
+        "p90": 598748.0
+      }
+    },
+    "php": {
+      "instructions": {
+        "n": 2,
+        "median": 15473855430.0,
+        "p10": 15473854196.4,
+        "p90": 15473856663.6
+      },
+      "analysis_seconds": {
+        "n": 2,
+        "median": 0.921770453,
+        "p10": 0.9150068994,
+        "p90": 0.9285340066000001
+      },
+      "wall_seconds": {
+        "n": 2,
+        "median": 1.3448470715011354,
+        "p10": 1.3359445759022492,
+        "p90": 1.3537495671000215
+      },
+      "max_rss_kib": {
+        "n": 2,
+        "median": 177762.0,
+        "p10": 177722.0,
+        "p90": 177802.0
+      }
+    }
+  }
+}

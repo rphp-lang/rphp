@@ -10961,14 +10961,14 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     }
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
-                        run_frame_destructors(eg, frame)?;
+                        run_return_frame_destructors(eg, frame)?;
                         complete_object_construction(eg, frame);
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11148,14 +11148,14 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     }
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
-                        run_frame_destructors(eg, frame)?;
+                        run_return_frame_destructors(eg, frame)?;
                         complete_object_construction(eg, frame);
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11536,10 +11536,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
 
                     let prev = unsafe { (*frame).prev_execute_data };
                     if prev.is_null() {
-                        run_frame_destructors(eg, frame)?;
+                        run_return_frame_destructors(eg, frame)?;
                         return Ok(());
                     }
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11600,7 +11600,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 }
                 // Recursive execute_ex boundary: callee done → return to caller's macro loop
                 if frame == initial_frame {
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11608,7 +11608,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     return Ok(());
                 }
 
-                run_frame_destructors(eg, frame)?;
+                run_return_frame_destructors(eg, frame)?;
                 complete_object_construction(eg, frame);
                 eg.current_execute_data.set(prev);
                 unsafe { cleanup_frame_slots(frame) };

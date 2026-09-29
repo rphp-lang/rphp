@@ -61,7 +61,7 @@ fn finish_request_shutdown(
         cleanup_frame_slots(frame);
         retired_values
     };
-    run_value_destructors(eg, &retired_values, frame)?;
+    run_shutdown_value_destructors(eg, &retired_values, frame)?;
     drop(retired_values);
     run_request_surviving_global_destructors(eg, frame)?;
     // Releasing the root symbol table may expose a Fiber/Generator cycle that
@@ -963,6 +963,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -979,6 +980,7 @@ fn call_function_iter_from_logical_caller<'a, I>(
     func_ptr: *const FunctionCommon,
     num_args: usize,
     args: I,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = &'a Value>,
@@ -998,6 +1000,7 @@ where
         true,
         logical_caller_at_current_site,
         internal_trace_origin.then(|| ("Unknown".to_string(), 0, None, false)),
+        callback_retirement,
     )?;
     Ok(return_value)
 }
@@ -1033,6 +1036,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1066,6 +1070,7 @@ where
         true,
         true,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1099,6 +1104,7 @@ where
         false,
         true,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1142,6 +1148,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1174,6 +1181,7 @@ where
             false,
             false,
             None,
+            CallbackReturnPolicy::Function,
         )?;
     Ok(return_value)
 }
@@ -1208,6 +1216,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1246,6 +1255,7 @@ where
         true,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1284,6 +1294,7 @@ where
         publish_live_trace_caller,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1319,6 +1330,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1339,6 +1351,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
     trace_origin: (String, usize),
     pending_preentry_error: Option<&Value>,
     capture_generated_preentry_error: bool,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
@@ -1363,6 +1376,7 @@ where
             pending_preentry_error,
             capture_generated_preentry_error,
         )),
+        callback_retirement,
     )?;
     Ok(return_value)
 }
@@ -1396,6 +1410,7 @@ where
             false,
             false,
             None,
+            CallbackReturnPolicy::Function,
         )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
@@ -1430,9 +1445,15 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
+
+/// Completion policy is supplied by the engine entry point; a synthetic
+/// trace caller is not evidence that ordinary PHP execution is still active.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallbackReturnPolicy { Function, Shutdown }
 
 /// Shared callback invocation path. `READBACK_ARG0` keeps the ordinary path
 /// free of the extra first-public-argument clone required by `array_walk`.
@@ -1451,6 +1472,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     publish_live_trace_caller: bool,
     trace_caller_at_current_site: bool,
     trace_origin: Option<(String, usize, Option<&Value>, bool)>,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<(Value, Option<Value>), VmError>
 where
     I: Iterator<Item = Value>,
@@ -2072,7 +2094,7 @@ where
         }
     }
 
-    let execution_result = match unsafe { (*func_ptr).fn_type } {
+    let mut execution_result = match function_type {
         FunctionType::User => {
             let user = unsafe { &*(func_ptr as *const UserFunction) };
             unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
@@ -2135,6 +2157,21 @@ where
     } else {
         None
     };
+    // The detached Return stops at its null predecessor. Readback above must
+    // retain its output before the committed callback relinquishes its slots.
+    let returning = function_type == FunctionType::User
+        && execution_result.is_ok()
+        && eg.exception.is_none();
+    if returning {
+        // Shutdown independently dispatches each destructor failure through
+        // the request handler. Ordinary returns chain replacements to their
+        // caller. This is the existing request/function completion policy.
+        execution_result = if callback_retirement == CallbackReturnPolicy::Shutdown {
+            run_committed_frame_destructors(eg, frame, CallbackReturnPolicy::Shutdown)
+        } else {
+            run_return_frame_destructors(eg, frame)
+        };
+    }
     let callback_threw = eg.exception.is_some();
 
     // A detached user callback has no physical predecessor, so its ordinary
@@ -2142,6 +2179,7 @@ where
     // popping it just as a linked user frame would; a throwing destructor
     // replaces and chains the callback's pending exception.
     if callback_threw
+        && !returning
         && function_type == FunctionType::User
         && let Some(pending) = eg.exception.take()
     {
@@ -2277,6 +2315,7 @@ where
             Some(throwable),
             false,
         )),
+        CallbackReturnPolicy::Function,
     )?;
     Ok(())
 }
@@ -2318,6 +2357,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
@@ -2366,6 +2406,7 @@ fn release_yield_from_values(
         false,
         true,
         false,
+        CallbackReturnPolicy::Function,
     )
     .map(|_| ());
     let replacement = eg.exception.take();

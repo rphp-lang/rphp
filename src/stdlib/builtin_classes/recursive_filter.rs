@@ -270,6 +270,7 @@ fn prepare_arguments(
                     ("Unknown".into(), 0),
                     Some(&error),
                     false,
+                    crate::vm::execute::CallbackReturnPolicy::Function,
                 )?;
                 eg.exception = Some(error);
                 return Ok(false);

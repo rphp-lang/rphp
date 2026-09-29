@@ -3759,6 +3759,7 @@ fn instantiate_attribute_definition_at_use(
         (source_file, source_line),
         None,
         false,
+        crate::vm::execute::CallbackReturnPolicy::Function,
     )?;
     if eg.exception.is_some() {
         return Ok(());

@@ -17043,7 +17043,16 @@ fn dispatch_php_error_encoded(
         eg.discard_detached_trace_origin(ed as usize);
         result
     } else {
-        call_resolved_with_values_from(eg, &resolved, &arguments, ed, file, line, false)
+        call_resolved_with_values_from(
+            eg,
+            &resolved,
+            &arguments,
+            ed,
+            file,
+            line,
+            false,
+            crate::vm::execute::CallbackReturnPolicy::Function,
+        )
     };
     eg.active_error_handler_generation = previous_active_generation;
     if eg.error_handler.is_none() {
@@ -17086,6 +17095,7 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         "Unknown",
         0,
         false,
+        crate::vm::execute::CallbackReturnPolicy::Function,
     );
     if eg.exception.is_none()
         && eg.exception_handler.is_none()
@@ -17391,7 +17401,7 @@ pub fn run_shutdown_functions(
         let Some(next) = next else {
             eg.shutdown_functions = None;
             release_roots.extend(eg.take_libxml_release_roots());
-            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            crate::vm::execute::run_shutdown_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             streams::user_wrapper::shutdown_open_streams(eg)?;
             return Ok(());
@@ -17404,11 +17414,12 @@ pub fn run_shutdown_functions(
             "Unknown",
             0,
             true,
+            crate::vm::execute::CallbackReturnPolicy::Shutdown,
         );
         release_roots.extend(next.into_release_roots());
         if let Err(error) = result {
             drain_pending_roots(eg, &mut release_roots);
-            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            crate::vm::execute::run_shutdown_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(error);
@@ -17416,7 +17427,11 @@ pub fn run_shutdown_functions(
         if eg.exception.is_some() {
             if let Err(error) = dispatch_pending_uncaught_exception_handlers(eg, logical_caller) {
                 drain_pending_roots(eg, &mut release_roots);
-                crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+                crate::vm::execute::run_shutdown_value_destructors(
+                    eg,
+                    &release_roots,
+                    logical_caller,
+                )?;
                 #[cfg(feature = "stream-registry")]
                 let _ = streams::user_wrapper::shutdown_open_streams(eg);
                 return Err(error);
@@ -17429,7 +17444,7 @@ pub fn run_shutdown_functions(
                 .take()
                 .expect("unhandled shutdown exception must remain pending");
             drain_pending_roots(eg, &mut release_roots);
-            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            crate::vm::execute::run_shutdown_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(VmError::Fatal(
@@ -17664,6 +17679,7 @@ fn transform_output_buffer(
             "Unknown",
             0,
             true,
+            crate::vm::execute::CallbackReturnPolicy::Function,
         )
     } else {
         call_resolved_with_values(eg, &resolved, &arguments)
@@ -26791,6 +26807,7 @@ where
         (file.to_string(), line),
         None,
         true,
+        crate::vm::execute::CallbackReturnPolicy::Function,
     )
 }
 
@@ -26974,6 +26991,7 @@ fn call_resolved_with_values_from(
     file: &str,
     line: usize,
     capture_preentry_error_origin: bool,
+    callback_retirement: crate::vm::execute::CallbackReturnPolicy,
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         let method = resolved
@@ -26996,6 +27014,7 @@ fn call_resolved_with_values_from(
             file,
             line,
             capture_preentry_error_origin,
+            callback_retirement,
         );
     }
     let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
@@ -27029,6 +27048,7 @@ fn call_resolved_with_values_from(
             (file.to_string(), line),
             Some(&error),
             false,
+            callback_retirement,
         )?;
         eg.exception = Some(error);
         return Ok(Value::null());
@@ -27057,6 +27077,7 @@ fn call_resolved_with_values_from(
         (file.to_string(), line),
         None,
         capture_preentry_error_origin,
+        callback_retirement,
     )
 }
 

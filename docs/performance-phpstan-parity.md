@@ -201,3 +201,108 @@ Parity is not achieved: candidate analysis remains about 11.6 times PHP and
 whole-command instructions about 9.0 times PHP. The next bounded implementation
 will address committed-frame owner retirement, preserving callback completion
 and destructor exception order, instead of rebuilding a frame-wide owner graph.
+
+## Accepted checkpoint: committed-frame owner retirement
+
+- Outcome: release actual owned frame slots on a committed return without
+  constructing a graph/count table of the whole frame.
+- Baseline: `3290af6b61439ac31e1e68efae18134bf14aefe5`; current source-attributed
+  evidence charges about 15 billion inclusive instructions to frame planning.
+  The earlier rejected prototype demonstrated removal of repeated maps but
+  failed root-destructor exception ordering; it is not an accepted baseline.
+- Hypothesis: detaching each owned slot before callbacks makes the current
+  reference count authoritative. Borrowed arguments stay outside the bitmap.
+- Scope and proof: retain construction receivers, dynamic symbols, PHP return
+  values and detached argument readback correctly. Ordinary call completion
+  chains exceptions; request shutdown handles failures independently. Carry
+  that policy explicitly from engine shutdown entries through destructor
+  callbacks, including root, static, surviving and handler-owned objects.
+  Do not infer shutdown from a synthetic trace frame or workload identity.
+- Ownership: the integrating agent owns the affected VM and callback entry
+  files. Accepted class-identity and allocation-header changes remain intact.
+- Gates: the previously failing root-destructor differential first, then
+  focused return/reference/destructor/exception/callback tests and feature
+  checks; same-output PHPStan instruction/time A/B; scalar and shared-frame
+  controls retained. Use the current corrected-memory baseline for RSS.
+- Rejection: any lost/duplicated callback, exception-order or alias-lifetime
+  difference rejects the implementation. Investigate and report performance
+  regressions instead of tuning for source names or accepting micro-only wins.
+
+
+### Retirement entry investigation
+
+The first candidate removes 7.863 billion whole-command instructions and reduces
+PHPStan analysis from 10.7990 to 10.0908 seconds, but its scalar control regresses
+15.7% in the short holdout and about 20% in independent longer runs. Instruction
+and branch counts are unchanged. Native sampling attributes 95% of cycles to the
+main executor. Hardware counters show more frontend-empty slots, op-cache misses
+and branch misses; the candidate is not accepted on this evidence.
+
+The next revision reuses the existing exact no-owner proof before crossing into
+cold destructor code. Committed retirement also no longer passes through the
+large live-frame planner. This removes unnecessary calls and stack setup for an
+ordinary owner-free frame; it is independent of source shape, types of arguments
+and workload names. Retain the first candidate and all measurements as evidence.
+
+
+### Retirement result
+
+The accepted source fingerprint is
+`b8cb2c2f7ff7bd18c40e53fb8e7d43cc573ad61995fe96578c6daa9da4f863db`.
+Every application, control and confirmation sample is retained in
+[the frame-retirement packet](performance-phpstan-frame-retirement-samples.json).
+The first native entry variant remains rejected evidence; its separate safety
+and compatibility results do not substitute for the accepted source's checks.
+
+| Same-window measurement | Baseline | Candidate | PHP |
+| --- | ---: | ---: | ---: |
+| Whole-command hardware instructions, billions | 138.7018 | 130.5969 | 15.4739 |
+| Analysis median, seconds | 10.77867 | 10.19991 | 0.92177 |
+| Peak RSS median, KiB | 598972 | 598700 | 177762 |
+
+The change removes 8.105 billion instructions (5.843%) and 5.370% of analysis
+time, with equivalent memory. All five files and twenty findings match PHP.
+It performs actual slot retirement before callbacks, preserves borrowed owners,
+retains construction receivers until completion and moves dynamic symbols in
+insertion order. Detached callback argument readback precedes retirement.
+Explicit ordinary/shutdown completion policy preserves exception replacement
+chains and independent request-handler dispatch, including nested destructors
+and last-alias order. Existing resumable boundaries keep their planner.
+
+Three-pair holdouts improve 50.3% for shared frames, 4.6% for scalar frames and
+10.3% for declared-property foreach; the mixed scalar loop changes -0.75%.
+An independent five-pair, five-million-iteration scalar confirmation gives
+340.226 versus 323.938 ms (-4.787%), 17 fewer instructions per iteration and
+essentially unchanged branch misses. The main executor shrinks by 163 bytes.
+
+Hardware startup-subtracted shared-frame counts fall from 4,974.941 to
+2,754.941 instructions per iteration, versus PHP's 516.001. Scalar counts fall
+from 1,671.342 to 1,654.342, versus 395.501. Separate Callgrind attribution puts
+2,045.440 shared-frame instructions in the main executor and 367.004 in committed
+retirement, inclusive. This is still a large ordinary-operation gap.
+
+The deep-destructor release phase regresses: five-pair controls show +5.0% at
+2,048 nodes and +2.9% at 8,192. Independent 16,384-node confirmation gives
+24.773 versus 25.388 ms (+2.48%). Build plus release is 30.944 versus 31.026 ms
+(+0.27%), and whole-program hardware instructions fall 1.62%. Source accounting
+at 2,048 nodes attributes 233 instructions per node to newly completed detached
+destructor callbacks, which the old implementation skipped. The integrating
+task accepts this phase-specific tradeoff against restored PHP behavior and the
+application, instruction and ownership gains. It remains a mandatory control.
+
+The exact accepted source passes 95 focused test executions across default,
+no-default and all features; 22 direct PHP differentials; all-target/all-feature
+compilation; formatting and the unsafe-policy gate. These cover callback and
+exception completion, references, dynamic/owned frame boundaries, generators,
+Fibers and native resource callbacks. The unsafe inventory stays within its
+existing ceiling at 1747 blocks and 321 functions. No JIT lowering or ABI is
+changed; native timings apply only to x86-64. All aggregate jobs stay below
+4.23 GB with no OOM or timeout. The confirmation service waited for the gate's
+exclusive lock; its service elapsed time is not benchmark duration. Cleanup ran
+in both local checkouts, and no private benchmark host was configured.
+
+PHPStan remains 11.1 times slower in actual analysis and uses 8.4 times the
+whole-command instructions. A fresh native profile still charges about 22% of
+cycles to the main executor, 5% to class lookup and several percent to temporary
+release and its snapshot/graph machinery. Continue from those general costs;
+this accepted checkpoint does not complete the parity goal.

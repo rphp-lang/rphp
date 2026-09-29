@@ -1171,6 +1171,27 @@ impl DynamicPropertyMap {
             .object_cursor = position.unwrap_or(OBJECT_CURSOR_INVALID);
     }
 
+    /// Move symbol-table owners out in insertion order for committed frame
+    /// retirement. No cloned owner remains in the detached table.
+    pub(crate) fn into_values(self) -> Vec<Value> {
+        match self.storage {
+            DynamicPropertyStorage::Small(small) => small
+                .entries
+                .into_iter()
+                .flatten()
+                .map(|(_, value)| value)
+                .collect(),
+            DynamicPropertyStorage::Linear(linear) => {
+                linear.entries.into_iter().map(|(_, value)| value).collect()
+            }
+            DynamicPropertyStorage::Indexed(indexed) => indexed
+                .entries
+                .into_iter()
+                .map(|(_, value)| value)
+                .collect(),
+        }
+    }
+
     pub(crate) fn for_each(&self, mut visitor: impl FnMut(&str, &Value)) {
         match &self.storage {
             DynamicPropertyStorage::Small(small) => {
