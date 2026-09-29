@@ -1058,7 +1058,7 @@ fn check_type_hint_in_scopes(
                 return val.as_array().is_some()
                     || val
                         .as_object()
-                        .is_some_and(|object| eg.class_is_a(&object.class_name, "Traversable"));
+                        .is_some_and(|object| eg.object_is_a(&object, "Traversable"));
             }
             if let Some(obj) = val.as_object() {
                 if class_name.eq_ignore_ascii_case("object") {
@@ -1081,7 +1081,7 @@ fn check_type_hint_in_scopes(
                     }
                     _ => class_name.as_str(),
                 };
-                eg.class_is_a(&obj.class_name, resolved)
+                eg.object_is_a(&obj, resolved)
             } else {
                 false
             }

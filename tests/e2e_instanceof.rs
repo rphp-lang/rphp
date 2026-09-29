@@ -3,6 +3,59 @@ mod common;
 use common::{run_php, run_php_expect_error};
 
 #[test]
+fn instanceof_literal_misses_observe_later_alias_publication() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface IdentityRoot {}
+interface IdentityLeaf extends IdentityRoot {}
+class IdentityParent implements IdentityLeaf {
+    public function __toString(): string { return 'value'; }
+}
+class IdentityChild extends IdentityParent {}
+function checkIdentity($value) {
+    echo (int) ($value instanceof PublishedIdentity) . ':';
+    echo (int) ($value instanceof IdentityRoot) . ':';
+    echo (int) ($value instanceof Stringable) . '|';
+}
+$object = new IdentityChild();
+checkIdentity($object);
+class_alias(IdentityRoot::class, 'PublishedIdentity');
+checkIdentity($object);
+checkIdentity(new class extends IdentityChild {});
+checkIdentity(new stdClass());
+"#
+        ),
+        "0:1:1|1:1:1|1:1:1|0:0:0|"
+    );
+}
+
+#[test]
+fn class_identity_relations_preserve_dynamic_operands_and_type_hints() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface IdentityA {}
+interface IdentityB {}
+class IdentityBase implements IdentityA {}
+class IdentityBoth extends IdentityBase implements IdentityB {}
+class_alias(IdentityBase::class, 'IdentityAlias');
+function identityTyped(IdentityAlias $a, IdentityA&IdentityB $b): IdentityA {
+    return $b;
+}
+$both = new IdentityBoth();
+$value = identityTyped($both, $both);
+foreach (['identityalias', '\\IdentityA', 'IdentityB', 'MissingIdentity', new IdentityBase(), new stdClass()] as $target) {
+    echo (int) ($value instanceof $target);
+}
+try { identityTyped(new stdClass(), $both); } catch (TypeError $e) { echo '|type'; }
+"#
+        ),
+        "111010|type"
+    );
+}
+
+#[test]
 fn instanceof_accepts_a_parenthesized_arbitrary_class_expression() {
     assert_eq!(
         run_php(

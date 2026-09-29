@@ -833,6 +833,26 @@ struct ClassNameIndex {
     names: SymbolTable<String>,
 }
 
+struct ClassAncestry {
+    names: Box<[String]>,
+    /// One bit per published declaration, including the declaration itself.
+    identities: Box<[u64]>,
+    /// Deferred declaration links can become resolvable after publication.
+    /// Such entries are rebuilt when the class table grows; complete entries
+    /// remain valid for the entire request.
+    unresolved: bool,
+    table_len: usize,
+}
+
+impl ClassAncestry {
+    #[inline]
+    fn contains(&self, class_id: u32) -> bool {
+        self.identities
+            .get(class_id as usize / 64)
+            .is_some_and(|word| word & (1u64 << (class_id % 64)) != 0)
+    }
+}
+
 /// Run `lookup` with the ASCII-lowercased form of `name`, using a stack
 /// buffer for the ordinary short identifiers so case-folded table probes do
 /// not allocate.
@@ -1251,8 +1271,9 @@ pub struct ExecutorGlobals {
     /// Per-class memo of `__get`/`__isset` availability: bit 0 resolved,
     /// bit 1 has `__get`, bit 2 has `__isset`.
     class_magic_accessor_flags: std::cell::RefCell<Vec<u8>>,
-    /// Transitive ancestor names per class id for `class_is_a`.
-    class_ancestor_cache: std::cell::RefCell<Vec<Option<std::rc::Rc<[String]>>>>,
+    /// Transitive ancestry per stable class ID. Numeric relations avoid name
+    /// hashing and case folding after declarations have been resolved.
+    class_ancestor_cache: std::cell::RefCell<Vec<Option<std::rc::Rc<ClassAncestry>>>>,
     /// Declared public property resolutions per (op array cache, ip, class
     /// id): a site that sees many receiver classes keeps its monomorphic
     /// inline cache thrashing but skips the full lookup.
@@ -9682,9 +9703,8 @@ impl ExecutorGlobals {
 
     /// Check if a class is an instance of another (walks parent chain AND implements)
     pub fn class_is_a(&self, class_name: &str, target: &str) -> bool {
-        let canonical_target = self
-            .find_class(target)
-            .map_or(target, |class| class.name.as_str());
+        let target_class = self.find_class(target);
+        let canonical_target = target_class.map_or(target, |class| class.name.as_str());
         let Some(class_def) = self.find_class(class_name) else {
             return class_name
                 .strip_prefix('\\')
@@ -9695,6 +9715,11 @@ impl ExecutorGlobals {
                         .unwrap_or(canonical_target),
                 );
         };
+        if class_def.class_id != 0
+            && let Some(target_class) = target_class.filter(|class| class.class_id != 0)
+        {
+            return self.class_is_a_ids(class_def.class_id, target_class.class_id);
+        }
         if class_def.name.eq_ignore_ascii_case(canonical_target) {
             return true;
         }
@@ -9707,17 +9732,46 @@ impl ExecutorGlobals {
                 .strip_prefix('\\')
                 .unwrap_or(canonical_target);
             return ancestors
+                .names
                 .iter()
                 .any(|ancestor| ancestor.eq_ignore_ascii_case(target));
         }
         self.class_is_a_uncached(class_def, canonical_target)
     }
 
+    /// Resolve only the requested name: object storage already records the
+    /// declaration that gives the receiver its identity. Dynamic internal
+    /// objects without a registered ID retain ordinary name resolution.
+    #[inline]
+    pub(crate) fn object_is_a(&self, object: &crate::value::PhpObject, target: &str) -> bool {
+        if object.class_id != 0
+            && let Some(target) = self.find_class(target).filter(|class| class.class_id != 0)
+        {
+            return self.class_is_a_ids(object.class_id, target.class_id);
+        }
+        self.class_is_a(&object.class_name, target)
+    }
+
+    /// Both IDs denote published declarations in this executor. Class aliases
+    /// share the original ID and cannot change an existing ancestry relation.
+    #[inline]
+    pub(crate) fn class_is_a_ids(&self, class_id: u32, target_id: u32) -> bool {
+        if class_id == target_id {
+            return class_id != 0;
+        }
+        let Some(class) = self.class_by_id(class_id) else {
+            return false;
+        };
+        self.class_ancestors(class).contains(target_id)
+    }
+
     /// Canonical names of every ancestor of `class_def` (excluding itself),
     /// memoized by class id.
-    fn class_ancestors(&self, class_def: &ClassDef) -> std::rc::Rc<[String]> {
+    fn class_ancestors(&self, class_def: &ClassDef) -> std::rc::Rc<ClassAncestry> {
         let index = class_def.class_id as usize;
-        if let Some(Some(cached)) = self.class_ancestor_cache.borrow().get(index) {
+        if let Some(Some(cached)) = self.class_ancestor_cache.borrow().get(index)
+            && (!cached.unresolved || cached.table_len == self.class_table.len())
+        {
             return std::rc::Rc::clone(cached);
         }
         let mut names: Vec<String> = Vec::new();
@@ -9754,7 +9808,26 @@ impl ExecutorGlobals {
             pending.extend(ancestor.parent.iter().cloned());
             pending.extend(ancestor.implements.iter().cloned());
         }
-        let ancestors: std::rc::Rc<[String]> = names.into();
+        let mut identities = vec![0u64; index / 64 + 1];
+        identities[index / 64] |= 1u64 << (index % 64);
+        let mut unresolved = false;
+        for name in &names {
+            if let Some(ancestor) = self.find_class(name).filter(|class| class.class_id != 0) {
+                let id = ancestor.class_id as usize;
+                if identities.len() <= id / 64 {
+                    identities.resize(id / 64 + 1, 0);
+                }
+                identities[id / 64] |= 1u64 << (id % 64);
+            } else {
+                unresolved = true;
+            }
+        }
+        let ancestors = std::rc::Rc::new(ClassAncestry {
+            names: names.into_boxed_slice(),
+            identities: identities.into_boxed_slice(),
+            unresolved,
+            table_len: self.class_table.len(),
+        });
         let mut cache = self.class_ancestor_cache.borrow_mut();
         if cache.len() <= index {
             cache.resize(index + 1, None);

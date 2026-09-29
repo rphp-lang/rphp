@@ -5475,13 +5475,40 @@ fn op_instanceof<'a>(
         None
     };
     let target = dynamic_target.as_deref().unwrap_or(raw_target);
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    // Constant class operands retain a successful declaration resolution in
+    // the opcode's existing cache word. A missing name remains unresolved so
+    // a later class declaration or class_alias() is immediately visible.
+    // Relative scopes and runtime operands resolve from their current value.
+    // SAFETY: this instruction, its same-index cache entry and result slot
+    // belong to the live activation. This non-reentrant lookup only updates
+    // the opcode-owned ID word; no cache reference survives a PHP callback.
+    let (target_id, result_ptr) = unsafe {
+        let target_id = if opline.op2_type == OpType::Const
+            && opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE == 0
+        {
+            let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+            let cache = &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache);
+            if cache.class_id == 0 {
+                cache.class_id = eg.find_class(target).map_or(0, |class| class.class_id);
+            }
+            cache.class_id
+        } else {
+            eg.find_class(target).map_or(0, |class| class.class_id)
+        };
+        (target_id, (*frame).get_op_mut(opline.result as u32, opline.result_type))
+    };
     let is_instance = if obj_val.value_type() == ValueType::Closure {
         eg.class_is_a("Closure", target)
     } else {
         obj_val
             .as_object()
-            .is_some_and(|object| eg.class_is_a(&object.class_name, target))
+            .is_some_and(|object| {
+                if target_id != 0 && object.class_id != 0 {
+                    eg.class_is_a_ids(object.class_id, target_id)
+                } else {
+                    eg.object_is_a(&object, target)
+                }
+            })
     };
     unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(is_instance)) };
     Ok(ColdResult::Done)

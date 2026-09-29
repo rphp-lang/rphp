@@ -1,0 +1,476 @@
+{
+  "status": "accepted partial checkpoint; overall parity goal active",
+  "baseline_commit": "2ee8e73dd532051b73ddf0ff70255a48923aeec7",
+  "candidate_source_sha256": "45cc0f1d320fb6dea409076edd69e3891a3ff5e5b146fcfdf11dee1974773f5b",
+  "profile": "max-perf, default features, debug=line-tables-only on both sides",
+  "binaries": {
+    "baseline": "a072e84684074c0c5e23977ffb1fe4fee0ba0a94760f0a0322992cb55b48dd3d",
+    "candidate": "c523226efcccb8fde57c80f7c7b86a19940f4af04cde51000e22c1f88f47a023",
+    "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "binary_sizes": {
+    "baseline": 83881752,
+    "candidate": 83891656,
+    "php": 12278912
+  },
+  "callgrind_whole_command": {
+    "baseline": 152418412307,
+    "candidate": 147853559401,
+    "php": 15606913817
+  },
+  "native_application": [
+    {
+      "runtime": "baseline",
+      "round": 0,
+      "analysis_seconds": 11.520200253,
+      "files_seconds": 11.514060974,
+      "wall_seconds": 13.778609048000362,
+      "max_rss_kib": 592764,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": 1,
+      "analysis_seconds": 11.154161453,
+      "files_seconds": 11.148341417,
+      "wall_seconds": 13.44208068199805,
+      "max_rss_kib": 594784,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": 2,
+      "analysis_seconds": 11.128290892,
+      "files_seconds": 11.122333288,
+      "wall_seconds": 13.421746553001867,
+      "max_rss_kib": 594608,
+      "output_equal": true
+    },
+    {
+      "runtime": "baseline",
+      "round": 3,
+      "analysis_seconds": 11.522438765,
+      "files_seconds": 11.516466379,
+      "wall_seconds": 13.804954547995294,
+      "max_rss_kib": 592724,
+      "output_equal": true
+    },
+    {
+      "runtime": "php",
+      "round": 4,
+      "analysis_seconds": 0.938668013,
+      "files_seconds": 0.936895847,
+      "wall_seconds": 1.3452614859997993,
+      "max_rss_kib": 177348,
+      "output_equal": true
+    }
+  ],
+  "native_warmups": [
+    {
+      "runtime": "baseline",
+      "round": "warmup",
+      "analysis_seconds": 11.689753294,
+      "files_seconds": 11.683507919,
+      "wall_seconds": 14.007931148997159,
+      "max_rss_kib": 592512,
+      "output_equal": true
+    },
+    {
+      "runtime": "candidate",
+      "round": "warmup",
+      "analysis_seconds": 11.169275045,
+      "files_seconds": 11.16339469,
+      "wall_seconds": 13.484637920999376,
+      "max_rss_kib": 594584,
+      "output_equal": true
+    },
+    {
+      "runtime": "php",
+      "round": "warmup",
+      "analysis_seconds": 0.942225933,
+      "files_seconds": 0.940474033,
+      "wall_seconds": 1.3505930829996942,
+      "max_rss_kib": 177464,
+      "output_equal": true
+    }
+  ],
+  "hardware": {
+    "complete": true,
+    "cpu": 2,
+    "event": "instructions:u",
+    "environment": "perf uses the distribution LLVM library instead of the incompatible AMD driver library; the same library search path is applied to all targets.",
+    "binaries": {
+      "baseline": "a072e84684074c0c5e23977ffb1fe4fee0ba0a94760f0a0322992cb55b48dd3d",
+      "candidate": "c523226efcccb8fde57c80f7c7b86a19940f4af04cde51000e22c1f88f47a023",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "samples": [
+      {
+        "runtime": "php",
+        "round": 0,
+        "instructions": 15473893278,
+        "analysis_seconds": 1.019220829,
+        "wall_seconds": 1.4736515689946827,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 1,
+        "instructions": 150037207893,
+        "analysis_seconds": 12.141917706,
+        "wall_seconds": 14.615618140000151,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "instructions": 145546441935,
+        "analysis_seconds": 11.889262199,
+        "wall_seconds": 14.324290927004768,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 3,
+        "instructions": 145537048689,
+        "analysis_seconds": 11.873035431,
+        "wall_seconds": 14.315654366997478,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 4,
+        "instructions": 150035457127,
+        "analysis_seconds": 12.176130772,
+        "wall_seconds": 14.624122461005754,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      },
+      {
+        "runtime": "php",
+        "round": 5,
+        "instructions": 15473891103,
+        "analysis_seconds": 0.983666897,
+        "wall_seconds": 1.4226564790005796,
+        "counter_running_percent": 100.0,
+        "output_equal": true
+      }
+    ]
+  },
+  "differentials": [
+    {
+      "case": 0,
+      "runtime": "baseline",
+      "passed": true,
+      "output": "0:1:1|1:1:1|1:1:1|0:0:0|"
+    },
+    {
+      "case": 0,
+      "runtime": "candidate",
+      "passed": true,
+      "output": "0:1:1|1:1:1|1:1:1|0:0:0|"
+    },
+    {
+      "case": 1,
+      "runtime": "baseline",
+      "passed": true,
+      "output": "111010|type"
+    },
+    {
+      "case": 1,
+      "runtime": "candidate",
+      "passed": true,
+      "output": "111010|type"
+    }
+  ],
+  "checks": [
+    {
+      "command": [
+        "cargo",
+        "fmt",
+        "--all",
+        "--",
+        "--check"
+      ],
+      "exit": 0,
+      "seconds": 2.4179629589998513,
+      "test_results": []
+    },
+    {
+      "command": [
+        "scripts/check-unsafe-policy.sh",
+        "--diff-base",
+        "HEAD"
+      ],
+      "exit": 0,
+      "seconds": 3.619719823000196,
+      "test_results": []
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--test",
+        "e2e_instanceof",
+        "--test",
+        "e2e_type_hints"
+      ],
+      "exit": 0,
+      "seconds": 66.42890516199986,
+      "test_results": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+        "test result: ok. 174 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.09s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--test",
+        "e2e_autoload",
+        "class_alias"
+      ],
+      "exit": 0,
+      "seconds": 0.6147532850009156,
+      "test_results": [
+        "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 55 filtered out; finished in 0.01s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--no-default-features",
+        "--test",
+        "e2e_instanceof"
+      ],
+      "exit": 0,
+      "seconds": 51.85369424700184,
+      "test_results": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "test",
+        "--offline",
+        "--locked",
+        "--profile",
+        "test-fast",
+        "--all-features",
+        "--test",
+        "e2e_instanceof"
+      ],
+      "exit": 0,
+      "seconds": 58.362565538001945,
+      "test_results": [
+        "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s"
+      ]
+    },
+    {
+      "command": [
+        "cargo",
+        "check",
+        "--offline",
+        "--locked",
+        "--profile",
+        "dev-fast",
+        "--all-targets",
+        "--all-features"
+      ],
+      "exit": 0,
+      "seconds": 25.15672522100067,
+      "test_results": []
+    }
+  ],
+  "holdouts": [
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.13315391540527,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.1347074508667,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.13844680786133,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.13575649261475,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.13352131843567,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_shared_frame_release.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.13324737548828,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.032057046890259,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.032086610794067,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.032344102859497,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.032804012298584,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.032545804977417,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_scalar_frame_return.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.032930374145508,
+      "output": "4500000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.28238034248352,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.27710962295532,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.28752613067627,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.28046011924744,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.28221106529236,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_foreach_declared_property_reads.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.28032445907593,
+      "output": "48640000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 0,
+      "seconds": 0.025217056274414,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 0,
+      "seconds": 0.024970769882202,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 1,
+      "seconds": 0.025499582290649,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 1,
+      "seconds": 0.024960517883301,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "baseline",
+      "round": 2,
+      "seconds": 0.024476051330566,
+      "output": "50000040000000"
+    },
+    {
+      "case": "bench_scalar_method_mixed_native_loop.php",
+      "runtime": "candidate",
+      "round": 2,
+      "seconds": 0.025029897689819,
+      "output": "50000040000000"
+    }
+  ],
+  "outlier_policy": "retain every valid measured run",
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "architecture": "x86_64; ARM64 native measurements unavailable"
+}
