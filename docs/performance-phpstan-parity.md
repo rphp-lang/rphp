@@ -1201,3 +1201,80 @@ PHP's instructions and 9.07 times its analysis time. A fresh instruction-sample
 profile puts 32.39% in the main executor and 5.33% in class lookup, with other
 frame, method and ownership costs distributed across helpers. These samples
 guide the next bounded investigation; they are not exact per-function budgets.
+
+## Accepted checkpoint: register-sized symbol hash tails
+
+- Baseline: clean `02db8434`, using the accepted independently trained PGO
+  executable above. Class lookup has 5.33% and caller-scope lookup 1.73% of the
+  whole-application instruction-overflow samples. Disassembly of class lookup
+  shows a zeroed stack word populated by partial overlapping stores for the
+  seven-byte hash tail, then reloaded for mixing; other lengths retain a
+  variable-size copy. The most frequent class-lookup sampled PC is immediately
+  after that tail load. Sampling skid prevents assigning its count to a single
+  instruction, but the temporary and copy are independently visible in code.
+- Outcome and hypothesis: assemble the same zero-padded little-endian word
+  directly from bounded integer loads. Remove transient stack storage and
+  variable-size library copies from a shared symbol-table primitive.
+- Scope: `SymbolHasher::write` only. Preserve every hash bit, per-write chunk
+  boundary, integer-key operation and table iteration order. Keep all loads
+  within the input slice on every architecture, without additional unsafe code
+  or name/length distributions learned from the target workload.
+- Ownership: this integrating task owns the runtime helper and its focused
+  hash compatibility tests in the same isolated worktree.
+- Gates: frozen hash vectors across short tails, chunk boundaries, unaligned
+  starts and multiple writes; default/no-default/all-feature checks and unsafe
+  policy; independent fixed-manifest PGO training; same-output PHPStan A/B and
+  the four retained controls. Inspect generated code as well as timings.
+- Stop rule: reject if hash values change, source introduces out-of-bounds or
+  architecture-specific behavior, or measured application results fail to
+  justify the change. A sample share alone is not an expected speedup.
+
+The safe Rust implementation combines overlapping, in-bounds integer loads.
+Explicit little-endian decoding preserves the original zero-padded word for
+every one-to-seven-byte remainder. The generated class-lookup tail has two
+register loads followed by shift/OR, with no temporary stack word or variable
+copy. Other lookup work still uses stack storage; this is not a claim of a
+stack-free class resolver.
+
+Independent application confirmation gives analysis **8.5596 to 8.3404 seconds
+(-2.56%)** and whole-command instructions **113.8856 to 113.5080 billion
+(-0.33%)**, with PHP at 0.9330 seconds / 15.4740 billion. RSS medians are 610334
+and 610342 KiB. All outputs, five files and twenty findings match. Both initial
+and confirmation windows are retained in
+[the symbol-hash packet](performance-phpstan-symbol-hash-samples.json).
+
+The independent five-pair controls give shared frames -1.32%, scalar return
++0.43%, property reads -1.57% and relative-self return -14.14% in time. Their
+instruction counts increase by 0.43-1.47%; this is visible in the packet, not
+described as a universal instruction-count improvement. No confirmed control
+time regression exceeds one percent. The large self-control timing gain is
+not attributed exclusively to the hash tail: source changes also alter compiler
+inlining and register/code placement.
+
+All 26 focused default tests pass, including frozen hash vectors with unaligned
+starts, every tail width and incremental/integer writes. The two new hash tests
+also pass in each no-default and all-feature build. Formatting, unchanged unsafe
+policy and all-target/all-feature compilation pass. No new allocation, unsafe
+operation or architecture-specific implementation is added. Main-executor code
+grows by 806 bytes, class lookup by 650 bytes and the full executable by 461936
+bytes, including debugging information. PGO training remains independent and
+unchanged; no runtime profile mismatch occurs. Memory boundaries record no OOM
+or timeout.
+
+### Analysis-only hardware counters
+
+A separate diagnostic archive now enables hardware counters at analysis entry
+and disables them at analysis completion, using acknowledged perf control FIFOs.
+The first probe required exact acknowledgement bytes and rejected a control
+response; that run is excluded. Accepting NUL/line terminators and the tool's status-line format
+produces identical ordinary PHPStan output. This probe is not the archive used
+for the native acceptance timings above.
+
+One valid phase measurement per runtime counts **10.3310 billion** user
+instructions for PHP, **94.3811 billion** for the property-container baseline
+and **94.1042 billion** for the hash candidate. Startup is outside those counts.
+The remaining analysis-only instruction ratio is approximately **9.11x**.
+Optimizing startup therefore cannot close the main gap. A phase-only native
+cycle/caller profile of the property-container baseline is retained separately
+to choose the next structural change. It is diagnostic evidence, not a new
+timing comparison or proof that the parity goal is complete.

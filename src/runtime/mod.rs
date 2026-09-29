@@ -931,9 +931,22 @@ impl std::hash::Hasher for SymbolHasher {
         }
         let rest = chunks.remainder();
         if !rest.is_empty() {
-            let mut word = [0u8; 8];
-            word[..rest.len()].copy_from_slice(rest);
-            self.mix(u64::from_le_bytes(word));
+            // Assemble the same zero-padded little-endian tail in registers.
+            // Overlapping prefix/suffix loads repeat identical bits, so OR
+            // preserves them without a variable-sized copy through the stack.
+            // Both loads remain entirely inside the one-to-seven-byte slice.
+            let len = rest.len();
+            let word = if len >= 4 {
+                let first = u32::from_le_bytes(rest[..4].try_into().expect("4-byte prefix"));
+                let last = u32::from_le_bytes(rest[len - 4..].try_into().expect("4-byte suffix"));
+                u64::from(first) | (u64::from(last) << ((len - 4) * 8))
+            } else if len >= 2 {
+                let first = u16::from_le_bytes(rest[..2].try_into().expect("2-byte prefix"));
+                u64::from(first) | (u64::from(rest[len - 1]) << ((len - 1) * 8))
+            } else {
+                u64::from(rest[0])
+            };
+            self.mix(word);
         }
     }
 
