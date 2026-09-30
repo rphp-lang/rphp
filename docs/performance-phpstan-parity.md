@@ -2119,3 +2119,40 @@ controls. Preparation peaks at 4,896,120,832 bytes under the 6 GiB boundary,
 without OOM. Native evidence remains x86-64 only. Overall parity stays open at
 **7.80x** analysis instructions; the next cost selection uses an exact profile
 limited to the application analysis interval.
+
+## Accepted checkpoint: inline release inspection identities
+
+The [identity-storage contract](performance-phpstan-release-identity-storage.md)
+keeps the inspection's first eight visited identities/counts in safe Rust stack
+storage and transfers every entry to the existing hash table on the ninth.
+Encounter counts, zeros, duplicate identities, opaque snapshots and deep-drop
+markers retain their canonical behavior. Other planners and Value/frame/opcode/
+JIT layouts remain unchanged, with no new unsafe operation.
+
+Phase-only hardware instructions improve **80.6539 to 79.8489 billion (-1.00%)**
+initially and **80.6781 to 79.8590 billion (-1.02%)** in confirmation, against
+PHP's 10.3365 billion. Whole-command confirmation is 99.2590 versus 98.4550
+billion (-0.81%). Analysis time is 7.3703 versus 7.2594 seconds (-1.50%), against
+PHP's 0.9113 seconds; RSS increases 122 KiB. All five files, twenty findings,
+stderr and status match with fresh cache storage per runtime.
+
+The confirmed callback-containing graph holdout improves only 0.12% instructions
+and 0.81% time. The initial plain-node graph control is a distinct retained
+program, not a focused inspection proof. Existing control instructions are
+essentially unchanged, but shared-frame time regresses 2.79% in confirmation
+after 2.43% initially. Code placement is a possible unproven cause. The integrating
+task accepts this explicit timing tradeoff under instruction priority; no broad
+graph-lifecycle or all-program speedup is claimed. Every sample remains in
+[the storage packet](performance-phpstan-release-identity-storage-samples.json).
+
+The 368 focused feature/resource executions, exact PGO PHP differentials,
+formatting, unsafe inventory and all-target compilation pass. Existing opaque
+transient and shared-subtree observations remain exact across spilling. The
+known callback-last-owner compatibility gap remains byte-equal to baseline and
+is not a PHP pass. Fresh independent PGO uses the unchanged 18 programs, excluding
+PHPStan and every control. Source is
+`f24637cce89489cd2a8c323d6dd2b1db4ce2af85fb7cdf0af5dc43d8cee260d7`;
+executable is
+`26410682002e68c683bd673d477d5a79c93920d2ea3b5ef883dff692889b2f6e`.
+Preparation peaks at 5,044,129,792 bytes under the 6 GiB boundary without OOM.
+Native evidence is x86-64 only. Parity remains open at **7.73x** instructions.

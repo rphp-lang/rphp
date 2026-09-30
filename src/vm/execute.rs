@@ -3371,6 +3371,10 @@ pub(crate) type IdentitySet =
 pub(crate) type IdentityMap =
     HashMap<usize, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
 
+#[path = "execute/release_identities.rs"]
+mod release_identities;
+use release_identities::{InspectionIdentityCounts, InspectionIdentitySet};
+
 #[cfg(all(feature = "quick-loops", not(target_vendor = "apple")))]
 include!("execute/quick_dispatch.rs");
 

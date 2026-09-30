@@ -280,12 +280,12 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
 fn value_tree_requires_vm_release(
     eg: &ExecutorGlobals,
     value: &Value,
-    seen_objects: &mut IdentitySet,
-    seen_arrays: &mut IdentitySet,
-    seen_references: &mut IdentitySet,
-    seen_closures: &mut IdentitySet,
+    seen_objects: &mut InspectionIdentitySet,
+    seen_arrays: &mut InspectionIdentitySet,
+    seen_references: &mut InspectionIdentitySet,
+    seen_closures: &mut InspectionIdentitySet,
 ) -> bool {
-    type Counts = IdentityMap;
+    type Counts = InspectionIdentityCounts;
 
     enum TreeHandle {
         Borrowed(std::mem::ManuallyDrop<Value>),
@@ -348,7 +348,7 @@ fn value_tree_requires_vm_release(
             .or_else(|| value.dereferenced().needs_vm_resource_release().then(|| value.dereferenced().clone()))
         {
             if let Some(identity) = node_identity(value.dereferenced()) {
-                *queued.entry(identity).or_insert(0) += 1;
+                *queued.get_or_insert_zero(identity) += 1;
             }
             pending.push((TreeHandle::Owned(value), depth.saturating_add(1)));
         }
@@ -391,7 +391,7 @@ fn value_tree_requires_vm_release(
     // tree. That keeps a replaced cache array from walking the whole object
     // graph it shares with the rest of the program.
     let mut encounters: Counts = Counts::default();
-    let mut descended: IdentitySet =
+    let mut descended: InspectionIdentitySet =
         Default::default();
     let mut current: Option<(TreeHandle, u32)> = None;
     let mut maximum_depth = 0u32;
@@ -432,7 +432,7 @@ fn value_tree_requires_vm_release(
                 None => is_new_node,
                 Some(identity) => {
                     let found = {
-                        let slot = encounters.entry(identity).or_insert(0);
+                        let slot = encounters.get_or_insert_zero(identity);
                         *slot += 1;
                         *slot
                     };
@@ -559,12 +559,12 @@ mod release_tree_observation_tests {
     }
 
     fn inspect(eg: &ExecutorGlobals, root: &Value) -> (usize, usize, usize) {
-        let mut objects = IdentitySet::default();
-        let mut arrays = IdentitySet::default();
-        let mut references = IdentitySet::default();
+        let mut objects = InspectionIdentitySet::default();
+        let mut arrays = InspectionIdentitySet::default();
+        let mut references = InspectionIdentitySet::default();
         assert!(!value_tree_requires_vm_release(
             eg, root, &mut objects, &mut arrays, &mut references,
-            &mut IdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
         ));
         (objects.len(), arrays.len(), references.len())
     }
@@ -660,10 +660,10 @@ fn frame_requires_vm_release(
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
         let pending_identity = pending.object_identity();
-        let mut seen_objects = IdentitySet::default();
-        let mut seen_arrays = IdentitySet::default();
-        let mut seen_references = IdentitySet::default();
-        let mut seen_closures = IdentitySet::default();
+        let mut seen_objects = InspectionIdentitySet::default();
+        let mut seen_arrays = InspectionIdentitySet::default();
+        let mut seen_references = InspectionIdentitySet::default();
+        let mut seen_closures = InspectionIdentitySet::default();
         let mut inspect_release = |value: &Value| {
             !pending_identity.is_some_and(|identity| {
                 value.dereferenced().object_identity() == Some(identity)
@@ -2616,10 +2616,10 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     let requires_vm_release = value_tree_requires_vm_release(
         eg,
         value,
-        &mut IdentitySet::default(),
-        &mut IdentitySet::default(),
-        &mut IdentitySet::default(),
-        &mut IdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
     );
     requires_vm_release.then(|| PreparedValueDestructor::Direct {
         owner: value.clone(),
@@ -2658,10 +2658,10 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
         || !value_tree_requires_vm_release(
             eg,
             value,
-            &mut IdentitySet::default(),
-            &mut IdentitySet::default(),
-            &mut IdentitySet::default(),
-            &mut IdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
         )
     {
         return None;

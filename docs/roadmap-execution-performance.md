@@ -48,20 +48,20 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. Following the declaration-bounded
-method index, the [single temporary-owner checkpoint](performance-phpstan-temp-release.md)
-reduces analysis-only instructions from 82.4797 to 80.6218 billion; reference
-PHP uses 10.3338 billion. Confirmation analysis time falls from 7.4976 to 7.3226
-seconds, against PHP's 0.9172 seconds. The independent shared temporary-read
-holdout uses 17.80% fewer instructions. RSS increases by 304 KiB. Property reads
-take 2.05% more time and scalar-frame instructions rise 0.79%; these are explicit
-instruction-priority tradeoffs. The 356 focused feature/resource checks and
-all-target compilation pass. Eight supported PHP differentials match; the
-preexisting last-owner callback gap remains on baseline and candidate and is
-not counted as a PHP pass. Failed gates and every valid sample remain recorded.
-These branch checkpoints are not yet merged to main. The remaining 7.80x
-instruction gap does not complete parity. A fresh analysis-only exact profile
-selects the next general cost in the executor and its runtime helpers.
+continues on its isolated performance branch. Following single temporary-owner
+retirement, [inline inspection identity storage](performance-phpstan-release-identity-storage.md)
+reduces confirmed analysis-only instructions from 80.6781 to 79.8590 billion;
+reference PHP uses 10.3365 billion. Confirmation analysis time falls from 7.3703
+to 7.2594 seconds, against PHP's 0.9113 seconds. RSS increases by 122 KiB. The
+shared-frame control takes 2.79% more time despite unchanged instructions; this
+is an explicit instruction-priority tradeoff. The graph holdout uses only 0.12%
+fewer instructions, so this is a narrow application improvement. The 368
+focused feature/resource checks and all-target compilation pass. Eight supported
+PHP differentials match; the preexisting last-owner callback gap remains on
+baseline and candidate and is not counted as a PHP pass. Failed gates and every
+valid sample remain recorded. These branch checkpoints are not yet merged to
+main. The remaining 7.73x instruction gap does not complete parity. Exact phase
+profiles of RPHP and PHP inform the next executor/ownership cost selection.
 
 ## Mission
 
