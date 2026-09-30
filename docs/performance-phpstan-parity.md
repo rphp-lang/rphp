@@ -2313,3 +2313,21 @@ selected type-hint filter are retained explicitly, alongside 24 actual focused
 passes and eight exact CLI contracts in
 [the rejected report](performance-phpstan-full-return-layout.md).
 The original parity goal continues; size/layout alone is not the next saving.
+
+## Rejected exploratory checkpoint: inline return-owner proof
+
+Moving shared-owner rejection before the cold retirement planner reduces
+analysis-only Callgrind instructions from 118.4208 to 118.1094 billion
+(-0.263%) in the identical optimization-level-one window. It fails the declared
+one-percent exploratory filter. Production source is fully restored; the
+accepted PGO executable remains at 74.2814 billion hardware instructions.
+All 122 actual focused feature executions and eight exact PHP CLI contracts
+pass. Reboot-reset hardware-counter permissions and the initial missing
+disposable diagnostic executable remain explicit environment failures.
+
+Corrected counters classify owners before preparation retains its plan handle.
+The remaining cost lies primarily in inspecting final trees, rather than
+rejecting shared owners. Exact identities, samples and the corrected diagnostic
+are in [the report](performance-phpstan-return-owner-proof.md) and
+[packet](performance-phpstan-return-owner-proof-samples.json).
+The instruction and time parity goal remains open.
