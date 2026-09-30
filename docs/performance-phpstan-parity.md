@@ -2299,3 +2299,17 @@ samples, builds and resource boundaries are in
 [packet](performance-phpstan-wide-temp-retirement-samples.json).
 The next selection returns to general call/frame costs; this checkpoint does
 not deliver the original instruction or one-second analysis target.
+
+
+## Rejected exploratory checkpoint: outlined full Return
+
+Moving only canonical full-return work out of the main Rust executor leaves
+analysis instructions effectively unchanged in the optimization-level-one
+exploratory window: 117.1536 to 117.1803 billion (+0.0228%). It fails the
+prespecified one-percent filter before fresh PGO or a broad matrix. The entire
+source change is reverted to accepted 84df0ff3; current PGO remains 74.2814
+billion. The initial compiler failure, corrected finally continuation and zero
+selected type-hint filter are retained explicitly, alongside 24 actual focused
+passes and eight exact CLI contracts in
+[the rejected report](performance-phpstan-full-return-layout.md).
+The original parity goal continues; size/layout alone is not the next saving.
