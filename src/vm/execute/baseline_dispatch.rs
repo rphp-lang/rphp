@@ -10866,6 +10866,16 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                             opline_ptr = unsafe { opline_ptr.add(bound) };
                         }
                     } else {
+                        // A class change can reuse an earlier immutable literal
+                        // resolution. No PHP effect has started: resume this same
+                        // InitMethodCall with its complete primary cache restored.
+                        if obj_class_id != 0
+                            && ic.class_id != obj_class_id
+                            && opline.op2_type == OpType::Const
+                            && try_memoized_method_cache(eg, frame, op_array, ip, obj_class_id)
+                        {
+                            continue 'vm;
+                        }
                         // Cache miss — full resolution in cold helper
                         match op_init_method_call(eg, frame, op_array, opline)? {
                             ColdResult::NewFrame(nf, no) => { resume_activation!(nf, no); }

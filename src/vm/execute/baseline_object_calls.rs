@@ -1796,9 +1796,54 @@ fn memoize_property_cache(
 ) {
     let (cached_class_id, prop_info, func) = op_array.cache[ip].property_cache_state();
     debug_assert_eq!(cached_class_id, class_id);
-    eg.polymorphic_property_cache
+    eg.polymorphic_member_cache
         .borrow_mut()
         .insert((op_array.cache.as_ptr() as usize, ip, class_id), (prop_info, func));
+}
+
+// Bound only new method admission; existing property cache policy remains
+// unchanged. Missing entries always resume canonical method resolution.
+const METHOD_RESOLUTION_MEMO_LIMIT: usize = 65_536;
+
+#[cold]
+#[inline(never)]
+fn memoize_method_cache(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) {
+    let (cached_class, flags, function) = op_array.cache[ip].property_cache_state();
+    if cached_class != class_id || function == 0 {
+        // Static methods called through objects use another cache format.
+        return;
+    }
+    let mut memo = eg.polymorphic_member_cache.borrow_mut();
+    if memo.len() < METHOD_RESOLUTION_MEMO_LIMIT {
+        memo.insert((op_array.cache.as_ptr() as usize, ip, class_id), (flags, function));
+    }
+}
+
+/// Reinstate a literal instance-method resolution only when the canonical
+/// scope probe proves this activation has the fixed scope used at publication.
+/// A refilled primary entry retains all generic/trait and return-dispatch guards.
+#[cold]
+#[inline(never)]
+fn try_memoized_method_cache(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) -> bool {
+    let state = eg.polymorphic_member_cache.borrow()
+        .get(&(op_array.cache.as_ptr() as usize, ip, class_id)).copied();
+    let Some((flags, function)) = state else { return false; };
+    if caller_scope(frame, eg).1.is_null() {
+        return false;
+    }
+    op_array.inline_cache_mut(ip).restore_property_cache(class_id, flags, function);
+    true
 }
 
 /// Refill a property-write cache at `ip` for `class_id` from the memo.
@@ -1811,7 +1856,7 @@ pub(super) fn try_memoized_assign_obj_prop(
     class_id: u32,
 ) -> bool {
     let state = eg
-        .polymorphic_property_cache
+        .polymorphic_member_cache
         .borrow()
         .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
         .copied();
@@ -1851,7 +1896,7 @@ fn try_memoized_fetch_obj_r<const FUNC_ARG: bool>(
         return CachedFetchObjResult::Miss;
     }
     let state = eg
-        .polymorphic_property_cache
+        .polymorphic_member_cache
         .borrow()
         .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
         .copied();
@@ -6277,7 +6322,7 @@ fn op_init_method_call<'a>(
                 return throw_located_call_error(eg, frame, op_array, ip,
                     "The parent constructor was not called: the object is in an invalid state");
             }
-            let caller_class = get_caller_class(frame, eg);
+            let (caller_class, fixed_scope_function, _) = caller_scope(frame, eg);
 
             let dispatch_class = eg.method_dispatch_class(&target_class_name, method, caller_class.as_deref());
 
@@ -6414,6 +6459,12 @@ fn op_init_method_call<'a>(
                     );
                     if trait_scope_class_id != 0 {
                         ic_mut.set_method_trait_scope_class_id(trait_scope_class_id);
+                    }
+                    if opline.op2_type == OpType::Const
+                        && !state_dependent_lookup
+                        && !fixed_scope_function.is_null()
+                    {
+                        memoize_method_cache(eg, op_array, ip, obj_class_id);
                     }
                 }
             }

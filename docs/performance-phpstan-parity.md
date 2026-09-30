@@ -2156,3 +2156,44 @@ executable is
 `26410682002e68c683bd673d477d5a79c93920d2ea3b5ef883dff692889b2f6e`.
 Preparation peaks at 5,044,129,792 bytes under the 6 GiB boundary without OOM.
 Native evidence is x86-64 only. Parity remains open at **7.73x** instructions.
+
+
+## Accepted checkpoint: literal method resolution memo
+
+The [method-resolution contract](performance-phpstan-method-resolution-memo.md)
+retains complete canonical literal instance-method cache states across receiver
+class changes. It uses the existing request-local member memo and restores only
+before PHP effects, with fixed lexical scope, no magic/stateful lookup and the
+same generic/trait/return guards. Private dispatch, rebound closures, aliases,
+reference returns and GlobIterator order remain exact. No layout or unsafe
+change is introduced.
+
+Actual diagnostic coverage is 1,072,607 restores: complete-command cold
+resolution drops from 1,205,232 to 132,694. The measured memo contains 17,765
+method entries with a 33,530-member peak; new method admission stops at 65,536
+members. Native confirmation reduces analysis instructions from **79.8377 to
+76.7068 billion (-3.92%)**, against PHP's 10.3380 billion. Analysis time falls
+from **7.3305 to 6.9115 s (-5.72%)**, against PHP's 0.9248 s. Whole-command
+instructions improve 98.4659 to 95.3183 billion (-3.20%), with 1,956 KiB more RSS.
+Fresh cache storage, five files, twenty findings, stderr and exit status agree.
+
+The independent alternating-method holdout improves 31.06% instructions and
+38.73% time; the inherited-method control improves 34.76% instructions and
+37.47% time. Scalar-frame time regresses 4.34% and regex time 1.13%, despite
+essentially unchanged instructions. Hardware frontend stalls support an
+instruction-supply explanation; the specific placement cause is unproven.
+These are explicit instruction-priority tradeoffs, not a general speedup claim.
+Every valid sample and separately scaled control is retained in
+[the method packet](performance-phpstan-method-resolution-memo-samples.json).
+
+The 115 focused feature executions, six exact PGO PHP differentials, formatting,
+unsafe inventory and all-target compilation pass. The preexisting last-owner
+callback gap remains on both RPHP executables and is not counted as a PHP pass.
+Fresh PGO excludes the application and holdouts. Exact source is
+`bdf1e318157656cd70248ffbc058565247689600f8df2f21c1c446a78818b3d9`;
+executable is
+`5718f9bfb75856c4d0c44624c928a9118fcc2c17f5fa6fcac90886086b194565`.
+Preparation peaks at 5,306,122,240 bytes under 6 GiB with no OOM or swap.
+Native evidence remains x86-64 only. Overall parity remains open at **7.42x**
+analysis instructions; the next selection returns to general executor/frame
+costs rather than further cache micro-optimization.

@@ -1307,13 +1307,15 @@ pub struct ExecutorGlobals {
     /// Declared public property resolutions per (op array cache, ip, class
     /// id): a site that sees many receiver classes keeps its monomorphic
     /// inline cache thrashing but skips the full lookup.
-    /// Property inline-cache states per (op array cache, ip, object class):
+    /// Property and literal-method inline-cache states per (op array cache,
+    /// instruction index, receiver class). Opcode identity separates the uses.
+    /// Property states per (op array cache, ip, object class):
     /// a monomorphic site that sees several classes refills its cache from
     /// here instead of re-resolving the property on the slow path. Read and
     /// write sites share the map (their ips differ); the value is the full
     /// cache state (prop_info, func) so typed and scope-proved entries round
     /// trip.
-    pub(crate) polymorphic_property_cache: std::cell::RefCell<
+    pub(crate) polymorphic_member_cache: std::cell::RefCell<
         HashMap<(usize, usize, u32), (u32, usize), std::hash::BuildHasherDefault<SymbolHasher>>,
     >,
     /// Results of the slow constant lookup (qualified-name scan and built-in
@@ -2509,7 +2511,7 @@ impl ExecutorGlobals {
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
             class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
-            polymorphic_property_cache: std::cell::RefCell::new(HashMap::default()),
+            polymorphic_member_cache: std::cell::RefCell::new(HashMap::default()),
             constant_lookup_memo: std::cell::RefCell::new(SymbolTable::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
@@ -2659,7 +2661,7 @@ impl ExecutorGlobals {
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
             class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
-            polymorphic_property_cache: std::cell::RefCell::new(HashMap::default()),
+            polymorphic_member_cache: std::cell::RefCell::new(HashMap::default()),
             constant_lookup_memo: std::cell::RefCell::new(SymbolTable::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
