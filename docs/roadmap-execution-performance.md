@@ -417,3 +417,18 @@ independent materialization branch.
 
 Update this section and the scorecard when priorities change. Put detailed
 benchmark records in dedicated reports, not in this roadmap.
+
+
+### Accepted PHPStan checkpoint: wide sole-owner retirement
+
+The original PHPStan parity goal remains open at **74.2814 billion analysis
+instructions versus PHP's 10.3374 billion (7.19x)**. The initialized-tail release
+range now uses the same existing sole-owner proof as the prefix, reducing the
+application budget 1.710% in independent PGO confirmation. All 168 focused
+feature executions, eight exact CLI contracts, formatting, unsafe inventory
+and all-target checks pass. Forced canonical coverage preserves output and
+counts; existing PHP gaps remain failures. Shared-frame, inherited-method and
+shared-temp timing tradeoffs are explicit under instruction priority.
+See [the accepted checkpoint](performance-phpstan-wide-temp-retirement.md).
+Continue with quantified general call/frame costs; no main-branch integration
+or completed parity claim follows from this partial checkpoint.

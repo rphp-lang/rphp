@@ -3286,12 +3286,22 @@ fn release_statement_temps(
             stats::record_statement_temp_owners(end <= 64, release_mode, count, kind, shared);
         }
 
+        // Read current ownership at each pass: callback completion can change
+        // the live prefix just as it can change an initialized tail value.
+        let is_owned = move |index: usize| {
+            if index < 64 {
+                (*frame).heap_bitmap & (1u64 << index) != 0
+            } else {
+                (*base.add(index)).needs_cleanup()
+            }
+        };
+
         // A single owned slot needs no range-wide release graph when its value
         // cannot lose any PHP children. Another physical owner pins a direct
         // array/object; strings and callback-free resources have no PHP cleanup.
         // Final owners and marked return/foreach sources retain the planner.
         if release_mode != STATEMENT_TEMPS_FOREACH_OBJECT {
-            if let Some(bitmap) = bitmap {
+            let single_owner = if let Some(bitmap) = bitmap {
                 let below_end = if end == 64 {
                     u64::MAX
                 } else {
@@ -3303,52 +3313,51 @@ fn release_statement_temps(
                     (1u64 << first) - 1
                 };
                 let owned = bitmap & below_end & !below_first;
-                if owned.is_power_of_two() {
-                    let index = owned.trailing_zeros() as usize;
-                    let value = base.add(index);
-                    let direct_drop = match (*value).value_type() {
-                        ValueType::Resource => !(*value).needs_vm_resource_release(),
-                        ValueType::String | ValueType::Array | ValueType::Object => {
-                            // A pending argument may be the other owner. Retire
-                            // those copies before making the same ownership
-                            // proof used by the nested planner below.
-                            if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
-                                cleanup_pending_calls(eg, frame);
-                            }
-                            (*value).value_type() == ValueType::String
-                                || (*value).cycle_strong_count().is_some_and(|count| count > 1)
+                owned.is_power_of_two().then(|| owned.trailing_zeros() as usize)
+            } else {
+                // Prefix bytes may be uninitialized; the ownership predicate
+                // reads only their bitmap. Tail slots retain their existing
+                // initialized-Value guarantee. Two owners disprove the sole
+                // owner case without scanning the rest of the interval.
+                let mut owned = (first..end).filter(|index| is_owned(*index));
+                owned.next().filter(|_| owned.next().is_none())
+            };
+            if let Some(index) = single_owner {
+                let value = base.add(index);
+                let direct_drop = match (*value).value_type() {
+                    ValueType::Resource => !(*value).needs_vm_resource_release(),
+                    ValueType::String | ValueType::Array | ValueType::Object => {
+                        // A pending argument may be the other owner. Retire
+                        // those copies before making the same ownership
+                        // proof used by the nested planner below.
+                        if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
+                            cleanup_pending_calls(eg, frame);
                         }
-                        _ => false,
-                    };
-                    if direct_drop {
-                        // Preserve normal GC admission. Only the current
-                        // canonical read-snapshot proof suppresses this drop;
-                        // no PHP callback occurs between that proof and drop.
-                        let snapshot = statement_temp_is_live_read_snapshot(
-                            eg, (*frame).op_array(), index, &*value,
-                            |operand, kind| &*(*frame).get_op_ptr(
-                                operand as u32, kind, (*frame).op_array(),
-                            ),
-                        );
-                        let _snapshot = snapshot.then(crate::value::suppress_cycle_snapshot_roots);
-                        std::ptr::drop_in_place(value);
-                        std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                        (*frame).heap_bitmap &= !owned;
-                        return Ok(());
+                        (*value).value_type() == ValueType::String
+                            || (*value).cycle_strong_count().is_some_and(|count| count > 1)
                     }
+                    _ => false,
+                };
+                if direct_drop {
+                    // Preserve normal GC admission. Only the current
+                    // canonical read-snapshot proof suppresses this drop;
+                    // no PHP callback occurs between that proof and drop.
+                    let snapshot = statement_temp_is_live_read_snapshot(
+                        eg, (*frame).op_array(), index, &*value,
+                        |operand, kind| &*(*frame).get_op_ptr(
+                            operand as u32, kind, (*frame).op_array(),
+                        ),
+                    );
+                    let _snapshot = snapshot.then(crate::value::suppress_cycle_snapshot_roots);
+                    std::ptr::drop_in_place(value);
+                    std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                    if index < 64 {
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                    }
+                    return Ok(());
                 }
             }
         }
-
-        // Read current ownership at each pass: callback completion can change
-        // the live prefix just as it can change an initialized tail value.
-        let is_owned = move |index: usize| {
-            if index < 64 {
-                (*frame).heap_bitmap & (1u64 << index) != 0
-            } else {
-                (*base.add(index)).needs_cleanup()
-            }
-        };
 
         // A single final object TMP has a completely owned native release
         // plan. The instruction can revisit its callback-free slot retirement

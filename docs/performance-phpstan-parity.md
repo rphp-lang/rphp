@@ -2272,3 +2272,30 @@ independent frontend counters and all valid samples are retained in
 The next selection uses a fresh exact analysis profile and a quantified budget
 for a larger general executor cost; another small opcode saving alone cannot
 resolve the outstanding instruction gap.
+
+
+## Accepted checkpoint: width-independent sole-owner TMP retirement
+
+The existing sole-owner proof now applies to initialized release ranges beyond
+the tracked prefix. It preserves pending-argument cleanup, final strong counts,
+read-snapshot and GC behavior, while final and multiple owners retain canonical
+planning. No frame layout, workload recognizer or new unsafe invariant is added.
+
+Independent PGO confirmation reduces analysis-only instructions **75.5740 to
+74.2814 billion (-1.710%)**, versus PHP **10.3374 billion**. Analysis medians
+are **6.8690 to 6.7981 seconds (-1.033%)**, versus PHP **0.9188 seconds**.
+The remaining **7.19x** instruction gap keeps parity open. All 168 focused feature
+executions and eight exact PGO CLI contracts pass; 5,252,123 actual tail-range
+completions have identical output and release counts under forced canonical
+execution. Existing last-owner and named-function self gaps remain failures.
+
+The independent wide shared-read holdout improves 7.728% instructions. Confirmed
+shared-frame time +4.096%, inherited-method time +6.081%, and shared-temp time
++2.518% remain explicit instruction-priority tradeoffs, with full instruction
+counts and separate frontend diagnostics. The initial optimization-level-one
+exploratory build is labeled separately from native PGO acceptance. All valid
+samples, builds and resource boundaries are in
+[the report](performance-phpstan-wide-temp-retirement.md) and
+[packet](performance-phpstan-wide-temp-retirement-samples.json).
+The next selection returns to general call/frame costs; this checkpoint does
+not deliver the original instruction or one-second analysis target.
