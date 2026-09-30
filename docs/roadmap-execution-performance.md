@@ -48,24 +48,27 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. Following exact typed property
-getters, [vacant temporary writes](performance-phpstan-vacant-tmp-writes.md) reduce
-confirmed analysis-only instructions from 76.1797 to 75.9427 billion (-0.311%),
-versus PHP's 10.3364 billion. Analysis time falls from 7.0856 to 6.9602 seconds
-in the same window, against PHP's 0.9340 seconds. RSS rises by 304 KiB. Actual
-diagnostic counting records 27,378,058 avoided retirement entries and preserves
-1,405,896 occupied-slot retirements with the same write classifications.
+continues on its isolated performance branch. Following vacant temporary
+writes, [resolved instanceof projection](performance-phpstan-resolved-instanceof.md)
+reduces confirmed analysis-only instructions from 75.9768 to 75.5715 billion
+(-0.533%), versus PHP's 10.3373 billion. Analysis medians fall from 7.0220 to
+6.9696 seconds in the same window, against PHP's 0.9195 seconds. RSS rises
+212 KiB. Actual counting records 6,535,341 direct numeric completions and exact
+forced-canonical output/query counts. Canonical membership and invalidation
+remain unchanged.
 
-The independent shared-temporary control uses 1.33% fewer instructions but 3.85%
-more time; scalar-frame returns use 0.75% more instructions and 1.65% more time.
-These are explicit instruction-priority tradeoffs. The separate frontend
-diagnostic retains evidence without asserting a proven placement cause. All
-159 focused feature executions, fourteen exact PGO PHP differentials,
-formatting/unsafe and all-target checks pass. The preexisting last-owner callback
-mismatch remains baseline-equal and is not a PHP pass. Every valid sample and
-separately scaled confirmation is recorded. These branch checkpoints are not
-merged to main. The remaining 7.35x instruction gap does not complete parity.
-Current profiles guide the next general executor/ownership cost.
+The independent relation control uses 3.81% fewer instructions. Shared-frame
+time +6.62% with unchanged instructions and inherited-method time +1.98% with
+instructions +0.185% remain explicit instruction-priority tradeoffs. Separate
+frontend evidence retains the association without a proven placement cause.
+All 129 focused feature executions, sixteen exact PGO PHP differentials,
+formatting/unsafe and all-target checks pass. Preexisting last-owner callback
+and named-function self compile-time gaps remain failing and baseline-equal.
+Initial preflight/counter failures and their diagnostic causes stay visible.
+Every valid window and build identity is recorded. These branch checkpoints
+are not merged to main. The remaining 7.31x gap does not complete parity.
+A fresh exact analysis profile will quantify the next larger general executor
+or ownership slice before implementation.
 
 ## Mission
 

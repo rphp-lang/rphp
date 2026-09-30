@@ -2245,3 +2245,30 @@ all valid samples and cleanup survive in
 [the checkpoint report](performance-phpstan-vacant-tmp-writes.md) and
 [packet](performance-phpstan-vacant-tmp-writes-samples.json).
 The remaining **7.35x** analysis instruction gap keeps parity open.
+
+## Accepted checkpoint: resolved instanceof operand projection
+
+Already resolved literal declarations now enter the same canonical numeric
+ancestry query before unused target/name projection. Missing names, relative
+scope, dynamic operands, closures and unregistered objects retain the complete
+original handler. No new cache, native ABI or unsafe invariant is introduced.
+
+Reversed-order confirmation reduces analysis-only instructions **75.9768 to
+75.5715 billion (-0.533%)**, against PHP's **10.3373 billion**. Analysis medians
+improve **7.0220 to 6.9696 seconds (-0.746%)**, against PHP's **0.9195 seconds**.
+The remaining **7.31x** gap does not satisfy parity. Actual whole-command
+diagnostics record 6,535,341 direct completions with matching forced-canonical
+output and total counts. All 129 focused feature executions and sixteen exact
+PGO CLI comparisons pass. The known last-owner callback and named-function
+self compile-time gaps remain baseline-equal failures, never PHP passes.
+
+The independent declared-relation control improves 3.81% instructions. Shared
+frame time +6.62% with unchanged instructions, and inherited-method time +1.98%
+with instructions +0.185%, remain explicit instruction-priority tradeoffs.
+Initial preflight and counter failures, their diagnosed harness causes,
+independent frontend counters and all valid samples are retained in
+[the report](performance-phpstan-resolved-instanceof.md) and
+[packet](performance-phpstan-resolved-instanceof-samples.json).
+The next selection uses a fresh exact analysis profile and a quantified budget
+for a larger general executor cost; another small opcode saving alone cannot
+resolve the outstanding instruction gap.

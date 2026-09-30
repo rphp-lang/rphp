@@ -5432,12 +5432,26 @@ fn op_instanceof<'a>(
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: both operands are compiler-owned slots in the same live frame
-    // and remain immutable for this non-reentrant instanceof check.
+    // and remain immutable for this non-reentrant instanceof check. A resolved
+    // non-relative literal and an Object tag prove the numeric query below;
+    // it invokes no PHP code and uses the same canonical ancestry membership.
     let (obj_val, class_name) = unsafe {
-        (
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
-            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
-        )
+        let object = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        if opline.op2_type == OpType::Const
+            && opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE == 0
+            && object.value_type() == ValueType::Object
+        {
+            let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+            let target_id = (*op_array.cache.as_ptr().add(ip)).class_id;
+            let receiver_id = object.object_class_id_unchecked();
+            if target_id != 0 && receiver_id != 0 {
+                let is_instance = eg.class_is_a_ids(receiver_id, target_id);
+                let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                frame_result_set(frame, result, opline.result_type, Value::bool(is_instance));
+                return Ok(ColdResult::Done);
+            }
+        }
+        (object, &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array))
     };
     // PHP accepts an object on the right side and uses its canonical runtime
     // class. This matters for aliases: the object's layout retains the
