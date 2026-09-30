@@ -48,22 +48,23 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. Following inline release
-inspection identities, [literal method resolution memoization](performance-phpstan-method-resolution-memo.md)
-reduces confirmed analysis-only instructions from 79.8377 to 76.7068 billion;
-reference PHP uses 10.3380 billion. Confirmation analysis time falls from 7.3305
-to 6.9115 seconds, against PHP's 0.9248 seconds. RSS increases by 1,956 KiB.
-Actual diagnostic coverage removes 1,072,607 repeated cold method resolutions.
-The independent alternating-dispatch holdout improves 31.06% instructions and
-38.73% time. Scalar-frame and regex controls take 4.34% and 1.13% more time
-with essentially unchanged instructions: explicit instruction-priority tradeoffs,
-with frontend effects measured and a specific placement cause still unproven.
-The 115 focused feature executions and all-target compilation pass. Six exact
-PGO PHP differentials match; the preexisting last-owner callback gap remains on
-baseline and candidate and is not counted as a PHP pass. Every valid sample and
-separately scaled confirmation is recorded. These branch checkpoints are not
-merged to main. The remaining 7.42x instruction gap does not complete parity.
-Exact phase profiles inform the next general executor/ownership cost selection.
+continues on its isolated performance branch. Following literal method memoization,
+[exact typed property getters](performance-phpstan-typed-property-getters.md) reduce
+confirmed analysis-only instructions from 76.6928 to 76.1537 billion, versus
+PHP's 10.3380 billion. Analysis time falls from 7.0172 to 6.9655 seconds, against
+PHP's 0.9321 seconds. RSS rises by 228 KiB. A separate diagnostic records 767,068
+completed direct getters with identical forced-canonical output.
+
+The stable-class getter holdout improves 17.85% instructions and 18.88% time;
+the preserved alternating-class holdout takes 0.0356% more instructions and 2.68%
+more time, an explicit instruction-priority tradeoff. An initial zero-admission
+fixture causes a retained coverage failure; strengthened repeated reads then
+exercise the direct path. All 107 focused feature executions, fourteen exact PGO
+PHP differentials, formatting/unsafe and all-target checks pass. The preexisting
+last-owner callback mismatch remains baseline-equal and is not a PHP pass.
+Every valid sample and separately scaled confirmation is recorded. These branch
+checkpoints are not merged to main. The remaining 7.37x instruction gap does not
+complete parity. Current profiles guide the next general executor/ownership cost.
 
 ## Mission
 

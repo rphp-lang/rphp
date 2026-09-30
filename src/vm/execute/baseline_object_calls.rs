@@ -6437,12 +6437,12 @@ fn op_init_method_call<'a>(
                     }
                 } else {
                     let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
-                        && common.supports_scalar_long_plan()
                     {
                         let user = unsafe { &*(resolved as *const UserFunction) };
+                        let scalar = common.supports_scalar_long_plan();
                         (
-                            user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
-                            user.long_property_plan.is_some(),
+                            scalar && user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
+                            scalar && user.long_property_plan.is_some(),
                             user.property_getter_plan.is_some(),
                         )
                     } else {

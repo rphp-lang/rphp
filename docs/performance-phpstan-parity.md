@@ -2197,3 +2197,28 @@ Preparation peaks at 5,306,122,240 bytes under 6 GiB with no OOM or swap.
 Native evidence remains x86-64 only. Overall parity remains open at **7.42x**
 analysis instructions; the next selection returns to general executor/frame
 costs rather than further cache micro-optimization.
+
+
+## Accepted checkpoint: exact typed property getters
+
+The existing three-opcode getter proof now admits already-canonical typed
+results through the shared pure type query. Conversions, reference returns,
+diagnostics, uninitialized/lazy/magic reads, dynamic scope and generic boundaries
+retain ordinary execution. The same exact proof guards composed and quick Long
+consumers before mutation; no new source recognizer or native ABI is added.
+
+Confirmation analysis-only instructions fall from **76.6928 to 76.1537 billion
+(-0.703%)**, versus PHP's **10.3380 billion**. Analysis time falls from 7.0172 to
+6.9655 seconds (-0.737%), versus PHP's 0.9321 seconds in this window. The remaining
+**7.37x** instruction gap keeps parity open. The diagnostic records 767,068
+completed direct getters and matching forced-canonical output.
+
+The stable-class independent holdout improves 17.85% instructions and 18.88%
+time. The preserved alternating-class control has a visible +0.0356% instruction
+and +2.68% timing tradeoff. An initial zero-admission coverage assertion fails;
+a strengthened repeated-read/class-change fixture subsequently exercises 48
+admissions with unchanged output. All 107 focused executions and fourteen PGO
+PHP differentials pass; the known callback-last-owner gap remains a failure.
+All valid windows, source/build identities, control tradeoffs and cleanup evidence
+are recorded in [the checkpoint report](performance-phpstan-typed-property-getters.md)
+and [samples](performance-phpstan-typed-property-getters-samples.json).

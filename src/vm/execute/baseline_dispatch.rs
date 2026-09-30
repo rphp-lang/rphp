@@ -10520,6 +10520,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                     if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
                                         && unsafe {
                                             try_execute_composed_long_property_call(
+                                                eg,
                                                 frame,
                                                 op_array,
                                                 opline_ptr,
@@ -10559,6 +10560,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                     let do_fcall_ptr = unsafe { opline_ptr.add(1) };
                                     if unsafe {
                                         try_execute_direct_property_getter(
+                                            eg,
                                             frame,
                                             obj_val,
                                             do_fcall_ptr,

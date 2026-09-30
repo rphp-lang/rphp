@@ -387,18 +387,24 @@ unsafe fn quick_long_property_slots(
 
 #[cfg(feature = "quick-loops")]
 unsafe fn quick_property_getter_slot(
+    eg: &ExecutorGlobals,
     receiver: *const Value,
     user: *const UserFunction,
 ) -> Option<usize> {
     let plan = (&*user).property_getter_plan.as_ref()?;
     let class_id = (*receiver).object_class_id_unchecked();
     let cache = (&*user).op_array.cache.get(plan.cache_ip as usize)?;
-    if class_id == 0 || cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+    if class_id == 0 || cache.class_id != class_id || cache.property_flags() & 1 == 0
+        || (cache.is_scoped_property() && cache.scope_function() != &(*user).common as *const FunctionCommon)
+        || eg.lazy_object_state(&*receiver).is_some()
+    {
         return None;
     }
     let slot = cache.property_slot();
     let value = &*(*receiver).object_property_slot_unchecked(slot);
-    if value.value_type() != ValueType::Long || value.is_reference() {
+    if value.value_type() != ValueType::Long || value.is_reference()
+        || !property_getter_return_is_exact(eg, &*receiver, value, &*user)
+    {
         return None;
     }
     Some(slot)
@@ -794,7 +800,7 @@ unsafe fn resolve_quick_object_ops(
                     call.argument_count as usize,
                     TypedGenericCallBoundary::Long,
                 )?;
-                let property_slot = quick_property_getter_slot(receiver, user)?;
+                let property_slot = quick_property_getter_slot(eg, receiver, user)?;
                 QuickResolvedObjectOp::PropertyGetter {
                     receiver,
                     target,
@@ -964,7 +970,7 @@ unsafe fn resolve_quick_object_ops(
                         TypedGenericCallBoundary::Long,
                     )?;
                 let inner_property_slot =
-                    quick_property_getter_slot(inner_receiver, inner_user)?;
+                    quick_property_getter_slot(eg, inner_receiver, inner_user)?;
                 QuickResolvedObjectOp::ComposedProperty {
                     outer_receiver,
                     outer_target,

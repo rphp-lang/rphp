@@ -1441,7 +1441,7 @@ pub fn execute_hot_frame(
                             if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
                                 && unsafe {
                                     super::execute::try_execute_composed_long_property_call(
-                                        frame, op_array, opline_ptr, obj_val, user, plan,
+                                        eg, frame, op_array, opline_ptr, obj_val, user, plan,
                                     )
                                 }
                             {
@@ -1477,6 +1477,7 @@ pub fn execute_hot_frame(
                             let do_fcall_ptr = unsafe { opline_ptr.add(1) };
                             if unsafe {
                                 super::execute::try_execute_hot_property_getter(
+                                    eg,
                                     frame,
                                     obj_val,
                                     do_fcall_ptr,

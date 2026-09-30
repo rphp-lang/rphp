@@ -5801,8 +5801,27 @@ fn property_name<'a>(op_array: &'a OpArray, instruction: &Instruction) -> Option
 fn build_property_getter_method_plan(function: &UserFunction) -> Option<PropertyGetterMethodPlan> {
     let common = &function.common;
     let op_array = &function.op_array;
-    if !common.supports_scalar_long_plan()
-        || common.plan.ret != ReturnStrategy::Fast
+    fn guardable_return(hint: &ParamTypeHint) -> bool {
+        match hint {
+            ParamTypeHint::Callable | ParamTypeHint::Void | ParamTypeHint::Never => false,
+            ParamTypeHint::Nullable(inner) => guardable_return(inner),
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+                parts.iter().all(guardable_return)
+            }
+            _ => true,
+        }
+    }
+    if !common.plan.call.is_compact_user_call()
+        || common.sig.returns_reference
+        || common.sig.ref_args != 0
+        || common.sig.is_variadic
+        || common.plan.has_call_diagnostic_attribute()
+        || !guardable_return(&common.sig.return_type_hint)
+        || !op_array.global_vars.is_empty()
+        || !op_array.static_vars.is_empty()
+        || !op_array.try_entries.is_empty()
+        || op_array.is_generator
+        || op_array.may_access_globals
         || common.sig.this_offset != 1
         || common.sig.public_arity() != 0
         || op_array.num_cvs != common.sig.num_args

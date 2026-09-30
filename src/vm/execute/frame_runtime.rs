@@ -1232,13 +1232,45 @@ unsafe fn try_execute_resolved_long_property_plan(
     true
 }
 
+/// Accept only an already-canonical result; conversions and diagnostics must
+/// enter the ordinary getter frame. No owner is cloned or retired by this probe.
+#[inline(never)]
+fn property_getter_return_is_exact(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    property: &Value,
+    callee: &UserFunction,
+) -> bool {
+    let hint = &callee.common.sig.return_type_hint;
+    let lexical = if hint.uses_declaring_class_scope() {
+        let Some(class) = eg.declaring_class_of(&callee.common) else { return false; };
+        // Relative trait scope depends on the composition frame. Keep that
+        // canonical frame rather than substituting the trait declaration.
+        if eg.find_class(class).is_none_or(|definition| definition.is_trait) {
+            return false;
+        }
+        Some(class)
+    } else {
+        None
+    };
+    let called = if hint.uses_late_static() {
+        receiver.as_object().and_then(|object| {
+            eg.class_by_id(object.class_id).map(|class| class.name.as_str())
+        })
+    } else {
+        None
+    };
+    check_type_hint_in_scopes(property.dereferenced(), hint, eg, true, lexical, called)
+}
+
 /// Materialize a compiler-proven `return $this->property` call directly into
 /// the caller's DoFcall result.  The callee's FetchObjR cache is authoritative:
-/// only a declared public property resolved for this exact receiver class can
-/// enter the path.  A cold, polymorphic, dynamic, or non-public access simply
-/// resumes through the ordinary method frame.
+/// only a readable declared property with matching class and fixed lexical
+/// scope can enter the path. Lazy, cold, dynamic, invalid or coercible results
+/// resume through the ordinary method frame before ownership changes.
 #[inline(always)]
 pub(crate) unsafe fn try_execute_direct_property_getter(
+    eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     receiver: &Value,
     do_fcall_ptr: *const Instruction,
@@ -1263,7 +1295,10 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
         return false;
     }
     let cache = &callee.op_array.cache[plan.cache_ip as usize];
-    if cache.class_id != class_id || cache.property_flags() & 1 == 0 {
+    if cache.class_id != class_id || cache.property_flags() & 1 == 0
+        || (cache.is_scoped_property() && cache.scope_function() != &callee.common as *const FunctionCommon)
+        || eg.lazy_object_state(receiver).is_some()
+    {
         return false;
     }
     let property_slot = cache.property_slot();
@@ -1272,6 +1307,10 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
         // A getter cache is shared by all instances of the class. The
         // baseline read must construct the catchable uninitialized typed
         // property Error for a different, not-yet-initialized receiver.
+        return false;
+    }
+
+    if !property_getter_return_is_exact(eg, receiver, property, callee) {
         return false;
     }
 
@@ -1298,13 +1337,14 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
 /// frames; baseline retains the inlined form.
 #[inline(never)]
 pub(crate) unsafe fn try_execute_hot_property_getter(
+    eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     receiver: &Value,
     do_fcall_ptr: *const Instruction,
     callee: &UserFunction,
     plan: &PropertyGetterMethodPlan,
 ) -> bool {
-    try_execute_direct_property_getter(caller, receiver, do_fcall_ptr, callee, plan)
+    try_execute_direct_property_getter(eg, caller, receiver, do_fcall_ptr, callee, plan)
 }
 
 /// Fuse the exact call-site shape `longPropertyMutator(propertyGetter())`
@@ -1313,6 +1353,7 @@ pub(crate) unsafe fn try_execute_hot_property_getter(
 /// starts, preserving PHP argument evaluation and same-object aliasing.
 #[inline(never)]
 pub(crate) unsafe fn try_execute_composed_long_property_call(
+    eg: &ExecutorGlobals,
     caller: *mut ExecuteData,
     caller_op_array: &crate::compiler::OpArray,
     outer_init_ptr: *const Instruction,
@@ -1377,7 +1418,9 @@ pub(crate) unsafe fn try_execute_composed_long_property_call(
         return false;
     }
     let inner_common = &*inner_ic.func;
-    if inner_common.fn_type != FunctionType::User || inner_common.sig.public_arity() != 0 {
+    if inner_common.fn_type != FunctionType::User || inner_common.sig.public_arity() != 0
+        || inner_ic.method_has_generic_contract()
+    {
         return false;
     }
     let inner_user = &*(inner_ic.func as *const UserFunction);
@@ -1385,11 +1428,16 @@ pub(crate) unsafe fn try_execute_composed_long_property_call(
         return false;
     };
     let getter_cache = &inner_user.op_array.cache[getter_plan.cache_ip as usize];
-    if getter_cache.class_id != inner_class_id || getter_cache.property_flags() & 1 == 0 {
+    if getter_cache.class_id != inner_class_id || getter_cache.property_flags() & 1 == 0
+        || (getter_cache.is_scoped_property() && getter_cache.scope_function() != inner_common as *const FunctionCommon)
+        || eg.lazy_object_state(inner_receiver).is_some()
+    {
         return false;
     }
     let argument = &*inner_receiver.object_property_slot_unchecked(getter_cache.property_slot());
-    if argument.value_type() != ValueType::Long || argument.is_reference() {
+    if argument.value_type() != ValueType::Long || argument.is_reference()
+        || !property_getter_return_is_exact(eg, inner_receiver, argument, inner_user)
+    {
         return false;
     }
     let mut arguments = [0i64; 8];
