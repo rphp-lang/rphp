@@ -2347,3 +2347,18 @@ whole-command diagnostic and corrected mechanical reversal are in
 [the report](performance-phpstan-release-tree-observation.md) and
 [packet](performance-phpstan-release-tree-observation-samples.json).
 Selection returns to repeated ordinary opcode work; parity remains open.
+
+## Rejected exploratory checkpoint: statement scratch reuse
+
+Compiler-side reuse of explicitly retired statement suffixes improves the
+optimization-level-one analysis count 118.4208 to 118.0314 billion (-0.329%).
+It fails the declared one-percent application filter. Although initialization
+falls by 9.28 million TMP slots, wide release checks fall only 0.98%; all cleanup
+markers and frame counts remain. All 45 final focused tests, eight exact PHP CLI
+contracts, full PHPStan output and four independent checksums pass. Two earlier
+scope failures and the baseline-equal trait-closure __CLASS__ PHP gap remain
+explicit failures. Source is fully restored and the accepted 74.2814 billion
+hardware PGO result is unchanged. No fresh PGO or later feature gate is run.
+See [the rejection report](performance-phpstan-scratch-reuse.md) and
+[packet](performance-phpstan-scratch-reuse-samples.json). Selection returns to
+the exact accepted PGO executor profile for a larger general cost.
