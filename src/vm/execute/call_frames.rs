@@ -3266,10 +3266,30 @@ fn release_statement_temps(
         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
         let bitmap = (end <= 64).then(|| (*frame).owned_heap_bitmap());
 
-        // A range can contain many scalar slots but only one counted native
-        // handle. Find that owned slot without scanning the surrounding values
-        // or entering the PHP release graph. Callback-capable resources and
-        // marked return/foreach sources retain their ordinary planner below.
+        #[cfg(feature = "vm-stats")]
+        if stats::enabled() {
+            let mut count = 0;
+            let mut kind = 0;
+            let mut shared = false;
+            for index in first..end {
+                let owned = if index < 64 {
+                    (*frame).heap_bitmap & (1u64 << index) != 0
+                } else {
+                    (*base.add(index)).needs_cleanup()
+                };
+                if owned {
+                    count += 1;
+                    kind = (*base.add(index)).value_type() as usize;
+                    shared = (*base.add(index)).cycle_strong_count().is_some_and(|n| n > 1);
+                }
+            }
+            stats::record_statement_temp_owners(end <= 64, release_mode, count, kind, shared);
+        }
+
+        // A single owned slot needs no range-wide release graph when its value
+        // cannot lose any PHP children. Another physical owner pins a direct
+        // array/object; strings and callback-free resources have no PHP cleanup.
+        // Final owners and marked return/foreach sources retain the planner.
         if release_mode != STATEMENT_TEMPS_FOREACH_OBJECT {
             if let Some(bitmap) = bitmap {
                 let below_end = if end == 64 {
@@ -3286,9 +3306,31 @@ fn release_statement_temps(
                 if owned.is_power_of_two() {
                     let index = owned.trailing_zeros() as usize;
                     let value = base.add(index);
-                    if (*value).value_type() == ValueType::Resource
-                        && !(*value).needs_vm_resource_release()
-                    {
+                    let direct_drop = match (*value).value_type() {
+                        ValueType::Resource => !(*value).needs_vm_resource_release(),
+                        ValueType::String | ValueType::Array | ValueType::Object => {
+                            // A pending argument may be the other owner. Retire
+                            // those copies before making the same ownership
+                            // proof used by the nested planner below.
+                            if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
+                                cleanup_pending_calls(eg, frame);
+                            }
+                            (*value).value_type() == ValueType::String
+                                || (*value).cycle_strong_count().is_some_and(|count| count > 1)
+                        }
+                        _ => false,
+                    };
+                    if direct_drop {
+                        // Preserve normal GC admission. Only the current
+                        // canonical read-snapshot proof suppresses this drop;
+                        // no PHP callback occurs between that proof and drop.
+                        let snapshot = statement_temp_is_live_read_snapshot(
+                            eg, (*frame).op_array(), index, &*value,
+                            |operand, kind| &*(*frame).get_op_ptr(
+                                operand as u32, kind, (*frame).op_array(),
+                            ),
+                        );
+                        let _snapshot = snapshot.then(crate::value::suppress_cycle_snapshot_roots);
                         std::ptr::drop_in_place(value);
                         std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
                         (*frame).heap_bitmap &= !owned;

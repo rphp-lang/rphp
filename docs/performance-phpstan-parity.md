@@ -2074,3 +2074,48 @@ resolver kept separately for fallback. Aggregate preparation peak is
 5,063,122,944 bytes and verification peak is 4,297,121,792 bytes, both within
 the 6 GiB boundary with no OOM or timeout. Native evidence remains x86-64 only.
 The remaining analysis instruction gap is **7.99x**, so parity stays open.
+
+## Accepted checkpoint: single temporary-owner retirement
+
+The [temporary-owner contract](performance-phpstan-temp-release.md) extends the
+existing bitmap proof to strings and direct arrays/objects that retain another
+physical owner. Pending call arguments retire before the nested-operand proof;
+the canonical read-snapshot predicate immediately precedes ordinary drop. Final
+owners, references, multiple roots, wide ranges and marked foreach return sources
+retain the planner. No new unsafe block, frame layout or JIT admission is added.
+
+Same-window analysis-only instructions fall from **82.4797 to 80.6218 billion
+(-2.25%)**, against PHP's 10.3338 billion. Whole-command confirmation medians
+fall from 101.1572 to 99.2534 billion (-1.88%). Confirmation analysis time is
+7.4976 versus 7.3226 seconds (-2.33%), against PHP's 0.9172 seconds; RSS increases
+304 KiB. Five files, twenty findings, stderr and status match. Each runtime uses
+a fresh cache directory. Whole-command counters and analysis-only counters are
+separate scopes.
+
+The independent shared temporary-read holdout uses **17.80% fewer instructions**
+and 15.43% less time. Existing shared-frame, relative-self, regex and inherited
+method controls also reduce instructions. The property-read control instead
+takes 2.05% more time and uses 0.40% more instructions; scalar-frame instructions
+rise 0.79% with essentially unchanged time. Confirmation retains these small
+regressions. The integrating task accepts the explicit instruction-priority
+tradeoff, without claiming every workload improves. All distributions survive
+in [the temporary-owner packet](performance-phpstan-temp-release-samples.json).
+
+Validation includes 356 focused feature/resource test executions, eight supported
+compact/wide PHP differential cases, formatting, unchanged unsafe inventory and
+all-target/all-feature compilation. A preflight exposes a baseline gap: replacing
+a nested last-owner array during a by-reference callback omits the old leaf's
+destructor. Its PHP fixture/expected output and original failed gate survive;
+candidate remains byte-identical to baseline and the case is not a PHP pass.
+The diagnostic attempt that shared PHP's result-cache directory is also rejected
+as admission evidence. Fresh diagnostics then establish the ownership counts.
+
+Exact source is
+`6b40e5f07116b0db3d6293a2b27d3e0355995318911b22612bf7b51405ea6549`;
+executable is
+`91f6a8424590da64f45347fa5858aeb20c29c367bcbfadd9f0cca50c68c31fc4`.
+PGO uses the unchanged 18 independent programs and excludes the target and all
+controls. Preparation peaks at 4,896,120,832 bytes under the 6 GiB boundary,
+without OOM. Native evidence remains x86-64 only. Overall parity stays open at
+**7.80x** analysis instructions; the next cost selection uses an exact profile
+limited to the application analysis interval.

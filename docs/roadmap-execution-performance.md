@@ -48,19 +48,20 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. A declaration-bounded resolved
-method index reduces analysis-only instructions from 84.4235 to 82.5389
-billion; reference PHP uses 10.3363 billion. Confirmation analysis time falls
-from 7.8557 to 7.7273 seconds, against PHP's 0.9400 seconds. The independent
-polymorphic method holdout uses 14.94% fewer instructions. RSS increases by
-8562 KiB and the nested-regex control is 3.62% slower in confirmation despite
-essentially unchanged instructions; these are explicit instruction-priority
-tradeoffs. The 516 focused feature checks and all-target compilation pass. Two
-PHP differentials match exactly; broader trait-composition gaps remain on both
-baseline and candidate and are not counted as PHP passes. Failed gates and
-every valid sample remain recorded. This branch checkpoint is not yet merged
-to main. The remaining 7.99x instruction gap does not complete parity; executor
-dispatch and temporary/return retirement remain the largest profiled areas.
+continues on its isolated performance branch. Following the declaration-bounded
+method index, the [single temporary-owner checkpoint](performance-phpstan-temp-release.md)
+reduces analysis-only instructions from 82.4797 to 80.6218 billion; reference
+PHP uses 10.3338 billion. Confirmation analysis time falls from 7.4976 to 7.3226
+seconds, against PHP's 0.9172 seconds. The independent shared temporary-read
+holdout uses 17.80% fewer instructions. RSS increases by 304 KiB. Property reads
+take 2.05% more time and scalar-frame instructions rise 0.79%; these are explicit
+instruction-priority tradeoffs. The 356 focused feature/resource checks and
+all-target compilation pass. Eight supported PHP differentials match; the
+preexisting last-owner callback gap remains on baseline and candidate and is
+not counted as a PHP pass. Failed gates and every valid sample remain recorded.
+These branch checkpoints are not yet merged to main. The remaining 7.80x
+instruction gap does not complete parity. A fresh analysis-only exact profile
+selects the next general cost in the executor and its runtime helpers.
 
 ## Mission
 
