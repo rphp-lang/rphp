@@ -76,6 +76,53 @@ the cache used by its subsequent warm run. OS filesystem caches remain warm.
 This protocol measures serial execution without PHPStan's process restart,
 not its unconstrained default worker configuration.
 
+## Fast instruction iteration
+
+Use `scripts/bench-instructions.py` for exploratory comparisons of already-built
+executables. It measures native `instructions:u`, checks exact reference exit,
+stdout and stderr, pins one CPU, creates a fresh TMPDIR per run and alternates
+baseline/candidate order across rounds. One pair is the default; it is feedback
+for selecting a change, not a final performance acceptance gate. Preserve the
+same build profile, compiler flags and inputs between baseline and candidate.
+An optimization-level-one development result does not establish a PGO result.
+
+Run the driver in the aggregate memory service described above. It verifies
+the effective boundary, takes the exclusive benchmark lock, runs cleanup and
+kills the whole workload process group on timeout. `--output` must name a fresh
+private directory: raw output and profiles can reveal input paths or data.
+`--input` records hashes of relevant input files; binary/input changes during
+the run reject the result. Counter denial, zero counts and multiplexing remain
+visible failures. Enable user-mode performance counters with
+`sudo sysctl kernel.perf_event_paranoid=2` when required; this resets on reboot.
+
+For an already prepared phase-instrumented PHPStan archive:
+
+```sh
+python3 scripts/bench-instructions.py \
+  --variant baseline=/tmp/rphp-candidate-baseline/rphp \
+  --variant candidate=/tmp/rphp-candidate-current/rphp \
+  --reference php --project /tmp/instruction-input \
+  --output /tmp/instruction-results --input /tmp/phpstan-phase.phar \
+  --phase --rounds 1 --profile candidate -- \
+  -d disable_functions=proc_open,pcntl_signal,pcntl_exec,pcntl_fork \
+  -d zend.exception_ignore_args=0 /tmp/phpstan-phase.phar \
+  analyse --no-progress --no-ansi
+```
+
+`--phase` requires the archive to send `enable`/`disable` through
+`RPHP_PERF_CONTROL`, await acknowledgements on `RPHP_PERF_ACK` and emit one
+`RPHP_BENCH_ANALYSIS` timing marker. Measurement starts with counters disabled,
+so startup is excluded. This runner does not modify the archive or runtime.
+Without `--phase`, counts cover the complete command and must be labeled so.
+
+Optional `--profile candidate` runs a separate native `perf record` with an
+instruction sampling period and writes a function report. Sampling indicates
+where instructions execute; percentages are estimates, not exact per-function
+counts. Keep its elapsed time separate from ordinary execution. Use Callgrind
+only when exact instruction-site or call-edge attribution is needed; do not
+repeat that expensive diagnostic for every source edit. The ordinary final
+correctness, feature and performance gates remain required.
+
 ## Workload selection
 
 Microbenchmarks are useful for isolating dispatch, calls, arrays, objects,
