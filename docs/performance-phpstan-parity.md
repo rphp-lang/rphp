@@ -2222,3 +2222,26 @@ PHP differentials pass; the known callback-last-owner gap remains a failure.
 All valid windows, source/build identities, control tradeoffs and cleanup evidence
 are recorded in [the checkpoint report](performance-phpstan-typed-property-getters.md)
 and [samples](performance-phpstan-typed-property-getters-samples.json).
+
+## Accepted checkpoint: vacant temporary owner writes
+
+The generic TMP writer reuses its existing clear-bitmap ownership proof and the
+initialized tail's ownership flag. It avoids entering retirement machinery when
+no prior owner exists, while occupied slots retain ordinary drop/GC/order. No
+uninitialized prefix bytes are read and no frame layout or unsafe invariant
+changes. Separate diagnostic counting records 27,378,058 avoided helper entries
+and 1,405,896 actual owner retirements over the full command.
+
+Reversed-order confirmation reduces analysis-only instructions **76.1797 to
+75.9427 billion (-0.311%)**, against PHP's **10.3364 billion**. Same-window
+analysis medians improve **7.0856 to 6.9602 seconds (-1.771%)**, against PHP's
+0.9340 seconds. RSS rises 304 KiB. All 159 focused feature executions and fourteen
+exact PGO PHP differentials pass, as do formatting, unsafe inventory and
+all-target checks. The preexisting callback-last-owner gap remains failing and
+baseline-equal. Shared temporary time +3.85% with instructions -1.33%, and
+scalar-frame time +1.65% with instructions +0.75%, remain explicit accepted
+instruction-priority tradeoffs. Frontend diagnostics, exact build identities,
+all valid samples and cleanup survive in
+[the checkpoint report](performance-phpstan-vacant-tmp-writes.md) and
+[packet](performance-phpstan-vacant-tmp-writes-samples.json).
+The remaining **7.35x** analysis instruction gap keeps parity open.

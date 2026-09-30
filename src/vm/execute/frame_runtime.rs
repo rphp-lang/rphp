@@ -176,12 +176,18 @@ unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
     let heap = val.needs_cleanup();
     if (*frame).has_heap_slots {
         // A clear tracked-prefix bit proves that there is no live heap owner.
-        // Do not inspect the old TMP bytes: they may be uninitialized. A
-        // scalar replacement also leaves that bit clear, so no update is due.
-        if heap
-            || slot_idx(frame, ptr) >= 64
-            || (*frame).heap_bitmap & (1u64 << slot_idx(frame, ptr)) != 0
-        {
+        // Never read its old TMP bytes: they may be uninitialized. Tail slots
+        // are initialized by the allocator; their ownership flag provides the
+        // same vacant-destination proof without entering a no-op drop routine.
+        let index = slot_idx(frame, ptr);
+        if index < 64 {
+            let bit = 1u64 << index;
+            if (*frame).heap_bitmap & bit != 0 {
+                bitmap_drop_and_update(frame, ptr, heap);
+            } else if heap {
+                (*frame).heap_bitmap |= bit;
+            }
+        } else if (*ptr).needs_cleanup() {
             bitmap_drop_and_update(frame, ptr, heap);
         }
         ptr.write(val);

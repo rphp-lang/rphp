@@ -48,23 +48,24 @@ remains pending.
 ## Current PHPStan instruction checkpoint
 
 The integrating task's [parity investigation](performance-phpstan-parity.md)
-continues on its isolated performance branch. Following literal method memoization,
-[exact typed property getters](performance-phpstan-typed-property-getters.md) reduce
-confirmed analysis-only instructions from 76.6928 to 76.1537 billion, versus
-PHP's 10.3380 billion. Analysis time falls from 7.0172 to 6.9655 seconds, against
-PHP's 0.9321 seconds. RSS rises by 228 KiB. A separate diagnostic records 767,068
-completed direct getters with identical forced-canonical output.
+continues on its isolated performance branch. Following exact typed property
+getters, [vacant temporary writes](performance-phpstan-vacant-tmp-writes.md) reduce
+confirmed analysis-only instructions from 76.1797 to 75.9427 billion (-0.311%),
+versus PHP's 10.3364 billion. Analysis time falls from 7.0856 to 6.9602 seconds
+in the same window, against PHP's 0.9340 seconds. RSS rises by 304 KiB. Actual
+diagnostic counting records 27,378,058 avoided retirement entries and preserves
+1,405,896 occupied-slot retirements with the same write classifications.
 
-The stable-class getter holdout improves 17.85% instructions and 18.88% time;
-the preserved alternating-class holdout takes 0.0356% more instructions and 2.68%
-more time, an explicit instruction-priority tradeoff. An initial zero-admission
-fixture causes a retained coverage failure; strengthened repeated reads then
-exercise the direct path. All 107 focused feature executions, fourteen exact PGO
-PHP differentials, formatting/unsafe and all-target checks pass. The preexisting
-last-owner callback mismatch remains baseline-equal and is not a PHP pass.
-Every valid sample and separately scaled confirmation is recorded. These branch
-checkpoints are not merged to main. The remaining 7.37x instruction gap does not
-complete parity. Current profiles guide the next general executor/ownership cost.
+The independent shared-temporary control uses 1.33% fewer instructions but 3.85%
+more time; scalar-frame returns use 0.75% more instructions and 1.65% more time.
+These are explicit instruction-priority tradeoffs. The separate frontend
+diagnostic retains evidence without asserting a proven placement cause. All
+159 focused feature executions, fourteen exact PGO PHP differentials,
+formatting/unsafe and all-target checks pass. The preexisting last-owner callback
+mismatch remains baseline-equal and is not a PHP pass. Every valid sample and
+separately scaled confirmation is recorded. These branch checkpoints are not
+merged to main. The remaining 7.35x instruction gap does not complete parity.
+Current profiles guide the next general executor/ownership cost.
 
 ## Mission
 
