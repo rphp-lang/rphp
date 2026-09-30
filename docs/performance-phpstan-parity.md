@@ -2331,3 +2331,19 @@ rejecting shared owners. Exact identities, samples and the corrected diagnostic
 are in [the report](performance-phpstan-return-owner-proof.md) and
 [packet](performance-phpstan-return-owner-proof-samples.json).
 The instruction and time parity goal remains open.
+
+## Rejected exploratory checkpoint: combined release-tree observation
+
+One identity entry replaces separate membership, encounter, descent and opaque
+snapshot tables while retaining per-root generations and type-specific
+membership. The exact default optimization-level-one Callgrind count improves
+118.4208 to 117.9742 billion (-0.377%). Tree inspection itself improves about
+15%, but the main executor's self count remains exactly unchanged. This fails
+the declared one-percent whole-analysis filter. All 35 actual focused tests and
+eight PHP CLI contracts pass; no later feature, PGO or native acceptance gate is
+run. Production source and the accepted 74.2814 billion-instruction PGO binary
+remain unchanged. The retained-baseline selection policy, all samples, the
+whole-command diagnostic and corrected mechanical reversal are in
+[the report](performance-phpstan-release-tree-observation.md) and
+[packet](performance-phpstan-release-tree-observation-samples.json).
+Selection returns to repeated ordinary opcode work; parity remains open.
