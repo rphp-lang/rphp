@@ -620,7 +620,6 @@
     "complete": true,
     "source_sha256": "37ccaf9d6be808d4d9cf138ced425674b6bbe65e9bfc08382b801aa9a3116b89",
     "baseline_commit": "54f2e19f",
-    "baseline_binary_sha256": "5718f9bfb75856c4d0c44624c928a9118fcc2c17f5fa6fcac90886086b194565",
     "profdata_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.98.1-stable\n  Optimized build.",
     "training_selection": [
       {
@@ -1227,7 +1226,10 @@
     "merged_profile_sha256": "20be852c3a85510d62ff2a94eb48f751e8512fcc577e9debdef929eafc10be11",
     "merged_profile_bytes": 6645440,
     "binary_sha256": "1389315dc329005b2ff8eb398041fc9c14161d73592c486146346dbfdd3e5086",
-    "binary_bytes": 76416568
+    "binary_bytes": 76416568,
+    "training_preflight_rphp_commit": "9790b30a",
+    "training_preflight_rphp_binary_sha256": "5718f9bfb75856c4d0c44624c928a9118fcc2c17f5fa6fcac90886086b194565",
+    "performance_baseline_binary_sha256": "80dbcc8339ba54b471a48eedadc2ddd9b5e82a9eb40054dd836f84820e834836"
   },
   "environment": {
     "reference_packet": "performance-phpstan-regex-continuations-samples.json",
@@ -4977,6 +4979,7 @@
     "Diagnostic write and helper counts include bootstrap and use a distinct default-feature test-fast executable; they are not native phase-only timing claims.",
     "The preexisting callback-last-owner PHP gap remains equal to baseline and is not a PHP pass.",
     "No warmed result cache, PHPStan workload, or independent control was used for PGO training.",
-    "Twenty-six missing-profile warnings belong exclusively to the untrained build script, with no executable profile mismatch warning; logs are retained by hash."
+    "Twenty-six missing-profile warnings belong exclusively to the untrained build script, with no executable profile mismatch warning; logs are retained by hash.",
+    "Training checksum preflight used the older 9790b30a RPHP executable and reference PHP, matching the newly instrumented candidate outputs. This metadata was initially mislabeled; all actual A/B windows use the correct 54f2e19f executable. No native measurement changes."
   ]
 }

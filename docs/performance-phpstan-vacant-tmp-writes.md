@@ -133,7 +133,14 @@ Exact source is
 executable is
 `1389315dc329005b2ff8eb398041fc9c14161d73592c486146346dbfdd3e5086`.
 Fresh PGO uses the unchanged eighteen independent inputs, excluding PHPStan
-and every holdout. Twenty-six missing-profile warnings concern only the
+and every holdout. The training-input checksum preflight used reference PHP and
+the older `9790b30a` method-memo executable; the recorded hashes match the fresh
+instrumented candidate's outputs. It was initially mislabeled as the performance
+baseline in the build metadata. The packet now distinguishes that preflight
+executable from the actual `54f2e19f` A/B baseline; all phase and application
+comparisons used the correct latter executable. This correction changes no
+native sample, PGO input or source fingerprint. Twenty-six missing-profile
+warnings concern only the
 untrained build script; no executable profile mismatch is reported. Preparation
 peaks at 5,539,594,240 bytes under the verified 6 GiB/no-swap boundary without OOM.
 Mandatory cleanup runs in both checkouts and deletes only disposable Cargo
