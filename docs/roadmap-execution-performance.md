@@ -2,21 +2,24 @@
 
 ## Current PHPStan scorecard
 
-Typed pending-call ownership and numeric frame hashing at baseline `82b60bc3`
-independently reduce analysis **69.6932 to 69.0416 billion instructions (-0.935%)**
-with exact PHP output; time medians are **6.5422/6.3595 seconds**. The remaining
-**6.68x instruction gap** keeps simultaneous parity active. All 284 focused
-feature executions, twelve final-PGO/canonical CLI programs and all-target checks
-pass. Inherited-method +1.653% and return-scope +2.881% control times are explicit
-instruction-priority tradeoffs, with instruction changes below +0.131%; those
-two timing cells do not pass the one-percent ceiling. See
-[the checkpoint](performance-phpstan-typed-call-state.md) and
-[all observations](performance-phpstan-typed-call-state-samples.json).
-The full preceding executor budget places at least 3.676/2.479/2.301 billion
-instructions in ReleaseTemps/DoFcall/Return bodies, before called helpers.
-Continue with general call and temporary ownership costs; main integration
-remains separate.
+Outlined canonical return validation at baseline `deea219c` independently
+reduces analysis **69.0510 to 68.6894 billion instructions (-0.524%)** with
+exact PHP output; time medians are **6.4377/6.3610 seconds (-1.192%)**. PHP uses
+10.3377 billion instructions and 0.9294 seconds. The remaining **6.64x
+instruction gap** keeps simultaneous parity active. All 403 focused test
+executions, 56 PGO/canonical CLI observations, all-target compilation,
+formatting and unchanged unsafe-policy checks pass. The independent five-pair
+review of all eight controls has no time regression above 1%; the typed-return
+holdout uses 2.929% fewer instructions and runs 5.475% faster. First-window
+regressions remain in the packet and were not pooled away. See
+[the checkpoint](performance-phpstan-outlined-return-check.md) and
+[all observations](performance-phpstan-outlined-return-check-samples.json).
 
+The preceding [typed call-state checkpoint](performance-phpstan-typed-call-state.md)
+retains its explicitly accepted timing tradeoffs. The full preceding executor
+budget places at least 3.676/2.479/2.301 billion own instructions in
+ReleaseTemps/DoFcall/Return bodies, before helpers. Continue with larger general
+executor and ownership costs; main integration remains separate.
 
 Status: active project direction
 

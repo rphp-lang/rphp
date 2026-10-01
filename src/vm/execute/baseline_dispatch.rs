@@ -2461,6 +2461,15 @@ unsafe fn validate_reference_return_after_finally(
         return Ok(());
     }
 
+    if return_type_is_exact(
+        &*return_target,
+        hint,
+        eg,
+        frame,
+        function as *const FunctionCommon,
+    ) {
+        return Ok(());
+    }
     let source = (&*return_target).dereferenced().clone();
     // SAFETY: the live function header proven above supplies the same lexical
     // fallback identity; the type probe borrows it only before PHP conversion.
@@ -11262,7 +11271,15 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let retval = unsafe {
                             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
-                        if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true) {
+                        if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true)
+                            && !return_type_is_exact(
+                                retval,
+                                ret_hint,
+                                eg,
+                                frame,
+                                func_common_ret as *const FunctionCommon,
+                            )
+                        {
                             let source = retval.dereferenced().clone();
                             let preparation = prepare_return_type_value(
                                 &source,
@@ -11543,80 +11560,88 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
-                                let source = retval.dereferenced().clone();
-                                let preparation = prepare_return_type_value(
-                                    &source,
+                                if !return_type_is_exact(
+                                    retval,
                                     hint,
                                     eg,
-                                    op_array.strict_types,
                                     frame,
                                     func_common as *const FunctionCommon,
-                                )?;
-                                resume_pending_exception!();
-                                match preparation {
-                                    ReturnTypePreparation::Exact => {}
-                                    ReturnTypePreparation::Coerced(value, diagnostic) => {
-                                        if let Some(diagnostic) = diagnostic {
-                                            report_scalar_coercion_diagnostic(
+                                ) {
+                                    let source = retval.dereferenced().clone();
+                                    let preparation = prepare_return_type_value(
+                                        &source,
+                                        hint,
+                                        eg,
+                                        op_array.strict_types,
+                                        frame,
+                                        func_common as *const FunctionCommon,
+                                    )?;
+                                    resume_pending_exception!();
+                                    match preparation {
+                                        ReturnTypePreparation::Exact => {}
+                                        ReturnTypePreparation::Coerced(value, diagnostic) => {
+                                            if let Some(diagnostic) = diagnostic {
+                                                report_scalar_coercion_diagnostic(
+                                                    eg,
+                                                    frame,
+                                                    op_array,
+                                                    opline,
+                                                    &source,
+                                                    diagnostic,
+                                                )?;
+                                                if let Some(exception) = eg.exception.take() {
+                                                    if matches!(
+                                                        diagnostic,
+                                                        ScalarCoercionDiagnostic::FloatToInt
+                                                            | ScalarCoercionDiagnostic::FloatStringToInt
+                                                    ) {
+                                                        let outcome = format!(
+                                                            "{} returned",
+                                                            declared_type_error_value_name(&source)
+                                                        );
+                                                        let err = return_type_error_value(
+                                                            eg,
+                                                            frame,
+                                                            func_common as *const FunctionCommon,
+                                                            op_array,
+                                                            opline,
+                                                            hint,
+                                                            &outcome,
+                                                        );
+                                                        append_replaced_exception(
+                                                            &err,
+                                                            &exception,
+                                                            eg,
+                                                        );
+                                                        match throw_in_frame(eg, frame, err)? {
+                                                            ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
+                                                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                                        }
+                                                    }
+                                                    eg.exception = Some(exception);
+                                                    resume_pending_exception!();
+                                                }
+                                            }
+                                            prepared_return = Some(value);
+                                        }
+                                        ReturnTypePreparation::Invalid => {
+                                            let outcome = format!(
+                                                "{} returned",
+                                                declared_type_error_value_name(&source)
+                                            );
+                                            let err = return_type_error_value(
                                                 eg,
                                                 frame,
+                                                func_common as *const FunctionCommon,
                                                 op_array,
                                                 opline,
-                                                &source,
-                                                diagnostic,
-                                            )?;
-                                            if let Some(exception) = eg.exception.take() {
-                                                if matches!(
-                                                    diagnostic,
-                                                    ScalarCoercionDiagnostic::FloatToInt
-                                                        | ScalarCoercionDiagnostic::FloatStringToInt
-                                                ) {
-                                                    let outcome = format!(
-                                                        "{} returned",
-                                                        declared_type_error_value_name(&source)
-                                                    );
-                                                    let err = return_type_error_value(
-                                                        eg,
-                                                        frame,
-                                                        func_common as *const FunctionCommon,
-                                                        op_array,
-                                                        opline,
-                                                        hint,
-                                                        &outcome,
-                                                    );
-                                                    append_replaced_exception(
-                                                        &err,
-                                                        &exception,
-                                                        eg,
-                                                    );
-                                                    match throw_in_frame(eg, frame, err)? {
-                                                        ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
-                                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                                    }
-                                                }
-                                                eg.exception = Some(exception);
-                                                resume_pending_exception!();
+                                                hint,
+                                                &outcome,
+                                            );
+                                            match throw_in_frame(eg, frame, err)? {
+                                                ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
+                                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                             }
-                                        }
-                                        prepared_return = Some(value);
-                                    }
-                                    ReturnTypePreparation::Invalid => {
-                                        let outcome = format!(
-                                            "{} returned",
-                                            declared_type_error_value_name(&source)
-                                        );
-                                        let err = return_type_error_value(
-                                            eg,
-                                            frame,
-                                            func_common as *const FunctionCommon,
-                                            op_array,
-                                            opline,
-                                            hint,
-                                            &outcome,
-                                        );
-                                        match throw_in_frame(eg, frame, err)? {
-                                            ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
-                                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                         }
                                     }
                                 }

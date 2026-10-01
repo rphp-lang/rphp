@@ -2108,6 +2108,22 @@ fn coerce_scalar_value(
     }
 }
 
+/// Probe live return storage without creating an inspection-only owner. This
+/// function cannot call PHP; the operand borrow ends before owned preparation
+/// runs coercion or diagnostics. Failed probes resume the original owned preparation.
+#[inline(never)]
+fn return_type_is_exact(
+    value: &Value,
+    hint: &ParamTypeHint,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    function: *const FunctionCommon,
+) -> bool {
+    check_return_type_hint(value, hint, eg, true, frame, function)
+}
+
+#[cold]
+#[inline(never)]
 fn prepare_return_type_value(
     value: &Value,
     hint: &ParamTypeHint,
@@ -2133,6 +2149,75 @@ fn prepare_return_type_value(
         return Ok(ReturnTypePreparation::Coerced(rendered, None));
     }
     Ok(ReturnTypePreparation::Invalid)
+}
+
+#[cfg(test)]
+mod borrowed_return_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn exact_storage_accepts_the_pure_predicate() {
+        let eg = ExecutorGlobals::new();
+        for (value, hint) in [
+            (Value::string("held"), ParamTypeHint::String),
+            (Value::long(42), ParamTypeHint::Mixed),
+            (
+                Value::owned_reference(Value::string("held")),
+                ParamTypeHint::String,
+            ),
+        ] {
+            assert!(return_type_is_exact(
+                &value,
+                &hint,
+                &eg,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            ));
+        }
+    }
+
+    #[test]
+    fn nested_reference_failure_keeps_canonical_exact_union_precedence() {
+        let mut eg = ExecutorGlobals::new();
+        for (value, hint) in [
+            (Value::long(42), ParamTypeHint::Int),
+            (
+                Value::long(42),
+                ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int]),
+            ),
+            (
+                Value::string("42"),
+                ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]),
+            ),
+            (
+                Value::null(),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ),
+        ] {
+            let reference =
+                Value::owned_reference(Value::owned_reference(Value::owned_reference(value)));
+            assert!(!return_type_is_exact(
+                &reference,
+                &hint,
+                &eg,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            ));
+            let snapshot = reference.dereferenced().clone();
+            assert!(matches!(
+                prepare_return_type_value(
+                    &snapshot,
+                    &hint,
+                    &mut eg,
+                    false,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+                .unwrap(),
+                ReturnTypePreparation::Exact,
+            ));
+        }
+    }
 }
 
 /// Apply the object-to-string argument conversion used by weak PHP call sites.
