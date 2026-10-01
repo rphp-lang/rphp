@@ -2487,3 +2487,15 @@ interrupted diagnostic-target gate and repaired run is recorded in
 [the packet](performance-phpstan-identity-branches-samples.json). The remaining
 6.74x gap keeps the original instruction/time goal active. Next selection uses
 the exact candidate's frame/runtime ownership profile; main remains separate.
+
+
+## Rejected checkpoint: shared call admission and scalar vacancy
+
+The combined ordinary-release selector saves 0.583%, but fresh PGO confirms
+only 0.766% fewer analysis instructions and 1.84% worse analysis time. Independent
+shared-frame and shared-temporary controls regress 9.57% and 4.13% in time.
+All 870 focused executions and seventeen PHP/canonical programs pass, but
+performance gates reject the entire source change. Production is restored to
+`2488921c`; the original instruction/time parity goal remains active. See
+[the rejected experiment](performance-phpstan-runtime-boundary.md) and
+[all valid samples](performance-phpstan-runtime-boundary-samples.json).
