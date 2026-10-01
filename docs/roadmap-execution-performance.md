@@ -455,3 +455,17 @@ native entry by 0.963% in independently trained PGO confirmation. All focused
 configuration, PHP-output and independent control gates pass. The original
 parity goal remains active; continue with source attribution inside the main
 executor. See [the checkpoint](performance-phpstan-locale-byte-tables.md).
+
+
+## Accepted PHPStan checkpoint: ordinary class constant replay
+
+Positive literal class-constant cache replay reduces independently confirmed
+analysis instructions **71.4670 to 70.6793 billion (-1.102%)**,
+with exact PHP output. The remaining **6.84x** instruction gap and roughly
+6.6-second analysis keep the original parity goal active. All 462 focused
+feature executions, four exact CLI contracts and all-target checks pass. The
+confirmed 2.863% regex timing regression is an explicit integration tradeoff
+under instruction priority, not a passing one-percent control. Ordinary release
+now gives a faster two-minute selection cycle before independent PGO. See
+[the checkpoint](performance-phpstan-class-constant-cache-replay.md) and
+[all samples](performance-phpstan-class-constant-cache-replay-samples.json).

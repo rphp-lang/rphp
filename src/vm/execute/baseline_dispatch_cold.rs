@@ -3508,6 +3508,31 @@ fn op_fetch_class_const<'a>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    // This opcode has an immutable literal owner/name. A positive ordinary
+    // constant entry already proved resolution, visibility and immediate value
+    // publication; replay that same entry before the full operand/autoload path.
+    // SAFETY: dispatch supplies the live frame and its own compiler-sized
+    // instruction/cache entry. A positive class ID and constant slot retain the
+    // canonical cache's registered immutable declaration proof. The result
+    // pointer is this opcode's writable slot; its normal writer retires owners.
+    unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        let cache = &op_array.cache[ip];
+        if opline.op1_type == OpType::Const
+            && opline.op2_type == OpType::Const
+            && cache.class_id != 0
+            && cache.property_flags() == 1
+        {
+            let class = eg.class_by_id(cache.class_id)
+                .expect("cached class constant owner must stay registered");
+            let definition = class.constants.get(cache.property_slot())
+                .expect("cached class constant index must stay valid");
+            let value = definition.value.clone();
+            let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            frame_result_set(frame, result, opline.result_type, value);
+            return Ok(ColdResult::Done);
+        }
+    }
     op_fetch_class_const_impl::<false>(eg, frame, op_array, opline)
 }
 
@@ -3541,7 +3566,7 @@ fn op_fetch_late_dynamic_class_const<'a>(
     op_fetch_class_const_impl::<true>(eg, frame, op_array, opline)
 }
 
-#[inline(always)]
+#[inline(never)]
 fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
