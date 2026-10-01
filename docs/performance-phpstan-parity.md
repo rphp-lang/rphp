@@ -2376,3 +2376,15 @@ open. RSS +2,400 KiB and confirmed relative-self/getter timing tradeoffs remain
 explicit under instruction priority. See
 [the report](performance-phpstan-named-type-metadata.md) and
 [all samples](performance-phpstan-named-type-metadata-samples.json).
+
+
+## Rejected exploratory checkpoint: iterative regex leaf continuations
+
+A Rust loop replacing ordinary recursive leaf continuations increases the
+same-policy optimization-level-one analysis count 115.2761 to 115.4138 billion
+(+0.119%), failing its predefined 0.5% saving filter. All 112 core tests and 30
+supported PHP differential lines pass; the documented baseline PRUNE mismatch
+remains a failure and all 31 baseline/candidate lines remain identical. Runtime
+is fully restored to accepted `3d7aa6ae`, with PGO still 73.4727 billion. No fresh
+PGO or later feature matrix is run. See
+[the rejected report](performance-phpstan-regex-continuation-loop.md).
