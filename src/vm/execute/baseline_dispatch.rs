@@ -5004,20 +5004,41 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
             }
 
-            OpCode::IsIdentical | OpCode::IsNotIdentical => {
+            OpCode::IsIdentical | OpCode::IsNotIdentical
+            | OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical => {
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
                 let Ok(identical) = values_identical_checked(op1, op2) else {
                     throw_operator!("Error", "Nesting level too deep - recursive dependency?");
                 };
 
-                let result = match opline.opcode {
-                    OpCode::IsIdentical => identical,
-                    _ => !identical,
-                };
-                unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
+                match opline.opcode {
+                    OpCode::IsIdentical | OpCode::IsNotIdentical => {
+                        let result = identical == (opline.opcode == OpCode::IsIdentical);
+                        // SAFETY: the canonical comparison owns this bounded
+                        // result slot in the active frame. The tracked writer
+                        // retires its old owner before publishing the bool.
+                        unsafe {
+                            let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            frame_tmp_set_bool(frame, result_ptr, result);
+                        }
+                    }
+                    OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical => {
+                        // SAFETY: compiler finalization proved the adjacent
+                        // unmarked branch, target bound and sole scalar use.
+                        // Both retained instruction positions stay in this
+                        // live op array; no operand borrow crosses a callback.
+                        unsafe {
+                            (*frame).opline = if identical == (opline.opcode == OpCode::JmpNZ_Identical) {
+                                op_array.instructions.as_ptr().add(usize::from(opline.result))
+                            } else {
+                                opline_ptr.add(2)
+                            };
+                        }
+                        continue;
+                    }
+                    _ => unreachable!(),
+                }
             }
 
             OpCode::Isset => {

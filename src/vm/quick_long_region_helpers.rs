@@ -10,7 +10,7 @@ fn detect_long_tail_trace_guard(
     if guard_ip.checked_add(2)? >= increment_ip {
         return None;
     }
-    let comparison = *op_array.instructions.get(guard_ip)?;
+    let comparison = op_array.canonical_instruction(guard_ip)?;
     let kind = match comparison.opcode {
         OpCode::IsIdentical => ScalarLongConditionKind::Equal,
         OpCode::IsNotIdentical => ScalarLongConditionKind::NotEqual,

@@ -484,6 +484,184 @@ impl OpArray {
 
             i += 1;
         }
+        self.combine_identity_branches();
+    }
+
+    /// Reconstruct the original predicate for typed planners. The adjacent
+    /// jump and all instruction positions are retained by combined bytecode.
+    pub(crate) fn canonical_instruction(&self, ip: usize) -> Option<Instruction> {
+        let mut instruction = *self.instructions.get(ip)?;
+        if matches!(
+            instruction.opcode,
+            OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical
+        ) {
+            let branch = self.instructions.get(ip + 1)?;
+            if !matches!(branch.opcode, OpCode::JmpZ | OpCode::JmpNZ) {
+                return None;
+            }
+            let same_sense =
+                (instruction.opcode == OpCode::JmpZ_Identical) == (branch.opcode == OpCode::JmpZ);
+            instruction.opcode = if same_sense {
+                OpCode::IsIdentical
+            } else {
+                OpCode::IsNotIdentical
+            };
+            instruction.result_type = OpType::Tmp;
+            instruction.result = u16::try_from(instruction.extended_value).ok()?;
+            instruction.extended_value = 0;
+        }
+        Some(instruction)
+    }
+
+    fn combine_identity_branches(&mut self) {
+        if !self
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, OpCode::IsIdentical | OpCode::IsNotIdentical))
+        {
+            return;
+        }
+        let total = (self.num_cvs + self.num_temps) as usize;
+        let mut definitions = vec![0u32; total];
+        let mut uses = vec![0u32; total];
+        let mut entries = vec![false; self.instructions.len()];
+        for instruction in &self.instructions {
+            if instruction.opcode != OpCode::ReleaseTemps {
+                if matches!(
+                    instruction.result_type,
+                    OpType::Cv | OpType::Tmp | OpType::Var
+                ) && let Some(count) = definitions.get_mut(usize::from(instruction.result))
+                {
+                    *count += 1;
+                }
+                for (operand, kind) in [
+                    (instruction.op1, instruction.op1_type),
+                    (instruction.op2, instruction.op2_type),
+                ] {
+                    if matches!(kind, OpType::Cv | OpType::Tmp | OpType::Var)
+                        && let Some(count) = uses.get_mut(usize::from(operand))
+                    {
+                        *count += 1;
+                    }
+                }
+                // Foreach's hidden position and diagnostic-write guard tokens
+                // are physical scratch definitions outside the result field.
+                let hidden = if instruction.opcode == OpCode::ForeachInit {
+                    Some(instruction.extended_value)
+                } else if instruction.opcode == OpCode::AssignDim
+                    && instruction._pad & crate::vm::instruction::ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+                {
+                    instruction.extended_value.checked_sub(1)
+                } else {
+                    None
+                };
+                if let Some(hidden) = hidden.and_then(|slot| definitions.get_mut(slot as usize)) {
+                    *hidden += 1;
+                }
+            }
+            // Opcode geometry distinguishes real control targets from
+            // numeric metadata (for example Return.extended_value is not an
+            // IP). Preserve every independent entry into the original jump.
+            let target = match instruction.opcode {
+                OpCode::Jmp | OpCode::QuickLongLoopJmp | OpCode::AssertCheck => {
+                    Some(instruction.op1)
+                }
+                OpCode::JmpFinally
+                    if instruction._pad & crate::vm::instruction::JMP_FLAG_FINALLY_END == 0 =>
+                {
+                    Some(instruction.op1)
+                }
+                OpCode::JmpFinally => {
+                    // A dynamic finally continuation needs a stronger CFG
+                    // proof than this local lowering, so keep this function.
+                    entries.fill(true);
+                    None
+                }
+                OpCode::JmpZ | OpCode::JmpNZ | OpCode::NullSafeCheck | OpCode::BindDefaultParam => {
+                    Some(instruction.op2)
+                }
+                OpCode::SnapshotDiagnosticWrite | OpCode::FetchDimR
+                    if instruction.extended_value != 0 =>
+                {
+                    if let Some(entry) = entries.get_mut(instruction.extended_value as usize) {
+                        *entry = true;
+                    }
+                    None
+                }
+                OpCode::CheckStatic
+                | OpCode::JmpZ_Le_CvConst
+                | OpCode::JmpNZ_Le_CvConst
+                | OpCode::JmpZ_Lt_CvConst
+                | OpCode::JmpNZ_Lt_CvConst
+                | OpCode::JmpZ_Eq_CvConst
+                | OpCode::JmpNZ_Eq_CvConst
+                | OpCode::JmpZ_Identical
+                | OpCode::JmpNZ_Identical => Some(instruction.result),
+                _ => None,
+            };
+            if let Some(entry) = target.and_then(|target| entries.get_mut(usize::from(target))) {
+                *entry = true;
+            }
+        }
+        if let Some(slot) = self
+            .trait_class_scope_tmp
+            .and_then(|slot| definitions.get_mut(usize::from(slot)))
+        {
+            *slot += 1;
+        }
+        for entry in &self.try_entries {
+            for target in [
+                entry.try_start,
+                entry.try_end,
+                entry.finally_start,
+                entry.finally_end,
+            ]
+            .into_iter()
+            .chain(entry.catches.iter().map(|catch| catch.catch_start))
+            {
+                if let Some(entry) = entries.get_mut(target as usize) {
+                    *entry = true;
+                }
+            }
+        }
+        for ip in 0..self.instructions.len().saturating_sub(1) {
+            let predicate = self.instructions[ip];
+            let branch = self.instructions[ip + 1];
+            let slot = usize::from(predicate.result);
+            if !matches!(
+                predicate.opcode,
+                OpCode::IsIdentical | OpCode::IsNotIdentical
+            ) || predicate.result_type != OpType::Tmp
+                || predicate._pad != 0
+                || predicate.extended_value != 0
+                || u32::from(predicate.result) < self.num_cvs
+                || definitions.get(slot) != Some(&1)
+                || uses.get(slot) != Some(&1)
+                || !matches!(branch.opcode, OpCode::JmpZ | OpCode::JmpNZ)
+                || branch.op1_type != OpType::Tmp
+                || branch.op1 != predicate.result
+                || branch.op2_type != OpType::Unused
+                || branch.result_type != OpType::Unused
+                || branch._pad != 0
+                || branch.extended_value != 0
+                || ip + 2 >= self.instructions.len()
+                || usize::from(branch.op2) >= self.instructions.len()
+                || entries[ip + 1]
+            {
+                continue;
+            }
+            let jump_on_identity =
+                (branch.opcode == OpCode::JmpNZ) == (predicate.opcode == OpCode::IsIdentical);
+            let combined = &mut self.instructions[ip];
+            combined.opcode = if jump_on_identity {
+                OpCode::JmpNZ_Identical
+            } else {
+                OpCode::JmpZ_Identical
+            };
+            combined.result_type = OpType::Unused;
+            combined.result = branch.op2;
+            combined.extended_value = u32::from(predicate.result);
+        }
     }
 
     /// Initialize the inline cache side table to match instruction count.
@@ -547,6 +725,17 @@ impl OpArray {
                     // Instruction after the branch is also a leader (fall-through)
                     if i + 1 < n {
                         is_leader[i + 1] = true;
+                    }
+                }
+                OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical => {
+                    if let Some(leader) = is_leader.get_mut(usize::from(instr.result)) {
+                        *leader = true;
+                    }
+                    if let Some(leader) = is_leader.get_mut(i + 1) {
+                        *leader = true;
+                    }
+                    if let Some(leader) = is_leader.get_mut(i + 2) {
+                        *leader = true;
                     }
                 }
                 OpCode::Return => {
@@ -911,6 +1100,162 @@ impl Drop for OpArray {
 }
 
 #[cfg(test)]
+mod identity_branch_tests {
+    use super::{OpArray, compile::Compiler};
+    use crate::vm::instruction::{Instruction, OpType};
+    use crate::vm::opcode::OpCode;
+
+    fn sequence(predicate_opcode: OpCode, branch_opcode: OpCode) -> OpArray {
+        let mut op = Compiler::new().compile(&[]).unwrap().main;
+        op.num_cvs = 2;
+        op.num_temps = 1;
+        let mut predicate = Instruction::new(predicate_opcode);
+        predicate.op1_type = OpType::Cv;
+        predicate.op2_type = OpType::Cv;
+        predicate.op2 = 1;
+        predicate.result_type = OpType::Tmp;
+        predicate.result = 2;
+        let mut branch = Instruction::new(branch_opcode);
+        branch.op1_type = OpType::Tmp;
+        branch.op1 = 2;
+        branch.op2 = 3;
+        op.instructions = vec![
+            predicate,
+            branch,
+            Instruction::new(OpCode::Return),
+            Instruction::new(OpCode::Return),
+        ];
+        op
+    }
+
+    #[test]
+    fn identity_branch_senses_keep_canonical_plans_slots_and_jump_positions() {
+        for predicate in [OpCode::IsIdentical, OpCode::IsNotIdentical] {
+            for branch in [OpCode::JmpZ, OpCode::JmpNZ] {
+                let mut op = sequence(predicate, branch);
+                let original = op.instructions.clone();
+                op.specialize_opcodes();
+                let on_identity = (predicate == OpCode::IsIdentical) == (branch == OpCode::JmpNZ);
+                assert_eq!(
+                    op.instructions[0].opcode,
+                    if on_identity {
+                        OpCode::JmpNZ_Identical
+                    } else {
+                        OpCode::JmpZ_Identical
+                    }
+                );
+                assert_eq!(op.instructions[0].result, 3);
+                assert_eq!(op.instructions[0].extended_value, 2);
+                for (ip, instruction) in original.iter().enumerate() {
+                    assert_eq!(
+                        format!("{:?}", op.canonical_instruction(ip).unwrap()),
+                        format!("{instruction:?}")
+                    );
+                }
+                let combined = format!("{:?}", op.instructions);
+                op.specialize_opcodes();
+                assert_eq!(format!("{:?}", op.instructions), combined);
+                op.compute_blocks();
+                assert_eq!(
+                    op.block_info
+                        .iter()
+                        .map(|block| block.start_ip)
+                        .collect::<Vec<_>>(),
+                    vec![0, 1, 2, 3]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn identity_branch_vetoes_extra_uses_definitions_entries_and_cleanup() {
+        for variant in 0..8 {
+            let mut op = sequence(OpCode::IsIdentical, OpCode::JmpNZ);
+            match variant {
+                0 => {
+                    let mut read = Instruction::new(OpCode::Echo);
+                    read.op1_type = OpType::Tmp;
+                    read.op1 = 2;
+                    op.instructions.push(read);
+                }
+                1 => {
+                    let mut write = op.instructions[0];
+                    write.opcode = OpCode::FetchCvR;
+                    op.instructions.push(write);
+                }
+                2 => {
+                    let mut jump = Instruction::new(OpCode::Jmp);
+                    jump.op1 = 1;
+                    op.instructions.push(jump);
+                }
+                3 => op.instructions[1]._pad = crate::vm::instruction::JMP_NZ_RELEASE_TEMPS,
+                4 => op.try_entries.push(super::compile::TryEntry {
+                    try_start: 0,
+                    try_end: 1,
+                    catches: Vec::new(),
+                    finally_start: u32::MAX,
+                    finally_end: 3,
+                }),
+                5 => op.trait_class_scope_tmp = Some(2),
+                6 => {
+                    let mut hidden = Instruction::new(OpCode::ForeachInit);
+                    hidden.extended_value = 2;
+                    op.instructions.push(hidden);
+                }
+                7 => op
+                    .instructions
+                    .insert(1, Instruction::new(OpCode::ReleaseTemps)),
+                _ => unreachable!(),
+            }
+            let original = format!("{:?}", op.instructions);
+            op.specialize_opcodes();
+            assert_eq!(format!("{:?}", op.instructions), original, "veto {variant}");
+        }
+    }
+
+    #[test]
+    fn identity_branch_preserves_diagnostic_array_continuation_entries() {
+        for opcode in [OpCode::SnapshotDiagnosticWrite, OpCode::FetchDimR] {
+            let mut op = sequence(OpCode::IsIdentical, OpCode::JmpZ);
+            let mut diagnostic = Instruction::new(opcode);
+            diagnostic.extended_value = 1;
+            op.instructions.push(diagnostic);
+            let original = format!("{:?}", op.instructions);
+            op.specialize_opcodes();
+            assert_eq!(format!("{:?}", op.instructions), original);
+        }
+    }
+
+    #[test]
+    fn identity_branch_actual_source_keeps_general_function_cleanup_contract() {
+        let source = "<?php function identityBranch($a, $b) { if ($a === $b) { return 1; } if ($a !== null) { return 2; } return 3; }";
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = Compiler::new().compile(&statements).unwrap();
+        let (_, function) = compiled
+            .functions
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("identityBranch"))
+            .unwrap();
+        assert!(
+            function
+                .op_array
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(
+                    instruction.opcode,
+                    OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical
+                ))
+                .count()
+                >= 2,
+            "actual bytecode: {:?}",
+            function.op_array.instructions
+        );
+        assert!(super::op_array_supports_cleanup_fast(&function.op_array));
+    }
+}
+
+#[cfg(test)]
 mod release_cache_tests {
     use super::{OpArray, compile::Compiler, make_user_function};
     use crate::lexer::Lexer;
@@ -1005,6 +1350,8 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::IsSmallerOrEqual
                 | OpCode::IsIdentical
                 | OpCode::IsNotIdentical
+                | OpCode::JmpZ_Identical
+                | OpCode::JmpNZ_Identical
                 | OpCode::BoolNot
                 | OpCode::Spaceship
                 | OpCode::Echo
@@ -1986,7 +2333,7 @@ fn build_conditional_scalar_double_function_plan(
         break;
     }
 
-    let condition_instruction = *instructions.get(ip)?;
+    let condition_instruction = function.op_array.canonical_instruction(ip)?;
     let condition_sources = |instruction: Instruction| {
         let lhs = scalar_double_source(
             &function.op_array,
@@ -2736,7 +3083,7 @@ fn build_conditional_scalar_long_function_plan(
         break;
     }
 
-    let condition_instruction = *instructions.get(ip)?;
+    let condition_instruction = function.op_array.canonical_instruction(ip)?;
     let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
         OpCode::IsEqual | OpCode::IsIdentical | OpCode::IsEqual_CvConst => (
             ScalarLongConditionKind::Equal,
@@ -3586,7 +3933,9 @@ fn build_object_long_function_plan(function: &UserFunction) -> Option<Box<Object
     let argument_end = first_argument + public_args;
     let mut dead_fused_branch = None;
 
-    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+    for ip in 0..op_array.instructions.len() {
+        let canonical = op_array.canonical_instruction(ip)?;
+        let instruction = &canonical;
         if dead_fused_branch == Some(ip) {
             if !matches!(instruction.opcode, OpCode::JmpZ | OpCode::JmpNZ) {
                 return None;
@@ -4520,7 +4869,7 @@ pub(crate) fn build_scalar_string_function_plan(
         return None;
     }
 
-    let condition_instruction = *instructions.get(ip)?;
+    let condition_instruction = function.op_array.canonical_instruction(ip)?;
     let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
         OpCode::IsEqual | OpCode::IsIdentical | OpCode::IsEqual_CvConst => (
             ScalarLongConditionKind::Equal,
@@ -6016,7 +6365,7 @@ fn register_long_plan_property(
 /// Locate a guarded scalar result's consumer past operand cleanup without
 /// erasing the canonical instruction indices used by caches and side exits.
 fn scalar_result_consumer(op_array: &OpArray, producer_ip: usize) -> Option<usize> {
-    let producer = op_array.instructions.get(producer_ip)?;
+    let producer = op_array.canonical_instruction(producer_ip)?;
     let consumer_ip = producer_ip.checked_add(1)?;
     let consumer = op_array.instructions.get(consumer_ip)?;
     if consumer.opcode != OpCode::ReleaseTemps {

@@ -2470,3 +2470,20 @@ percent. Exact copy attribution confirms 3.41 million copies removed; the next
 checkpoint must quantify wider frame/executor costs. See
 [the report](performance-phpstan-return-scope-projection.md) and
 [all samples](performance-phpstan-return-scope-projection-samples.json).
+
+## Accepted checkpoint: direct strict identity branches
+
+General compiler-proven identity/conditional bytecodes eliminate an invisible
+scalar scratch write/read and one dispatch while preserving all instruction
+positions, canonical checked comparison, release intervals and typed-plan
+projection. Independent PGO analysis instructions improve **69.8710 to 69.6827
+billion (-0.270%)**, against PHP's 10.3379 billion. Time is 6.4252/6.4348 seconds,
+so no confirmed analysis-time gain is claimed. All 878 focused executions,
+seventeen final-PGO CLI contracts, seven forced-canonical comparisons and
+all-target/format/unsafe checks pass. The shared-frame +1.735% review-time
+regression stays an explicit instruction-priority exception. Every failed proof,
+interrupted diagnostic-target gate and repaired run is recorded in
+[the report](performance-phpstan-identity-branches.md) and
+[the packet](performance-phpstan-identity-branches-samples.json). The remaining
+6.74x gap keeps the original instruction/time goal active. Next selection uses
+the exact candidate's frame/runtime ownership profile; main remains separate.

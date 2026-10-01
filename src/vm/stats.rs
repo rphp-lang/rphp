@@ -831,6 +831,8 @@ mod inner {
             223 => Some("BitwiseXor_LongLong"),
             224 => Some("BitwiseAnd_LongLong"),
             225 => Some("BitwiseOr_LongLong"),
+            227 => Some("JmpZ_Identical"),
+            228 => Some("JmpNZ_Identical"),
             _ => None,
         }
     }

@@ -305,7 +305,7 @@ fn detect_long_ops_region_inner(
     #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
     let mut pending_indirect_call: Option<PendingIndirectScalarCall> = None;
     while ip <= backedge_ip {
-        let instruction = op_array.instructions[ip];
+        let instruction = op_array.canonical_instruction(ip)?;
         if instruction.opcode == OpCode::NewObj
             && instruction._pad & crate::vm::instruction::NEW_FLAG_PREPARE_ONLY != 0
         {

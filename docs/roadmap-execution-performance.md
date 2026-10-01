@@ -2,17 +2,17 @@
 
 ## Current PHPStan scorecard
 
-Compiled release ownership projection at baseline `b5890a2e` independently
-reduces analysis **70.2264 to 69.8711 billion instructions
-(-0.506%)**, with exact PHP output. The remaining
-**6.76x** instruction gap keeps parity active. Paired analysis times
-are 6.4870/6.5052 seconds; no confirmed analysis-time gain is claimed.
-All 377 focused executions, ten final-binary CLI contracts and all-target
-checks pass. Every untrained instruction budget decreases; inherited-method
-time +1.134% remains an explicit exception under instruction priority. See
-[the checkpoint](performance-phpstan-release-projection.md) and
-[all samples](performance-phpstan-release-projection-samples.json). Continue
-with quantified general frame/runtime costs; main integration remains separate.
+Direct strict identity branches at baseline `8b06523f` independently reduce
+analysis **69.8710 to 69.6827 billion instructions (-0.270%)**, with exact PHP
+output. The remaining **6.74x** instruction gap keeps parity active. Analysis
+medians are 6.4252/6.4348 seconds; no confirmed time gain is claimed. All 878
+focused executions, seventeen final-PGO CLI programs, seven forced-canonical
+programs and all-target checks pass. Shared-frame time +1.735% with effectively
+unchanged instructions is an explicit instruction-priority tradeoff. See
+[the checkpoint](performance-phpstan-identity-branches.md) and
+[all samples](performance-phpstan-identity-branches-samples.json). Continue with
+quantified general frame/runtime ownership costs; main integration remains
+separate.
 
 
 Status: active project direction
