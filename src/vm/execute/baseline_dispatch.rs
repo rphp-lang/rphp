@@ -83,22 +83,6 @@ fn never_return_type_error_value(
     error
 }
 
-#[inline]
-fn return_type_callee_class(
-    eg: &ExecutorGlobals,
-    frame: *mut ExecuteData,
-    function: *const FunctionCommon,
-    hint: &ParamTypeHint,
-) -> Option<String> {
-    eg.declaring_class_of(function)
-        .map(str::to_owned)
-        .or_else(|| {
-            hint.uses_declaring_class_scope()
-                .then(|| get_caller_class(frame, eg))
-                .flatten()
-        })
-}
-
 #[cold]
 #[inline(never)]
 fn throw_invalid_dynamic_call_class<'a>(
@@ -2478,19 +2462,15 @@ unsafe fn validate_reference_return_after_finally(
     }
 
     let source = (&*return_target).dereferenced().clone();
-    let callee_class = return_type_callee_class(
-        eg,
-        frame,
-        function as *const FunctionCommon,
-        hint,
-    );
+    // SAFETY: the live function header proven above supplies the same lexical
+    // fallback identity; the type probe borrows it only before PHP conversion.
     let preparation = prepare_return_type_value(
         &source,
         hint,
         eg,
         op_array.strict_types,
         frame,
-        callee_class.as_deref(),
+        function as *const FunctionCommon,
     )?;
     let marker = &*(*frame).opline;
     let opline = if marker.op2_type == OpType::Cv {
@@ -11263,19 +11243,13 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         };
                         if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true) {
                             let source = retval.dereferenced().clone();
-                            let callee_class = return_type_callee_class(
-                                eg,
-                                frame,
-                                func_common_ret as *const FunctionCommon,
-                                ret_hint,
-                            );
                             let preparation = prepare_return_type_value(
                                 &source,
                                 ret_hint,
                                 eg,
                                 op_array.strict_types,
                                 frame,
-                                callee_class.as_deref(),
+                                func_common_ret as *const FunctionCommon,
                             )?;
                             resume_pending_exception!();
                             match preparation {
@@ -11549,19 +11523,13 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
                                 let source = retval.dereferenced().clone();
-                                let ret_callee_class = return_type_callee_class(
-                                    eg,
-                                    frame,
-                                    func_common as *const FunctionCommon,
-                                    hint,
-                                );
                                 let preparation = prepare_return_type_value(
                                     &source,
                                     hint,
                                     eg,
                                     op_array.strict_types,
                                     frame,
-                                    ret_callee_class.as_deref(),
+                                    func_common as *const FunctionCommon,
                                 )?;
                                 resume_pending_exception!();
                                 match preparation {

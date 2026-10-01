@@ -469,3 +469,17 @@ under instruction priority, not a passing one-percent control. Ordinary release
 now gives a faster two-minute selection cycle before independent PGO. See
 [the checkpoint](performance-phpstan-class-constant-cache-replay.md) and
 [all samples](performance-phpstan-class-constant-cache-replay-samples.json).
+
+
+## Accepted PHPStan checkpoint: lazy return declaration scope
+
+Removing eager owned declaring-class names from typed returns independently
+reduces analysis **70.6979 to 70.2339 billion instructions (-0.656%)**, with
+exact PHP output and 6.4852-second analysis. The **6.79x** instruction gap keeps
+parity active. All 207 actual focused feature executions, seven CLI contracts
+and all-target checks pass. A larger, unselective five-pair review of all seven
+controls resolves the inconsistent trait timing result and stays within one
+percent. Exact copy attribution confirms 3.41 million copies removed; the next
+checkpoint must quantify wider frame/executor costs. See
+[the report](performance-phpstan-return-scope-projection.md) and
+[all samples](performance-phpstan-return-scope-projection-samples.json).

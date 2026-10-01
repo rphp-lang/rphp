@@ -1057,17 +1057,20 @@ enum TypeCheckScope<'a> {
     },
     Return {
         frame: *mut ExecuteData,
-        fallback: Option<&'a str>,
+        // The return site already holds the callee's common header. Retain its
+        // identity until a relative hint needs the declaring-name fallback;
+        // ordinary return checks do not materialize an owned class name.
+        function: *const FunctionCommon,
     },
 }
 
 impl TypeCheckScope<'_> {
-    fn lexical_class(&self, eg: &ExecutorGlobals) -> Option<Cow<'_, str>> {
+    fn lexical_class<'a>(&'a self, eg: &'a ExecutorGlobals) -> Option<Cow<'a, str>> {
         match self {
             Self::Classes { lexical, .. } => lexical.map(Cow::Borrowed),
-            Self::Return { frame, fallback } => get_caller_class(*frame, eg)
+            Self::Return { frame, function } => get_caller_class(*frame, eg)
                 .map(Cow::Owned)
-                .or_else(|| fallback.map(Cow::Borrowed)),
+                .or_else(|| eg.declaring_class_of(*function).map(Cow::Borrowed)),
         }
     }
 
@@ -2111,12 +2114,12 @@ fn prepare_return_type_value(
     eg: &mut ExecutorGlobals,
     strict: bool,
     frame: *mut ExecuteData,
-    callee_class: Option<&str>,
+    function: *const FunctionCommon,
 ) -> Result<ReturnTypePreparation, VmError> {
     // Exact runtime members always win. Use the strict checker here because
     // weak acceptance alone is not enough: a declared float must return a
     // Double value even when the source was an integer.
-    if check_return_type_hint(value, hint, eg, true, frame, callee_class) {
+    if check_return_type_hint(value, hint, eg, true, frame, function) {
         return Ok(ReturnTypePreparation::Exact);
     }
     if let Some((coerced, diagnostic)) = coerce_scalar_value(value, hint, !strict) {
@@ -2231,17 +2234,14 @@ fn check_return_type_hint(
     eg: &ExecutorGlobals,
     strict: bool,
     frame: *mut ExecuteData,
-    callee_class: Option<&str>,
+    function: *const FunctionCommon,
 ) -> bool {
     check_type_hint_with_scope(
         value.dereferenced(),
         hint,
         eg,
         strict,
-        &TypeCheckScope::Return {
-            frame,
-            fallback: callee_class,
-        },
+        &TypeCheckScope::Return { frame, function },
     )
 }
 
