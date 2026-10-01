@@ -938,6 +938,30 @@ impl InlineCache {
     /// the typed-declaration tag bits cannot collide with this tag.
     const CLOSURE_SCOPE_TAG: usize = 1;
 
+    /// A constant-name read proved in an instance trait frame. Its lexical
+    /// scope follows from the immutable hidden receiver's class, independently
+    /// of the object whose property is read. Typed write declarations use
+    /// flags 2 and cannot share this tagged scope word.
+    const TRAIT_RECEIVER_SCOPE_TAG: usize = 3;
+
+    #[inline]
+    pub fn set_trait_receiver_scope_class(&mut self, class_id: u32) {
+        debug_assert_ne!(class_id, 0);
+        debug_assert_ne!(self.property_flags(), 2);
+        self.mark_scoped_property();
+        self.func =
+            (((class_id as usize) << 3) | Self::TRAIT_RECEIVER_SCOPE_TAG) as *const FunctionCommon;
+    }
+
+    #[inline(always)]
+    pub fn trait_receiver_scope_class(&self) -> Option<u32> {
+        let raw = self.func as usize;
+        (self.is_scoped_property()
+            && self.property_flags() != 2
+            && raw & 0b111 == Self::TRAIT_RECEIVER_SCOPE_TAG)
+            .then(|| (raw >> 3) as u32)
+    }
+
     #[inline]
     pub fn set_closure_scope_class(&mut self, class_id: u32) {
         debug_assert_ne!(self.property_flags(), 2);
@@ -1557,6 +1581,33 @@ mod inline_cache_tests {
 
         cache.set_property(7, 3, 1);
         assert_eq!(cache.generic_property_declaration(), None);
+    }
+
+    #[test]
+    fn trait_receiver_scope_is_distinct_and_survives_polymorphic_restore() {
+        let mut cache = InlineCache::empty();
+        for class_id in [1, 7, 65_535] {
+            cache.set_property(11, 3, 3);
+            cache.set_trait_receiver_scope_class(class_id);
+            assert!(cache.is_scoped_property());
+            assert_eq!(cache.class_id, 11);
+            assert_eq!(cache.property_slot(), 3);
+            assert_eq!(cache.trait_receiver_scope_class(), Some(class_id));
+            assert_eq!(cache.closure_scope_class(), None);
+            let (receiver, info, scope) = cache.property_cache_state();
+            let mut restored = InlineCache::empty();
+            restored.restore_property_cache(receiver, info, scope);
+            assert_eq!(restored.trait_receiver_scope_class(), Some(class_id));
+
+            cache.set_property(11, 3, 1);
+            cache.set_closure_scope_class(class_id);
+            assert_eq!(cache.closure_scope_class(), Some(class_id));
+            assert_eq!(cache.trait_receiver_scope_class(), None);
+        }
+        cache.set_generic_property(2, 11, 3);
+        assert_eq!(cache.trait_receiver_scope_class(), None);
+        cache.set_property(11, 3, 3);
+        assert_eq!(cache.trait_receiver_scope_class(), None);
     }
 
     #[test]

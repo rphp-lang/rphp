@@ -1,0 +1,8 @@
+FirstFallback:first|SecondFallback:second|first|second|7|8
+Cannot indirectly modify readonly property FirstFallback::$items
+FirstFallback:first|SecondFallback:second|first|second|7|8
+Cannot indirectly modify readonly property FirstFallback::$items
+FirstFallback:first|SecondFallback:second|first|second|7|8
+Cannot indirectly modify readonly property FirstFallback::$items
+42|Typed property SecondFallback::$number must not be accessed before initialization
+42|Typed property SecondFallback::$number must not be accessed before initialization

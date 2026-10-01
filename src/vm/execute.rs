@@ -318,13 +318,15 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
 /// depends on frame state (rebound closure, trait composition, late static
 /// scope) and must not be keyed on the function. The third element is the
 /// bound class id of a closure frame (0 otherwise): closure sites key their
-/// entries on it instead and verify it on every hit.
+/// entries on it instead and verify it on every hit. The fourth element is
+/// the hidden receiver class of an instance trait scope recovered from CV0.
+/// Hidden lexical-scope TMPs and static trait frames do not provide that proof.
 fn caller_scope(
     frame: *mut ExecuteData,
     eg: &ExecutorGlobals,
-) -> (Option<String>, *const FunctionCommon, u32) {
+) -> (Option<String>, *const FunctionCommon, u32, u32) {
     if frame.is_null() {
-        return (None, std::ptr::null(), 0);
+        return (None, std::ptr::null(), 0, 0);
     }
     // SAFETY: callers pass the live executing frame; its function pointer,
     // compiler-sized CV range and scope TMP remain valid for this
@@ -334,7 +336,7 @@ fn caller_scope(
     let declaring_trait = unsafe {
         let func = (*frame).func;
         if func.is_null() {
-            return (None, std::ptr::null(), 0);
+            return (None, std::ptr::null(), 0, 0);
         }
         if (*frame).has_closure_scope() {
             let id = (*frame).tmp((*frame).num_temps - 1).as_long().unwrap_or(0) as u32;
@@ -342,6 +344,7 @@ fn caller_scope(
                 eg.class_by_id(id).map(|class| class.name.clone()),
                 std::ptr::null(),
                 id,
+                0,
             );
         }
         let mut declaring_trait = None;
@@ -351,16 +354,19 @@ fn caller_scope(
                 .get(class)
                 .is_some_and(|definition| definition.is_trait);
             if !is_trait {
-                return (Some(class.to_string()), func, 0);
+                return (Some(class.to_string()), func, 0, 0);
             }
             declaring_trait = Some(class);
 
+            let mut receiver_scope_proved = false;
             if (*func).fn_type == FunctionType::User {
                 let function = &*(func as *const UserFunction);
+                receiver_scope_proved = function.common.sig.this_offset == 1
+                    && function.op_array.trait_class_scope_tmp.is_none();
                 if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp {
                     let scope = &*(*frame).slot_ptr(scope_tmp as u32);
                     if let Some(scope) = scope.as_str() {
-                        return (Some(scope.to_string()), std::ptr::null(), 0);
+                        return (Some(scope.to_string()), std::ptr::null(), 0, 0);
                     }
                 }
             }
@@ -369,13 +375,26 @@ fn caller_scope(
                 None
             } else {
                 let receiver = (*frame).cv(0);
-                (receiver.value_type() == ValueType::Object)
-                    .then(|| receiver.object_class_name_unchecked().to_string())
+                (receiver.value_type() == ValueType::Object).then(|| {
+                    (
+                        receiver.object_class_name_unchecked().to_string(),
+                        receiver.object_class_id_unchecked(),
+                    )
+                })
             };
-            if let Some(receiver_class) = receiver_class
+            if let Some((receiver_class, receiver_class_id)) = receiver_class
                 && let Some(scope) = eg.trait_composition_scope(&receiver_class, class)
             {
-                return (Some(scope.to_string()), std::ptr::null(), 0);
+                return (
+                    Some(scope.to_string()),
+                    std::ptr::null(),
+                    0,
+                    if receiver_scope_proved {
+                        receiver_class_id
+                    } else {
+                        0
+                    },
+                );
             }
         }
         declaring_trait
@@ -395,7 +414,7 @@ fn caller_scope(
             class_id = called_class_id_for_frame(eg, frame, 0);
         }
         let Some(called) = eg.class_by_id(class_id) else {
-            return (None, std::ptr::null(), 0);
+            return (None, std::ptr::null(), 0, 0);
         };
         return (
             Some(
@@ -404,11 +423,13 @@ fn caller_scope(
             ),
             std::ptr::null(),
             0,
+            0,
         );
     }
     (
         eg.class_by_id(class_id).map(|class| class.name.clone()),
         std::ptr::null(),
+        0,
         0,
     )
 }

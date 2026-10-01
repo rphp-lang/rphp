@@ -1998,7 +1998,8 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
 
     // SAFETY: the tag check above proves an Object value; the frame is the
     // live executing frame whose function pointer and call-kind flags stay
-    // valid for this read-only probe.
+    // valid for this read-only probe. A trait receiver entry was published
+    // only for an instance function whose hidden CV0 receiver exists.
     let (object_class_id, scope_matches) = unsafe {
         (
             obj_val.object_class_id_unchecked(),
@@ -2012,8 +2013,15 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
                                     == Some(i64::from(class_id))
                         }
                         None => {
-                            (*frame).func == cache.scope_function()
-                                && !(*frame).has_closure_scope()
+                            !(*frame).has_closure_scope()
+                                && match cache.trait_receiver_scope_class() {
+                                    Some(class_id) => {
+                                        let receiver = (*frame).cv(0);
+                                        receiver.value_type() == ValueType::Object
+                                            && receiver.object_class_id_unchecked() == class_id
+                                    }
+                                    None => (*frame).func == cache.scope_function(),
+                                }
                         }
                     }),
         )
@@ -2479,7 +2487,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
     if let Some(obj) = obj_val.as_object() {
 
         // ── Full resolution (cache miss or private/protected) ──
-        let (caller_class, scope_function, closure_scope) = caller_scope(frame, eg);
+        let (caller_class, scope_function, closure_scope, trait_receiver_scope) = caller_scope(frame, eg);
 
         // Private property early binding is only valid when the receiver
         // is in the same inheritance hierarchy as the caller.  When
@@ -2702,13 +2710,12 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             && !force_dynamic
             && obj.class_id != 0
             && opline.op2_type == OpType::Const
-            && (!scope_function.is_null() || closure_scope != 0)
+            && (!scope_function.is_null() || closure_scope != 0 || trait_receiver_scope != 0)
         {
             // A private/protected declared property read from a scope that is
-            // fixed by the executing function. The slot and the visibility
-            // verdict only depend on (function, object class), so the entry
-            // is keyed on both; it stays read-only and is not memoized for
-            // other object classes.
+            // fixed by the function, closure binding or hidden trait
+            // receiver. The hit path validates that scope proof separately
+            // from the class of the object whose slot it reads.
             if let Some(slot) = obj.property_slot(&key)
                 && !eg
                     .instance_property_definition(obj.class_id, slot)
@@ -2726,7 +2733,9 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 });
                 let ic_mut = op_array.inline_cache_mut(ip);
                 ic_mut.set_property(obj.class_id, slot, if writable { 3 } else { 1 });
-                if scope_function.is_null() {
+                if trait_receiver_scope != 0 {
+                    ic_mut.set_trait_receiver_scope_class(trait_receiver_scope);
+                } else if scope_function.is_null() {
                     // A closure site: the proof holds for this bound class
                     // scope only, which the hit path re-reads from the frame.
                     ic_mut.set_closure_scope_class(closure_scope);
@@ -5409,7 +5418,7 @@ fn op_assign_obj_prop_inner<'a>(
         return Ok(ColdResult::Done);
     }
     if let Some(php_obj) = obj.as_object_mut() {
-        let (caller_class, scope_function, closure_scope) = caller_scope(frame, eg);
+        let (caller_class, scope_function, closure_scope, _) = caller_scope(frame, eg);
         let object_display_class_name = std::rc::Rc::<str>::from(displayed_class_name(
             eg,
             php_obj.class_name.as_ref(),
@@ -6322,7 +6331,7 @@ fn op_init_method_call<'a>(
                 return throw_located_call_error(eg, frame, op_array, ip,
                     "The parent constructor was not called: the object is in an invalid state");
             }
-            let (caller_class, fixed_scope_function, _) = caller_scope(frame, eg);
+            let (caller_class, fixed_scope_function, _, _) = caller_scope(frame, eg);
 
             let dispatch_class = eg.method_dispatch_class(&target_class_name, method, caller_class.as_deref());
 

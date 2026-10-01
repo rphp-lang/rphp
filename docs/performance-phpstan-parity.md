@@ -2400,3 +2400,17 @@ analysis instructions remain effectively flat, **73.4634 to 73.4883 billion
 an accepted speed gain. The original parity goal remains open. See
 [the report](performance-phpstan-release-tracking.md) and
 [all samples](performance-phpstan-release-tracking-samples.json).
+
+## Accepted checkpoint: instance trait property scope
+
+The existing property cache now validates the independent hidden receiver
+class that determines an instance trait's lexical scope. The same analysis
+improves **73.4659 to 72.1651 billion instructions (-1.771%)**, independently
+confirmed, with exact PHP output and a **6.98x** remaining instruction gap.
+All 405 focused feature executions, 55 preparation repeats, thirteen PGO CLI
+cases and all-target checks pass. Independent control instruction/time
+regressions stay below one percent; the untrained mixed-trait control improves
+11.55% in instructions. Source, frame/cache sizes and unsafe inventory remain
+bounded. The original parity goal remains open. See
+[the report](performance-phpstan-trait-property-scope.md) and
+[every sample](performance-phpstan-trait-property-scope-samples.json).
