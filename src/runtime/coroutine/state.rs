@@ -83,7 +83,7 @@ pub(super) struct CoroutineExecutionState {
     pending_named_variadic: crate::runtime::PendingNamedVariadic,
     function_argument_state: FunctionArgumentState,
     active_generator: Option<crate::vm::generator::GeneratorRef>,
-    pending_invoke_this: Option<Value>,
+    pending_invoke_this: Option<crate::runtime::PendingCallState>,
     error_reporting: i64,
     error_suppression_frames: Vec<(usize, i64)>,
 }
@@ -209,8 +209,8 @@ impl CoroutineExecutionState {
             let generator = generator.borrow();
             generator.for_each_cycle_child(&mut push);
         }
-        if let Some(value) = &self.pending_invoke_this {
-            push(value);
+        if let Some(state) = &self.pending_invoke_this {
+            state.for_each_value(&mut push);
         }
 
         // SAFETY: current_execute_data names the inactive stack owned by
@@ -275,7 +275,7 @@ pub(super) fn cleanup_frame_chain(
     vm_stack: &mut VmStack,
     pending_call_stack: &mut VmStack,
     pending_named_variadic: &mut crate::runtime::PendingNamedVariadic,
-    pending_invoke_this: &mut Option<Value>,
+    pending_invoke_this: &mut Option<crate::runtime::PendingCallState>,
     mut frame: *mut ExecuteData,
 ) {
     unsafe {
@@ -441,8 +441,8 @@ mod tests {
         state
             .pending_named_variadic
             .insert(2, vec![("child".into(), Value::long(44))]);
-        eg.pending_invoke_this = Some(Value::long(55));
-        state.pending_invoke_this = Some(Value::long(66));
+        eg.pending_invoke_this = Some(crate::runtime::PendingCallState::opaque(Value::long(55)));
+        state.pending_invoke_this = Some(crate::runtime::PendingCallState::opaque(Value::long(66)));
         eg.error_reporting = 111;
         eg.error_suppression_frames.push((3, 101));
         state.error_reporting = 222;
@@ -455,11 +455,18 @@ mod tests {
         assert!(eg.pending_named_variadic.contains_key(&2));
         assert!(state.pending_named_variadic.contains_key(&1));
         assert_eq!(
-            eg.pending_invoke_this.as_ref().and_then(Value::as_long),
+            eg.pending_invoke_this
+                .as_ref()
+                .and_then(crate::runtime::PendingCallState::opaque_value)
+                .and_then(Value::as_long),
             Some(66)
         );
         assert_eq!(
-            state.pending_invoke_this.as_ref().and_then(Value::as_long),
+            state
+                .pending_invoke_this
+                .as_ref()
+                .and_then(crate::runtime::PendingCallState::opaque_value)
+                .and_then(Value::as_long),
             Some(55)
         );
         assert_eq!(eg.error_reporting, 222);
@@ -471,7 +478,10 @@ mod tests {
         assert_eq!(eg.exception.as_ref().and_then(Value::as_long), Some(11));
         assert!(eg.pending_named_variadic.contains_key(&1));
         assert_eq!(
-            eg.pending_invoke_this.as_ref().and_then(Value::as_long),
+            eg.pending_invoke_this
+                .as_ref()
+                .and_then(crate::runtime::PendingCallState::opaque_value)
+                .and_then(Value::as_long),
             Some(55)
         );
         assert_eq!(eg.error_reporting, 111);

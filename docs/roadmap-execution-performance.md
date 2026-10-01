@@ -2,17 +2,20 @@
 
 ## Current PHPStan scorecard
 
-Direct strict identity branches at baseline `8b06523f` independently reduce
-analysis **69.8710 to 69.6827 billion instructions (-0.270%)**, with exact PHP
-output. The remaining **6.74x** instruction gap keeps parity active. Analysis
-medians are 6.4252/6.4348 seconds; no confirmed time gain is claimed. All 878
-focused executions, seventeen final-PGO CLI programs, seven forced-canonical
-programs and all-target checks pass. Shared-frame time +1.735% with effectively
-unchanged instructions is an explicit instruction-priority tradeoff. See
-[the checkpoint](performance-phpstan-identity-branches.md) and
-[all samples](performance-phpstan-identity-branches-samples.json). Continue with
-quantified general frame/runtime ownership costs; main integration remains
-separate.
+Typed pending-call ownership and numeric frame hashing at baseline `82b60bc3`
+independently reduce analysis **69.6932 to 69.0416 billion instructions (-0.935%)**
+with exact PHP output; time medians are **6.5422/6.3595 seconds**. The remaining
+**6.68x instruction gap** keeps simultaneous parity active. All 284 focused
+feature executions, twelve final-PGO/canonical CLI programs and all-target checks
+pass. Inherited-method +1.653% and return-scope +2.881% control times are explicit
+instruction-priority tradeoffs, with instruction changes below +0.131%; those
+two timing cells do not pass the one-percent ceiling. See
+[the checkpoint](performance-phpstan-typed-call-state.md) and
+[all observations](performance-phpstan-typed-call-state-samples.json).
+The full preceding executor budget places at least 3.676/2.479/2.301 billion
+instructions in ReleaseTemps/DoFcall/Return bodies, before called helpers.
+Continue with general call and temporary ownership costs; main integration
+remains separate.
 
 
 Status: active project direction

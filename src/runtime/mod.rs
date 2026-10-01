@@ -1,3 +1,6 @@
+mod pending_call_state;
+pub use pending_call_state::PendingCallState;
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
@@ -266,6 +269,12 @@ impl std::hash::Hasher for FunctionIdentityHasher {
 }
 
 type FunctionIdentityMap<T> = HashMap<*const FunctionCommon, T, FunctionIdentityBuildHasher>;
+
+/// Frame keys are engine-owned identities, never user-supplied symbol names.
+type FrameIdentityMap<T> = HashMap<usize, T, FunctionIdentityBuildHasher>;
+
+const _: [(); std::mem::size_of::<HashMap<usize, usize>>()] =
+    [(); std::mem::size_of::<FrameIdentityMap<usize>>()];
 
 const _: () = {
     assert!(
@@ -1233,7 +1242,7 @@ pub struct ExecutorGlobals {
     /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
     /// slot. Keep those rare entries in a frame-keyed cold symbol table while
     /// statically known names continue to live directly in their CVs.
-    pub(crate) dynamic_variables: HashMap<usize, crate::value::DynamicPropertyMap>,
+    pub(crate) dynamic_variables: FrameIdentityMap<crate::value::DynamicPropertyMap>,
     /// Included code executes in its caller's variable scope. This sparse map
     /// aliases an include frame to the owning caller frame without changing
     /// the ordinary ExecuteData layout.
@@ -1278,9 +1287,9 @@ pub struct ExecutorGlobals {
     /// Closure-owned function-static cells for active or pending frames. The
     /// sidecar is absent unless a static-bearing anonymous Closure is called.
     closure_static_frames: Option<HashMap<usize, ClosureStaticVars>>,
-    /// Packed internal `(call frame, $this)` pairs for dynamically resolved
-    /// `__invoke` calls. The existing Option remains the cheap hot-path marker.
-    pub pending_invoke_this: Option<crate::value::Value>,
+    /// Typed engine-owned receiver, magic-call and late-static records.
+    /// The optional state retains the established field geometry.
+    pub pending_invoke_this: Option<PendingCallState>,
     /// Object identities whose user destructor has already started. Lazily
     /// allocated because ordinary requests never declare `__destruct`.
     /// Set of absolute file paths already included via include_once/require_once
@@ -2497,7 +2506,7 @@ impl ExecutorGlobals {
             globals: HashMap::new(),
             jit_auto_globals: HashMap::new(),
             phar_runtime: Default::default(),
-            dynamic_variables: HashMap::new(),
+            dynamic_variables: Default::default(),
             dynamic_scope_owners: Default::default(),
             detached_trace_callers: None,
             debug_only_trace_frames: None,
@@ -2648,7 +2657,7 @@ impl ExecutorGlobals {
             globals: HashMap::new(),
             jit_auto_globals: HashMap::new(),
             phar_runtime: Default::default(),
-            dynamic_variables: HashMap::new(),
+            dynamic_variables: Default::default(),
             dynamic_scope_owners: Default::default(),
             detached_trace_callers: None,
             debug_only_trace_frames: None,
@@ -3692,67 +3701,27 @@ impl ExecutorGlobals {
         if class_id == 0 {
             return;
         }
-        const TAG: usize = 1usize << (usize::BITS - 1);
-        debug_assert_eq!(call & TAG, 0);
-        let pending = self
-            .pending_invoke_this
-            .get_or_insert_with(|| Value::array(PhpArray::with_packed_capacity(4)));
-        let stack = pending
-            .as_array_mut()
-            .expect("pending call side state must remain a packed array");
-        stack.push(Value::long((call | TAG) as i64));
-        stack.push(Value::long(class_id as i64));
+        self.pending_invoke_this
+            .get_or_insert_with(Default::default)
+            .push_late_static(call, class_id);
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn late_static_scope_class_id(&self, call: usize) -> u32 {
-        const TAG: usize = 1usize << (usize::BITS - 1);
-        let Some(stack) = self.pending_invoke_this.as_ref().and_then(Value::as_array) else {
-            return 0;
-        };
-        let Some(key_index) = stack.len().checked_sub(2) else {
-            return 0;
-        };
-        if stack
-            .get_value_at(key_index)
-            .and_then(Value::as_long)
-            .map(|key| key as usize)
-            != Some(call | TAG)
-        {
-            return 0;
-        }
-        stack
-            .get_value_at(key_index + 1)
-            .and_then(Value::as_long)
-            .map_or(0, |class_id| class_id as u32)
+        self.pending_invoke_this
+            .as_ref()
+            .map_or(0, |state| state.late_static(call))
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn discard_late_static_scope(&mut self, call: usize) {
-        const TAG: usize = 1usize << (usize::BITS - 1);
-        let Some(pending) = self.pending_invoke_this.as_mut() else {
+        let Some(state) = self.pending_invoke_this.as_mut() else {
             return;
         };
-        let stack = pending
-            .as_array_mut()
-            .expect("pending call side state must remain a packed array");
-        let Some(key_index) = stack.len().checked_sub(2) else {
-            return;
-        };
-        if stack
-            .get_value_at(key_index)
-            .and_then(Value::as_long)
-            .map(|key| key as usize)
-            != Some(call | TAG)
-        {
-            return;
-        }
-        let _class_id = stack.pop();
-        let _call = stack.pop();
-        if stack.is_empty() {
-            self.pending_invoke_this = None;
+        if state.discard_late_static(call) && state.is_empty() {
+            self.pending_invoke_this = None
         }
     }
 

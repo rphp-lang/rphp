@@ -3993,14 +3993,7 @@ fn discard_pending_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteDat
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn push_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize, receiver: Value) {
-    let pending = eg
-        .pending_invoke_this
-        .get_or_insert_with(|| Value::array(PhpArray::with_packed_capacity(4)));
-    let stack = pending
-        .as_array_mut()
-        .expect("pending invoke state must remain a packed array");
-    stack.push(Value::long(call_key as i64));
-    stack.push(receiver);
+    eg.pending_invoke_this.get_or_insert_with(Default::default).push_receiver(call_key, receiver);
 }
 
 /// Pop the current dynamically resolved `__invoke` receiver without
@@ -4009,30 +4002,9 @@ fn push_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize, receiver:
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn take_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize) -> Option<Value> {
-    // Ordinary calls carry no pending receiver; answer before touching the
-    // stack representation.
-    if eg.pending_invoke_this.is_none() {
-        return None;
-    }
-    let matches_current = {
-        let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
-        let key_index = stack.len().checked_sub(2)?;
-        stack.get_value_at(key_index)?.as_long()? as usize == call_key
-    };
-    if !matches_current {
-        return None;
-    }
-
-    let (receiver, empty) = {
-        let stack = eg.pending_invoke_this.as_mut()?.as_array_mut()?;
-        let receiver = stack.pop()?;
-        let key = stack.pop()?;
-        debug_assert_eq!(key.as_long().map(|key| key as usize), Some(call_key));
-        (receiver, stack.is_empty())
-    };
-    if empty {
-        eg.pending_invoke_this = None;
-    }
+    let state = eg.pending_invoke_this.as_mut()?;
+    let receiver = state.take_receiver(call_key)?;
+    if state.is_empty() { eg.pending_invoke_this = None }
     Some(receiver)
 }
 
@@ -4047,23 +4019,7 @@ const PENDING_MAGIC_CALL_TAG: usize = 1usize << (usize::BITS - 2);
 /// embedding state; inspecting another activation never removes its owner.
 #[inline]
 fn has_pending_state_for_call(eg: &ExecutorGlobals, call_key: usize) -> bool {
-    let Some(pending) = eg.pending_invoke_this.as_ref() else {
-        return false;
-    };
-    let Some(stack) = pending.as_array() else {
-        return true;
-    };
-    if stack.len() % 2 != 0 {
-        return true;
-    }
-    let Some(key_index) = stack.len().checked_sub(2) else {
-        return true;
-    };
-    let Some(key) = stack.get_value_at(key_index).and_then(Value::as_long) else {
-        return true;
-    };
-    const LATE_STATIC_TAG: usize = 1usize << (usize::BITS - 1);
-    (key as usize & !(LATE_STATIC_TAG | PENDING_MAGIC_CALL_TAG)) == call_key
+    eg.pending_invoke_this.as_ref().is_some_and(|state| state.has_call(call_key))
 }
 
 #[cfg(test)]
@@ -4103,12 +4059,12 @@ mod call_side_state_admission_tests {
     #[test]
     fn opaque_and_incomplete_side_records_keep_full_preparation() {
         let mut eg = ExecutorGlobals::new();
-        eg.pending_invoke_this = Some(Value::long(55));
+        eg.pending_invoke_this = Some(crate::runtime::PendingCallState::opaque(Value::long(55)));
         assert!(has_pending_state_for_call(&eg, 16));
         for values in [vec![], vec![Value::long(32)], vec![Value::string("key"), Value::null()]] {
             let mut array = PhpArray::new();
             for value in values { array.push(value); }
-            eg.pending_invoke_this = Some(Value::array(array));
+            eg.pending_invoke_this = Some(crate::runtime::PendingCallState::opaque(Value::array(array)));
             assert!(has_pending_state_for_call(&eg, 16));
         }
     }
@@ -4131,21 +4087,7 @@ fn take_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize) -> Option<
 
 #[cold]
 fn pending_magic_call_name(eg: &ExecutorGlobals, call_key: usize) -> Option<String> {
-    let tagged_key = call_key | PENDING_MAGIC_CALL_TAG;
-    let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
-    let mut key_index = stack.len().checked_sub(2)?;
-    loop {
-        if stack.get_value_at(key_index)?.as_long()? as usize == tagged_key {
-            return stack
-                .get_value_at(key_index + 1)
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-        }
-        if key_index < 2 {
-            return None;
-        }
-        key_index -= 2;
-    }
+    eg.pending_invoke_this.as_ref()?.magic_name(call_key)
 }
 
 /// Compact arguments emitted by source-level `Closure->__invoke()` syntax.
