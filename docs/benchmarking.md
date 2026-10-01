@@ -140,3 +140,22 @@ Prefer: "At commit `…`, on CPU/OS `…`, RPHP was 1.4x faster for workload `�
 under these configurations."
 
 Avoid: "RPHP is 1.4x faster than PHP."
+
+
+## Short parser replay diagnostics
+
+`benches/bench_parser_replay.php ARCHIVE SOURCE...` loads the caller-supplied
+PHAR's Composer loader, instantiates the bundled PhpParser and reads all source
+bytes before measurement. The existing instruction driver can run it with
+`--phase`: it acknowledges both counter boundaries and reports a serialized-AST
+SHA-256 after counters stop. Without FIFO environment variables it also runs
+as an ordinary PHP/RPHP differential. Retain the archive, driver and every
+source as `--input` identities. Inputs must be valid for the bundled parser's
+newest supported version; no dependency download or archive patch is needed.
+
+An exact capture of the five-file application's real 331 parser invocations
+provides a 1.17–1.20-second native interval and a seventy-second instruction-site
+profile, with identical PHP ASTs. Source replay changes application context and
+AST lifetime: its counts select parser/runtime experiments but never substitute
+for full PHPStan acceptance. Private captured sources stay outside Git and
+outside PGO training. See [the diagnostic packet](performance-phpstan-parser-feedback-samples.json).
