@@ -446,3 +446,12 @@ the user's instruction priority. See
 [the accepted report](performance-phpstan-named-type-metadata.md).
 Continue with measured general runtime costs; this partial checkpoint neither
 completes parity nor authorizes main-branch integration.
+
+### Accepted PHPStan checkpoint: locale byte tables
+
+The current analysis executes **71.4742 billion instructions versus PHP's
+10.3377 billion (6.91x)**. Fixed locale-aware byte projections reduce repeated
+native entry by 0.963% in independently trained PGO confirmation. All focused
+configuration, PHP-output and independent control gates pass. The original
+parity goal remains active; continue with source attribution inside the main
+executor. See [the checkpoint](performance-phpstan-locale-byte-tables.md).

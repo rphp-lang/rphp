@@ -2414,3 +2414,16 @@ regressions stay below one percent; the untrained mixed-trait control improves
 bounded. The original parity goal remains open. See
 [the report](performance-phpstan-trait-property-scope.md) and
 [every sample](performance-phpstan-trait-property-scope-samples.json).
+
+## Accepted checkpoint: locale byte projections
+
+Safe fixed byte tables replace repeated cold native classification/case-fold
+entries while following successful LC_CTYPE/LC_ALL changes. Independent PGO
+confirmation reduces analysis instructions **72.1691 to 71.4742 billion
+(-0.963%)**, with exact PHP output and 6.6122-second analysis. The remaining
+**6.91x instruction gap** keeps the original parity goal active. All 786 focused
+executions and all-target checks pass; six independent controls stay within
+the one-percent gate. The baseline nested PRUNE gap remains a failure. No
+unsafe, VM ABI or architecture-specific lowering is added. See
+[the report](performance-phpstan-locale-byte-tables.md) and
+[all samples](performance-phpstan-locale-byte-tables-samples.json).

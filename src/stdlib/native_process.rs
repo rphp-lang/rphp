@@ -8,6 +8,8 @@
 #[cfg(target_os = "linux")]
 use std::cell::{Cell, RefCell};
 use std::ffi::OsStr;
+#[cfg(target_os = "linux")]
+use std::sync::atomic::{AtomicU64, Ordering};
 
 #[cfg(target_os = "linux")]
 use std::ffi::CStr;
@@ -104,6 +106,27 @@ pub(crate) enum NativeCtypeClass {
     Space,
     Upper,
     HexDigit,
+}
+
+// Process-global locale mutations invalidate every thread's byte projection.
+// Native mutation retains this module's existing single-VM-thread contract.
+#[cfg(target_os = "linux")]
+static CTYPE_GENERATION: AtomicU64 = AtomicU64::new(1);
+
+#[cfg(target_os = "linux")]
+pub(super) struct NativeCtypeTables {
+    generation: Cell<u64>,
+    lowercase: [Cell<u8>; 256],
+    classes: [Cell<u16>; 256],
+}
+
+#[cfg(target_os = "linux")]
+thread_local! {
+    static BYTE_CTYPE: NativeCtypeTables = const { NativeCtypeTables {
+        generation: Cell::new(0),
+        lowercase: [const { Cell::new(0) }; 256],
+        classes: [const { Cell::new(0) }; 256],
+    } };
 }
 
 /// Safe, fixed-width projection of the POSIX `rusage` fields exposed by PHP.
@@ -220,15 +243,9 @@ pub(super) enum NativeCall<'a> {
     #[cfg(target_os = "linux")]
     IconvVersion,
     #[cfg(target_os = "linux")]
-    Ctype {
-        class: NativeCtypeClass,
-        byte: u8,
-        result: &'a Cell<bool>,
-    },
-    #[cfg(target_os = "linux")]
-    CtypeLowercase {
-        byte: u8,
-        result: &'a Cell<u8>,
+    FillCtypeTables {
+        tables: &'a NativeCtypeTables,
+        generation: u64,
     },
     #[cfg(target_os = "linux")]
     GetResourceUsage {
@@ -284,7 +301,8 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
     // synchronously; password strings are copied before their scratch buffer
     // is dropped. RPHP executes process-global locale/catalog/environment
     // mutations on its single VM thread, so no concurrent Rust environment
-    // access is possible.
+    // access is possible. Byte tables pass only 0..255 to libc ctype functions
+    // and finish filling without callbacks before publishing their generation.
     unsafe {
         match call {
             NativeCall::SetEnvironment(key, value) => {
@@ -293,32 +311,30 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
             }
             #[cfg(target_os = "linux")]
             call => {
-                if let NativeCall::Ctype {
-                    class,
-                    byte,
-                    result,
-                } = call
-                {
-                    let byte = c_int::from(byte);
-                    let matched = match class {
-                        NativeCtypeClass::Alnum => libc::isalnum(byte),
-                        NativeCtypeClass::Alpha => libc::isalpha(byte),
-                        NativeCtypeClass::Blank => libc::isblank(byte),
-                        NativeCtypeClass::Control => libc::iscntrl(byte),
-                        NativeCtypeClass::Digit => libc::isdigit(byte),
-                        NativeCtypeClass::Graph => libc::isgraph(byte),
-                        NativeCtypeClass::Lower => libc::islower(byte),
-                        NativeCtypeClass::Print => libc::isprint(byte),
-                        NativeCtypeClass::Punctuation => libc::ispunct(byte),
-                        NativeCtypeClass::Space => libc::isspace(byte),
-                        NativeCtypeClass::Upper => libc::isupper(byte),
-                        NativeCtypeClass::HexDigit => libc::isxdigit(byte),
-                    } != 0;
-                    result.set(matched);
-                    return Some(Vec::new());
-                }
-                if let NativeCall::CtypeLowercase { byte, result } = call {
-                    result.set(libc::tolower(c_int::from(byte)) as u8);
+                if let NativeCall::FillCtypeTables { tables, generation } = call {
+                    for byte in 0..=u8::MAX {
+                        let native_byte = c_int::from(byte);
+                        let matches = [
+                            libc::isalnum(native_byte),
+                            libc::isalpha(native_byte),
+                            libc::isblank(native_byte),
+                            libc::iscntrl(native_byte),
+                            libc::isdigit(native_byte),
+                            libc::isgraph(native_byte),
+                            libc::islower(native_byte),
+                            libc::isprint(native_byte),
+                            libc::ispunct(native_byte),
+                            libc::isspace(native_byte),
+                            libc::isupper(native_byte),
+                            libc::isxdigit(native_byte),
+                        ];
+                        let mask = matches.iter().enumerate().fold(0u16, |mask, (bit, value)| {
+                            mask | (u16::from(*value != 0) << bit)
+                        });
+                        tables.classes[usize::from(byte)].set(mask);
+                        tables.lowercase[usize::from(byte)].set(libc::tolower(native_byte) as u8);
+                    }
+                    tables.generation.set(generation);
                     return Some(Vec::new());
                 }
                 if let NativeCall::GetResourceUsage { children, result } = call {
@@ -577,14 +593,19 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     return Some(Vec::new());
                 }
                 let (result, first_fallback, second_fallback) = match call {
-                    NativeCall::SetLocale { category, locale } => (
-                        native_setlocale(
+                    NativeCall::SetLocale { category, locale } => {
+                        let result = native_setlocale(
                             category,
                             locale.map_or(std::ptr::null(), NativeInput::as_ptr),
-                        ),
-                        None,
-                        None,
-                    ),
+                        );
+                        if !result.is_null()
+                            && locale.is_some()
+                            && matches!(category, libc::LC_CTYPE | libc::LC_ALL)
+                        {
+                            CTYPE_GENERATION.fetch_add(1, Ordering::Relaxed);
+                        }
+                        (result, None, None)
+                    }
                     NativeCall::NlLangInfo(item) => (native_nl_langinfo(item), None, None),
                     NativeCall::TextDomain(domain) => (
                         native_textdomain(domain.map_or(std::ptr::null(), NativeInput::as_ptr)),
@@ -648,8 +669,7 @@ pub(super) fn invoke_native(call: NativeCall<'_>) -> Option<Vec<u8>> {
                     ),
                     NativeCall::Iconv { .. } => unreachable!(),
                     NativeCall::IconvVersion => unreachable!(),
-                    NativeCall::Ctype { .. } => unreachable!(),
-                    NativeCall::CtypeLowercase { .. } => unreachable!(),
+                    NativeCall::FillCtypeTables { .. } => unreachable!(),
                     NativeCall::GetResourceUsage { .. } => unreachable!(),
                     NativeCall::GetUserId { .. } => unreachable!(),
                     NativeCall::GetPasswordByUserId { .. } => unreachable!(),
@@ -808,17 +828,28 @@ pub(super) fn compare_locale_strings(left: &[u8], right: &[u8]) -> i64 {
     i64::from(result.get())
 }
 
+#[cfg(target_os = "linux")]
+impl NativeCtypeTables {
+    #[inline]
+    fn ensure_current(&self) {
+        let generation = CTYPE_GENERATION.load(Ordering::Relaxed);
+        if self.generation.get() != generation {
+            let _ = invoke_native(NativeCall::FillCtypeTables {
+                tables: self,
+                generation,
+            });
+        }
+    }
+}
+
 #[inline]
 pub(crate) fn ctype_byte_matches(class: NativeCtypeClass, byte: u8) -> bool {
     #[cfg(target_os = "linux")]
     {
-        let result = Cell::new(false);
-        let _ = invoke_native(NativeCall::Ctype {
-            class,
-            byte,
-            result: &result,
+        return BYTE_CTYPE.with(|tables| {
+            tables.ensure_current();
+            tables.classes[usize::from(byte)].get() & (1 << class as u8) != 0
         });
-        return result.get();
     }
     #[cfg(not(target_os = "linux"))]
     match class {
@@ -841,12 +872,10 @@ pub(crate) fn ctype_byte_matches(class: NativeCtypeClass, byte: u8) -> bool {
 pub(crate) fn ctype_lowercase_byte(byte: u8) -> u8 {
     #[cfg(target_os = "linux")]
     {
-        let result = Cell::new(byte);
-        let _ = invoke_native(NativeCall::CtypeLowercase {
-            byte,
-            result: &result,
+        return BYTE_CTYPE.with(|tables| {
+            tables.ensure_current();
+            tables.lowercase[usize::from(byte)].get()
         });
-        return result.get();
     }
     #[cfg(not(target_os = "linux"))]
     byte.to_ascii_lowercase()
@@ -862,5 +891,66 @@ mod tests {
         let input = NativeInput::new(b"a\0b");
         assert_eq!(input.original, b"a\0b");
         assert_eq!(input.terminated, b"a\0b\0");
+    }
+
+    #[test]
+    fn byte_tables_track_only_successful_character_locale_mutations() {
+        let original = set_process_locale(i64::from(libc::LC_ALL), None).unwrap();
+        struct RestoreLocale(Vec<u8>);
+        impl Drop for RestoreLocale {
+            fn drop(&mut self) {
+                set_process_locale(i64::from(libc::LC_ALL), Some(&self.0));
+            }
+        }
+        let _restore = RestoreLocale(original);
+        assert!(set_process_locale(i64::from(libc::LC_ALL), Some(b"C")).is_some());
+        for byte in 0..=u8::MAX {
+            let expectations = [
+                (NativeCtypeClass::Alnum, byte.is_ascii_alphanumeric()),
+                (NativeCtypeClass::Alpha, byte.is_ascii_alphabetic()),
+                (NativeCtypeClass::Blank, matches!(byte, b'\t' | b' ')),
+                (NativeCtypeClass::Control, byte.is_ascii_control()),
+                (NativeCtypeClass::Digit, byte.is_ascii_digit()),
+                (NativeCtypeClass::Graph, byte.is_ascii_graphic()),
+                (NativeCtypeClass::Lower, byte.is_ascii_lowercase()),
+                (
+                    NativeCtypeClass::Print,
+                    byte.is_ascii_graphic() || byte == b' ',
+                ),
+                (NativeCtypeClass::Punctuation, byte.is_ascii_punctuation()),
+                (
+                    NativeCtypeClass::Space,
+                    matches!(byte, b'\t'..=b'\r' | b' '),
+                ),
+                (NativeCtypeClass::Upper, byte.is_ascii_uppercase()),
+                (NativeCtypeClass::HexDigit, byte.is_ascii_hexdigit()),
+            ];
+            for (class, expected) in expectations {
+                assert_eq!(ctype_byte_matches(class, byte), expected, "byte {byte}");
+            }
+            assert_eq!(ctype_lowercase_byte(byte), byte.to_ascii_lowercase());
+        }
+        let generation = CTYPE_GENERATION.load(Ordering::Relaxed);
+        for (category, name) in [
+            (libc::LC_CTYPE, None),
+            (libc::LC_ALL, None),
+            (libc::LC_CTYPE, Some(b"invalid_RPHP".as_slice())),
+            (libc::LC_ALL, Some(b"invalid_RPHP".as_slice())),
+            (libc::LC_NUMERIC, Some(b"C".as_slice())),
+        ] {
+            set_process_locale(i64::from(category), name);
+            assert_eq!(CTYPE_GENERATION.load(Ordering::Relaxed), generation);
+        }
+        for category in [libc::LC_CTYPE, libc::LC_ALL] {
+            let old = CTYPE_GENERATION.load(Ordering::Relaxed);
+            assert!(set_process_locale(i64::from(category), Some(b"C")).is_some());
+            assert_ne!(CTYPE_GENERATION.load(Ordering::Relaxed), old);
+            assert_eq!(BYTE_CTYPE.with(|tables| tables.generation.get()), old);
+            assert_eq!(ctype_lowercase_byte(b'A'), b'a');
+            assert_eq!(
+                BYTE_CTYPE.with(|tables| tables.generation.get()),
+                CTYPE_GENERATION.load(Ordering::Relaxed)
+            );
+        }
     }
 }
