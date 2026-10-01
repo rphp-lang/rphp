@@ -86,8 +86,8 @@ struct FunctionContract {
 #[cold]
 pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<InternalFunction>>) {
     register_key_class(eg);
-    let false_type = || ParamTypeHint::ClassName("false".to_string());
-    let key_type = || ParamTypeHint::ClassName(KEY_CLASS.to_string());
+    let false_type = || ParamTypeHint::ClassName("false".into());
+    let key_type = || ParamTypeHint::ClassName(KEY_CLASS.into());
     let contracts = [
         FunctionContract {
             name: "openssl_get_cert_locations",
@@ -105,7 +105,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             parameters: &["certificate", "short_names"],
             hints: vec![
                 ParamTypeHint::Union(vec![
-                    ParamTypeHint::ClassName("OpenSSLCertificate".to_string()),
+                    ParamTypeHint::ClassName("OpenSSLCertificate".into()),
                     ParamTypeHint::String,
                 ]),
                 ParamTypeHint::Bool,

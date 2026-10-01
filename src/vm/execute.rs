@@ -1125,51 +1125,56 @@ fn check_type_hint_with_scope(
             })
         }
         ParamTypeHint::ClassName(class_name) => {
-            if class_name.eq_ignore_ascii_case("null") {
-                return val.value_type() == ValueType::Null;
-            }
-            if class_name.eq_ignore_ascii_case("false") {
-                return val.value_type() == ValueType::False;
-            }
-            if class_name.eq_ignore_ascii_case("true") {
-                return val.value_type() == ValueType::True;
-            }
-            if val.value_type() == ValueType::Closure
-                && (class_name.eq_ignore_ascii_case("Closure")
-                    || class_name.eq_ignore_ascii_case("object"))
-            {
-                return true;
-            }
-            if class_name.eq_ignore_ascii_case("iterable") {
-                return val.as_array().is_some()
-                    || val
-                        .as_object()
-                        .is_some_and(|object| eg.object_is_a(&object, "Traversable"));
-            }
-            if let Some(obj) = val.as_object() {
-                if class_name.eq_ignore_ascii_case("object") {
+            use crate::vm::function::NamedTypeKind;
+            let kind = class_name.kind();
+            match kind {
+                NamedTypeKind::Null => return val.value_type() == ValueType::Null,
+                NamedTypeKind::False => return val.value_type() == ValueType::False,
+                NamedTypeKind::True => return val.value_type() == ValueType::True,
+                NamedTypeKind::Closure | NamedTypeKind::Object
+                    if val.value_type() == ValueType::Closure =>
+                {
                     return true;
                 }
-                // `self`/`parent` are lexical; `static` is the runtime called class.
-                match class_name.as_str() {
-                    "self" => {
-                        let lexical = scope.lexical_class(eg);
-                        eg.object_is_a(&obj, lexical.as_deref().unwrap_or(class_name))
-                    }
-                    "static" => eg.object_is_a(&obj, scope.called_class(eg).unwrap_or(class_name)),
-                    "parent" => {
-                        let lexical = scope.lexical_class(eg);
-                        let parent = lexical
-                            .as_deref()
-                            .and_then(|decl| eg.class_table.get(decl))
-                            .and_then(|class| class.parent.as_deref());
-                        eg.object_is_a(&obj, parent.unwrap_or(class_name))
-                    }
-                    _ => eg.object_is_a(&obj, class_name),
-                }
-            } else {
-                false
+                NamedTypeKind::Iterable if val.as_array().is_some() => return true,
+                _ => {}
             }
+            let Some(object) = val.as_object() else {
+                return false;
+            };
+            let resolved = match kind {
+                NamedTypeKind::Object => return true,
+                // Relative declarations must observe the current activation's
+                // lexical/called scope, never the shared positive-name cache.
+                NamedTypeKind::SelfClass => scope
+                    .lexical_class(eg)
+                    .unwrap_or_else(|| Cow::Borrowed(class_name.as_str())),
+                NamedTypeKind::Static => {
+                    Cow::Borrowed(scope.called_class(eg).unwrap_or(class_name.as_str()))
+                }
+                NamedTypeKind::Parent => {
+                    let lexical = scope.lexical_class(eg);
+                    let parent = lexical
+                        .as_deref()
+                        .and_then(|decl| eg.class_table.get(decl))
+                        .and_then(|class| class.parent.as_deref());
+                    Cow::Borrowed(parent.unwrap_or(class_name.as_str()))
+                }
+                _ => {
+                    if object.class_id != 0 {
+                        let target_id = class_name.resolved_class_id(eg);
+                        if target_id != 0 {
+                            return eg.class_is_a_ids(object.class_id, target_id);
+                        }
+                    }
+                    Cow::Borrowed(if kind == NamedTypeKind::Iterable {
+                        "Traversable"
+                    } else {
+                        class_name.as_str()
+                    })
+                }
+            };
+            eg.object_is_a(&object, &resolved)
         }
         ParamTypeHint::Nullable(inner) => {
             if val.value_type() == ValueType::Null {
@@ -4279,7 +4284,7 @@ pub(crate) fn resolved_type_diagnostic_name(
         match hint {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
                 if let Some(class) = lexical_class {
-                    *name = displayed_class_name(eg, class);
+                    *name = displayed_class_name(eg, class).into();
                 }
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
@@ -4287,12 +4292,12 @@ pub(crate) fn resolved_type_diagnostic_name(
                     .and_then(|class| eg.find_class(class))
                     .and_then(|class| class.parent.as_deref())
                 {
-                    *name = displayed_class_name(eg, parent);
+                    *name = displayed_class_name(eg, parent).into();
                 }
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
                 if let Some(class) = called_class.or(lexical_class) {
-                    *name = displayed_class_name(eg, class);
+                    *name = displayed_class_name(eg, class).into();
                 }
             }
             ParamTypeHint::Nullable(inner) => resolve(inner, eg, lexical_class, called_class),

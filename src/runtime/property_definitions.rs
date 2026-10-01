@@ -423,7 +423,7 @@ fn collect_variance_class_names(
         {
             let key = name.to_ascii_lowercase();
             if seen.insert(key) {
-                dependencies.push(name.clone());
+                dependencies.push(name.to_string());
             }
         }
         ParamTypeHint::Nullable(inner) => {

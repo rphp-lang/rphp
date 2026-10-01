@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -983,7 +983,16 @@ impl std::hash::Hasher for SymbolHasher {
 /// String-keyed table hashed with [`SymbolHasher`].
 pub type SymbolTable<V> = HashMap<String, V, std::hash::BuildHasherDefault<SymbolHasher>>;
 
+fn next_type_resolution_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("executor identity space exhausted")
+}
+
 pub struct ExecutorGlobals {
+    /// Never reused, even when an executor is moved or its address is recycled.
+    /// Shared named type metadata guards request-local class IDs with this ID.
+    pub(crate) type_resolution_id: u64,
     pub(crate) memory_budget: crate::request_memory::Budget,
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -2386,6 +2395,7 @@ impl ExecutorGlobals {
 
     pub fn new() -> Self {
         Self {
+            type_resolution_id: next_type_resolution_id(),
             memory_budget: crate::request_memory::Budget::default(),
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
@@ -2536,6 +2546,7 @@ impl ExecutorGlobals {
     /// Create EG with captured output (for testing)
     pub fn with_output(output: Box<dyn Write>) -> Self {
         Self {
+            type_resolution_id: next_type_resolution_id(),
             memory_budget: crate::request_memory::Budget::default(),
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
@@ -5282,7 +5293,7 @@ impl ExecutorGlobals {
 
         match hint {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
-                ParamTypeHint::ClassName(scope_owner.to_string())
+                ParamTypeHint::ClassName(scope_owner.into())
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
                 ParamTypeHint::ClassName(
@@ -5293,7 +5304,8 @@ impl ExecutorGlobals {
                             self.find_class(scope_owner)
                                 .and_then(|class| class.parent.clone())
                         })
-                        .unwrap_or_else(|| name.clone()),
+                        .unwrap_or_else(|| name.to_string())
+                        .into(),
                 )
             }
             ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
@@ -11966,7 +11978,7 @@ impl ExecutorGlobals {
         // X&Traversable <: iterable.
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_return_type_compatible_mode(
                 &ParamTypeHint::Array,
                 iface_hint,
@@ -11987,7 +11999,7 @@ impl ExecutorGlobals {
         }
         if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_return_type_compatible_mode(
                 impl_hint,
                 &ParamTypeHint::Array,
@@ -12256,7 +12268,7 @@ impl ExecutorGlobals {
 
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_param_type_compatible_mode(
                 &ParamTypeHint::Array,
                 iface_hint,
@@ -12277,7 +12289,7 @@ impl ExecutorGlobals {
         }
         if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_param_type_compatible_mode(
                 impl_hint,
                 &ParamTypeHint::Array,

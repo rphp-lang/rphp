@@ -432,3 +432,17 @@ shared-temp timing tradeoffs are explicit under instruction priority.
 See [the accepted checkpoint](performance-phpstan-wide-temp-retirement.md).
 Continue with quantified general call/frame costs; no main-branch integration
 or completed parity claim follows from this partial checkpoint.
+
+
+### Accepted PHPStan checkpoint: named type metadata
+
+Immutable declaration kind and positive request-identity-guarded class-ID reuse
+reduce analysis instructions 74.2806 to **73.4727 billion (-1.088%)**, versus
+PHP's 10.3379 billion. The remaining 7.11x gap keeps parity open. All 654 focused
+feature executions, twelve exact CLI contracts and all-target checks pass.
+Relative scopes, late aliases, cross-executor hints and canonical fallbacks keep
+PHP behavior. Time/RSS and independent control tradeoffs remain explicit under
+the user's instruction priority. See
+[the accepted report](performance-phpstan-named-type-metadata.md).
+Continue with measured general runtime costs; this partial checkpoint neither
+completes parity nor authorizes main-branch integration.

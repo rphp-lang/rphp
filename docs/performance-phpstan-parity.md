@@ -2362,3 +2362,17 @@ hardware PGO result is unchanged. No fresh PGO or later feature gate is run.
 See [the rejection report](performance-phpstan-scratch-reuse.md) and
 [packet](performance-phpstan-scratch-reuse-samples.json). Selection returns to
 the exact accepted PGO executor profile for a larger general cost.
+
+
+## Accepted checkpoint: named type declaration metadata
+
+Shared immutable named-type spelling/kind and a positive executor-guarded
+class-ID cache reduce current analysis instructions **74.2806 to 73.4727 billion
+(-1.088%)**, independently confirmed. Relative scopes and misses remain canonical;
+no unsafe invariant, workload recognizer or ABI change is added. All 654 focused
+feature executions, twelve exact PGO CLI contracts and all-target checks pass.
+The remaining **7.11x** instruction gap and 6.8589-second analysis keep parity
+open. RSS +2,400 KiB and confirmed relative-self/getter timing tradeoffs remain
+explicit under instruction priority. See
+[the report](performance-phpstan-named-type-metadata.md) and
+[all samples](performance-phpstan-named-type-metadata-samples.json).

@@ -1129,7 +1129,7 @@ struct Declaration {
 fn string_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 
@@ -1139,7 +1139,7 @@ fn string_or_false() -> ParamTypeHint {
 fn int_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::Int,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 
@@ -1149,7 +1149,7 @@ fn int_or_false() -> ParamTypeHint {
 fn array_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::Array,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 
@@ -1160,7 +1160,7 @@ fn array_string_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::Array,
         ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 

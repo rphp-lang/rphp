@@ -9588,8 +9588,8 @@ impl Compiler {
                     "void" => ParamTypeHint::Void,
                     "null" => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
                     builtin @ ("self" | "parent" | "static" | "object" | "iterable" | "false"
-                    | "true") => ParamTypeHint::ClassName(builtin.to_string()),
-                    _ => ParamTypeHint::ClassName(self.resolve_name(name)),
+                    | "true") => ParamTypeHint::ClassName(builtin.into()),
+                    _ => ParamTypeHint::ClassName(self.resolve_name(name).into()),
                 }
             }
             Some(TypeHint::Nullable(inner)) => {
@@ -9618,8 +9618,8 @@ impl Compiler {
             }
             Some(TypeHint::GenericApplication { base, .. }) => {
                 ParamTypeHint::ClassName(match base.as_str() {
-                    "self" | "parent" | "static" | "object" | "iterable" => base.clone(),
-                    _ => self.resolve_name(base),
+                    "self" | "parent" | "static" | "object" | "iterable" => base.as_str().into(),
+                    _ => self.resolve_name(base).into(),
                 })
             }
         }
@@ -9633,13 +9633,13 @@ impl Compiler {
     ) -> ParamTypeHint {
         match hint {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
-                ParamTypeHint::ClassName(class_name.to_string())
+                ParamTypeHint::ClassName(class_name.into())
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
-                ParamTypeHint::ClassName(parent_name.unwrap_or("parent").to_string())
+                ParamTypeHint::ClassName(parent_name.unwrap_or("parent").into())
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
-                ParamTypeHint::ClassName(class_name.to_string())
+                ParamTypeHint::ClassName(class_name.into())
             }
             ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
                 self.resolve_declared_property_type_hint(*inner, class_name, parent_name),
@@ -9672,10 +9672,10 @@ impl Compiler {
     ) -> ParamTypeHint {
         match hint {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
-                ParamTypeHint::ClassName(class_name.to_string())
+                ParamTypeHint::ClassName(class_name.into())
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
-                ParamTypeHint::ClassName(parent_name.unwrap_or("parent").to_string())
+                ParamTypeHint::ClassName(parent_name.unwrap_or("parent").into())
             }
             // Unlike property declarations, a class-constant `static` type
             // remains late-bound and is also preserved in PHP diagnostics.

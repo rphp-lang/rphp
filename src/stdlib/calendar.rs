@@ -1257,7 +1257,7 @@ fn string_or_int_type() -> ParamTypeHint {
 fn int_or_false_type() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::Int,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 

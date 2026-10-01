@@ -280,7 +280,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             vec![ParamTypeHint::Int],
             ParamTypeHint::Union(vec![
                 ParamTypeHint::Array,
-                ParamTypeHint::ClassName("false".to_string()),
+                ParamTypeHint::ClassName("false".into()),
             ]),
         ),
         (

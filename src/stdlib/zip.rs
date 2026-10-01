@@ -170,7 +170,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
     })
     .expect("ZipArchive registers once per request");
 
-    let false_type = || ParamTypeHint::ClassName("false".to_string());
+    let false_type = || ParamTypeHint::ClassName("false".into());
     let int_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::Int, false_type()]);
     let array_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()]);
     let string_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::String, false_type()]);

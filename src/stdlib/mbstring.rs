@@ -776,14 +776,14 @@ fn string_and_nullable_string() -> Vec<ParamTypeHint> {
 fn int_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::Int,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 
 fn string_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 
@@ -795,7 +795,7 @@ fn array_string_or_null() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::Array,
         ParamTypeHint::String,
-        ParamTypeHint::ClassName("null".to_string()),
+        ParamTypeHint::ClassName("null".into()),
     ])
 }
 
@@ -860,7 +860,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 ParamTypeHint::Union(vec![
                     ParamTypeHint::Array,
                     ParamTypeHint::String,
-                    ParamTypeHint::ClassName("false".to_string()),
+                    ParamTypeHint::ClassName("false".into()),
                 ])
             },
             defaults: || vec![None, None, Some(Value::null())],

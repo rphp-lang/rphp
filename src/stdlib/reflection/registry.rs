@@ -589,7 +589,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("PropertyHookType::from was just registered")
         .common
         .sig
-        .return_type_hint = ParamTypeHint::ClassName("PropertyHookType".to_string());
+        .return_type_hint = ParamTypeHint::ClassName("PropertyHookType".into());
     register_static_method!(
         "PropertyHookType",
         "tryFrom",
@@ -610,7 +610,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-        "PropertyHookType".to_string(),
+        "PropertyHookType".into(),
     )));
 
     register_reflection_interface(eg, "Reflector");
@@ -1370,7 +1370,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-        "ReflectionReference".to_string(),
+        "ReflectionReference".into(),
     )));
     register_method!(
         "ReflectionReference",
@@ -1434,7 +1434,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionEnum::getCase was just registered")
         .common
         .sig
-        .return_type_hint = ParamTypeHint::ClassName("ReflectionEnumUnitCase".to_string());
+        .return_type_hint = ParamTypeHint::ClassName("ReflectionEnumUnitCase".into());
     register_method!("ReflectionEnum", "getCases", enum_get_cases, 1, 0, []);
     functions
         .last_mut()
@@ -1470,7 +1470,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-        "ReflectionNamedType".to_string(),
+        "ReflectionNamedType".into(),
     )));
 
     for (class, constructor) in [
@@ -1505,7 +1505,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionEnumUnitCase::getEnum was just registered")
         .common
         .sig
-        .return_type_hint = ParamTypeHint::ClassName("ReflectionEnum".to_string());
+        .return_type_hint = ParamTypeHint::ClassName("ReflectionEnum".into());
     register_method!(
         "ReflectionEnumUnitCase",
         "getValue",
@@ -1519,7 +1519,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionEnumUnitCase::getValue was just registered")
         .common
         .sig
-        .return_type_hint = ParamTypeHint::ClassName("UnitEnum".to_string());
+        .return_type_hint = ParamTypeHint::ClassName("UnitEnum".into());
     register_method!(
         "ReflectionEnumBackedCase",
         "getBackingValue",
@@ -1771,9 +1771,8 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionParameter::getClass was just registered")
         .common
         .sig
-        .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-        "ReflectionClass".to_string(),
-    )));
+        .return_type_hint =
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("ReflectionClass".into())));
     register_method!(
         "ReflectionParameter",
         "isarray",
@@ -2444,7 +2443,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionMethod::createFromMethodName was just registered")
         .common
         .sig
-        .return_type_hint = ParamTypeHint::ClassName("static".to_string());
+        .return_type_hint = ParamTypeHint::ClassName("static".into());
     functions
         .last_mut()
         .expect("ReflectionMethod::createFromMethodName was just registered")
@@ -2534,7 +2533,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .param_type_hints = vec![ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-        "object".to_string(),
+        "object".into(),
     )))];
     register_method!(
         "ReflectionMethod",
@@ -2550,7 +2549,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .common
         .sig
         .param_type_hints = vec![
-        ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("object".to_string()))),
+        ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("object".into()))),
         ParamTypeHint::Array,
     ];
     register_method!(
@@ -2679,14 +2678,14 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionProperty::getHook was just registered")
         .common
         .sig
-        .param_type_hints = vec![ParamTypeHint::ClassName("PropertyHookType".to_string())];
+        .param_type_hints = vec![ParamTypeHint::ClassName("PropertyHookType".into())];
     functions
         .last_mut()
         .expect("ReflectionProperty::getHook was just registered")
         .common
         .sig
         .return_type_hint = ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-        "ReflectionMethod".to_string(),
+        "ReflectionMethod".into(),
     )));
     register_method!(
         "ReflectionProperty",
@@ -2715,7 +2714,7 @@ pub(in crate::stdlib) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalF
         .expect("ReflectionProperty::hasHook was just registered")
         .common
         .sig
-        .param_type_hints = vec![ParamTypeHint::ClassName("PropertyHookType".to_string())];
+        .param_type_hints = vec![ParamTypeHint::ClassName("PropertyHookType".into())];
     functions
         .last_mut()
         .expect("ReflectionProperty::hasHook was just registered")

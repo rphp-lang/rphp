@@ -2353,7 +2353,7 @@ fn fn_xpath_quote(
 }
 
 fn nullable_class(name: &str) -> ParamTypeHint {
-    ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(name.to_string())))
+    ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(name.into())))
 }
 
 fn nullable_string() -> ParamTypeHint {

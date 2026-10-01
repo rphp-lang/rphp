@@ -355,7 +355,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             function.common.sig.param_type_hints = vec![ParamTypeHint::None];
             function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
                 ParamTypeHint::Array,
-                ParamTypeHint::ClassName("false".to_string()),
+                ParamTypeHint::ClassName("false".into()),
             ]);
             function.handler_validates_types = true;
         } else if name == "is_resource" {
@@ -366,14 +366,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             function.common.sig.param_type_hints = vec![ParamTypeHint::String];
             function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
                 ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".to_string()),
+                ParamTypeHint::ClassName("false".into()),
             ]);
             function.handler_validates_types = true;
         } else if name == "stream_socket_get_name" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::None, ParamTypeHint::Bool];
             function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
                 ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".to_string()),
+                ParamTypeHint::ClassName("false".into()),
             ]);
             function.handler_validates_types = true;
         } else if name == "stream_set_blocking" {
@@ -420,7 +420,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             ];
             function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
                 ParamTypeHint::Int,
-                ParamTypeHint::ClassName("false".to_string()),
+                ParamTypeHint::ClassName("false".into()),
             ]);
             function.handler_validates_types = true;
         }
