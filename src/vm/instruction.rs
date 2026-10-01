@@ -814,6 +814,29 @@ impl InlineCache {
         }
     }
 
+    /// Immutable geometry for a ReleaseTemps entry. Its property words are
+    /// otherwise unused, and its function pointer remains empty. The frame's
+    /// live bits, rather than this mask, still decide which Values are owned.
+    pub(crate) fn for_release_range(first: u16, end: u16) -> Self {
+        let below = |bound: u16| {
+            u64::MAX
+                .checked_shr(64 - u32::from(bound.min(64)))
+                .unwrap_or(0)
+        };
+        let mask = below(end) & !below(first);
+        Self {
+            func: std::ptr::null(),
+            class_id: mask as u32,
+            prop_info: (mask >> 32) as u32,
+        }
+    }
+
+    /// Read only for the ReleaseTemps instruction owning this metadata slot.
+    #[inline(always)]
+    pub(crate) fn release_prefix_mask(&self) -> u64 {
+        u64::from(self.class_id) | (u64::from(self.prop_info) << 32)
+    }
+
     /// Declaration ID cached by CheckGenericArgs. Opcode-local cache slots do
     /// not share property/call meanings, so the existing packed word can hold
     /// index+1 without changing InlineCache's 16-byte layout.
@@ -1546,6 +1569,28 @@ mod inline_cache_tests {
     use crate::parser::Visibility;
     use crate::value::ObjectLayout;
     use crate::vm::function::ParamTypeHint;
+
+    #[test]
+    fn release_mask_covers_only_the_owned_prefix_interval() {
+        // Include the embedded-scope boundary, the last ownership bit and
+        // intervals entirely beyond the tracked prefix. Build the expected
+        // result by slot membership rather than repeating the shift formula.
+        for first in 0..=67u16 {
+            for end in first..=67u16 {
+                let cache = InlineCache::for_release_range(first, end);
+                let expected = (first..end)
+                    .filter(|slot| *slot < 64)
+                    .fold(0u64, |mask, slot| mask | (1u64 << slot));
+                assert_eq!(cache.release_prefix_mask(), expected, "{first}..{end}");
+                assert!(cache.func.is_null());
+            }
+        }
+        assert_eq!(std::mem::size_of::<InlineCache>(), 16);
+        assert_eq!(
+            InlineCache::for_release_range(63, u16::MAX).release_prefix_mask(),
+            1u64 << 63
+        );
+    }
 
     #[test]
     fn dynamic_property_marker_does_not_alias_a_declared_slot() {

@@ -12040,33 +12040,31 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 // SAFETY: the compiler emits a bounded CV/TMP interval for the
                 // active frame. Every frame tracks its first 64 slots;
                 // intervals beyond that prefix retain the initialized-slot fallback.
-                let range_owned = unsafe {
+                // SAFETY: the active instruction and its equally sized cache
+                // share an index; finalization initialized this marker's mask
+                // after resolving its absolute bounds. Masks contain no bits
+                // beyond the interval, so embedded scope bits are excluded.
+                let (range_owned, prefix_mask) = unsafe {
                     let first = opline.op1 as usize;
                     let end = opline.op2 as usize;
                     let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
                     debug_assert!(first <= end && end <= total);
-                    if end <= 64 {
-                        let below_end = if end == 64 {
-                            u64::MAX
-                        } else {
-                            (1u64 << end) - 1
-                        };
-                        let below_first = if first == 64 {
-                            u64::MAX
-                        } else {
-                            (1u64 << first) - 1
-                        };
-                        (*frame).owned_heap_bitmap() & (below_end & !below_first) != 0
+                    let ip = opline_ptr.offset_from(op_array.instructions.as_ptr()) as usize;
+                    let prefix_mask = op_array.cache.get_unchecked(ip).release_prefix_mask();
+                    let owned = if end <= 64 {
+                        (*frame).heap_bitmap & prefix_mask != 0
                     } else if !(*frame).has_heap_slots {
                         false
                     } else {
                         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
-                        (first..end).any(|index| (*base.add(index)).needs_cleanup())
-                    }
+                        (*frame).heap_bitmap & prefix_mask != 0
+                            || (first.max(64)..end).any(|index| (*base.add(index)).needs_cleanup())
+                    };
+                    (owned, prefix_mask)
                 };
                 if !return_cleanup || op_array.try_entries.is_empty() {
                     if range_owned {
-                        release_statement_temps(
+                        release_statement_temps_with_mask(
                             eg,
                             frame,
                             opline.op1 as usize,
@@ -12084,6 +12082,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 STATEMENT_TEMPS_ORDINARY
                             },
                             return_cleanup,
+                            prefix_mask,
                         )?;
                     }
                     resume_pending_exception!();

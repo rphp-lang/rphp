@@ -323,6 +323,14 @@ impl OpArray {
                 instr.extended_value += offset;
             }
         }
+        // Release intervals are immutable once their physical offsets are
+        // resolved. Their opcode-local cache is never used for dispatch or
+        // property resolution, so preserve its existing 16-byte geometry.
+        for (instruction, cache) in self.instructions.iter().zip(&mut self.cache) {
+            if instruction.opcode == OpCode::ReleaseTemps {
+                *cache = InlineCache::for_release_range(instruction.op1, instruction.op2);
+            }
+        }
     }
 
     /// Specialize opcodes for common operand-type patterns.
@@ -483,8 +491,14 @@ impl OpArray {
     pub fn init_cache(&mut self) {
         let len = self.instructions.len();
         self.cache = Vec::with_capacity(len);
-        for _ in 0..len {
-            self.cache.push(InlineCache::empty());
+        for instruction in &self.instructions {
+            self.cache.push(
+                if instruction.opcode == crate::vm::opcode::OpCode::ReleaseTemps {
+                    InlineCache::for_release_range(instruction.op1, instruction.op2)
+                } else {
+                    InlineCache::empty()
+                },
+            );
         }
     }
 
@@ -891,6 +905,55 @@ impl Drop for OpArray {
             };
             if !retained_string.is_null() {
                 unsafe { Value::release_cached_string(retained_string) };
+            }
+        }
+    }
+}
+
+#[cfg(test)]
+mod release_cache_tests {
+    use super::{OpArray, compile::Compiler, make_user_function};
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+    use crate::vm::opcode::OpCode;
+
+    fn verify_release_masks(op: &OpArray) {
+        assert_eq!(op.instructions.len(), op.cache.len());
+        let mut markers = 0;
+        for (instruction, cache) in op.instructions.iter().zip(&op.cache) {
+            if instruction.opcode == OpCode::ReleaseTemps {
+                markers += 1;
+                let expected = (instruction.op1..instruction.op2)
+                    .filter(|slot| *slot < 64)
+                    .fold(0u64, |mask, slot| mask | (1u64 << slot));
+                assert_eq!(cache.release_prefix_mask(), expected);
+                assert!(cache.func.is_null());
+            }
+        }
+        assert!(markers > 0);
+    }
+
+    #[test]
+    fn release_masks_follow_absolute_offsets_and_cache_reinitialization() {
+        for locals in [1, 31, 63, 65] {
+            for missing_cache in [false, true] {
+                let mut source = String::from("<?php ");
+                for index in 0..locals {
+                    source.push_str(&format!("$v{index}={index};"));
+                }
+                source.push_str("implode(',', [$v0, str_repeat('x', 3)]);");
+                let statements = Parser::new(Lexer::new(&source).tokenize().unwrap())
+                    .parse()
+                    .unwrap();
+                let mut op = Compiler::new().compile(&statements).unwrap().main;
+                assert_eq!(op.num_cvs, locals);
+                if missing_cache {
+                    op.cache.clear();
+                }
+                let mut function = make_user_function(op);
+                verify_release_masks(&function.op_array);
+                function.op_array.init_cache();
+                verify_release_masks(&function.op_array);
             }
         }
     }

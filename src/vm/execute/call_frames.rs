@@ -3249,7 +3249,9 @@ fn statement_snapshot_proofs_keep_inline_and_overflow_slots_distinct() {
     }
 }
 
-#[cold]
+/// Dynamic internal intervals keep the same prefix geometry as compiler
+/// markers. Ordinary bytecode supplies its already-projected immutable mask.
+#[inline]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -3258,13 +3260,32 @@ fn release_statement_temps(
     release_mode: u8,
     logical_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
+    let below = |bound: usize| u64::MAX.checked_shr((64 - bound.min(64)) as u32).unwrap_or(0);
+    release_statement_temps_with_mask(
+        eg, frame, first, end, release_mode, logical_caller_at_current_site,
+        below(end) & !below(first),
+    )
+}
+
+#[cold]
+fn release_statement_temps_with_mask(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    first: usize,
+    end: usize,
+    release_mode: u8,
+    logical_caller_at_current_site: bool,
+    prefix_mask: u64,
+) -> Result<(), VmError> {
     // SAFETY: the compiler emits a bounded statement-temporary range inside
     // this live frame; ownership bits identify which slots may be dropped.
     unsafe {
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         debug_assert!(first <= end && end <= total);
         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-        let bitmap = (end <= 64).then(|| (*frame).owned_heap_bitmap());
+        // The interval is bounded by the physical slot capacity, so its mask
+        // excludes embedded class metadata as well as out-of-range owners.
+        let bitmap = (end <= 64).then(|| (*frame).heap_bitmap & prefix_mask);
 
         #[cfg(feature = "vm-stats")]
         if stats::enabled() {
@@ -3302,18 +3323,7 @@ fn release_statement_temps(
         // Final owners and marked return/foreach sources retain the planner.
         if release_mode != STATEMENT_TEMPS_FOREACH_OBJECT {
             let single_owner = if let Some(bitmap) = bitmap {
-                let below_end = if end == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << end) - 1
-                };
-                let below_first = if first == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << first) - 1
-                };
-                let owned = bitmap & below_end & !below_first;
-                owned.is_power_of_two().then(|| owned.trailing_zeros() as usize)
+                bitmap.is_power_of_two().then(|| bitmap.trailing_zeros() as usize)
             } else {
                 // Prefix bytes may be uninitialized; the ownership predicate
                 // reads only their bitmap. Tail slots retain their existing
@@ -3396,10 +3406,8 @@ fn release_statement_temps(
                 }
             };
             if end <= 64 {
-                let bitmap = (*frame).owned_heap_bitmap();
-                let below_end = u64::MAX.checked_shr((64 - end) as u32).unwrap_or(0);
-                let below_first = u64::MAX.checked_shr((64 - first) as u32).unwrap_or(0);
-                for index in HeapSlotIter::new(bitmap & below_end & !below_first) {
+                let bitmap = (*frame).heap_bitmap & prefix_mask;
+                for index in HeapSlotIter::new(bitmap) {
                     capture(index as usize);
                 }
             } else {
