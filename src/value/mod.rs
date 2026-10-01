@@ -1223,7 +1223,7 @@ impl std::fmt::Debug for DynamicPropertyMap {
 }
 
 /// PHP object — class instance with properties.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct PhpObject {
     allocation: crate::request_memory::Allocation,
     /// Shared with the class layout for declared objects. Dynamic/internal
@@ -2572,6 +2572,77 @@ fn tracked_lifecycle(tracked: bool) -> u32 {
 pub(crate) fn vm_release_tracked_live() -> bool {
     VM_RELEASE_TRACKED.with(|count| count.get() != 0)
 }
+
+#[cfg(test)]
+mod release_tracking_lifecycle_tests {
+    use super::*;
+
+    fn count() -> usize {
+        VM_RELEASE_TRACKED.with(Cell::get)
+    }
+
+    fn declared_candidate() -> PhpObject {
+        let layout = Rc::new(ObjectLayout::new("TrackedDeclaration", Vec::new()));
+        layout.set_vm_release_tracked(true);
+        PhpObject::with_layout(1, layout, Vec::new())
+    }
+
+    #[test]
+    fn publication_retains_tracking_until_the_last_value_owner_dies() {
+        let initial = count();
+        let object = declared_candidate();
+        assert_eq!(count(), initial + 1);
+        let owner = Value::object(object);
+        let alias = owner.clone();
+        assert_eq!(count(), initial + 1, "Value aliases share one candidate");
+        drop(owner);
+        assert_eq!(count(), initial + 1);
+        drop(alias);
+        assert_eq!(count(), initial);
+
+        let mut generator = PhpObject::dynamic("Generator".into(), 0, HashMap::new());
+        generator.track_vm_release();
+        generator.track_vm_release();
+        let owner = Value::object(generator);
+        assert_eq!(count(), initial + 1, "explicit tracking is idempotent");
+        drop(owner);
+        assert_eq!(count(), initial);
+    }
+
+    #[test]
+    fn raw_and_php_clones_register_independent_object_lifetimes() {
+        let initial = count();
+        let original = declared_candidate();
+        let raw_clone = original.clone();
+        let php_clone = original.clone_for_php();
+        assert_eq!(count(), initial + 3);
+        let raw_owner = Value::object(raw_clone);
+        let php_owner = Value::object(php_clone);
+        drop(original);
+        assert_eq!(count(), initial + 2);
+        drop(raw_owner);
+        assert_eq!(count(), initial + 1);
+        drop(php_owner);
+        assert_eq!(count(), initial);
+
+        let plain = PhpObject::dynamic("Plain".into(), 0, HashMap::new());
+        drop(plain.clone());
+        drop(plain.clone_for_php());
+        drop(Value::object(plain));
+        assert_eq!(count(), initial, "plain lifetimes never acquire tracking");
+    }
+
+    #[test]
+    fn deferred_publication_preserves_the_candidate_registration() {
+        let initial = count();
+        let owner = Value::deferred_object(declared_candidate());
+        assert_eq!(count(), initial + 1);
+        assert_ne!(owner.publish_object_handle(), Some(0));
+        assert_eq!(count(), initial + 1);
+        drop(owner);
+        assert_eq!(count(), initial);
+    }
+}
 const OBJECT_HANDLE_MASK: u32 = !OBJECT_STATE_MASK;
 
 #[inline(always)]
@@ -3358,7 +3429,7 @@ impl PhpObject {
     }
 
     pub(crate) fn clone_for_php(&self) -> Self {
-        Self {
+        let mut object = Self {
             allocation: self.allocation.clone(),
             class_name: self.class_name.clone(),
             class_id: self.class_id,
@@ -3366,8 +3437,7 @@ impl PhpObject {
             // clone can reach a pathologically deep payload. The clone gets a
             // fresh handle/destructor lifecycle but retains the stack-safety
             // state needed when its shared properties are eventually final.
-            lifecycle: (self.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT)
-                | tracked_lifecycle(self.lifecycle & OBJECT_VM_RELEASE_TRACKED != 0),
+            lifecycle: self.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT,
             property_layout: self.property_layout.clone(),
             property_values: self
                 .property_values
@@ -3385,12 +3455,37 @@ impl PhpObject {
                 .as_ref()
                 .map(|properties| Box::new(properties.clone_for_php_object())),
             generator: None,
+        };
+        // Register only after fallible property cloning completed. A partial
+        // construction drops its fields without invoking PhpObject::drop.
+        if self.lifecycle & OBJECT_VM_RELEASE_TRACKED != 0 {
+            object.track_vm_release();
         }
+        object
     }
 
     #[inline]
     pub(crate) fn instance_property_reference_owner(&self, slot: usize) -> usize {
         instance_property_reference_owner(self.lifecycle & OBJECT_HANDLE_MASK, slot)
+    }
+}
+
+impl Clone for PhpObject {
+    fn clone(&self) -> Self {
+        let mut object = Self {
+            allocation: self.allocation.clone(),
+            class_name: self.class_name.clone(),
+            class_id: self.class_id,
+            lifecycle: self.lifecycle & !OBJECT_VM_RELEASE_TRACKED,
+            property_layout: self.property_layout.clone(),
+            property_values: self.property_values.clone(),
+            dynamic_properties: self.dynamic_properties.clone(),
+            generator: self.generator.clone(),
+        };
+        if self.lifecycle & OBJECT_VM_RELEASE_TRACKED != 0 {
+            object.track_vm_release();
+        }
+        object
     }
 }
 
@@ -7771,7 +7866,9 @@ impl Value {
         // A PHP clone receives a fresh handle and destructor lifecycle, but a
         // monotonic deep-drop checkpoint proved on the source remains valid
         // for the clone's initially shared property graph.
-        obj.lifecycle = (obj.lifecycle & OBJECT_DEEP_DROP_STACK_CHECKPOINT) | handle;
+        obj.lifecycle = (obj.lifecycle
+            & (OBJECT_DEEP_DROP_STACK_CHECKPOINT | OBJECT_VM_RELEASE_TRACKED))
+            | handle;
         let rc = Rc::new(CycleOwner::new(RefCell::new(obj)));
         if is_declared {
             stats::inc_declared_object_owner_allocation();
@@ -7793,7 +7890,7 @@ impl Value {
     /// path is allowed to consume an object-store handle.
     #[inline]
     pub(crate) fn deferred_object(mut obj: PhpObject) -> Self {
-        obj.lifecycle = 0;
+        obj.lifecycle &= OBJECT_DEEP_DROP_STACK_CHECKPOINT | OBJECT_VM_RELEASE_TRACKED;
         let rc = Rc::new(CycleOwner::new(RefCell::new(obj)));
         Self {
             data: ValueData {

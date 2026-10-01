@@ -2388,3 +2388,15 @@ remains a failure and all 31 baseline/candidate lines remain identical. Runtime
 is fully restored to accepted `3d7aa6ae`, with PGO still 73.4727 billion. No fresh
 PGO or later feature matrix is run. See
 [the rejected report](performance-phpstan-regex-continuation-loop.md).
+
+## Correctness checkpoint: balanced object release tracking
+
+Object publication preserves its existing candidate registration, and raw/PHP
+clones pair a new registration with the new lifetime. Three regressions fail on
+the original runtime; all 291 focused feature executions and two preparation
+repeats pass with the repair. No new planner guard is retained. Fresh PGO
+analysis instructions remain effectively flat, **73.4634 to 73.4883 billion
+(+0.0339%)**, against PHP's 10.3386 billion. This is a correctness repair, not
+an accepted speed gain. The original parity goal remains open. See
+[the report](performance-phpstan-release-tracking.md) and
+[all samples](performance-phpstan-release-tracking-samples.json).
