@@ -32,12 +32,17 @@ Linux process-state/read races after successful termination. Those failures rema
 private evidence. The final timeout check accepts an absent, dead or zombie
 descendant; it does not accept a running process. Python syntax and diff checks pass.
 
-The real host preflight fails visibly with `perf_event_paranoid=4` and records no
-measurement samples. `sudo` requires human authentication, so native end-to-end
-counts and elapsed iteration speed are not yet verified. Host perf also requires
+The initial real host preflight failed visibly with `perf_event_paranoid=4` and
+recorded no measurement samples. After the host setting changed to 2, the native
+end-to-end self-comparison and instruction profile passed in **30.751 seconds**.
+The same executable measured **74.2860 and 74.2752 billion** analysis instructions,
+a **0.0145%** difference, against PHP's **10.3378 billion**. Both comparison runs
+and the separate profile have identical reference exit/stdout/stderr. The profile
+records 74 thousand samples with zero lost samples. This validates the feedback
+loop, not a runtime optimization. The aggregate peak is 650,764,288 bytes, with
+no OOM or swap. Host perf also requires
 system library search paths because desktop-bundled LLVM otherwise causes a
-loader error; the runner selects system libraries. Enabling user-mode counters
-with `kernel.perf_event_paranoid=2` allows the pending native self-comparison.
+loader error; the runner selects system libraries.
 No fake test counter is application performance evidence.
 
 The accepted application result remains **74.2814 billion hardware analysis
