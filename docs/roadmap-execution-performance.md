@@ -580,3 +580,14 @@ Zend's 322 recognized context rows cover 318 physical functions, with their
 3.378G total unchanged. Continue with quantified common operand/result and
 slot ownership work across reads/writes. This is a diagnostic checkpoint,
 not a runtime speedup or completed parity.
+
+### Current application-work control
+
+The [retained body-entry probe](performance-phpstan-application-work.md) completes
+on the exact accepted PGO executable with fresh caches and unchanged findings.
+RPHP enters counted bodies 9.537M times versus PHP's 9.606M (-0.7125%); main
+parser traversal counts match. This rules out many-fold additional counted
+function entries, not differing inner loops or native/polyfill work. Instrumented
+whole-command counts and elapsed times do not update the native analysis
+scorecard. No runtime change is accepted; quantify common execution and slot
+ownership work before choosing another production representation.

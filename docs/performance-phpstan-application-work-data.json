@@ -1,0 +1,113 @@
+{
+  "complete": true,
+  "scope": "instrumented application body entries; no native performance claim",
+  "production_source_sha256": "f86729eb00a0b37058fdb228745baebf3933dae975aca2d44de071575c144146",
+  "archive_sha256": "1e3049e2478fd0f2875646f3d925a04096bc97cf372eb0e2e6677100fc450c7e",
+  "input_sha256": "0335fe28e70618e0e38e54d56f2ce361d2372e691474036a0a68318d36d990c2",
+  "mapping_sha256": "a541a4b9ba5f8e22de3de67c28706a2e943b5dcdb8238f4b83645f820f700761",
+  "mapped_entries": 23557,
+  "mapped_files": 3014,
+  "runs": [
+    {
+      "runtime": "reference-original",
+      "output_equal": true,
+      "exit": 1,
+      "analysed_files": 5,
+      "fresh_cache": true,
+      "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+      "diagnostic_wall_seconds": 1.3417289359786082,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+    },
+    {
+      "runtime": "reference-counted",
+      "output_equal": true,
+      "exit": 1,
+      "analysed_files": 5,
+      "fresh_cache": true,
+      "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+      "diagnostic_wall_seconds": 1.5016052889986895,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+      "body_entries": 9605729,
+      "entered_functions": 6818,
+      "counts_sha256": "8df17fff0e42439df633c920629d60d85d40b8f9e4712e9eef242bee7ba100a5"
+    },
+    {
+      "runtime": "accepted-counted",
+      "output_equal": true,
+      "exit": 1,
+      "analysed_files": 5,
+      "fresh_cache": true,
+      "binary_sha256": "99e294a6bed65cb5e8d01d10582a3041464216f334f95ccb32d4964bc85a0fd5",
+      "diagnostic_wall_seconds": 10.408914777013706,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+      "body_entries": 9537284,
+      "entered_functions": 6809,
+      "counts_sha256": "09702591400badfc6085bc8f83ebb24c5383c61c9a07cc15f24a9cdf5c74e38f"
+    }
+  ],
+  "total_extra_entries": 1849,
+  "total_fewer_entries": 70294,
+  "differing_entries": 85,
+  "total_entry_delta_percent": -0.712543524806919,
+  "exact_matches": 23472,
+  "exact_matching_entered_functions": 6733,
+  "older_reference_counts_identical": false,
+  "older_rphp_counts_identical": false,
+  "identities_unchanged": true,
+  "accepted_runtime": "724abb76",
+  "accepted_native_scorecard_unchanged": true,
+  "matching_body_entries": 7967099,
+  "selected_parser_entries": [
+    {
+      "class_name": "NodeTraverser",
+      "method": "traverse",
+      "reference": 1685,
+      "accepted": 1685
+    },
+    {
+      "class_name": "NodeTraverser",
+      "method": "traverseNode",
+      "reference": 63069,
+      "accepted": 63069
+    },
+    {
+      "class_name": "NodeTraverser",
+      "method": "traverseArray",
+      "reference": 27948,
+      "accepted": 27948
+    },
+    {
+      "class_name": "ParserAbstract",
+      "method": "parse",
+      "reference": 331,
+      "accepted": 331
+    }
+  ],
+  "boundary": {
+    "complete": true,
+    "exit": 0,
+    "seconds": 13.54345452398411,
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "memory_peak_bytes": 719994880,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "limits": [
+    "Instrumented whole-command body-entry counts include bootstrap and rendering; native accepted measurements cover analysis only.",
+    "Arrow expressions, native bodies and inner iterations are not counted.",
+    "Added PHP counter statements can inhibit optimized execution; diagnostic elapsed time is not performance evidence.",
+    "Differing reflection/native-versus-polyfill paths persist; causes are not all established.",
+    "No runtime gain, removable-work estimate or complete semantic equivalence is claimed."
+  ]
+}

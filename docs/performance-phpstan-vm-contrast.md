@@ -43,6 +43,13 @@ complete equivalent-operation costs. Source:
 
 ## Concrete representation differences
 
+The [current application-work control](performance-phpstan-application-work.md)
+reuses the retained function-body probe on the accepted PGO runtime: 9,537,284
+RPHP entries versus 9,605,729 PHP entries (-0.7125%), with identical main parser
+traversal counts and findings. It excludes an order-of-magnitude increase in
+counted function entries, not differences inside bodies. These whole-command
+instrumented counts are separate from the native analysis-only profile above.
+
 RPHP executes 36,411,017 separate `ReleaseTemps` markers. Their uniquely
 attributable own bodies cost 3,675,814,454 instructions, before called cleanup
 helpers. Zend frees consumed TMP/VAR operands inside operation handlers through
