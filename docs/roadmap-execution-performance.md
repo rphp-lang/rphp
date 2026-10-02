@@ -591,3 +591,13 @@ function entries, not differing inner loops or native/polyfill work. Instrumente
 whole-command counts and elapsed times do not update the native analysis
 scorecard. No runtime change is accepted; quantify common execution and slot
 ownership work before choosing another production representation.
+
+### Rejected Value transport controls
+
+The [exact ordinary selectors](performance-phpstan-value-transport.md) add
+0.362% instructions for Clone normalization and 0.494% for a pointer scalar-pair
+payload. An exact production-library probe proves register transport really
+changed; this is not a runtime improvement. Both patches are fully removed,
+with accepted source restored. No PGO, broad feature or ARM64 performance gate
+is expanded after rejection. Parity stays open at 68.6894G / 6.3610s; continue
+quantifying common operation/storage and lifetime work across the executor.

@@ -166,3 +166,11 @@ pure predicate branches. Both production changes are removed. Existing temporary
 operand/Fiber destructor gaps remain explicit failures, not passing coverage.
 The accepted scorecard is unchanged; neither compiler unwinding nor a few extra
 branch fusions explains or closes the several-fold application gap.
+
+The [Value transport controls](performance-phpstan-value-transport.md) prove
+that a pointer-only payload changes actual production constructors, moves and
+Clone to scalar-pair register transport while preserving sixteen-byte physical
+layout. Full ordinary analysis nonetheless adds 0.494% instructions. A separate
+Clone normalization adds 0.362%. Both prototypes are completely removed; no PGO
+scorecard update or error-API migration follows. General register transport
+alone does not establish an application optimization.
