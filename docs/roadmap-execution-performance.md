@@ -28,6 +28,24 @@ See the [project coordination map](roadmap.md), the
 and the shared [goal contract](agent-goal-contract.md) for assignment and
 integration rules.
 
+## Systemic VM cost investigation
+
+The [Zend/RPHP comparison](performance-phpstan-vm-contrast.md) reconciles exact
+saved analysis profiles. A 6.822x instruction difference combines approximately
+1.513x dispatched steps with 4.508x instructions per step; opcode formats are
+not equivalent semantic operations. PHP's main plus recognized separate
+handlers account for at least 6.518G, versus RPHP main alone at 27.916G.
+The investigation replaces the misleading main-executor-only comparison and
+prioritizes broad operand/lifetime, call/return and result-transport costs.
+The current accepted native scorecard above remains unchanged.
+
+The [direct root-index candidate](performance-phpstan-direct-root-index-rejected.md)
+is fully removed: a 1.153% first-window PGO instruction win fails the independent
+trait-property time gate (+5.728%) and shared-temporary gate (+1.960%). Preserve
+its exact failed/valid evidence, do not stack a compensating patch, and do not
+claim its 67.881G as the accepted runtime result. Simultaneous parity remains
+active; next implementation admission requires quantified systemic evidence.
+
 ## Accepted heap and bounded runtime repair
 
 The Rust-only allocator checkpoint is integrated at `0a0099fe` after the joint

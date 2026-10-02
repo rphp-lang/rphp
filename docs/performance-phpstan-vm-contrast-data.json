@@ -1,0 +1,734 @@
+{
+  "complete": true,
+  "scope": "Existing exact analysis-only Callgrind profiles; not current native timing or a causal optimization result",
+  "rphp": {
+    "binary_sha256": "8c95f735eca9d6ab8e26adf2d7aa05640756557be739b558bb7db34ff3013ed8",
+    "instructions": 71045941603,
+    "dispatches": 247231188,
+    "main_executor": 27916272120,
+    "other": 43129669483,
+    "instructions_per_dispatched_step": 287.36642078911177,
+    "body_lower_bounds": [
+      {
+        "opcodes": [
+          "ReleaseTemps"
+        ],
+        "dispatches": 36411017,
+        "unique_reachable_body_instructions": 3675814454
+      },
+      {
+        "opcodes": [
+          "DoFcall"
+        ],
+        "dispatches": 11127628,
+        "unique_reachable_body_instructions": 2478826829
+      },
+      {
+        "opcodes": [
+          "Return"
+        ],
+        "dispatches": 8462930,
+        "unique_reachable_body_instructions": 2300853458
+      },
+      {
+        "opcodes": [
+          "AssignCv",
+          "BindCvRef"
+        ],
+        "dispatches": 22626719,
+        "unique_reachable_body_instructions": 2109068279
+      },
+      {
+        "opcodes": [
+          "FetchObjR"
+        ],
+        "dispatches": 23031246,
+        "unique_reachable_body_instructions": 1893567080
+      },
+      {
+        "opcodes": [
+          "FetchDimR"
+        ],
+        "dispatches": 11976345,
+        "unique_reachable_body_instructions": 1620764315
+      },
+      {
+        "opcodes": [
+          "InitMethodCall"
+        ],
+        "dispatches": 7449470,
+        "unique_reachable_body_instructions": 1277831491
+      },
+      {
+        "opcodes": [
+          "AssignObjProp"
+        ],
+        "dispatches": 5387019,
+        "unique_reachable_body_instructions": 1124258772
+      },
+      {
+        "opcodes": [
+          "IsIdentical",
+          "IsNotIdentical",
+          "JmpZ_Identical",
+          "JmpNZ_Identical"
+        ],
+        "dispatches": 9323821,
+        "unique_reachable_body_instructions": 650355890
+      },
+      {
+        "opcodes": [
+          "AssignDim"
+        ],
+        "dispatches": 2418155,
+        "unique_reachable_body_instructions": 615659543
+      },
+      {
+        "opcodes": [
+          "SendVarEx"
+        ],
+        "dispatches": 7921256,
+        "unique_reachable_body_instructions": 538406726
+      },
+      {
+        "opcodes": [
+          "SendVal"
+        ],
+        "dispatches": 6561581,
+        "unique_reachable_body_instructions": 478876775
+      },
+      {
+        "opcodes": [
+          "JmpZ"
+        ],
+        "dispatches": 27891310,
+        "unique_reachable_body_instructions": 463983280
+      },
+      {
+        "opcodes": [
+          "IsEqual",
+          "IsNotEqual",
+          "IsSmaller",
+          "IsSmallerOrEqual"
+        ],
+        "dispatches": 4403191,
+        "unique_reachable_body_instructions": 315725870
+      },
+      {
+        "opcodes": [
+          "InitFcall"
+        ],
+        "dispatches": 3209961,
+        "unique_reachable_body_instructions": 253217674
+      },
+      {
+        "opcodes": [
+          "AddArrayElement"
+        ],
+        "dispatches": 2793838,
+        "unique_reachable_body_instructions": 187267186
+      },
+      {
+        "opcodes": [
+          "InitArray"
+        ],
+        "dispatches": 2574074,
+        "unique_reachable_body_instructions": 162719524
+      },
+      {
+        "opcodes": [
+          "FetchConst"
+        ],
+        "dispatches": 2445151,
+        "unique_reachable_body_instructions": 155387526
+      },
+      {
+        "opcodes": [
+          "CallUserFuncArray"
+        ],
+        "dispatches": 337031,
+        "unique_reachable_body_instructions": 108125946
+      },
+      {
+        "opcodes": [
+          "JmpNZ"
+        ],
+        "dispatches": 5258489,
+        "unique_reachable_body_instructions": 106090794
+      },
+      {
+        "opcodes": [
+          "Instanceof"
+        ],
+        "dispatches": 7034927,
+        "unique_reachable_body_instructions": 105523905
+      },
+      {
+        "opcodes": [
+          "Sub"
+        ],
+        "dispatches": 1451782,
+        "unique_reachable_body_instructions": 88624041
+      },
+      {
+        "opcodes": [
+          "BoolNot"
+        ],
+        "dispatches": 2055966,
+        "unique_reachable_body_instructions": 86347645
+      },
+      {
+        "opcodes": [
+          "FetchCvR"
+        ],
+        "dispatches": 1691194,
+        "unique_reachable_body_instructions": 83471936
+      },
+      {
+        "opcodes": [
+          "ArrayPushOp"
+        ],
+        "dispatches": 830778,
+        "unique_reachable_body_instructions": 76803962
+      },
+      {
+        "opcodes": [
+          "Isset"
+        ],
+        "dispatches": 1567674,
+        "unique_reachable_body_instructions": 57332440
+      },
+      {
+        "opcodes": [
+          "Jmp"
+        ],
+        "dispatches": 9944937,
+        "unique_reachable_body_instructions": 49724685
+      },
+      {
+        "opcodes": [
+          "Add"
+        ],
+        "dispatches": 673668,
+        "unique_reachable_body_instructions": 46821908
+      },
+      {
+        "opcodes": [
+          "FetchClassConst"
+        ],
+        "dispatches": 2951973,
+        "unique_reachable_body_instructions": 44279595
+      },
+      {
+        "opcodes": [
+          "Add_LongLong",
+          "Sub_LongLong",
+          "Mul_LongLong",
+          "Mod_LongLong",
+          "BitwiseXor_LongLong",
+          "BitwiseAnd_LongLong",
+          "BitwiseOr_LongLong"
+        ],
+        "dispatches": 640549,
+        "unique_reachable_body_instructions": 44102981
+      },
+      {
+        "opcodes": [
+          "ForeachNextPlain"
+        ],
+        "dispatches": 2317586,
+        "unique_reachable_body_instructions": 39398962
+      },
+      {
+        "opcodes": [
+          "PreInc"
+        ],
+        "dispatches": 1091944,
+        "unique_reachable_body_instructions": 38901490
+      },
+      {
+        "opcodes": [
+          "Cast"
+        ],
+        "dispatches": 476377,
+        "unique_reachable_body_instructions": 38400564
+      },
+      {
+        "opcodes": [
+          "Concat_StringString"
+        ],
+        "dispatches": 57185,
+        "unique_reachable_body_instructions": 35570637
+      },
+      {
+        "opcodes": [
+          "AssignConcat"
+        ],
+        "dispatches": 197733,
+        "unique_reachable_body_instructions": 29842462
+      },
+      {
+        "opcodes": [
+          "NewObj"
+        ],
+        "dispatches": 1231163,
+        "unique_reachable_body_instructions": 25354049
+      },
+      {
+        "opcodes": [
+          "BindObjPropRef"
+        ],
+        "dispatches": 1303407,
+        "unique_reachable_body_instructions": 24918315
+      },
+      {
+        "opcodes": [
+          "Add_TmpTmp"
+        ],
+        "dispatches": 472683,
+        "unique_reachable_body_instructions": 23109366
+      },
+      {
+        "opcodes": [
+          "InitStaticCall"
+        ],
+        "dispatches": 1336067,
+        "unique_reachable_body_instructions": 22713139
+      },
+      {
+        "opcodes": [
+          "ForeachInit"
+        ],
+        "dispatches": 1159986,
+        "unique_reachable_body_instructions": 18744512
+      },
+      {
+        "opcodes": [
+          "BitwiseAnd",
+          "BitwiseOr",
+          "BitwiseXor"
+        ],
+        "dispatches": 288790,
+        "unique_reachable_body_instructions": 17607986
+      },
+      {
+        "opcodes": [
+          "PostInc"
+        ],
+        "dispatches": 520830,
+        "unique_reachable_body_instructions": 16147830
+      },
+      {
+        "opcodes": [
+          "FetchStaticProp"
+        ],
+        "dispatches": 1044748,
+        "unique_reachable_body_instructions": 15671220
+      },
+      {
+        "opcodes": [
+          "SendRef"
+        ],
+        "dispatches": 141136,
+        "unique_reachable_body_instructions": 13228618
+      },
+      {
+        "opcodes": [
+          "CreateClosure"
+        ],
+        "dispatches": 194079,
+        "unique_reachable_body_instructions": 13162871
+      },
+      {
+        "opcodes": [
+          "BindDefaultParam"
+        ],
+        "dispatches": 2180058,
+        "unique_reachable_body_instructions": 13080348
+      },
+      {
+        "opcodes": [
+          "PreDec"
+        ],
+        "dispatches": 274852,
+        "unique_reachable_body_instructions": 9545277
+      },
+      {
+        "opcodes": [
+          "InitDynamicCall"
+        ],
+        "dispatches": 574757,
+        "unique_reachable_body_instructions": 9196112
+      },
+      {
+        "opcodes": [
+          "Add_CvTmp"
+        ],
+        "dispatches": 174666,
+        "unique_reachable_body_instructions": 7958248
+      },
+      {
+        "opcodes": [
+          "UnsetDim"
+        ],
+        "dispatches": 49786,
+        "unique_reachable_body_instructions": 7612954
+      },
+      {
+        "opcodes": [
+          "ForeachNext"
+        ],
+        "dispatches": 352755,
+        "unique_reachable_body_instructions": 5996835
+      },
+      {
+        "opcodes": [
+          "AddCallUnpack"
+        ],
+        "dispatches": 345669,
+        "unique_reachable_body_instructions": 5185035
+      },
+      {
+        "opcodes": [
+          "Sub_TmpTmp"
+        ],
+        "dispatches": 92452,
+        "unique_reachable_body_instructions": 4068234
+      },
+      {
+        "opcodes": [
+          "AddCallArgument"
+        ],
+        "dispatches": 223642,
+        "unique_reachable_body_instructions": 3354630
+      },
+      {
+        "opcodes": [
+          "Concat"
+        ],
+        "dispatches": 166658,
+        "unique_reachable_body_instructions": 2499870
+      },
+      {
+        "opcodes": [
+          "CheckDefaultType"
+        ],
+        "dispatches": 162235,
+        "unique_reachable_body_instructions": 2433525
+      },
+      {
+        "opcodes": [
+          "AssertCheck"
+        ],
+        "dispatches": 67527,
+        "unique_reachable_body_instructions": 2015167
+      },
+      {
+        "opcodes": [
+          "Mul"
+        ],
+        "dispatches": 28298,
+        "unique_reachable_body_instructions": 1759689
+      },
+      {
+        "opcodes": [
+          "PostDec"
+        ],
+        "dispatches": 26279,
+        "unique_reachable_body_instructions": 1235099
+      },
+      {
+        "opcodes": [
+          "FetchLateClassConst"
+        ],
+        "dispatches": 51909,
+        "unique_reachable_body_instructions": 778635
+      },
+      {
+        "opcodes": [
+          "ClosureUseVar"
+        ],
+        "dispatches": 111644,
+        "unique_reachable_body_instructions": 669864
+      },
+      {
+        "opcodes": [
+          "Sub_CvConst"
+        ],
+        "dispatches": 5377,
+        "unique_reachable_body_instructions": 279899
+      },
+      {
+        "opcodes": [
+          "JmpFinally"
+        ],
+        "dispatches": 10752,
+        "unique_reachable_body_instructions": 274048
+      },
+      {
+        "opcodes": [
+          "CloneObj"
+        ],
+        "dispatches": 16304,
+        "unique_reachable_body_instructions": 244560
+      },
+      {
+        "opcodes": [
+          "ShiftRight"
+        ],
+        "dispatches": 2282,
+        "unique_reachable_body_instructions": 221354
+      },
+      {
+        "opcodes": [
+          "Spaceship"
+        ],
+        "dispatches": 3010,
+        "unique_reachable_body_instructions": 180001
+      },
+      {
+        "opcodes": [
+          "ForeachNextRef"
+        ],
+        "dispatches": 5464,
+        "unique_reachable_body_instructions": 92888
+      },
+      {
+        "opcodes": [
+          "DirectInternalCall2"
+        ],
+        "dispatches": 457,
+        "unique_reachable_body_instructions": 60971
+      },
+      {
+        "opcodes": [
+          "IsSmaller_CvConst",
+          "JmpZ_Lt_CvConst",
+          "JmpNZ_Lt_CvConst"
+        ],
+        "dispatches": 1937,
+        "unique_reachable_body_instructions": 60765
+      },
+      {
+        "opcodes": [
+          "BitwiseNot"
+        ],
+        "dispatches": 945,
+        "unique_reachable_body_instructions": 34038
+      },
+      {
+        "opcodes": [
+          "UnsetObj"
+        ],
+        "dispatches": 1928,
+        "unique_reachable_body_instructions": 28920
+      },
+      {
+        "opcodes": [
+          "AssignStaticProp"
+        ],
+        "dispatches": 1832,
+        "unique_reachable_body_instructions": 27480
+      },
+      {
+        "opcodes": [
+          "Throw"
+        ],
+        "dispatches": 1308,
+        "unique_reachable_body_instructions": 19620
+      },
+      {
+        "opcodes": [
+          "CheckStatic"
+        ],
+        "dispatches": 3585,
+        "unique_reachable_body_instructions": 17925
+      },
+      {
+        "opcodes": [
+          "ForeachWriteback"
+        ],
+        "dispatches": 1726,
+        "unique_reachable_body_instructions": 15534
+      },
+      {
+        "opcodes": [
+          "SnapshotDiagnosticWrite"
+        ],
+        "dispatches": 648,
+        "unique_reachable_body_instructions": 14904
+      },
+      {
+        "opcodes": [
+          "Div"
+        ],
+        "dispatches": 171,
+        "unique_reachable_body_instructions": 11145
+      },
+      {
+        "opcodes": [
+          "BindArrayDimRef"
+        ],
+        "dispatches": 550,
+        "unique_reachable_body_instructions": 8250
+      },
+      {
+        "opcodes": [
+          "Mod"
+        ],
+        "dispatches": 128,
+        "unique_reachable_body_instructions": 8018
+      },
+      {
+        "opcodes": [
+          "FetchLateStaticProp"
+        ],
+        "dispatches": 528,
+        "unique_reachable_body_instructions": 7920
+      },
+      {
+        "opcodes": [
+          "FetchDynamicClassConst"
+        ],
+        "dispatches": 524,
+        "unique_reachable_body_instructions": 7860
+      },
+      {
+        "opcodes": [
+          "Yield"
+        ],
+        "dispatches": 436,
+        "unique_reachable_body_instructions": 5668
+      },
+      {
+        "opcodes": [
+          "ShiftLeft"
+        ],
+        "dispatches": 44,
+        "unique_reachable_body_instructions": 4928
+      },
+      {
+        "opcodes": [
+          "Include"
+        ],
+        "dispatches": 119,
+        "unique_reachable_body_instructions": 2856
+      },
+      {
+        "opcodes": [
+          "AddArrayUnpack"
+        ],
+        "dispatches": 188,
+        "unique_reachable_body_instructions": 2820
+      },
+      {
+        "opcodes": [
+          "IssetObj"
+        ],
+        "dispatches": 130,
+        "unique_reachable_body_instructions": 1950
+      },
+      {
+        "opcodes": [
+          "IsSmallerOrEqual_CvConst",
+          "JmpZ_Le_CvConst",
+          "JmpNZ_Le_CvConst"
+        ],
+        "dispatches": 55,
+        "unique_reachable_body_instructions": 1705
+      },
+      {
+        "opcodes": [
+          "DeclareClass"
+        ],
+        "dispatches": 105,
+        "unique_reachable_body_instructions": 1260
+      },
+      {
+        "opcodes": [
+          "InitDynamicStaticCall"
+        ],
+        "dispatches": 31,
+        "unique_reachable_body_instructions": 465
+      },
+      {
+        "opcodes": [
+          "FetchGlobal",
+          "AssignGlobal",
+          "UnsetGlobal",
+          "BindGlobalRef",
+          "AssignGlobalRef",
+          "FetchGlobals"
+        ],
+        "dispatches": 22,
+        "unique_reachable_body_instructions": 330
+      },
+      {
+        "opcodes": [
+          "InitLateStaticCall"
+        ],
+        "dispatches": 8,
+        "unique_reachable_body_instructions": 136
+      },
+      {
+        "opcodes": [
+          "BindStatic"
+        ],
+        "dispatches": 5,
+        "unique_reachable_body_instructions": 70
+      },
+      {
+        "opcodes": [
+          "ReportDeprecatedTraitUses"
+        ],
+        "dispatches": 4,
+        "unique_reachable_body_instructions": 56
+      },
+      {
+        "opcodes": [
+          "Strlen_String"
+        ],
+        "dispatches": 1,
+        "unique_reachable_body_instructions": 31
+      },
+      {
+        "opcodes": [
+          "AssignLateStaticProp"
+        ],
+        "dispatches": 1,
+        "unique_reachable_body_instructions": 15
+      },
+      {
+        "opcodes": [
+          "BindGlobal"
+        ],
+        "dispatches": 2,
+        "unique_reachable_body_instructions": 12
+      }
+    ]
+  },
+  "php": {
+    "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+    "instructions": 10413594551,
+    "dispatches": 163373959,
+    "main_executor": 3140080363,
+    "recognized_standalone_handlers": 3377659115,
+    "other_or_unclassified_handler": 3895855073,
+    "instructions_per_dispatched_step": 63.74084716279661,
+    "mapped_dispatches": 163184499,
+    "unmapped_dispatches": 189460,
+    "recognized_functions": 322,
+    "metadata_functions": 882
+  },
+  "ratios": {
+    "instructions": 6.822422483903752,
+    "dispatched_steps": 1.5132839377418772,
+    "instructions_per_step": 4.508355843705163
+  },
+  "limits": [
+    "Different opcode formats, fusion, receive operations and native builtins prevent equating dispatched steps to identical semantic operations.",
+    "All self instruction costs reconcile; inclusive call edges overlap and are not added.",
+    "Recognized PHP handlers are a lower bound: unmatched addresses remain separate.",
+    "Current accepted native source differs from the older RPHP Callgrind source."
+  ]
+}
