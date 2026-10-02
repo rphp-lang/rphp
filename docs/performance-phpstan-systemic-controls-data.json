@@ -1,0 +1,428 @@
+{
+  "status": "read-only controls; no runtime improvement accepted; full parity active",
+  "docs_baseline": "530b17d8",
+  "runtime_baseline": "724abb76",
+  "unchanged_runtime_source_sha256": "f86729eb00a0b37058fdb228745baebf3933dae975aca2d44de071575c144146",
+  "known_output": {
+    "exit": 1,
+    "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+    "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+  },
+  "accepted_pgo_scorecard": {
+    "rphp_instructions": 68689379772,
+    "rphp_analysis_seconds": 6.3609637025,
+    "php_instructions": 10337662850,
+    "php_analysis_seconds": 0.929350138
+  },
+  "wide_owner_window": {
+    "baseline_runtime_source_sha256": "f86729eb00a0b37058fdb228745baebf3933dae975aca2d44de071575c144146",
+    "diagnostic_runtime_source_sha256": "13de3b34cb7a8e1a23326d9fbf8cbb46ee2f42ac4f9f9409c43dfe2432ba3c2a",
+    "diagnostic_binary_sha256": "c9a731a77eba97a340477ad7c7e475e59bcdbf0665eaf0c5931c48d8ba09f579",
+    "input_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "counter_names": [
+      "wide_release_markers",
+      "declared_tail_span",
+      "guard_tail_visits",
+      "native_cleanup_tail_visits",
+      "committed_return_tail_visits",
+      "statement_predicate_tail_visits",
+      "statement_predicate_tail_live_results",
+      "wide_markers_with_owners"
+    ],
+    "counts": {
+      "wide_release_markers": 15364958,
+      "declared_tail_span": 27169875,
+      "guard_tail_visits": 25129801,
+      "native_cleanup_tail_visits": 57223808,
+      "committed_return_tail_visits": 57188292,
+      "statement_predicate_tail_visits": 10948199,
+      "statement_predicate_tail_live_results": 7637354,
+      "wide_markers_with_owners": 5269373
+    },
+    "existing_stats": {
+      "push_call_frame_calls": 13593911,
+      "push_call_frame_zero_slots": 98066087,
+      "cleanup_frame_calls": 13571349,
+      "cleanup_frame_scanned_slots": 99678549,
+      "ReleaseTemps": 38176885
+    },
+    "observations": [
+      {
+        "runtime": "reference",
+        "signature": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "seconds_diagnostic_only": 1.3850183530012146,
+        "instructions_including_diagnostic_overhead": 10338052598,
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      {
+        "runtime": "baseline",
+        "signature": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "seconds_diagnostic_only": 8.416363336000359,
+        "instructions_including_diagnostic_overhead": 68657329841,
+        "binary_sha256": "99e294a6bed65cb5e8d01d10582a3041464216f334f95ccb32d4964bc85a0fd5"
+      },
+      {
+        "runtime": "diagnostic",
+        "signature": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "seconds_diagnostic_only": 10.11111452600744,
+        "instructions_including_diagnostic_overhead": 81454562227,
+        "binary_sha256": "c9a731a77eba97a340477ad7c7e475e59bcdbf0665eaf0c5931c48d8ba09f579"
+      }
+    ],
+    "initial_attempt": "failed-no-perf-control: phase PHAR requires real perf FIFO endpoints; retained as a failure",
+    "diagnostic_performance_is_not_a_speed_claim": true,
+    "counter_scope": "whole command including startup; overlaps are not additive savings",
+    "mean_declared_tail_span": 1.768301286602931,
+    "boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 20.220081756997388,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 683683840,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "build_boundary": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 71.14611415300169,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 2842685440,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "failed_initial_observations": [
+      {
+        "runtime": "reference",
+        "signature": {
+          "exit": 1,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderr_sha256": "94c05e409efd11248ab6d92840b012a7168f92b261dc0d784290a937d7cd94f8"
+        },
+        "seconds_diagnostic_only": 0.3889908780111
+      },
+      {
+        "runtime": "baseline",
+        "signature": {
+          "exit": 1,
+          "stdout_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "stderr_sha256": "3cbb80c07cfaeb0e91a0475d664f26b8ecccbe43087c416a40942f0ccef59225"
+        },
+        "seconds_diagnostic_only": 1.7998598289996153
+      }
+    ],
+    "build": {
+      "exit": 0,
+      "seconds": 68.78343099199992
+    }
+  },
+  "seven_plan_control": {
+    "complete": true,
+    "purpose": "exploratory instruction feedback, not an acceptance gate",
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 2,
+    "warmup": "none; fresh TMPDIR per run",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "outlier_policy": "retain every valid output-checked sample",
+    "samples": [
+      {
+        "runtime": "enabled",
+        "wall_seconds": 9.747496231997502,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.529354811,
+        "instructions": 78311858041,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "disabled",
+        "wall_seconds": 9.758575422994909,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.547030926,
+        "instructions": 78783591738,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "disabled",
+        "wall_seconds": 9.696265083999606,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.489099979,
+        "instructions": 78770464890,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "enabled",
+        "wall_seconds": 9.677444794011535,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.470435381,
+        "instructions": 78313640091,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "binaries": {
+      "enabled": "2e9bac80c592b6febc07ffdc192778041dc8d5a85d9f85f7ac695635a8d09599",
+      "disabled": "357bac4abfbede31582d0d93b621e6144290b089716b7bfa4d3b7915170eeae0",
+      "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "inputs": [
+      "c9a731a77eba97a340477ad7c7e475e59bcdbf0665eaf0c5931c48d8ba09f579",
+      "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.3654251709958771,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.940600872,
+      "instructions": 10337878632,
+      "counter_running_percent": 100.0
+    },
+    "medians": {
+      "enabled": 78312749066.0,
+      "disabled": 78777028314.0
+    },
+    "delta_percent": {
+      "enabled": 0.0,
+      "disabled": 0.5928527009168238
+    },
+    "memory_peak_bytes": 652976128,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    },
+    "same_underlying_binary_sha256": "c9a731a77eba97a340477ad7c7e475e59bcdbf0665eaf0c5931c48d8ba09f579",
+    "statistics_enabled": false,
+    "switches_disabled": [
+      "RPHP_DISABLE_QUICK_LOOPS",
+      "RPHP_DISABLE_DIRECT_USER_CALLS",
+      "RPHP_DISABLE_DEFERRED_SCALAR_CALLS",
+      "RPHP_DISABLE_COMPOSED_SCALAR_CALLS",
+      "RPHP_DISABLE_COMPOSED_SCALAR_BODIES",
+      "RPHP_DISABLE_DIRECT_PROPERTY_GETTERS",
+      "RPHP_DISABLE_COMPOSED_PROPERTY_CALLS"
+    ],
+    "time_medians": {
+      "enabled": 7.4998950959999995,
+      "disabled": 7.5180654525
+    },
+    "time_delta_percent": 0.24227480874621232
+  },
+  "tail_merge_control": {
+    "complete": true,
+    "purpose": "exploratory instruction feedback, not an acceptance gate",
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 2,
+    "warmup": "none; fresh TMPDIR per run",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "outlier_policy": "retain every valid output-checked sample",
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 9.30105115599872,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.12555027,
+        "instructions": 74636537000,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "diagnostic",
+        "wall_seconds": 9.577862695994554,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.375793219,
+        "instructions": 74580846676,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "diagnostic",
+        "wall_seconds": 9.572677379997913,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.359824657,
+        "instructions": 74577216791,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 9.305626921996009,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.139525175,
+        "instructions": 74637630913,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "binaries": {
+      "baseline": "e99eeb48edad7ed88ac7318449d462f652b0ba15e44a4149c5ebcbe08dfba584",
+      "diagnostic": "6b49090d9e99a33c75b3a69b5ff3b81af7bf60b0f9f5673ab126e4bf3533231d",
+      "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "inputs": [
+      "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.3658400080021238,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.936621904,
+      "instructions": 10337856885,
+      "counter_running_percent": 100.0
+    },
+    "medians": {
+      "baseline": 74637083956.5,
+      "diagnostic": 74579031733.5
+    },
+    "delta_percent": {
+      "baseline": 0.0,
+      "diagnostic": -0.07777932888406447
+    },
+    "memory_peak_bytes": 651976704,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    },
+    "build": {
+      "complete": true,
+      "source_sha256": "f86729eb00a0b37058fdb228745baebf3933dae975aca2d44de071575c144146",
+      "runtime_commit": "724abb76",
+      "docs_head": "530b17d8",
+      "features": "default",
+      "profile": "release",
+      "pgo": false,
+      "llvm_args": [
+        "-enable-tail-merge=false"
+      ],
+      "exit": 0,
+      "seconds": 80.40139537600044,
+      "binary_sha256": "6b49090d9e99a33c75b3a69b5ff3b81af7bf60b0f9f5673ab126e4bf3533231d",
+      "binary_bytes": 25107552
+    },
+    "executor_symbols": {
+      "baseline": [
+        {
+          "address": "0000000000678040",
+          "bytes": 352495,
+          "type": "t",
+          "symbol": "rphp::vm::execute::execute_ex_inner"
+        }
+      ],
+      "diagnostic": [
+        {
+          "address": "000000000069e8a0",
+          "bytes": 409865,
+          "type": "t",
+          "symbol": "rphp::vm::execute::execute_ex_inner"
+        }
+      ]
+    },
+    "build_boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 80.53806218899263,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3077361664,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "time_medians": {
+      "baseline": 7.1325377225,
+      "diagnostic": 7.367808938
+    },
+    "time_delta_percent": 3.2985625124396067
+  }
+}

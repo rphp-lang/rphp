@@ -126,6 +126,15 @@ combining its graph traversals does not produce a material application win.
 
 Exact binary identities, reconciled partitions, opcode body lower bounds and
 scope limits are in [the data](performance-phpstan-vm-contrast-data.json).
+
+The [systemic controls](performance-phpstan-systemic-controls.md) find a mean
+wide-marker tail span of only 1.768 slots, +0.593% instructions when seven
+existing plans are disabled, and only -0.078% instructions when LLVM machine
+tail merging is disabled. No runtime change is accepted. These exclude specific
+broad hypotheses without identifying all probe, code-generation or lifetime
+costs as irreducible. Operation/storage and ownership boundaries remain the
+priority; the accepted PGO scorecard is unchanged.
+
 Metadata-only FFI cast attempts produced invalid maps, including one isolated
 failed process; those attempts were rejected. The retained map uses checked
 native pointer extraction and verified 32-byte Zend opcode geometry. Diagnostic

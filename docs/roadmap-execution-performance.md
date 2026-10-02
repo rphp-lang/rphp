@@ -62,6 +62,14 @@ its exact failed/valid evidence, do not stack a compensating patch, and do not
 claim its 67.881G as the accepted runtime result. Simultaneous parity remains
 active; next implementation admission requires quantified systemic evidence.
 
+The [systemic controls](performance-phpstan-systemic-controls.md) add actual
+wide-tail visits (mean declared span 1.768 slots), a same-binary seven-plan
+counterfactual (+0.593% instructions disabled), and a same-source LLVM machine
+tail-merge control (-0.078% instructions, insufficient). Production remains
+byte-identical. A tail bitmap, wholesale plan removal and this compiler switch
+are not admitted as the next large parity change. Continue with operation/storage
+and ownership work whose actual coverage supports a material application budget.
+
 ## Accepted heap and bounded runtime repair
 
 The Rust-only allocator checkpoint is integrated at `0a0099fe` after the joint
