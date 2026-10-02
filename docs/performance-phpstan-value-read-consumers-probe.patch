@@ -1,0 +1,154 @@
+diff --git a/src/vm/stats.rs b/src/vm/stats.rs
+index 09e2fd4e..232dfadf 100644
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -1815 +1815 @@ pub(crate) fn record_dispatch_context(op_array: &crate::compiler::OpArray,
+-    instruction: &crate::vm::instruction::Instruction) {
++    instruction: &crate::vm::instruction::Instruction, frame_identity: usize) {
+@@ -1816,0 +1817 @@ pub(crate) fn record_dispatch_context(op_array: &crate::compiler::OpArray,
++    record_projection_after_cleanup(frame_identity, instruction);
+@@ -1833,0 +1835,2 @@ fn dump_dispatch_context(output: &mut impl std::io::Write) {
++    dump_projection_consumers(output);
++    dump_projection_after_cleanup(output);
+@@ -1845,0 +1849,109 @@ fn dump_dispatch_context(output: &mut impl std::io::Write) {
++
++// Private descriptive probe, enabled only in this vm-stats source snapshot.
++#[cfg(feature = "vm-stats")]
++static PROJECTION_CONSUMERS: [std::sync::atomic::AtomicU64; 3 * 16 * 256 * 4 * 2 * 2] =
++    [const { std::sync::atomic::AtomicU64::new(0) }; 3 * 16 * 256 * 4 * 2 * 2];
++
++#[cfg(feature = "vm-stats")]
++pub(crate) fn record_projection_consumer(
++    kind: usize,
++    frame_identity: usize,
++    op_array: &crate::compiler::OpArray,
++    instruction: &crate::vm::instruction::Instruction,
++    value: &crate::value::Value,
++    scoped: bool,
++) {
++    if !enabled() { return; }
++    let ip = (instruction as *const _ as usize)
++        .saturating_sub(op_array.instructions.as_ptr() as usize)
++        / std::mem::size_of::<crate::vm::instruction::Instruction>();
++    let Some(next) = op_array.instructions.get(ip + 1) else { return; };
++    let same = |operand, op_type| matches!(instruction.result_type,
++        crate::vm::instruction::OpType::Tmp | crate::vm::instruction::OpType::Var)
++        && op_type == instruction.result_type && operand == instruction.result;
++    let relation = if next.opcode == crate::vm::opcode::OpCode::ReleaseTemps { 0 } else {
++        usize::from(same(next.op1, next.op1_type))
++            | (usize::from(same(next.op2, next.op2_type)) << 1)
++    };
++    let readonly = instruction._pad == 0 && matches!(instruction.result_type,
++        crate::vm::instruction::OpType::Tmp | crate::vm::instruction::OpType::Var);
++    let tag = value.value_type() as usize;
++    assert!(kind < 3 && tag < 16);
++    let index = (((((kind * 16 + tag) * 256 + next.opcode as usize) * 4 + relation) * 2
++        + usize::from(readonly)) * 2) + usize::from(scoped);
++    PROJECTION_CONSUMERS[index].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++    PROJECTION_PENDING.with(|pending| {
++        pending.set(None);
++        if next.opcode != crate::vm::opcode::OpCode::ReleaseTemps || !matches!(instruction.result_type,
++            crate::vm::instruction::OpType::Tmp | crate::vm::instruction::OpType::Var) { return; }
++        let mut last = ip + 1;
++        while let Some(release) = op_array.instructions.get(last) {
++            if release.opcode != crate::vm::opcode::OpCode::ReleaseTemps { break; }
++            if last > ip + 4 || instruction.result >= release.op1 && instruction.result < release.op2 { return; }
++            last += 1;
++        }
++        let Some(consumer) = op_array.instructions.get(last) else { return; };
++        let relation = usize::from(same(consumer.op1, consumer.op1_type))
++            | (usize::from(same(consumer.op2, consumer.op2_type)) << 1);
++        let output = (((((kind * 16 + tag) * 256 + consumer.opcode as usize) * 4 + relation) * 2
++            + usize::from(readonly)) * 2) + usize::from(scoped);
++        pending.set(Some(ProjectionPending { frame: frame_identity,
++            expected: next as *const _ as usize, consumer: consumer as *const _ as usize,
++            output }));
++    });
++}
++
++#[cfg(feature = "vm-stats")]
++fn dump_projection_consumers(output: &mut impl std::io::Write) {
++    let _ = writeln!(output, "-- diagnostic completed value-read consumers --");
++    for (index, counter) in PROJECTION_CONSUMERS.iter().enumerate() {
++        let value = counter.load(std::sync::atomic::Ordering::Relaxed);
++        if value == 0 { continue; }
++        let scoped = index % 2;
++        let readonly = index / 2 % 2;
++        let relation = index / 4 % 4;
++        let opcode = index / 16 % 256;
++        let tag = index / (16 * 256) % 16;
++        let kind = index / (16 * 256 * 16);
++        let _ = writeln!(output,
++            "kind_{kind}_tag_{tag}_next_{opcode}_use_{relation}_readonly_{readonly}_scoped_{scoped}={value}");
++    }
++}
++
++#[cfg(feature = "vm-stats")]
++#[derive(Clone, Copy)]
++struct ProjectionPending { frame: usize, expected: usize, consumer: usize, output: usize }
++#[cfg(feature = "vm-stats")]
++thread_local! {
++    static PROJECTION_PENDING: std::cell::Cell<Option<ProjectionPending>> = const { std::cell::Cell::new(None) };
++}
++#[cfg(feature = "vm-stats")]
++static PROJECTION_AFTER_CLEANUP: [std::sync::atomic::AtomicU64; 3 * 16 * 256 * 4 * 2 * 2] =
++    [const { std::sync::atomic::AtomicU64::new(0) }; 3 * 16 * 256 * 4 * 2 * 2];
++#[cfg(feature = "vm-stats")]
++fn record_projection_after_cleanup(frame: usize, instruction: &crate::vm::instruction::Instruction) {
++    PROJECTION_PENDING.with(|pending| {
++        let Some(mut item) = pending.take() else { return; };
++        let address = instruction as *const _ as usize;
++        if frame != item.frame || address != item.expected { return; }
++        if address == item.consumer {
++            PROJECTION_AFTER_CLEANUP[item.output].fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++        } else if instruction.opcode == crate::vm::opcode::OpCode::ReleaseTemps {
++            item.expected += std::mem::size_of::<crate::vm::instruction::Instruction>();
++            pending.set(Some(item));
++        }
++    });
++}
++#[cfg(feature = "vm-stats")]
++fn dump_projection_after_cleanup(output: &mut impl std::io::Write) {
++    let _ = writeln!(output, "-- diagnostic witnessed value-read consumers after cleanup --");
++    for (index, counter) in PROJECTION_AFTER_CLEANUP.iter().enumerate() {
++        let value = counter.load(std::sync::atomic::Ordering::Relaxed);
++        if value == 0 { continue; }
++        let scoped = index % 2; let readonly = index / 2 % 2;
++        let relation = index / 4 % 4; let opcode = index / 16 % 256;
++        let tag = index / (16 * 256) % 16; let kind = index / (16 * 256 * 16);
++        let _ = writeln!(output,
++            "kind_{kind}_tag_{tag}_next_{opcode}_use_{relation}_readonly_{readonly}_scoped_{scoped}={value}");
++    }
++}
+diff --git a/src/vm/execute/baseline_object_calls.rs b/src/vm/execute/baseline_object_calls.rs
+index a5e2d572..a629ac05 100644
+--- a/src/vm/execute/baseline_object_calls.rs
++++ b/src/vm/execute/baseline_object_calls.rs
+@@ -1721,0 +1722,7 @@ fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
++    #[cfg(feature = "vm-stats")]
++    {
++        let ip = (opline as *const Instruction as usize
++            - op_array.instructions.as_ptr() as usize) / std::mem::size_of::<Instruction>();
++        stats::record_projection_consumer(0, frame as usize, op_array, opline, property,
++            op_array.cache[ip].is_scoped_property());
++    }
+diff --git a/src/vm/execute/baseline_dispatch.rs b/src/vm/execute/baseline_dispatch.rs
+index 40d529e6..07a9a957 100644
+--- a/src/vm/execute/baseline_dispatch.rs
++++ b/src/vm/execute/baseline_dispatch.rs
+@@ -3116 +3116 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
+-        stats::record_dispatch_context(op_array, opline);
++        stats::record_dispatch_context(op_array, opline, frame as usize);
+@@ -7904,0 +7905,4 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
++                                #[cfg(feature = "vm-stats")]
++                                if let Some(fetched) = fetched {
++                                    stats::record_projection_consumer(1, frame as usize, op_array, opline, fetched, false);
++                                }
+diff --git a/src/vm/execute/frame_runtime.rs b/src/vm/execute/frame_runtime.rs
+index 8b572659..bbe34de5 100644
+--- a/src/vm/execute/frame_runtime.rs
++++ b/src/vm/execute/frame_runtime.rs
+@@ -1322,0 +1323,3 @@ pub(crate) unsafe fn try_execute_direct_property_getter(
++    #[cfg(feature = "vm-stats")]
++    stats::record_projection_consumer(2, caller as usize, (*caller).op_array(), do_fcall, property,
++        cache.is_scoped_property());

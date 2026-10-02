@@ -32,6 +32,15 @@ whole-request diagnostic dispatches (0.009158%). This is coverage evidence, not
 a native instruction saving. Broader general value/ownership support needs an
 actual coverage and instruction budget before a larger rewrite; parity stays open.
 
+[Ordinary value-flow coverage](performance-phpstan-value-read-consumers.md)
+records 23,056,206 non-fused cached property reads and 12,017,577 present-array
+reads. Array-valued property results feed 4,715,883 immediate dimension reads;
+8,502,862 array reads lead through cleanup to a witnessed following operation,
+including 3,558,203 assignments. Most property reads carry scoped metadata.
+The callback control verifies conservative witness cancellation. This admits a
+common value/ownership graph investigation, not a runtime or native speedup;
+canonical lifetime/cache/scope proof and an instruction gate remain necessary.
+
 ### Preceding return checkpoint
 
 Outlined canonical return validation at baseline `deea219c` independently
