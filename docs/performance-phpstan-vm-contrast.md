@@ -84,6 +84,30 @@ execution. Do not add workload recognizers or stack small compensating changes.
 The current difference requires removing broad repeated work; accumulated
 half-percent checkpoints alone are not a sufficient parity strategy.
 
+### Result-transport diagnostic
+
+An isolated probe linked the retained release library with the exact Rust
+1.98.1 toolchain. `VmError`, `Result<(), VmError>` and `Result<Value, VmError>`
+are each 32 bytes. Boxing the complete error gives 8-byte unit results and
+24-byte value results. The wide unit result has a hidden return-buffer argument;
+its success stores only a discriminant byte, not a 32-byte error copy.
+
+With a separately outlined cold constructor, the synthetic wide/thin success
+bodies execute seven/five machine instructions including return. Without that
+outlining, the boxed example acquires extra hot stack setup. Neither layout
+nor assembly size alone establishes application performance.
+
+The saved profile contains 24,821,440 confirmed edges into identified core
+VM/stdlib unit-result helpers. Four hypothetical saved instructions per such
+entry amount to 0.0993G, or 0.140% of the total; this is illustrative arithmetic,
+not an exhaustive overhead bound or measured improvement. This evidence does
+not admit a broad error API migration as the next parity implementation. The
+larger operation/lifetime costs remain the priority. See
+[the diagnostic](performance-phpstan-result-abi-data.json). Production source
+is unchanged. Initial toolchain mismatch attempts remain failures; the
+unintentionally auto-installed toolchain was removed, and final compilation
+uses the project-pinned compiler with automatic installation disabled.
+
 The direct root-index candidate was rejected after a confirmed independent
 control regression; its runtime change is completely removed. See
 [the rejection](performance-phpstan-direct-root-index-rejected.md).

@@ -1,0 +1,48 @@
+{
+  "complete": true,
+  "status": "not_admitted",
+  "reason": "Layout and ABI overhead are real, but no quantified broad gain supports a whole-runtime migration or explains the multiplicative gap.",
+  "layout": {
+    "vm_error": 32,
+    "unit_result": 32,
+    "value_result": 32,
+    "boxed_error": 8,
+    "boxed_unit_result": 8,
+    "boxed_value_result": 24,
+    "payload_box_error": 16,
+    "payload_box_unit_result": 16,
+    "complete": true,
+    "scope": "Exact retained VmError/Value layout; isolated ABI probe, not a runtime performance measurement",
+    "rlib_sha256": "1f6dc763bb73bb4d6174bdfeda5f1efdc0711937e1c924494b275144a6236f41",
+    "rustc": "rustc 1.98.1 (48a229cea 2026-09-01)"
+  },
+  "confirmed_core_unit_call_entries": 24821440,
+  "confirmed_edges": 323,
+  "counts_scope": "Exact saved analysis call edges into source-identified core VM/stdlib unit Result functions; not exhaustive, not inclusive instruction sums.",
+  "codegen": {
+    "wide_success_instructions_including_return": 7,
+    "thin_success_instructions_including_return": 5,
+    "cold_box_allocation_outlined": true,
+    "wide_success_writes_one_discriminant_byte": true
+  },
+  "illustrative_projection": {
+    "assumed_saved_instructions_per_confirmed_call": 4,
+    "instructions": 99285760,
+    "percent_of_profile": 0.1397486721406301,
+    "scope": "Illustrative arithmetic only, not measured gain or global upper bound"
+  },
+  "toolchain": {
+    "exact_version": "1.98.1",
+    "initial_default_mismatch": "1.93.1",
+    "unintended_stable_install": "1.99.0",
+    "unintended_stable_removed": true,
+    "auto_install_disabled_for_final_probe": true
+  },
+  "runtime_changed": false,
+  "limitations": [
+    "A smaller return type alone is not a speedup proof.",
+    "A first boxed inline allocation probe adds a hot stack prologue; outlining the cold constructor removes it.",
+    "Actual layout uses retained release-library VmError and Value; the private ColdResult type was not claimed to be directly measured.",
+    "Successful whole-application behavior and native performance need a real A/B before any source migration."
+  ]
+}
