@@ -26,6 +26,17 @@ published separately from production. No new native gain or runtime candidate
 is admitted; broader operand/owner/publication work and simultaneous parity
 remain open. The scorecard above is unchanged.
 
+[Canonical operand-storage expansion](performance-phpstan-storage-expansion-rejected.md)
+rejects a whole-body macro prototype before candidate execution: ordinary
+native main text grows 264.390% and its prologue stack grows 5,392 bytes,
+violating the declared stop condition. No candidate instruction saving or
+compatibility gate is claimed. A separate exact accepted-PGO observation
+reproduces 66.8021G against PHP's 10.3380G with identical output; sampled main
+self is approximately 40.58%. The profile loses 43 records and its inclusive
+context is not admitted, so neither exact operation costs nor a removable
+budget follow. Both bounded cycles have zero OOM, superseded build targets are
+removed, and the accepted scorecard and simultaneous parity goal stay unchanged.
+
 ### Preceding string-owner checkpoint
 
 [String-owner accounting](performance-phpstan-string-owner-accounting.md)
