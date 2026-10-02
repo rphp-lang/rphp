@@ -554,3 +554,16 @@ percent. Exact copy attribution confirms 3.41 million copies removed; the next
 checkpoint must quantify wider frame/executor costs. See
 [the report](performance-phpstan-return-scope-projection.md) and
 [all samples](performance-phpstan-return-scope-projection-samples.json).
+
+
+### Rejected PHPStan predicate/code-generation controls
+
+Accepted runtime stays `724abb76` at **68.6894G / 6.3610s**, with parity open.
+Outlining the property leaf adds 1.291% ordinary analysis instructions. A
+same-source abort diagnostic removes only 1.021% and is semantically ineligible.
+Pure predicate branches pass 36 focused tests but save only 0.446%, below their
+selector, so the whole prototype is removed without a larger gate cycle.
+Original lifetime-fixture failures reproduce on accepted source and remain
+compatibility gaps. See [all controls and the counterexample](performance-phpstan-predicate-controls.md).
+Continue with a quantified boundary shared across operation/ownership protocols;
+narrow fusions alone are not a parity strategy. No runtime checkpoint is accepted.

@@ -148,3 +148,11 @@ failed process; those attempts were rejected. The retained map uses checked
 native pointer extraction and verified 32-byte Zend opcode geometry. Diagnostic
 FFI enablement never entered a benchmark configuration. No runtime source
 changed during this investigation, and no new full Callgrind cycle was needed.
+
+The [predicate/code-generation controls](performance-phpstan-predicate-controls.md)
+add 1.291% instructions when the cached property leaf is outlined, remove only
+1.021% in an ineligible panic=abort diagnostic, and save just 0.446% with broader
+pure predicate branches. Both production changes are removed. Existing temporary
+operand/Fiber destructor gaps remain explicit failures, not passing coverage.
+The accepted scorecard is unchanged; neither compiler unwinding nor a few extra
+branch fusions explains or closes the several-fold application gap.
