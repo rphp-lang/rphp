@@ -41,6 +41,15 @@ The callback control verifies conservative witness cancellation. This admits a
 common value/ownership graph investigation, not a runtime or native speedup;
 canonical lifetime/cache/scope proof and an instruction gate remain necessary.
 
+[The eager general-value graph prototype](performance-phpstan-value-graph-rejected.md)
+executes 35,317,006 nodes over the actual request with exact focused/application
+output, but ordinary release analysis instructions rise 3.807% and time 3.768%.
+Sampled main work falls while the additional executor and entry wrapper cost
+more. The candidate is rejected without PGO or a full feature matrix; production
+and its PGO parity scorecard stay unchanged. Execution coverage must be paired
+with removal of repeated operand/owner/publication work, not dispatch-count
+claims alone.
+
 ### Preceding return checkpoint
 
 Outlined canonical return validation at baseline `deea219c` independently

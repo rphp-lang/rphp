@@ -1,0 +1,498 @@
+{
+  "status": "rejected private eager value-graph executor; production unchanged",
+  "baseline_commit": "5e00e50439a2197da2f018cbbc3273ff2473c29a",
+  "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+  "candidate_source_sha256": "231eb2d3052ff6fa280fb166fe4dde62db6a0f5d860a86ca9458d1a0e77ebc86",
+  "builds": {
+    "diagnostic": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 69.12911959100165,
+      "source_sha256": "231eb2d3052ff6fa280fb166fe4dde62db6a0f5d860a86ca9458d1a0e77ebc86",
+      "profile": "release",
+      "features": "default,vm-stats",
+      "pgo": false,
+      "binary_sha256": "e51aab3785ab5ebc26acf9032c9a603bed8e478a0be72b9cf8e8fdcef66d6c97",
+      "binary_bytes": 24829376
+    },
+    "ordinary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 69.0251308369916,
+      "source_sha256": "231eb2d3052ff6fa280fb166fe4dde62db6a0f5d860a86ca9458d1a0e77ebc86",
+      "profile": "release",
+      "features": "default",
+      "pgo": false,
+      "binary_sha256": "b49ab5ee6d1212c6330d81ede0e4575ec9b4673cb9aef4a1ec2f29fbdf4763ce",
+      "binary_bytes": 24332480
+    }
+  },
+  "coverage": {
+    "value_region_admitted": 15780,
+    "value_region_entered": 12928785,
+    "value_region_operations": 35317006,
+    "value_region_completed": 3505458,
+    "value_region_partial": 9423327,
+    "value_region_guard_failed": 883
+  },
+  "canonical_dispatch_observations": 247515490,
+  "native": {
+    "complete": true,
+    "purpose": "exploratory instruction feedback, not an acceptance gate",
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 2,
+    "warmup": "none; fresh TMPDIR per run",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "outlier_policy": "retain every valid output-checked sample",
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.596662402997026,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.725122213,
+        "instructions": 73776799063,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.893117197992979,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.994246244,
+        "instructions": 76583387291,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.836594049003907,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.939622879,
+        "instructions": 76591847848,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.587903514999198,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.702837706,
+        "instructions": 73780680996,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "binaries": {
+      "baseline": "158af2eef30d07c1ed89598836dee95c133629ad9cddd95c5f2f873bc88b9d73",
+      "candidate": "b49ab5ee6d1212c6330d81ede0e4575ec9b4673cb9aef4a1ec2f29fbdf4763ce",
+      "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "inputs": [
+      "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.3806728449999355,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.948922873,
+      "instructions": 10337882417,
+      "counter_running_percent": 100.0
+    },
+    "medians": {
+      "baseline": 73778740029.5,
+      "candidate": 76587617569.5
+    },
+    "delta_percent": {
+      "baseline": 0.0,
+      "candidate": 3.807163877936759
+    },
+    "memory_peak_bytes": 627404800,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "time_medians": {
+    "baseline": 6.7139799595,
+    "candidate": 6.9669345615000005
+  },
+  "time_delta_percent": 3.7675805338394097,
+  "focused": [
+    {
+      "control": "arithmetic.php",
+      "passed": true,
+      "observations": [
+        {
+          "runtime": "arithmetic-php",
+          "exit": 0,
+          "stdout_sha256": "08ea37bda32102aa5cee98809ccf5e76a14ec807593ed86a10d2fd340d215f89",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "arithmetic-baseline",
+          "exit": 0,
+          "stdout_sha256": "08ea37bda32102aa5cee98809ccf5e76a14ec807593ed86a10d2fd340d215f89",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "arithmetic-prototype",
+          "exit": 0,
+          "stdout_sha256": "08ea37bda32102aa5cee98809ccf5e76a14ec807593ed86a10d2fd340d215f89",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 11,
+            "value_region_entered": 665,
+            "value_region_operations": 7526,
+            "value_region_completed": 651,
+            "value_region_partial": 14,
+            "value_region_guard_failed": 0
+          }
+        },
+        {
+          "runtime": "arithmetic-canonical",
+          "exit": 0,
+          "stdout_sha256": "08ea37bda32102aa5cee98809ccf5e76a14ec807593ed86a10d2fd340d215f89",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 0,
+            "value_region_entered": 0,
+            "value_region_operations": 0,
+            "value_region_completed": 0,
+            "value_region_partial": 0,
+            "value_region_guard_failed": 0
+          }
+        }
+      ]
+    },
+    {
+      "control": "cleanup.php",
+      "passed": true,
+      "observations": [
+        {
+          "runtime": "cleanup-php",
+          "exit": 0,
+          "stdout_sha256": "f2eb032d50d5c57ac30919bfcc4d6e64b8c70b8831918726ce726f9e6fb9f72a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "cleanup-baseline",
+          "exit": 0,
+          "stdout_sha256": "f2eb032d50d5c57ac30919bfcc4d6e64b8c70b8831918726ce726f9e6fb9f72a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "cleanup-prototype",
+          "exit": 0,
+          "stdout_sha256": "f2eb032d50d5c57ac30919bfcc4d6e64b8c70b8831918726ce726f9e6fb9f72a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 5,
+            "value_region_entered": 674,
+            "value_region_operations": 830,
+            "value_region_completed": 0,
+            "value_region_partial": 674,
+            "value_region_guard_failed": 0
+          }
+        },
+        {
+          "runtime": "cleanup-canonical",
+          "exit": 0,
+          "stdout_sha256": "f2eb032d50d5c57ac30919bfcc4d6e64b8c70b8831918726ce726f9e6fb9f72a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 0,
+            "value_region_entered": 0,
+            "value_region_operations": 0,
+            "value_region_completed": 0,
+            "value_region_partial": 0,
+            "value_region_guard_failed": 0
+          }
+        }
+      ]
+    },
+    {
+      "control": "guards.php",
+      "passed": true,
+      "observations": [
+        {
+          "runtime": "guards-php",
+          "exit": 0,
+          "stdout_sha256": "a96955f78c1f9d4a81a311bfaade36cc190c041409a5f2f853d76071ab55d8af",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "guards-baseline",
+          "exit": 0,
+          "stdout_sha256": "a96955f78c1f9d4a81a311bfaade36cc190c041409a5f2f853d76071ab55d8af",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "guards-prototype",
+          "exit": 0,
+          "stdout_sha256": "a96955f78c1f9d4a81a311bfaade36cc190c041409a5f2f853d76071ab55d8af",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 3,
+            "value_region_entered": 703,
+            "value_region_operations": 1721,
+            "value_region_completed": 164,
+            "value_region_partial": 539,
+            "value_region_guard_failed": 5
+          }
+        },
+        {
+          "runtime": "guards-canonical",
+          "exit": 0,
+          "stdout_sha256": "a96955f78c1f9d4a81a311bfaade36cc190c041409a5f2f853d76071ab55d8af",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 0,
+            "value_region_entered": 0,
+            "value_region_operations": 0,
+            "value_region_completed": 0,
+            "value_region_partial": 0,
+            "value_region_guard_failed": 0
+          }
+        }
+      ]
+    },
+    {
+      "control": "references.php",
+      "passed": true,
+      "observations": [
+        {
+          "runtime": "references-php",
+          "exit": 0,
+          "stdout_sha256": "8b0cf78f13043f74d28b18677d4d8c7131ca03a3a7ab848cf463b071ae89102f",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "references-baseline",
+          "exit": 0,
+          "stdout_sha256": "8b0cf78f13043f74d28b18677d4d8c7131ca03a3a7ab848cf463b071ae89102f",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "references-prototype",
+          "exit": 0,
+          "stdout_sha256": "8b0cf78f13043f74d28b18677d4d8c7131ca03a3a7ab848cf463b071ae89102f",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 6,
+            "value_region_entered": 701,
+            "value_region_operations": 1207,
+            "value_region_completed": 170,
+            "value_region_partial": 531,
+            "value_region_guard_failed": 3
+          }
+        },
+        {
+          "runtime": "references-canonical",
+          "exit": 0,
+          "stdout_sha256": "8b0cf78f13043f74d28b18677d4d8c7131ca03a3a7ab848cf463b071ae89102f",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 0,
+            "value_region_entered": 0,
+            "value_region_operations": 0,
+            "value_region_completed": 0,
+            "value_region_partial": 0,
+            "value_region_guard_failed": 0
+          }
+        }
+      ]
+    },
+    {
+      "control": "values.php",
+      "passed": true,
+      "observations": [
+        {
+          "runtime": "values-php",
+          "exit": 0,
+          "stdout_sha256": "41a3af23d97786a21063d8be7a47555a199f63c6dca85b6696dface94184f10e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "values-baseline",
+          "exit": 0,
+          "stdout_sha256": "41a3af23d97786a21063d8be7a47555a199f63c6dca85b6696dface94184f10e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "values-prototype",
+          "exit": 0,
+          "stdout_sha256": "41a3af23d97786a21063d8be7a47555a199f63c6dca85b6696dface94184f10e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 9,
+            "value_region_entered": 9306,
+            "value_region_operations": 10863,
+            "value_region_completed": 0,
+            "value_region_partial": 9306,
+            "value_region_guard_failed": 0
+          }
+        },
+        {
+          "runtime": "values-canonical",
+          "exit": 0,
+          "stdout_sha256": "41a3af23d97786a21063d8be7a47555a199f63c6dca85b6696dface94184f10e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 0,
+            "value_region_entered": 0,
+            "value_region_operations": 0,
+            "value_region_completed": 0,
+            "value_region_partial": 0,
+            "value_region_guard_failed": 0
+          }
+        }
+      ]
+    },
+    {
+      "control": "wide.php",
+      "passed": true,
+      "observations": [
+        {
+          "runtime": "wide-php",
+          "exit": 0,
+          "stdout_sha256": "b0885c6ffeff10a5d12c16f1f149fce1ff86aeb9c6dbeffd1ec36f484527ca6e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "wide-baseline",
+          "exit": 0,
+          "stdout_sha256": "b0885c6ffeff10a5d12c16f1f149fce1ff86aeb9c6dbeffd1ec36f484527ca6e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {}
+        },
+        {
+          "runtime": "wide-prototype",
+          "exit": 0,
+          "stdout_sha256": "b0885c6ffeff10a5d12c16f1f149fce1ff86aeb9c6dbeffd1ec36f484527ca6e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 6,
+            "value_region_entered": 322,
+            "value_region_operations": 1601,
+            "value_region_completed": 0,
+            "value_region_partial": 322,
+            "value_region_guard_failed": 0
+          }
+        },
+        {
+          "runtime": "wide-canonical",
+          "exit": 0,
+          "stdout_sha256": "b0885c6ffeff10a5d12c16f1f149fce1ff86aeb9c6dbeffd1ec36f484527ca6e",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "value_regions": {
+            "value_region_admitted": 0,
+            "value_region_entered": 0,
+            "value_region_operations": 0,
+            "value_region_completed": 0,
+            "value_region_partial": 0,
+            "value_region_guard_failed": 0
+          }
+        }
+      ]
+    }
+  ],
+  "profiles": {
+    "complete": true,
+    "observations": [
+      {
+        "label": "baseline",
+        "status": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "period": 1000003
+      },
+      {
+        "label": "candidate",
+        "status": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "period": 1000003
+      }
+    ],
+    "scope": "analysis FIFO instruction sampling; approximate self attribution, no exact removable budget"
+  },
+  "limits": [
+    "Coverage and counters describe the whole instrumented request; native perf measures the analysis FIFO only.",
+    "Ordinary release is paired with ordinary release; the accepted PGO parity scorecard is unchanged.",
+    "Sampled self attribution is approximate, has source-PC skid, and is not an exact removable budget.",
+    "No PGO, full feature/architecture matrix, corpus/holdout acceptance or source integration for this rejected candidate.",
+    "One extra explicit unsafe block: 1750 versus production ceiling 1749; no new unsafe function. The candidate was never policy eligible or accepted.",
+    "Six controls compare PHP, baseline, vm-stats candidate and forced canonical; they do not prove full compatibility.",
+    "Initial reference fixture incorrectly redeclared the built-in copy() and is preserved separately as a failed fixture, never counted as a pass."
+  ],
+  "rejection": "Eager publication preserves the original ownership/operand work and a second executor adds more than the displaced main work. Do not ship or stack a compensating patch.",
+  "executor_sampled_self": [
+    {
+      "runtime": "baseline",
+      "symbol": "rphp::vm::execute::execute_ex_inner",
+      "sampled_self_percent": 33.41,
+      "sample_event_count": 73756221268,
+      "approximate_self_instructions": 24641953525.638798
+    },
+    {
+      "runtime": "candidate",
+      "symbol": "rphp::vm::execute::execute_ex_inner",
+      "sampled_self_percent": 29.87,
+      "sample_event_count": 76569229707,
+      "approximate_self_instructions": 22871228913.4809
+    },
+    {
+      "runtime": "candidate",
+      "symbol": "rphp::vm::planner::execute_macro",
+      "sampled_self_percent": 4.44,
+      "sample_event_count": 76569229707,
+      "approximate_self_instructions": 3399673798.9908004
+    },
+    {
+      "runtime": "candidate",
+      "symbol": "rphp::vm::execute::execute_quick_region_entry",
+      "sampled_self_percent": 1.28,
+      "sample_event_count": 76569229707,
+      "approximate_self_instructions": 980086140.2496
+    }
+  ]
+}
