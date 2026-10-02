@@ -1,0 +1,1700 @@
+{
+  "scope": "Read-only reanalysis of the exact saved older profiles; not current native counters or a candidate gain. Explicit named function families are additive own costs and do not include every generic descendant.",
+  "rphp": {
+    "binary_sha256": "8c95f735eca9d6ab8e26adf2d7aa05640756557be739b558bb7db34ff3013ed8",
+    "total": 71045941603,
+    "groups": {
+      "main-executor": 27916272120,
+      "other-vm-explicit": 17478290074,
+      "other-or-unclassified": 11417937006,
+      "regex-explicit": 2631908173,
+      "runtime-explicit": 3214580692,
+      "value-explicit": 4479675714,
+      "allocator-and-rust-entry-explicit": 2081423727,
+      "stdlib-explicit": 1825854097
+    }
+  },
+  "executor_stack_diagnostic": {
+    "rphp": {
+      "binary_sha256": "8c95f735eca9d6ab8e26adf2d7aa05640756557be739b558bb7db34ff3013ed8",
+      "executor_self_instructions": 27916272120,
+      "unmatched_sites": [
+        {
+          "address": "0x3a7cbe",
+          "instructions": 19535223
+        },
+        {
+          "address": "0x3a7cc1",
+          "instructions": 19535223
+        },
+        {
+          "address": "0x3a7cc4",
+          "instructions": 19535223
+        },
+        {
+          "address": "0x3a7cc8",
+          "instructions": 19535223
+        },
+        {
+          "address": "0x3a7cca",
+          "instructions": 19535223
+        },
+        {
+          "address": "0x3a7d5a",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d5d",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d61",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d68",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d6b",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d6f",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d73",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d77",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d82",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d86",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d8b",
+          "instructions": 19340734
+        },
+        {
+          "address": "0x3a7d91",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7d94",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7d96",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7d9c",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7d9f",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7da2",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7da8",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dac",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7db1",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7db3",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7db7",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dbc",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dc0",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dc5",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dca",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dd0",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dd3",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7dd7",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7ddb",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7ddf",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7de2",
+          "instructions": 17620451
+        },
+        {
+          "address": "0x3a7ccc",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7ccf",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7cd3",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7cd6",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7cda",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7cdc",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7cdf",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7ce3",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7ce9",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7cec",
+          "instructions": 15853433
+        },
+        {
+          "address": "0x3a7c1f",
+          "instructions": 9207701
+        },
+        {
+          "address": "0x3a7c22",
+          "instructions": 9207701
+        },
+        {
+          "address": "0x3a7b76",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b7d",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b83",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b89",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b8f",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b97",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b9b",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7ba3",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7ba6",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bae",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bb3",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bb6",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bb8",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bba",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bbf",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bc4",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bc8",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7bcd",
+          "instructions": 8365704
+        },
+        {
+          "address": "0x3a7b41",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b48",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b4d",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b50",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b55",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b58",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b5a",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b5d",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b63",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b6a",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b6e",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b71",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7b73",
+          "instructions": 8363720
+        },
+        {
+          "address": "0x3a7c28",
+          "instructions": 6811886
+        },
+        {
+          "address": "0x3a7c2b",
+          "instructions": 6811886
+        },
+        {
+          "address": "0x3a7c30",
+          "instructions": 6811886
+        },
+        {
+          "address": "0x3a7c34",
+          "instructions": 6811886
+        },
+        {
+          "address": "0x3a7c38",
+          "instructions": 6811886
+        },
+        {
+          "address": "0x3a7c3a",
+          "instructions": 6811886
+        },
+        {
+          "address": "0x3a7de8",
+          "instructions": 6603998
+        },
+        {
+          "address": "0x3a7deb",
+          "instructions": 6603998
+        },
+        {
+          "address": "0x3a7df0",
+          "instructions": 6603998
+        },
+        {
+          "address": "0x3a7df3",
+          "instructions": 6603998
+        },
+        {
+          "address": "0x3a7e0c",
+          "instructions": 6603998
+        },
+        {
+          "address": "0x3a7e0f",
+          "instructions": 6603998
+        },
+        {
+          "address": "0x3a7df5",
+          "instructions": 6215822
+        },
+        {
+          "address": "0x3a7df9",
+          "instructions": 6215822
+        },
+        {
+          "address": "0x3a7d41",
+          "instructions": 3688313
+        },
+        {
+          "address": "0x3a7d44",
+          "instructions": 3688313
+        },
+        {
+          "address": "0x3a7d4a",
+          "instructions": 3681790
+        },
+        {
+          "address": "0x3a7d4c",
+          "instructions": 3681790
+        },
+        {
+          "address": "0x3a7d52",
+          "instructions": 3648991
+        },
+        {
+          "address": "0x3a7d54",
+          "instructions": 3648991
+        },
+        {
+          "address": "0x3a7dff",
+          "instructions": 3384982
+        },
+        {
+          "address": "0x3a7e02",
+          "instructions": 3384982
+        },
+        {
+          "address": "0x3a7e06",
+          "instructions": 3384982
+        },
+        {
+          "address": "0x3a7b3c",
+          "instructions": 2223534
+        },
+        {
+          "address": "0x3a7bd2",
+          "instructions": 2185674
+        },
+        {
+          "address": "0x3a7bd5",
+          "instructions": 2185674
+        },
+        {
+          "address": "0x3a7bd9",
+          "instructions": 2185674
+        },
+        {
+          "address": "0x3a7bdf",
+          "instructions": 2185647
+        },
+        {
+          "address": "0x3a7be3",
+          "instructions": 2185647
+        },
+        {
+          "address": "0x3a7be7",
+          "instructions": 2185647
+        },
+        {
+          "address": "0x3a7bed",
+          "instructions": 2093504
+        },
+        {
+          "address": "0x3a7bf1",
+          "instructions": 2093504
+        },
+        {
+          "address": "0x3a7bf6",
+          "instructions": 2093504
+        },
+        {
+          "address": "0x3a7bf9",
+          "instructions": 2093504
+        },
+        {
+          "address": "0x3a7bff",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c02",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c06",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c0a",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c10",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c13",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c15",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7c1a",
+          "instructions": 2076478
+        },
+        {
+          "address": "0x3a7d79",
+          "instructions": 2062610
+        },
+        {
+          "address": "0x3a7d7c",
+          "instructions": 2062610
+        },
+        {
+          "address": "0x3a7e14",
+          "instructions": 1106914
+        },
+        {
+          "address": "0x3a7e19",
+          "instructions": 1106914
+        },
+        {
+          "address": "0x3a7e1d",
+          "instructions": 1106914
+        },
+        {
+          "address": "0x3a7e21",
+          "instructions": 1106914
+        },
+        {
+          "address": "0x3a7e25",
+          "instructions": 1106914
+        },
+        {
+          "address": "0x3a7e2b",
+          "instructions": 1098309
+        },
+        {
+          "address": "0x3a7e32",
+          "instructions": 1098309
+        },
+        {
+          "address": "0x3a7e67",
+          "instructions": 1098309
+        },
+        {
+          "address": "0x3a7e6f",
+          "instructions": 1098309
+        },
+        {
+          "address": "0x3a7e72",
+          "instructions": 1098309
+        },
+        {
+          "address": "0x3a7e75",
+          "instructions": 1098309
+        },
+        {
+          "address": "0x3a7e34",
+          "instructions": 1097329
+        },
+        {
+          "address": "0x3a7e3d",
+          "instructions": 1097329
+        },
+        {
+          "address": "0x3a7e42",
+          "instructions": 1097329
+        },
+        {
+          "address": "0x3a7e46",
+          "instructions": 1097329
+        },
+        {
+          "address": "0x3a7cf2",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7cf7",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7cfb",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d01",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d06",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d0a",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d0e",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d11",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d15",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d1a",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d1e",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d24",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d2a",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d2e",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d31",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d33",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7d36",
+          "instructions": 682443
+        },
+        {
+          "address": "0x3a7e48",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7e4c",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7e52",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7e57",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7e5a",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7e5f",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7e64",
+          "instructions": 334253
+        },
+        {
+          "address": "0x3a7c40",
+          "instructions": 36135
+        },
+        {
+          "address": "0x3a7c43",
+          "instructions": 36135
+        },
+        {
+          "address": "0x3a7c46",
+          "instructions": 36135
+        },
+        {
+          "address": "0x3a7c49",
+          "instructions": 36135
+        },
+        {
+          "address": "0x3a7c4c",
+          "instructions": 36135
+        },
+        {
+          "address": "0x3a7c51",
+          "instructions": 21068
+        },
+        {
+          "address": "0x3a7c54",
+          "instructions": 21068
+        },
+        {
+          "address": "0x3a7c85",
+          "instructions": 21068
+        },
+        {
+          "address": "0x3a7c8a",
+          "instructions": 21068
+        },
+        {
+          "address": "0x3a7c8d",
+          "instructions": 21068
+        },
+        {
+          "address": "0x3a7d3b",
+          "instructions": 6523
+        },
+        {
+          "address": "0x3a7d3e",
+          "instructions": 6523
+        },
+        {
+          "address": "0x3a7c5a",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c62",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c65",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c68",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c6e",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c71",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c75",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c7d",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c80",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c93",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c9b",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7c9e",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7ca1",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7ca7",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7caa",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7cae",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7cb6",
+          "instructions": 1576
+        },
+        {
+          "address": "0x3a7cb9",
+          "instructions": 1576
+        }
+      ],
+      "groups": {
+        "other": 9879827825,
+        "explicit_rsp_memory": 4994721629,
+        "control_flow": 6086932689,
+        "other_explicit_memory": 5620837731,
+        "unmatched_instruction_boundary": 1317065534,
+        "push_pop": 16886712
+      },
+      "rsp_memory_fraction_percent": 17.891793028560002,
+      "top_rsp_sites": [
+        {
+          "address": "0x3a2af6",
+          "instructions": 247231188,
+          "assembly": "mov 0x10(%rsp),%r12"
+        },
+        {
+          "address": "0x3a2b1b",
+          "instructions": 247231188,
+          "assembly": "mov 0x20(%rsp),%rbp"
+        },
+        {
+          "address": "0x3a2b20",
+          "instructions": 247231188,
+          "assembly": "mov %r14,(%rsp)"
+        },
+        {
+          "address": "0x3a2ae0",
+          "instructions": 239727581,
+          "assembly": "incb 0x6a8(%rsp)"
+        },
+        {
+          "address": "0x3a2c50",
+          "instructions": 181134337,
+          "assembly": "mov 0x10(%rsp),%rax"
+        },
+        {
+          "address": "0x3a2bf2",
+          "instructions": 36411017,
+          "assembly": "mov 0x28(%rsp),%rcx"
+        },
+        {
+          "address": "0x3a2c30",
+          "instructions": 36230639,
+          "assembly": "mov 0x8(%rsp),%rbx"
+        },
+        {
+          "address": "0x3a2c35",
+          "instructions": 36230639,
+          "assembly": "mov (%rsp),%r15"
+        },
+        {
+          "address": "0x3a3ce2",
+          "instructions": 31455534,
+          "assembly": "mov (%rsp),%r14"
+        },
+        {
+          "address": "0x3a30c4",
+          "instructions": 27891310,
+          "assembly": "mov (%rsp),%r14"
+        },
+        {
+          "address": "0x3a5bfc",
+          "instructions": 22776857,
+          "assembly": "mov 0x28(%rsp),%rcx"
+        },
+        {
+          "address": "0x3a5c36",
+          "instructions": 22776857,
+          "assembly": "mov 0x20(%rsp),%rsi"
+        },
+        {
+          "address": "0x3a5c66",
+          "instructions": 22776857,
+          "assembly": "mov %ecx,0x68(%rsp)"
+        },
+        {
+          "address": "0x3a5c73",
+          "instructions": 22776847,
+          "assembly": "mov (%rsp),%rcx"
+        },
+        {
+          "address": "0x3a2ea9",
+          "instructions": 22626710,
+          "assembly": "mov (%rsp),%r9"
+        },
+        {
+          "address": "0x3a2c16",
+          "instructions": 21201522,
+          "assembly": "mov 0x38(%rsp),%rax"
+        },
+        {
+          "address": "0x3e41ff",
+          "instructions": 17471768,
+          "assembly": "mov 0x10(%rsp),%r9"
+        },
+        {
+          "address": "0x3eca10",
+          "instructions": 17147509,
+          "assembly": "mov 0x10(%rsp),%rdx"
+        },
+        {
+          "address": "0x3a49a0",
+          "instructions": 16619635,
+          "assembly": "mov %rcx,0x20(%rsp)"
+        },
+        {
+          "address": "0x3a49a9",
+          "instructions": 16619635,
+          "assembly": "mov %rcx,0x1a0(%rsp)"
+        },
+        {
+          "address": "0x3a49b5",
+          "instructions": 16619635,
+          "assembly": "mov %rcx,0x1b0(%rsp)"
+        },
+        {
+          "address": "0x3a49c2",
+          "instructions": 16619635,
+          "assembly": "mov %rcx,0x70(%rsp)"
+        },
+        {
+          "address": "0x3a49cc",
+          "instructions": 16619635,
+          "assembly": "mov %rcx,0x38(%rsp)"
+        },
+        {
+          "address": "0x3a49d1",
+          "instructions": 16619635,
+          "assembly": "mov %r13,0x28(%rsp)"
+        },
+        {
+          "address": "0x3a49da",
+          "instructions": 16619635,
+          "assembly": "mov %rax,0x860(%rsp)"
+        },
+        {
+          "address": "0x3a49e7",
+          "instructions": 16619635,
+          "assembly": "mov %rax,0x518(%rsp)"
+        },
+        {
+          "address": "0x3a49ef",
+          "instructions": 16619635,
+          "assembly": "mov %r12,0x10(%rsp)"
+        },
+        {
+          "address": "0x3a49f9",
+          "instructions": 16619635,
+          "assembly": "mov %rax,0x1098(%rsp)"
+        },
+        {
+          "address": "0x3a4a01",
+          "instructions": 16619635,
+          "assembly": "movq $0x0,(%rsp)"
+        },
+        {
+          "address": "0x3a2bdf",
+          "instructions": 15704174,
+          "assembly": "mov (%rsp),%r14"
+        },
+        {
+          "address": "0x3a5aaa",
+          "instructions": 15360734,
+          "assembly": "mov 0x28(%rsp),%rcx"
+        },
+        {
+          "address": "0x3b0d71",
+          "instructions": 15209495,
+          "assembly": "mov 0x70(%rsp),%rax"
+        },
+        {
+          "address": "0x3b0d7f",
+          "instructions": 15209495,
+          "assembly": "mov 0x38(%rsp),%rax"
+        },
+        {
+          "address": "0x3b605e",
+          "instructions": 15205427,
+          "assembly": "add 0x518(%rsp),%rdx"
+        },
+        {
+          "address": "0x3a30f9",
+          "instructions": 14573229,
+          "assembly": "mov 0x10(%rsp),%rcx"
+        },
+        {
+          "address": "0x3a30fe",
+          "instructions": 14573229,
+          "assembly": "mov %rcx,0x478(%rsp)"
+        },
+        {
+          "address": "0x3a3106",
+          "instructions": 14573229,
+          "assembly": "mov %r13,0x458(%rsp)"
+        },
+        {
+          "address": "0x3a310e",
+          "instructions": 14573229,
+          "assembly": "mov 0x20(%rsp),%rcx"
+        },
+        {
+          "address": "0x3a3113",
+          "instructions": 14573229,
+          "assembly": "mov %rcx,0x4b8(%rsp)"
+        },
+        {
+          "address": "0x3a315f",
+          "instructions": 14094384,
+          "assembly": "mov 0x20(%rsp),%rcx"
+        }
+      ]
+    },
+    "php": {
+      "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+      "executor_self_instructions": 3140080363,
+      "unmatched_sites": [
+        {
+          "address": "0x5a6794",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a6798",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a679c",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a679f",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a67a6",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a67af",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a67b5",
+          "instructions": 5114246
+        },
+        {
+          "address": "0x5a675f",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a6763",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a6767",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a676b",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a676f",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a6779",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a677d",
+          "instructions": 1791707
+        },
+        {
+          "address": "0x5a6632",
+          "instructions": 1399299
+        },
+        {
+          "address": "0x5a6636",
+          "instructions": 1399299
+        },
+        {
+          "address": "0x5a663c",
+          "instructions": 1399299
+        },
+        {
+          "address": "0x5a6601",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a660a",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6610",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6617",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a661b",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6622",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6626",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6654",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6658",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a665e",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6664",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a666b",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6672",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6679",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6681",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6687",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a668b",
+          "instructions": 934340
+        },
+        {
+          "address": "0x5a6642",
+          "instructions": 644479
+        },
+        {
+          "address": "0x5a6645",
+          "instructions": 644479
+        },
+        {
+          "address": "0x5a6746",
+          "instructions": 329634
+        },
+        {
+          "address": "0x5a674a",
+          "instructions": 329634
+        },
+        {
+          "address": "0x5a674e",
+          "instructions": 329634
+        },
+        {
+          "address": "0x5a6752",
+          "instructions": 329634
+        },
+        {
+          "address": "0x5a6758",
+          "instructions": 329634
+        },
+        {
+          "address": "0x5a675c",
+          "instructions": 329634
+        },
+        {
+          "address": "0x5a67dd",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67e1",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67e5",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67e9",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67ed",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67f1",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67f5",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67fb",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a67fe",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a6804",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a6808",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a680c",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a680f",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a6812",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a6815",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a6818",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a681b",
+          "instructions": 313568
+        },
+        {
+          "address": "0x5a692c",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a6930",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a6934",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a6938",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a693b",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a693f",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a6943",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a6947",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a694d",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a6950",
+          "instructions": 308284
+        },
+        {
+          "address": "0x5a664a",
+          "instructions": 191280
+        },
+        {
+          "address": "0x5a664d",
+          "instructions": 191280
+        },
+        {
+          "address": "0x5a66d2",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66d6",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66da",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66de",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66e1",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66e4",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66e8",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66ee",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66f2",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66f8",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66fc",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a66ff",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a6703",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a6706",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a6709",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a670c",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a6713",
+          "instructions": 184474
+        },
+        {
+          "address": "0x5a68fb",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a68ff",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6903",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6907",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a690a",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a690d",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6910",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6913",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6916",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6919",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a691c",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6922",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6925",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6929",
+          "instructions": 161772
+        },
+        {
+          "address": "0x5a6a4f",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a53",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a57",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a5b",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a5e",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a61",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a65",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a6b",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a6e",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a82",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a85",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a88",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a8c",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a8f",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a92",
+          "instructions": 85475
+        },
+        {
+          "address": "0x5a6a73",
+          "instructions": 79832
+        },
+        {
+          "address": "0x5a6a76",
+          "instructions": 79832
+        },
+        {
+          "address": "0x5a6a7c",
+          "instructions": 78425
+        },
+        {
+          "address": "0x5a6a7f",
+          "instructions": 78425
+        },
+        {
+          "address": "0x5a6783",
+          "instructions": 27031
+        },
+        {
+          "address": "0x5a678a",
+          "instructions": 27031
+        },
+        {
+          "address": "0x5a678d",
+          "instructions": 27031
+        },
+        {
+          "address": "0x5a6791",
+          "instructions": 27031
+        },
+        {
+          "address": "0x5a687c",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a6880",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a6884",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a6888",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a688b",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a688e",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a6891",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a6894",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a689a",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a689d",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a68a0",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a68a6",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a68a9",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a68ac",
+          "instructions": 11489
+        },
+        {
+          "address": "0x5a68b2",
+          "instructions": 11410
+        },
+        {
+          "address": "0x5a68b6",
+          "instructions": 11410
+        },
+        {
+          "address": "0x5a68bb",
+          "instructions": 11410
+        },
+        {
+          "address": "0x5a68c2",
+          "instructions": 11410
+        },
+        {
+          "address": "0x5a68cb",
+          "instructions": 11410
+        },
+        {
+          "address": "0x5a68d1",
+          "instructions": 11410
+        },
+        {
+          "address": "0x5a6956",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a695a",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a695e",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6962",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6966",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a696e",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6971",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6974",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6978",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a697b",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a697f",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6985",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6995",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a6998",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69bd",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69d7",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69db",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69e2",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69e9",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69f2",
+          "instructions": 351
+        },
+        {
+          "address": "0x5a69f8",
+          "instructions": 351
+        }
+      ],
+      "groups": {
+        "other_explicit_memory": 1287899159,
+        "control_flow": 805350455,
+        "other": 957928797,
+        "unmatched_instruction_boundary": 87830472,
+        "push_pop": 1071480
+      },
+      "rsp_memory_fraction_percent": 0.0,
+      "top_rsp_sites": []
+    },
+    "scope": "Saved exact executor self costs only. Explicit RSP memory excludes LEA; includes stack materialization as well as spills. Both callgraph clones merged. Not a removable-cost estimate or causal source attribution; separate PHP handlers excluded from this stack comparison."
+  },
+  "zero_event_position_decoder": {
+    "skipped_zero_event_rows": 44103,
+    "changed_rphp_pc_costs": 0,
+    "rphp_total_unchanged": 27916272120,
+    "source": "https://valgrind.org/docs/manual/cl-format.html"
+  },
+  "limits": [
+    "Unmatched instruction-boundary rows remain unclassified; their cause is not proved.",
+    "Explicit RSP accesses include materialized Values, callback inputs and spilled registers, not just avoidable spills.",
+    "PHP standalone handlers are excluded from this executor-only stack diagnostic.",
+    "No change is admitted from these descriptive quantities alone."
+  ]
+}

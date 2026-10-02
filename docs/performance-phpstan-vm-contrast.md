@@ -112,6 +112,15 @@ The direct root-index candidate was rejected after a confirmed independent
 control regression; its runtime change is completely removed. See
 [the rejection](performance-phpstan-direct-root-index-rejected.md).
 
+The [executor traffic follow-up](performance-phpstan-executor-traffic.md) retains
+1.3171G of RPHP main-executor PCs as unmatched instruction boundaries. The
+per-opcode body lower bounds above remain provisional until that discrepancy
+is reconciled. Complete profile/function totals and native A/B observations
+are unchanged. An argument-only owner-transfer prototype saves just 0.5992%
+in the ordinary native selector and is
+[removed](performance-phpstan-argument-transfer-rejected.md); no runtime gain
+or compatibility repair from it is accepted.
+
 Exact binary identities, reconciled partitions, opcode body lower bounds and
 scope limits are in [the data](performance-phpstan-vm-contrast-data.json).
 Metadata-only FFI cast attempts produced invalid maps, including one isolated

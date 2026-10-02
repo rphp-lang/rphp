@@ -39,6 +39,15 @@ The investigation replaces the misleading main-executor-only comparison and
 prioritizes broad operand/lifetime, call/return and result-transport costs.
 The current accepted native scorecard above remains unchanged.
 
+The [executor traffic follow-up](performance-phpstan-executor-traffic.md) isolates
+4.995G of explicit native-stack instructions in the retained main executor but
+keeps 1.317G unmatched static-PC costs unclassified. Opcode body lower bounds
+remain provisional pending that reconciliation. The
+[consumed argument prototype](performance-phpstan-argument-transfer-rejected.md)
+is removed after only -0.599% ordinary analysis instructions; its separate
+lifetime counterexamples are not an accepted repair. No PGO or full feature
+matrix was run for the rejected candidate.
+
 The [direct root-index candidate](performance-phpstan-direct-root-index-rejected.md)
 is fully removed: a 1.153% first-window PGO instruction win fails the independent
 trait-property time gate (+5.728%) and shared-temporary gate (+1.960%). Preserve
