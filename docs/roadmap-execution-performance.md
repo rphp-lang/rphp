@@ -24,6 +24,14 @@ supports investigating general partial-block/value execution, but admits no
 runtime rewrite or measured gain. Complete CFG/effect and ownership proofs
 remain necessary, and the parity scorecard above is unchanged.
 
+[Existing-IR feasibility](performance-phpstan-existing-ir-feasibility.md) rejects
+both isolated admission-filter probes without changing production. Allowing a
+bounded region in a wide frame adds no actual optimized execution; admitting
+generic straight regions displaces only 24,718 of 269,905,727 canonical
+whole-request diagnostic dispatches (0.009158%). This is coverage evidence, not
+a native instruction saving. Broader general value/ownership support needs an
+actual coverage and instruction budget before a larger rewrite; parity stays open.
+
 ### Preceding return checkpoint
 
 Outlined canonical return validation at baseline `deea219c` independently

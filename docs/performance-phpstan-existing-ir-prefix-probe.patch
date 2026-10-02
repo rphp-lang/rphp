@@ -1,0 +1,19 @@
+diff --git a/src/vm/quick_long_region_plan.rs b/src/vm/quick_long_region_plan.rs
+index 2ee98e5e..8b64efe1 100644
+--- a/src/vm/quick_long_region_plan.rs
++++ b/src/vm/quick_long_region_plan.rs
+@@ -161,4 +161,4 @@ fn detect_long_ops_region_inner(
+-    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?;
+-    if total_slots > 64 {
+-        return None;
+-    }
++    // The existing IR addresses only the first 64 physical slots. Every
++    // admitted input, output and release range is checked against this bound;
++    // unrelated slots elsewhere in the frame remain canonical.
++    let total_slots = op_array.num_cvs.checked_add(op_array.num_temps)?.min(64);
+diff --git a/src/vm/execute/quick_dispatch.rs b/src/vm/execute/quick_dispatch.rs
+index 52eb7814..27f2b802 100644
+--- a/src/vm/execute/quick_dispatch.rs
++++ b/src/vm/execute/quick_dispatch.rs
+@@ -20 +19,0 @@ unsafe fn run_quick_long_ops_loop(
+-        || (*frame).num_cvs + (*frame).num_temps > 64

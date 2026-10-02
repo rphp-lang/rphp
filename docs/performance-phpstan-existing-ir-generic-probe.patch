@@ -1,0 +1,13 @@
+diff --git a/src/compiler/mod.rs b/src/compiler/mod.rs
+index 15fb3ece..6f61cde6 100644
+--- a/src/compiler/mod.rs
++++ b/src/compiler/mod.rs
+@@ -1042,6 +1042,2 @@ impl OpArray {
+-                // Short straight-line regions must have a preselected dense
+-                // execution shape. Falling back to generic typed-op dispatch
+-                // here costs more than the baseline instructions it replaces.
+-                if plan.straight_array_kernel.is_none() {
+-                    continue;
+-                }
++                // Diagnostic feasibility only: measure actual execution of
++                // existing typed regions without the dense-kernel filter.
