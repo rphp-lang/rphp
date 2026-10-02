@@ -1,0 +1,194 @@
+--- a/src/value/mod.rs
++++ b/src/value/mod.rs
+@@ -2847 +2847 @@
+-        Self {
++        let object = Self {
+@@ -2861 +2861,6 @@
+-        }
++        };
++        #[cfg(feature = "vm-stats")]
++        if object.lifecycle & OBJECT_VM_RELEASE_TRACKED != 0 {
++            crate::vm::stats::record_live_release_class(&object.class_name, true);
++        }
++        object
+@@ -3427,0 +3433,2 @@
++            #[cfg(feature = "vm-stats")]
++            crate::vm::stats::record_live_release_class(&self.class_name, true);
+@@ -3494,0 +3502,2 @@
++            #[cfg(feature = "vm-stats")]
++            crate::vm::stats::record_live_release_class(&self.class_name, false);
+@@ -11068,0 +11078,5 @@
++
++#[cfg(feature = "vm-stats")]
++pub(crate) fn live_release_count_diagnostic() -> usize {
++    VM_RELEASE_TRACKED.with(Cell::get)
++}
+--- a/src/vm/execute/call_frames.rs
++++ b/src/vm/execute/call_frames.rs
+@@ -288,0 +289,2 @@
++    #[cfg(feature = "vm-stats")]
++    let mut diagnostic_visits = 0u64;
+@@ -405,0 +408,2 @@
++        #[cfg(feature = "vm-stats")]
++        { diagnostic_visits += 1; }
+@@ -504,0 +509,2 @@
++            #[cfg(feature = "vm-stats")]
++            stats::record_owned_release_tree(diagnostic_visits, requires_release);
+@@ -2146,0 +2153,4 @@
++    #[cfg(feature = "vm-stats")]
++    let _diagnostic_scope = stats::record_owned_release_root(
++        diagnostic_owned_release_category(eg, &owner), owner.value_type() as usize,
++    );
+@@ -2184,0 +2195,3 @@
++    #[cfg(feature = "vm-stats")]
++    stats::record_release_proof(0, eg.vm_release_possible(), (ValueType::Undef) as usize);
++
+@@ -2595,0 +2609,3 @@
++    #[cfg(feature = "vm-stats")]
++    stats::record_release_proof(1, eg.vm_release_possible(), (value.value_type()) as usize);
++
+@@ -2640,0 +2657,3 @@
++    #[cfg(feature = "vm-stats")]
++    stats::record_release_proof(2, eg.vm_release_possible(), (value.value_type()) as usize);
++
+@@ -3279,0 +3299,3 @@
++    #[cfg(feature = "vm-stats")]
++    stats::record_release_proof(3, eg.vm_release_possible(), (ValueType::Undef) as usize);
++
+@@ -5763,0 +5786,31 @@
++
++#[cfg(feature = "vm-stats")]
++fn diagnostic_owned_release_category(eg: &ExecutorGlobals, owner: &Value) -> usize {
++    match owner.value_type() {
++        ValueType::Object => {
++            if owner.cycle_strong_count() != Some(1) { return 2; }
++            let Some(object) = owner.as_object() else { return 1; };
++            let Some(identity) = owner.object_identity() else { return 1; };
++            if object.generator.is_some()
++                || eg.has_weak_object_release_work(identity)
++                || eg.lazy_object_state(owner).is_some()
++                || eg.has_fiber_context(identity)
++                || eg.class_has_destructor(object.class_id, &object.class_name)
++                    && !owner.is_object_destructor_retired()
++            { return 3; }
++            if object.dynamic_properties.is_some() { return 4; }
++            if object.property_values.iter().any(Value::is_reference) { return 5; }
++            if object.property_values.iter().any(|value| match value.value_type() {
++                ValueType::Array | ValueType::Object | ValueType::Closure => true,
++                ValueType::Resource => value.needs_vm_resource_release(),
++                _ => false,
++            }) { 7 } else { 6 }
++        }
++        ValueType::Array => {
++            if owner.cycle_strong_count() != Some(1) { 10 }
++            else if owner.as_array().is_some_and(PhpArray::may_require_nested_release) { 8 }
++            else { 9 }
++        }
++        _ => 0,
++    }
++}
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -1792,0 +1793,3 @@
++    dump_release_proof();
++    dump_release_class_samples();
++    dump_owned_release_budget();
+@@ -1796,0 +1800,98 @@
++
++#[cfg(feature = "vm-stats")]
++thread_local! {
++    static RELEASE_PROOF: std::cell::Cell<[[u64; 24]; 4]> = const { std::cell::Cell::new([[0; 24]; 4]) };
++}
++#[cfg(feature = "vm-stats")]
++pub(super) fn record_release_proof(site: usize, possible: bool, kind: usize) {
++    RELEASE_PROOF.with(|counts| {
++        let mut current = counts.get();
++        current[site][usize::from(possible) * 12 + kind] += 1;
++        counts.set(current);
++        if site == 0 {
++            let total: u64 = current[site].iter().sum();
++            if total == 1 || total.is_multiple_of(262144) {
++                RELEASE_CLASS_SAMPLES.with(|samples| {
++                    let classes = RELEASE_LIVE_CLASSES.with(|classes| classes.borrow().clone());
++                    samples.borrow_mut().push((total, possible, crate::value::live_release_count_diagnostic(), classes));
++                });
++            }
++        }
++    });
++}
++#[cfg(feature = "vm-stats")]
++fn dump_release_proof() {
++    if std::env::var("RPHP_VM_STATS").as_deref() != Ok("1") { return; }
++    eprintln!("-- global release proof observations --");
++    RELEASE_PROOF.with(|counts| {
++        for (site, row) in counts.get().iter().enumerate() {
++            for (index, count) in row.iter().enumerate() {
++                eprintln!("release_proof_site_{}_possible_{}_kind_{}={}", site, index / 12, index % 12, count);
++            }
++        }
++    });
++}
++
++#[cfg(feature = "vm-stats")]
++thread_local! {
++    static RELEASE_LIVE_CLASSES: std::cell::RefCell<std::collections::BTreeMap<String, usize>> = const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
++    static RELEASE_CLASS_SAMPLES: std::cell::RefCell<Vec<(u64, bool, usize, std::collections::BTreeMap<String, usize>)>> = const { std::cell::RefCell::new(Vec::new()) };
++}
++#[cfg(feature = "vm-stats")]
++pub(crate) fn record_live_release_class(class: &str, add: bool) {
++    RELEASE_LIVE_CLASSES.with(|classes| {
++        let mut classes = classes.borrow_mut();
++        if add { *classes.entry(class.to_owned()).or_default() += 1; }
++        else if let Some(count) = classes.get_mut(class) {
++            *count -= 1;
++            if *count == 0 { classes.remove(class); }
++        } else { panic!("unmatched diagnostic release tracking"); }
++    });
++}
++#[cfg(feature = "vm-stats")]
++fn dump_release_class_samples() {
++    if std::env::var("RPHP_VM_STATS").as_deref() != Ok("1") { return; }
++    eprintln!("-- global release class samples --");
++    RELEASE_CLASS_SAMPLES.with(|samples| {
++        for (index, (observation, possible, tracked, classes)) in samples.borrow().iter().enumerate() {
++            eprintln!("release_class_sample_{}={}", index, serde_json::json!({"observation":observation,"possible":possible,"tracked":tracked,"classes":classes}));
++        }
++    });
++}
++
++#[cfg(feature = "vm-stats")]
++thread_local! {
++    static OWNED_RELEASE_CURRENT: std::cell::Cell<usize> = const { std::cell::Cell::new(12) };
++    static OWNED_RELEASE_TOTALS: std::cell::Cell<[[u64; 16]; 13]> = const { std::cell::Cell::new([[0; 16]; 13]) };
++}
++#[cfg(feature = "vm-stats")]
++pub(super) struct OwnedReleaseProbeScope(usize);
++#[cfg(feature = "vm-stats")]
++impl Drop for OwnedReleaseProbeScope {
++    fn drop(&mut self) { OWNED_RELEASE_CURRENT.with(|current| current.set(self.0)); }
++}
++#[cfg(feature = "vm-stats")]
++pub(super) fn record_owned_release_root(category: usize, kind: usize) -> OwnedReleaseProbeScope {
++    OWNED_RELEASE_TOTALS.with(|totals| {
++        let mut rows = totals.get(); rows[category][0] += 1; rows[category][1 + kind] += 1; totals.set(rows);
++    });
++    OwnedReleaseProbeScope(OWNED_RELEASE_CURRENT.with(|current| current.replace(category)))
++}
++#[cfg(feature = "vm-stats")]
++pub(super) fn record_owned_release_tree(visits: u64, callbacks: bool) {
++    let category = OWNED_RELEASE_CURRENT.with(std::cell::Cell::get);
++    OWNED_RELEASE_TOTALS.with(|totals| {
++        let mut rows = totals.get(); rows[category][13] += 1; rows[category][14] += visits;
++        rows[category][15] += u64::from(callbacks); totals.set(rows);
++    });
++}
++#[cfg(feature = "vm-stats")]
++fn dump_owned_release_budget() {
++    if std::env::var("RPHP_VM_STATS").as_deref() != Ok("1") { return; }
++    eprintln!("-- owned release budget --");
++    OWNED_RELEASE_TOTALS.with(|totals| {
++        for (category, row) in totals.get().iter().enumerate() {
++            eprintln!("owned_release_category_{}={}", category, serde_json::json!(row));
++        }
++    });
++}

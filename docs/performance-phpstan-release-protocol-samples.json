@@ -1,0 +1,768 @@
+{
+  "complete": true,
+  "status": "diagnostic checkpoint; no performance candidate admitted",
+  "baseline_commit": "4c8fd4d932dbf7244e823ed4627bcdd88160b4ac",
+  "production_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+  "production_changed": false,
+  "performance_claim": false,
+  "scope": "Whole identical request including startup/rendering; counters do not equal analysis-only native instruction costs.",
+  "toolchain": "Same locked repository toolchain; offline release default plus vm-stats; no PGO for diagnostic binaries.",
+  "accepted_pgo_binary_sha256": "ad561a656aa3b79b5e4b7b2a1cec88ea99190d3087c00cb64a71601f6c3716e5",
+  "phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+  "runtime_unsafe_blocks": 1749,
+  "runtime_unsafe_functions": 321,
+  "probe_patch_sha256": "3a3b92d6c80e08ae10f8ab5960af034be5b8836bc45a2214afee0ab3d0da77c8",
+  "probe_source_sha256": "751e74abd122a80b00a6008d8aa80f0122a764117845717b174c0f354f6902e7",
+  "aggregate_limits": {
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "oom_policy": "kill",
+    "kill_mode": "control-group"
+  },
+  "experiments": [
+    {
+      "name": "global-release-protocol-20261002",
+      "source_sha256": "6203e1eec53b44ead448ab3a1e79da071dca8ca3d0e374d40ab0e59ca747da99",
+      "binary_sha256": "2e976a26d31da115cbea0549460bd6b3232b5afd08d372a8f1c8313dd03e9606",
+      "build_seconds": 80.35486119499546,
+      "aggregate_memory_peak_bytes": 3072421888,
+      "aggregate_memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "observations": [
+        {
+          "runtime": "php",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+        },
+        {
+          "runtime": "baseline",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "ad561a656aa3b79b5e4b7b2a1cec88ea99190d3087c00cb64a71601f6c3716e5"
+        },
+        {
+          "runtime": "diagnostic",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "2e976a26d31da115cbea0549460bd6b3232b5afd08d372a8f1c8313dd03e9606"
+        }
+      ]
+    },
+    {
+      "name": "global-release-causes-20261002",
+      "source_sha256": "395a376058cd45bc6ac3096b48208c73d5f81ddcc2834ff9ce72a3d9923177fe",
+      "binary_sha256": "f86e75a1b4aa5f904b0baf0a42d2f3262dfa7ab8f259a83625b9ff4225c079e1",
+      "build_seconds": 80.50550180699793,
+      "aggregate_memory_peak_bytes": 3105423360,
+      "aggregate_memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "observations": [
+        {
+          "runtime": "php",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+        },
+        {
+          "runtime": "baseline",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "ad561a656aa3b79b5e4b7b2a1cec88ea99190d3087c00cb64a71601f6c3716e5"
+        },
+        {
+          "runtime": "diagnostic",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "f86e75a1b4aa5f904b0baf0a42d2f3262dfa7ab8f259a83625b9ff4225c079e1"
+        }
+      ]
+    },
+    {
+      "name": "owned-release-budget-20261003",
+      "source_sha256": "751e74abd122a80b00a6008d8aa80f0122a764117845717b174c0f354f6902e7",
+      "binary_sha256": "e34a5e03587b02dc541b9727553c62e0d86dd83ec97c0c11692bc57073871e44",
+      "build_seconds": 80.7594285760133,
+      "aggregate_memory_peak_bytes": 3113885696,
+      "aggregate_memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "observations": [
+        {
+          "runtime": "php",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+        },
+        {
+          "runtime": "baseline",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "ad561a656aa3b79b5e4b7b2a1cec88ea99190d3087c00cb64a71601f6c3716e5"
+        },
+        {
+          "runtime": "diagnostic",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "binary_sha256": "e34a5e03587b02dc541b9727553c62e0d86dd83ec97c0c11692bc57073871e44"
+        }
+      ]
+    }
+  ],
+  "global_negative_coverage": [
+    {
+      "site": 0,
+      "global_false": 357102,
+      "global_true": 7055552,
+      "false_percent": 4.817464837830014
+    },
+    {
+      "site": 1,
+      "global_false": 466871,
+      "global_true": 9464041,
+      "false_percent": 4.701189578560358
+    },
+    {
+      "site": 2,
+      "global_false": 530936,
+      "global_true": 4395226,
+      "false_percent": 10.777883471960525
+    },
+    {
+      "site": 3,
+      "global_false": 1126847,
+      "global_true": 15712353,
+      "false_percent": 6.691808399448905
+    }
+  ],
+  "owner_budget": {
+    "complete": true,
+    "performance_claim": false,
+    "scope": "whole request; visited loop iterations, not unique nodes or removable native instructions",
+    "rows": [
+      {
+        "category": 0,
+        "name": "other_value",
+        "roots": 3359149,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2061447,
+          0,
+          0,
+          28,
+          881887,
+          415787
+        ],
+        "tree_inspections": 145683,
+        "tree_visits": 379551,
+        "callback_required_inspections": 6
+      },
+      {
+        "category": 1,
+        "name": "unique_object_projection_failure",
+        "roots": 0,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 2,
+        "name": "shared_object",
+        "roots": 5838862,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          5838862,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 3,
+        "name": "unique_object_own_callback_or_sidecar",
+        "roots": 0,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 4,
+        "name": "unique_plain_object_dynamic_storage",
+        "roots": 2940,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2940,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 1,
+        "tree_visits": 52,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 5,
+        "name": "unique_plain_object_reference_property",
+        "roots": 12654,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          12654,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 9807,
+        "tree_visits": 397288,
+        "callback_required_inspections": 1366
+      },
+      {
+        "category": 6,
+        "name": "unique_plain_object_no_aggregate_child",
+        "roots": 62667,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          62667,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 7,
+        "name": "unique_plain_object_aggregate_child",
+        "roots": 145936,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          145936,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 140002,
+        "tree_visits": 1217013,
+        "callback_required_inspections": 1825
+      },
+      {
+        "category": 8,
+        "name": "unique_nested_array",
+        "roots": 691642,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          691642,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 454747,
+        "tree_visits": 1366477,
+        "callback_required_inspections": 532
+      },
+      {
+        "category": 9,
+        "name": "unique_plain_array",
+        "roots": 967458,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          967458,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 10,
+        "name": "shared_array",
+        "roots": 2245157,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          2245157,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 11,
+        "name": "unused",
+        "roots": 0,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 0,
+        "tree_visits": 0,
+        "callback_required_inspections": 0
+      },
+      {
+        "category": 12,
+        "name": "outside_committed_owner",
+        "roots": 0,
+        "types": [
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "tree_inspections": 138147,
+        "tree_visits": 1678282,
+        "callback_required_inspections": 1983
+      }
+    ],
+    "totals": {
+      "roots": 13326465,
+      "tree_inspections": 888387,
+      "tree_visits": 5038663,
+      "callback_required_inspections": 5712
+    },
+    "unchanged_original_release_counts": true,
+    "unchanged_general_counts": true
+  },
+  "decisions": [
+    "Broad global-negative release guard rejected before implementation: low actual coverage and separate deep-drop safety requirements.",
+    "Earlier array-only actual-owner retirement remains rejected: +0.02449% ordinary native analysis instructions.",
+    "Unique plain-object preinspection coverage does not justify a parity-scale committed-frame rewrite. No broader production candidate admitted; potential narrow wins are not ruled out.",
+    "No callback classes or workload identities used as production guards. Continue broad operand/owner/publication protocol investigation rather than counting inclusive helper costs as removable overhead."
+  ],
+  "original_parity_goal_open": true,
+  "unchanged_scorecard": {
+    "candidate_analysis_instructions": 66806846824.5,
+    "php_analysis_instructions": 10338002467,
+    "candidate_analysis_seconds": 5.816221952,
+    "php_analysis_seconds": 0.911412954
+  },
+  "live_class_samples": [
+    {
+      "classes": {},
+      "observation": 1,
+      "possible": false,
+      "tracked": 0
+    },
+    {
+      "classes": {},
+      "observation": 262144,
+      "possible": false,
+      "tracked": 0
+    },
+    {
+      "classes": {},
+      "observation": 524288,
+      "possible": true,
+      "tracked": 0
+    },
+    {
+      "classes": {},
+      "observation": 786432,
+      "possible": true,
+      "tracked": 0
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 1048576,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 1310720,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 1572864,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 1835008,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 2097152,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 2359296,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 2621440,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 2883584,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 3145728,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 16,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 3407872,
+      "possible": true,
+      "tracked": 18
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 3670016,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 3932160,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 4194304,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 4456448,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 4718592,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 4980736,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 5242880,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 5505024,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 27,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 5767168,
+      "possible": true,
+      "tracked": 29
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 140,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 6029312,
+      "possible": true,
+      "tracked": 142
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 140,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 6291456,
+      "possible": true,
+      "tracked": 142
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 140,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 6553600,
+      "possible": true,
+      "tracked": 142
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 140,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 6815744,
+      "possible": true,
+      "tracked": 142
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 140,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 7077888,
+      "possible": true,
+      "tracked": 142
+    },
+    {
+      "classes": {
+        "Generator": 1,
+        "Hoa\\Compiler\\Llk\\TreeNode": 140,
+        "Hoa\\File\\Read": 1
+      },
+      "observation": 7340032,
+      "possible": true,
+      "tracked": 142
+    }
+  ],
+  "probe_apply_flags": [
+    "--unidiff-zero"
+  ],
+  "cleanup": {
+    "complete": true,
+    "deleted_candidate_targets": 3,
+    "retained_exact_diagnostics": 3,
+    "surviving_measured_processes": 0,
+    "local_cleanup_hooks": 2,
+    "private_benchmark_host_configured": false
+  }
+}

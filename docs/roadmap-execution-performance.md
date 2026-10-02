@@ -15,6 +15,17 @@ medians exceed it, including four in both windows. Those are explicit
 instruction-priority integration tradeoffs; the strict global time gate fails.
 RSS is flat, and evidence is x86-64 only.
 
+[Release-protocol diagnostic budget](performance-phpstan-release-protocol-budget.md)
+rejects a broad global-negative guard before implementation: it applies at only
+4.817% of committed frame boundaries. Actual committed-owner counters show
+5,838,862 shared objects with zero tree inspections; adding only unique plain
+objects would target 140,002 inspections / 1,217,013 visits. The earlier
+array-only owner walker remains rejected. Nine identical-request observations
+match PHP, three bounded builds have zero OOM, and the exact source probe is
+published separately from production. No new native gain or runtime candidate
+is admitted; broader operand/owner/publication work and simultaneous parity
+remain open. The scorecard above is unchanged.
+
 ### Preceding string-owner checkpoint
 
 [String-owner accounting](performance-phpstan-string-owner-accounting.md)
