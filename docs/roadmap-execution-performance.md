@@ -2,6 +2,21 @@
 
 ## Current PHPStan scorecard
 
+[Canonical source-unpack entry](performance-phpstan-source-unpack-entry.md)
+independently reduces actual analysis **67.5204 to 66.8068 billion instructions
+(-1.057%)** and **5.9202/5.8162-second** paired medians. PHP uses
+10.3380G / 0.9114s; the **6.46x instruction gap** keeps
+simultaneous parity active. All 491 focused feature executions, 66 CLI
+observations and all-target/unsafe checks pass. One canonical owned argument
+validation replaces eager duplicate source coercion; lazy display names and
+borrowed parameter names accompany five explicit baseline/reference corrections.
+Independent control instructions remain within one percent, but six time
+medians exceed it, including four in both windows. Those are explicit
+instruction-priority integration tradeoffs; the strict global time gate fails.
+RSS is flat, and evidence is x86-64 only.
+
+### Preceding string-owner checkpoint
+
 [String-owner accounting](performance-phpstan-string-owner-accounting.md)
 confirms **68.6833 to 67.5210 billion analysis instructions (-1.692%)**,
 with exact PHP output and **6.5048/6.0081-second** paired medians. PHP uses
@@ -14,11 +29,11 @@ satisfied. Independent RSS falls about 52.36 MiB. Measurements are x86-64;
 ARM64 performance and main integration remain separate.
 
 [Current execution coverage](performance-phpstan-execution-coverage.md) is a
-read-only checkpoint on that accepted runtime. Existing optimized regions run
+read-only checkpoint on the preceding string-owner runtime. Existing optimized regions run
 only twice (478 iterations) over the whole request. Of recorded canonical
 dispatches, 60.177% occur in planner blocks of at most eight instructions,
 versus 3.750% in functions that size; these are dispatch shares, not time or
-instruction savings. Current analysis sampling puts 40.771% in main self and
+instruction savings. That saved analysis sampling puts 40.771% in main self and
 64.292% in listed VM-namespace self, with a separate unlisted residual. This
 supports investigating general partial-block/value execution, but admits no
 runtime rewrite or measured gain. Complete CFG/effect and ownership proofs
@@ -51,7 +66,7 @@ with removal of repeated operand/owner/publication work, not dispatch-count
 claims alone.
 
 [Native callchain validation](performance-phpstan-callchain-validation.md)
-repairs causal attribution of the saved current PGO profile. GDB reconstructs
+repairs causal attribution of the saved string-owner PGO profile. GDB reconstructs
 67,477 physical-parent samples; all 67,497 raw records reconcile, including
 11 undecoded and 18 kernel-IP residuals, and 600 separate-core vectors match.
 Main self remains approximately 27.519G. The 5.781G full-call boundary includes

@@ -948,7 +948,7 @@ pub fn call_function_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -985,7 +985,7 @@ fn call_function_iter_from_logical_caller<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1021,7 +1021,7 @@ fn call_function_iter_from_live_internal_caller<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1055,7 +1055,7 @@ where
     I: Iterator<Item = &'a Value>,
 {
     let logical_caller = eg.current_execute_data.get();
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1089,7 +1089,7 @@ where
     I: Iterator<Item = &'a Value>,
 {
     let logical_caller = eg.current_execute_data.get();
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1127,7 +1127,7 @@ where
     I: Iterator<Item = &'a Value>,
 {
     let capture_start = num_args.saturating_sub(capture_count);
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1166,7 +1166,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, _) =
-        call_function_value_iter::<_, false>(
+        call_function_value_iter::<_, false, false>(
             eg,
             func_ptr,
             num_args,
@@ -1201,7 +1201,7 @@ pub(crate) fn call_function_owned_iter_with_context<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1240,7 +1240,7 @@ pub(crate) fn call_function_owned_iter_with_context_from<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1279,7 +1279,7 @@ pub(crate) fn call_function_owned_iter_with_context_from_mode<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1315,7 +1315,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1356,7 +1356,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1381,6 +1381,47 @@ where
     Ok(return_value)
 }
 
+/// Source unpacking has collected and bound its arguments before this entry.
+/// Validate its owned frame once with source strictness and diagnostic origin;
+/// ordinary engine callbacks keep their independent weak-call policy.
+pub(crate) fn call_function_source_unpack_iter_with_context<I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
+    bound_this: Option<Value>,
+    capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
+    named_variadic: Vec<(String, Value)>,
+    named_variadic_external_byte_keys: bool,
+    trace_origin: (String, usize),
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false, true>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        closure_scope_class_id,
+        bound_this,
+        capture_count,
+        closure_static_vars,
+        Some((named_variadic, named_variadic_external_byte_keys)),
+        logical_caller,
+        true,
+        false,
+        Some((trace_origin.0, trace_origin.1, None, true)),
+        CallbackReturnPolicy::Function,
+    )?;
+    Ok(return_value)
+}
+
 /// Owned-argument form that reads back the first public argument after user
 /// code finishes. The argument is moved into the frame as its sole owner, so
 /// ordinary PHP COW mutation stays in place; the readback clone becomes the
@@ -1395,7 +1436,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, arg0) =
-        call_function_value_iter::<_, true>(
+        call_function_value_iter::<_, true, false>(
             eg,
             func_ptr,
             num_args,
@@ -1430,7 +1471,7 @@ pub(crate) fn call_function_owned_iter_readback_arg0_with_context<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, arg0) = call_function_value_iter::<_, true>(
+    let (return_value, arg0) = call_function_value_iter::<_, true, false>(
         eg,
         func_ptr,
         num_args,
@@ -1457,7 +1498,7 @@ pub(crate) enum CallbackReturnPolicy { Function, Shutdown }
 
 /// Shared callback invocation path. `READBACK_ARG0` keeps the ordinary path
 /// free of the extra first-public-argument clone required by `array_walk`.
-fn call_function_value_iter<I, const READBACK_ARG0: bool>(
+fn call_function_value_iter<I, const READBACK_ARG0: bool, const SOURCE_UNPACK: bool>(
     eg: &mut ExecutorGlobals,
     func_ptr: *const FunctionCommon,
     num_args: usize,
@@ -1563,7 +1604,9 @@ where
         && !crate::stdlib::internal_variadic_forwards_named_arguments(
             &displayed_function_name(eg, func_ptr),
         );
-    let arity_num_args = if rejects_internal_named_variadic {
+    let arity_num_args = if rejects_internal_named_variadic
+        || (SOURCE_UNPACK && user_callee.is_some())
+    {
         positional_public_num_args
     } else {
         public_num_args
@@ -1594,6 +1637,7 @@ where
     }
     if supplied_preentry_error.is_none()
         && arity_num_args < signature.required_num_args as usize
+        && !(SOURCE_UNPACK && user_callee.is_some())
     {
         let common = unsafe { &*func_ptr };
         let required = signature.required_num_args;
@@ -1619,6 +1663,10 @@ where
             };
             format!(
                 "{name}() expects {relation} {required} {noun}, {arity_num_args} given"
+            )
+        } else if SOURCE_UNPACK && let Some((file, line, _, _)) = trace_origin.as_ref() {
+            format!(
+                "Too few arguments to function {name}(), {arity_num_args} passed in {file} on line {line} and {relation} {required} expected"
             )
         } else {
             format!(
@@ -1777,6 +1825,16 @@ where
                 .collect::<Vec<_>>()
         });
 
+        // Captures were snapshotted before relocation. Source calls with
+        // omitted optional parameters must leave those original parameter CVs
+        // Undef, so BindDefaultParam supplies the declaration's default.
+        if SOURCE_UNPACK && capture_count != 0 {
+            for index in capture_source_start..num_args.min(capture_destination) {
+                let destination = (*frame).cv_mut(index as u32) as *mut Value;
+                frame_slot_set(frame, destination, Value::undef());
+            }
+        }
+
         // Detached callback entry bypasses DoFcall, whose full path normally
         // materializes the variadic bucket. Internal handlers use the same ABI in
         // both entry modes, so pack their trailing public arguments here before
@@ -1839,6 +1897,7 @@ where
             && generated_preentry_error.is_none()
         {
             let callee_class = lexical_class_name_for_frame(eg, frame);
+            let argument_strictness = SOURCE_UNPACK && (*frame).is_detached_strict_call();
             let fixed_arity = if signature.is_variadic {
                 signature.public_arity() as usize
             } else {
@@ -1847,7 +1906,11 @@ where
             for (index, hint) in signature
                 .param_type_hints
                 .iter()
-                .take(fixed_arity)
+                .take(if SOURCE_UNPACK {
+                    fixed_arity.min(positional_public_num_args)
+                } else {
+                    fixed_arity
+                })
                 .enumerate()
             {
                 if matches!(hint, ParamTypeHint::None) {
@@ -1863,7 +1926,7 @@ where
                     &source,
                     hint,
                     eg,
-                    false,
+                    argument_strictness,
                     callee_class.as_deref(),
                 )? {
                     CallArgumentPreparation::Exact => {}
@@ -1881,9 +1944,7 @@ where
                                 .get(index)
                                 .map(|name| &**name)
                                 .unwrap_or("unknown");
-                            make_error_value(
-                                "TypeError",
-                                &format!(
+                            let mut message = format!(
                                     "{}(): Argument #{} (${parameter}) must be of type {}, {} given",
                                     displayed_function_name(eg, func_ptr),
                                     index + 1,
@@ -1894,8 +1955,11 @@ where
                                         callee_class.as_deref(),
                                     ),
                                     declared_type_error_value_name(&source),
-                                ),
-                            )
+                                );
+                            if SOURCE_UNPACK && let Some((file, line, _, _)) = trace_origin.as_ref() {
+                                message.push_str(&format!(", called in {file} on line {line}"));
+                            }
+                            make_error_value("TypeError", &message)
                         });
                         eg.exception = Some(error.clone());
                         generated_argument_type_error = Some(error);
@@ -1904,7 +1968,40 @@ where
                 }
             }
 
+            // Source RECV validates supplied values before a missing trailing
+            // parameter. Binding already rejected named holes; named variadics do
+            // not count as positional values in this diagnostic. Limit validation
+            // above to supplied slots so relocated captures cannot become arguments.
+            if SOURCE_UNPACK
+                && user_callee.is_some()
+                && supplied_preentry_error.is_none()
+                && generated_preentry_error.is_none()
+                && generated_argument_type_error.is_none()
+                && arity_num_args < signature.required_num_args as usize
+            {
+                let name = displayed_function_name(eg, func_ptr);
+                let required = signature.required_num_args;
+                let relation = if signature.public_arity() > required {
+                    "at least"
+                } else {
+                    "exactly"
+                };
+                let message = if let Some((file, line, _, _)) = trace_origin.as_ref() {
+                    format!(
+                        "Too few arguments to function {name}(), {arity_num_args} passed in {file} on line {line} and {relation} {required} expected"
+                    )
+                } else {
+                    format!(
+                        "Too few arguments to function {name}(), {arity_num_args} passed and {relation} {required} expected"
+                    )
+                };
+                let error = make_error_value("ArgumentCountError", &message);
+                eg.exception = Some(error.clone());
+                generated_preentry_error = Some(error);
+            }
+
             if generated_argument_type_error.is_none()
+                && generated_preentry_error.is_none()
                 && signature.is_variadic
                 && public_num_args > fixed_arity
                 && let Some(hint) = signature.param_type_hints.get(fixed_arity)
@@ -1930,7 +2027,7 @@ where
                         &source,
                         hint,
                         eg,
-                        false,
+                        argument_strictness,
                         callee_class.as_deref(),
                     )? {
                         CallArgumentPreparation::Exact => {}
@@ -1951,9 +2048,7 @@ where
                         CallArgumentPreparation::Invalid => {
                             let argument_index = fixed_arity + position;
                             let error = eg.exception.take().unwrap_or_else(|| {
-                                make_error_value(
-                                    "TypeError",
-                                    &format!(
+                                let mut message = format!(
                                         "{}(): Argument #{} must be of type {}, {} given",
                                         displayed_function_name(eg, func_ptr),
                                         argument_index + 1,
@@ -1964,8 +2059,11 @@ where
                                             callee_class.as_deref(),
                                         ),
                                         declared_type_error_value_name(&source),
-                                    ),
-                                )
+                                    );
+                                if SOURCE_UNPACK && let Some((file, line, _, _)) = trace_origin.as_ref() {
+                                    message.push_str(&format!(", called in {file} on line {line}"));
+                                }
+                                make_error_value("TypeError", &message)
                             });
                             eg.exception = Some(error.clone());
                             generated_argument_type_error = Some(error);
@@ -2295,7 +2393,7 @@ pub(crate) fn attach_detached_argument_type_error_origin<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let _ = call_function_value_iter::<_, false>(
+    let _ = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -2342,7 +2440,7 @@ pub fn call_function_readback_arg0_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, arg0) = call_function_value_iter::<_, true>(
+    let (return_value, arg0) = call_function_value_iter::<_, true, false>(
         eg,
         func_ptr,
         num_args,
