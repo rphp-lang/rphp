@@ -39,10 +39,11 @@ The investigation replaces the misleading main-executor-only comparison and
 prioritizes broad operand/lifetime, call/return and result-transport costs.
 The current accepted native scorecard above remains unchanged.
 
-The [executor traffic follow-up](performance-phpstan-executor-traffic.md) isolates
-4.995G of explicit native-stack instructions in the retained main executor but
-keeps 1.317G unmatched static-PC costs unclassified. Opcode body lower bounds
-remain provisional pending that reconciliation. The
+The earlier [executor traffic follow-up](performance-phpstan-executor-traffic.md)
+is superseded by the [position reconciliation](performance-phpstan-pc-reconciliation.md):
+5.129G explicit RSP instructions are decoded, every main boundary matches, and
+corrected property/dimension body lower bounds are 2.833G/1.940G.
+Those descriptive costs are not a removable-work estimate. The
 [consumed argument prototype](performance-phpstan-argument-transfer-rejected.md)
 is removed after only -0.599% ordinary analysis instructions; its separate
 lifetime counterexamples are not an accepted repair. No PGO or full feature
@@ -567,3 +568,15 @@ Original lifetime-fixture failures reproduce on accepted source and remain
 compatibility gaps. See [all controls and the counterexample](performance-phpstan-predicate-controls.md).
 Continue with a quantified boundary shared across operation/ownership protocols;
 narrow fusions alone are not a parity strategy. No runtime checkpoint is accepted.
+
+### Reconciled executor positions
+
+The [profiling-reader repair](performance-phpstan-pc-reconciliation.md) resolves
+all retained main instruction boundaries without changing any full/function
+self totals or the accepted native scorecard. Five focused reader tests pass.
+Corrected body lower bounds raise property reads from 1.894G to 2.833G and
+dimension reads from 1.621G to 1.940G; RPHP dispatch count stays 247.231M.
+Zend's 322 recognized context rows cover 318 physical functions, with their
+3.378G total unchanged. Continue with quantified common operand/result and
+slot ownership work across reads/writes. This is a diagnostic checkpoint,
+not a runtime speedup or completed parity.

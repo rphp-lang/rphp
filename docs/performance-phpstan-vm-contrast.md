@@ -25,8 +25,9 @@ locates the broad excess; it does not prove a particular optimization's gain.
 
 PHP's executor must include its separate opcode handlers. Comparing only
 `execute_ex` with RPHP's large executor would exaggerate the difference.
-Exact installed-binary handler selection identifies 322 observed separate
-functions with 3.3777 billion self instructions. Main plus recognized handlers
+Exact installed-binary handler selection identifies 322 observed function/context
+rows covering 318 distinct functions with 3.3777 billion self instructions.
+Main plus recognized handlers
 therefore accounts for at least 6.5177 billion, with unmatched functions kept
 separate. Every self-cost partition sums to the full profile; nested inclusive
 call edges are never added.
@@ -53,8 +54,9 @@ These are structural lifetime differences, not an allocator language boundary.
 Even eliminating all of that RPHP marker-body cost would remove only 5.174%
 of the profiled total. The 36.4 million extra marker dispatches explain part
 of the roughly 83.9 million dispatch difference, but are not the sole cause.
-DoFcall, Return, assignment and object/dimension read bodies independently
-account for at least 2.479, 2.301, 2.109, 1.894 and 1.621 billion own instructions.
+The [position reconciliation](performance-phpstan-pc-reconciliation.md) corrects
+DoFcall, Return, assignment and object/dimension read bodies to lower bounds of
+2.481, 2.320, 2.147, 2.833 and 1.940 billion own instructions respectively.
 Other costs remain spread across frame retirement, scope metadata, graph
 release, containers, allocation, string processing and library implementations.
 
@@ -112,11 +114,12 @@ The direct root-index candidate was rejected after a confirmed independent
 control regression; its runtime change is completely removed. See
 [the rejection](performance-phpstan-direct-root-index-rejected.md).
 
-The [executor traffic follow-up](performance-phpstan-executor-traffic.md) retains
-1.3171G of RPHP main-executor PCs as unmatched instruction boundaries. The
-per-opcode body lower bounds above remain provisional until that discrepancy
-is reconciled. Complete profile/function totals and native A/B observations
-are unchanged. An argument-only owner-transfer prototype saves just 0.5992%
+The [executor traffic follow-up](performance-phpstan-executor-traffic.md) originally
+retained 1.3171G of RPHP main-executor PCs as unmatched instruction boundaries.
+The [position reconciliation](performance-phpstan-pc-reconciliation.md) resolves
+that discrepancy and supplies corrected body lower bounds. Complete
+profile/function totals and native A/B observations are unchanged.
+An argument-only owner-transfer prototype saves just 0.5992%
 in the ordinary native selector and is
 [removed](performance-phpstan-argument-transfer-rejected.md); no runtime gain
 or compatibility repair from it is accepted. The

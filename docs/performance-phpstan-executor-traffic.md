@@ -3,6 +3,12 @@
 Status: read-only follow-up to the [Zend/RPHP contrast](performance-phpstan-vm-contrast.md).
 No runtime change or performance gain is accepted here.
 
+The [position reconciliation](performance-phpstan-pc-reconciliation.md)
+supersedes this report's unmatched-boundary and stack-category numbers. An
+association compression-base error caused the RPHP discrepancy; PHP's remaining
+addresses were in cold code outside its named hot symbol. Both main PC maps
+now match every executed instruction boundary, with totals unchanged.
+
 The same retained RPHP profile has 27.916272G own instructions in its main
 executor and another 17.478290G in functions whose symbols explicitly begin
 with the VM module or a VM type. Together those disjoint buckets are 45.394562G,
