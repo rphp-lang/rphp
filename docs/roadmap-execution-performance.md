@@ -13,6 +13,17 @@ of 12.265%, 1.909% and 1.005% in controls; the strict global time gate is not
 satisfied. Independent RSS falls about 52.36 MiB. Measurements are x86-64;
 ARM64 performance and main integration remain separate.
 
+[Current execution coverage](performance-phpstan-execution-coverage.md) is a
+read-only checkpoint on that accepted runtime. Existing optimized regions run
+only twice (478 iterations) over the whole request. Of recorded canonical
+dispatches, 60.177% occur in planner blocks of at most eight instructions,
+versus 3.750% in functions that size; these are dispatch shares, not time or
+instruction savings. Current analysis sampling puts 40.771% in main self and
+64.292% in listed VM-namespace self, with a separate unlisted residual. This
+supports investigating general partial-block/value execution, but admits no
+runtime rewrite or measured gain. Complete CFG/effect and ownership proofs
+remain necessary, and the parity scorecard above is unchanged.
+
 ### Preceding return checkpoint
 
 Outlined canonical return validation at baseline `deea219c` independently
