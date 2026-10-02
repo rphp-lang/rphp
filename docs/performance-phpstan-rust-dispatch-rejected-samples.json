@@ -1,0 +1,736 @@
+{
+  "status": "rejected; production unchanged; instruction/time parity goal active",
+  "baseline_commit": "a280c750c0302ca04dc68411bc95c066dbb20aaf",
+  "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+  "accepted_pgo": {
+    "instructions": 67520990384.5,
+    "analysis_seconds": 6.00805676,
+    "reference_instructions": 10338031140,
+    "reference_seconds": 0.944525003
+  },
+  "environment": {
+    "architecture": "physical x86-64",
+    "cpu": "AMD Ryzen 9 7950X",
+    "toolchain": "Rust 1.98.1 / LLVM 22.1.8",
+    "php": "8.5.11; opcache disabled; JIT disabled",
+    "cpu_affinity": 2,
+    "event": "instructions:u",
+    "scope": "analysis FIFO; actual PHPStan five-file analysis; fresh TMPDIR each run",
+    "outliers": "retain every output-checked sample",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0
+  },
+  "candidate_build": {
+    "complete": true,
+    "exit": 0,
+    "seconds": 81.35327762100496,
+    "source_sha256": "98331c82344f513c255ae297e93618a34c75106bf4c194d092b9bbd43c0dbcce",
+    "profile": "release",
+    "features": "default",
+    "pgo": false,
+    "binary_sha256": "444088124c06bd82ad2f71c13382ef10b6dc670aad4d0727a35b16e74e4eb398",
+    "binary_bytes": 24995696
+  },
+  "sibling_transfer": {
+    "status": "rejected sibling-transfer architecture before execution",
+    "source_sha256": "5d53a6ae1e6903024ed5e10440eae5e27cad8e525ba2d27af9992d61a5549938",
+    "binary_sha256": "d979f636afd24d4951ef4f1d42ea2ac684c713ff676c1a588b232fae401f8ba2",
+    "generated_handler_symbols": 131,
+    "stack_growing_handler_count": 52,
+    "stack_growing_symbols": [
+      "rphp::vm::execute::threaded_vm_add_14",
+      "rphp::vm::execute::threaded_vm_div_17",
+      "rphp::vm::execute::threaded_vm_echo_3",
+      "rphp::vm::execute::threaded_vm_mod_18",
+      "rphp::vm::execute::threaded_vm_mul_16",
+      "rphp::vm::execute::threaded_vm_pow_22",
+      "rphp::vm::execute::threaded_vm_sub_15",
+      "rphp::vm::execute::threaded_vm_cast_30",
+      "rphp::vm::execute::threaded_vm_newobj_77",
+      "rphp::vm::execute::threaded_vm_predec_55",
+      "rphp::vm::execute::threaded_vm_preinc_54",
+      "rphp::vm::execute::threaded_vm_strlen_41",
+      "rphp::vm::execute::threaded_vm_assigncv_0",
+      "rphp::vm::execute::threaded_vm_dofcall_53",
+      "rphp::vm::execute::threaded_vm_postdec_57",
+      "rphp::vm::execute::threaded_vm_postinc_56",
+      "rphp::vm::execute::threaded_vm_return_111",
+      "rphp::vm::execute::threaded_vm_sendref_48",
+      "rphp::vm::execute::threaded_vm_sendval_47",
+      "rphp::vm::execute::threaded_vm_add_cvtmp_8",
+      "rphp::vm::execute::threaded_vm_echo_long_5",
+      "rphp::vm::execute::threaded_vm_unsetdim_70",
+      "rphp::vm::execute::threaded_vm_add_tmptmp_7",
+      "rphp::vm::execute::threaded_vm_assigndim_67",
+      "rphp::vm::execute::threaded_vm_fetchdimr_63",
+      "rphp::vm::execute::threaded_vm_initfcall_46",
+      "rphp::vm::execute::threaded_vm_sendnamed_52",
+      "rphp::vm::execute::threaded_vm_sendvarex_49",
+      "rphp::vm::execute::threaded_vm_shiftleft_24",
+      "rphp::vm::execute::threaded_vm_bitwiseand_23",
+      "rphp::vm::execute::threaded_vm_bitwisenot_26",
+      "rphp::vm::execute::threaded_vm_shiftright_25",
+      "rphp::vm::execute::threaded_vm_sub_cvconst_9",
+      "rphp::vm::execute::threaded_vm_sub_tmptmp_10",
+      "rphp::vm::execute::threaded_vm_arraypushop_68",
+      "rphp::vm::execute::threaded_vm_assignconcat_2",
+      "rphp::vm::execute::threaded_vm_fetchconst_106",
+      "rphp::vm::execute::threaded_vm_foreachnext_72",
+      "rphp::vm::execute::threaded_vm_assignobjdim_84",
+      "rphp::vm::execute::threaded_vm_initusercall_45",
+      "rphp::vm::execute::threaded_vm_assignobjprop_83",
+      "rphp::vm::execute::threaded_vm_declareclass_122",
+      "rphp::vm::execute::threaded_vm_strlen_string_43",
+      "rphp::vm::execute::threaded_vm_foreachnextref_74",
+      "rphp::vm::execute::threaded_vm_initmethodcall_85",
+      "rphp::vm::execute::threaded_vm_addarrayelement_59",
+      "rphp::vm::execute::threaded_vm_initdynamiccall_88",
+      "rphp::vm::execute::threaded_vm_foreachnextplain_73",
+      "rphp::vm::execute::threaded_vm_bindarrayappendref_69",
+      "rphp::vm::execute::threaded_vm_concat_stringstring_19",
+      "rphp::vm::execute::threaded_vm_directinternalcall1_39",
+      "rphp::vm::execute::threaded_vm_directinternalcall2_40"
+    ],
+    "runtime_executed": false
+  },
+  "bounded_audit": {
+    "complete": true,
+    "passed": true,
+    "binary_sha256": "444088124c06bd82ad2f71c13382ef10b6dc670aad4d0727a35b16e74e4eb398",
+    "handler_symbols": 131,
+    "calls_to_dispatcher": [],
+    "dispatcher_indirect_calls": [
+      {
+        "pc": 6792768,
+        "opcode": "call",
+        "operand": "*0x0(%rbp,%rax,8)"
+      }
+    ],
+    "dispatcher_backedges": [
+      {
+        "pc": 6792774,
+        "opcode": "jne",
+        "target": 6792688
+      },
+      {
+        "pc": 6792841,
+        "opcode": "je",
+        "target": 6792747
+      },
+      {
+        "pc": 6792861,
+        "opcode": "jmp",
+        "target": 6792688
+      },
+      {
+        "pc": 6793009,
+        "opcode": "jmp",
+        "target": 6792953
+      }
+    ],
+    "scope": "same fixed dispatcher activation calls and receives one opcode before its loop backedge; no recursive opcode continuation; native PHP callback/helper calls retain their original separate semantics"
+  },
+  "native_windows": [
+    {
+      "complete": true,
+      "rounds": 2,
+      "samples": [
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.619019734993344,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.723278284,
+          "instructions": 73781445760,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.78112044298905,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.885347843,
+          "instructions": 77597209540,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.76919269899372,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.832555056,
+          "instructions": 77603987610,
+          "counter_running_percent": 100.0,
+          "round": 1
+        },
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.555337487021461,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.674250603,
+          "instructions": 73786967421,
+          "counter_running_percent": 100.0,
+          "round": 1
+        }
+      ],
+      "binaries": {
+        "baseline": "158af2eef30d07c1ed89598836dee95c133629ad9cddd95c5f2f873bc88b9d73",
+        "candidate": "444088124c06bd82ad2f71c13382ef10b6dc670aad4d0727a35b16e74e4eb398",
+        "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      "inputs": [
+        "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+      ],
+      "reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.371363194019068,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.943120003,
+        "instructions": 10337864783,
+        "counter_running_percent": 100.0
+      },
+      "medians": {
+        "baseline": 73784206590.5,
+        "candidate": 77600598575.0
+      },
+      "delta_percent": {
+        "baseline": 0.0,
+        "candidate": 5.172369753436334
+      },
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 602525696,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    {
+      "complete": true,
+      "rounds": 2,
+      "samples": [
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.544663260981906,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.662152529,
+          "instructions": 73775835357,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.777086068002973,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.882177591,
+          "instructions": 77595339242,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.646031418000348,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.75810504,
+          "instructions": 77597016479,
+          "counter_running_percent": 100.0,
+          "round": 1
+        },
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.458813894016203,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.583688021,
+          "instructions": 73781361665,
+          "counter_running_percent": 100.0,
+          "round": 1
+        }
+      ],
+      "binaries": {
+        "baseline": "158af2eef30d07c1ed89598836dee95c133629ad9cddd95c5f2f873bc88b9d73",
+        "candidate": "444088124c06bd82ad2f71c13382ef10b6dc670aad4d0727a35b16e74e4eb398",
+        "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      "inputs": [
+        "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+      ],
+      "reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.3538225920055993,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.925931215,
+        "instructions": 10337864295,
+        "counter_running_percent": 100.0
+      },
+      "medians": {
+        "baseline": 73778598511.0,
+        "candidate": 77596177860.5
+      },
+      "delta_percent": {
+        "baseline": 0.0,
+        "candidate": 5.174372279423034
+      },
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 602324992,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  ],
+  "combined": {
+    "complete": true,
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.619019734993344,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.723278284,
+        "instructions": 73781445760,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.78112044298905,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.885347843,
+        "instructions": 77597209540,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.76919269899372,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.832555056,
+        "instructions": 77603987610,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.555337487021461,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.674250603,
+        "instructions": 73786967421,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.544663260981906,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.662152529,
+        "instructions": 73775835357,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.777086068002973,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.882177591,
+        "instructions": 77595339242,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.646031418000348,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.75810504,
+        "instructions": 77597016479,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.458813894016203,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.583688021,
+        "instructions": 73781361665,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "medians": {
+      "instructions": {
+        "baseline": 73781403712.5,
+        "candidate": 77597113009.5
+      },
+      "analysis_seconds": {
+        "baseline": 6.6682015660000005,
+        "candidate": 6.8573663235
+      }
+    },
+    "deltas": {
+      "instructions": 5.171640962360202,
+      "analysis_seconds": 2.8368182279389753
+    },
+    "source_sha256": "98331c82344f513c255ae297e93618a34c75106bf4c194d092b9bbd43c0dbcce",
+    "binary_sha256": "444088124c06bd82ad2f71c13382ef10b6dc670aad4d0727a35b16e74e4eb398"
+  },
+  "canonical_counterfactual": {
+    "complete": true,
+    "rounds": 1,
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.518100207991665,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.637592793,
+        "instructions": 73774564836,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.73950197600061,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.849316597,
+        "instructions": 74188663670,
+        "counter_running_percent": 100.0,
+        "round": 0
+      }
+    ],
+    "medians": {
+      "baseline": 73774564836,
+      "candidate": 74188663670
+    },
+    "delta_percent": {
+      "baseline": 0.0,
+      "candidate": 0.5613029841931905
+    },
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "memory_peak_bytes": 602116096,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    },
+    "purpose": "one-pair causal diagnostic; not independent acceptance or direct cross-window subtraction"
+  },
+  "profiles": {
+    "scope": "separate-run instruction sampling; approximate self attribution only; rounded symbol percentages; no exact removable budget",
+    "profiles": {
+      "baseline": {
+        "event_count_approx": 73752221256,
+        "lost_samples": 0,
+        "rounded_percent_total": 99.60000000000001,
+        "executor_percent": 33.35,
+        "executor_approx_self_instructions": 24596365788.876,
+        "top_symbols": [
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::execute_ex_inner",
+            "percent": 33.35,
+            "approx_self_instructions": 24596365788.876
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::retire_return_frame_owners",
+            "percent": 3.24,
+            "approx_self_instructions": 2389571968.6944
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::release_statement_temps_with_mask",
+            "percent": 3.0,
+            "approx_self_instructions": 2212566637.68
+          },
+          {
+            "dso": "libc.so.6",
+            "symbol": "__memmove_avx512_unaligned_erms",
+            "percent": 2.5,
+            "approx_self_instructions": 1843805531.4
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::regex::match_seq_from",
+            "percent": 1.87,
+            "approx_self_instructions": 1379166537.4872
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::value_tree_requires_vm_release",
+            "percent": 1.43,
+            "approx_self_instructions": 1054656763.9608
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "core::ptr::drop_glue::<rphp::value::Value>",
+            "percent": 1.35,
+            "approx_self_instructions": 995654986.9560001
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "<rphp::value::PhpArray>::try_push",
+            "percent": 1.09,
+            "approx_self_instructions": 803899211.6904001
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+            "percent": 1.05,
+            "approx_self_instructions": 774398323.1880001
+          },
+          {
+            "dso": "libc.so.6",
+            "symbol": "__memcmp_evex_movbe",
+            "percent": 1.03,
+            "approx_self_instructions": 759647878.9368001
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::caller_scope",
+            "percent": 0.96,
+            "approx_self_instructions": 708021324.0575999
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "<rphp::value::PhpArray>::prepare_string_key_for_write",
+            "percent": 0.94,
+            "approx_self_instructions": 693270879.8064
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::execute_full_call",
+            "percent": 0.84,
+            "approx_self_instructions": 619518658.5504
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::op_instanceof",
+            "percent": 0.73,
+            "approx_self_instructions": 538391215.1688
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::op_assign_obj_prop_completion",
+            "percent": 0.72,
+            "approx_self_instructions": 531015993.0432
+          }
+        ]
+      },
+      "candidate": {
+        "event_count_approx": 77609232827,
+        "lost_samples": 0,
+        "rounded_percent_total": 99.71,
+        "executor_percent": 35.62,
+        "executor_approx_self_instructions": 27644408732.9774,
+        "top_symbols": [
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_next",
+            "percent": 5.72,
+            "approx_self_instructions": 4439248117.7044
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_assigncv_0",
+            "percent": 3.38,
+            "approx_self_instructions": 2623192069.5526
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_fetchobjr_78",
+            "percent": 3.2,
+            "approx_self_instructions": 2483495450.464
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::retire_return_frame_owners",
+            "percent": 2.98,
+            "approx_self_instructions": 2312755138.2446
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::release_statement_temps_with_mask",
+            "percent": 2.67,
+            "approx_self_instructions": 2072166516.4809
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_fetchdimr_63",
+            "percent": 2.64,
+            "approx_self_instructions": 2048883746.6328
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_dofcall_53",
+            "percent": 2.56,
+            "approx_self_instructions": 1986796360.3711998
+          },
+          {
+            "dso": "libc.so.6",
+            "symbol": "__memmove_avx512_unaligned_erms",
+            "percent": 2.27,
+            "approx_self_instructions": 1761729585.1729002
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_return_111",
+            "percent": 2.1,
+            "approx_self_instructions": 1629793889.367
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_releasetemps_130",
+            "percent": 2.04,
+            "approx_self_instructions": 1583228349.6708002
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::regex::match_seq_from",
+            "percent": 1.92,
+            "approx_self_instructions": 1490097270.2784
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_assigndim_67",
+            "percent": 1.79,
+            "approx_self_instructions": 1389205267.6033
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_initmethodcall_85",
+            "percent": 1.72,
+            "approx_self_instructions": 1334878804.6244001
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::called_vm_jmpz_37",
+            "percent": 1.69,
+            "approx_self_instructions": 1311596034.7763
+          },
+          {
+            "dso": "candidate-release",
+            "symbol": "rphp::vm::execute::value_tree_requires_vm_release",
+            "percent": 1.36,
+            "approx_self_instructions": 1055485566.4472001
+          }
+        ]
+      }
+    }
+  },
+  "correctness": {
+    "focused_controls": 9,
+    "four_runtimes_exact_outputs": 36,
+    "whole_application_exact_outputs": true,
+    "expected_application_exit": 1,
+    "ordinary_stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+    "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+    "source_unsafe_blocks": 1748,
+    "source_unsafe_functions": 321,
+    "production_ceilings": [
+      1749,
+      321
+    ],
+    "full_feature_matrix_run": false,
+    "pgo_run": false,
+    "arm64_run": false
+  },
+  "cleanup": {
+    "complete": true,
+    "disposable_target_removed": true,
+    "exact_source_binaries_profiles_retained": true,
+    "private_benchmark_host_configured": false,
+    "production_runtime_changed": false
+  }
+}
