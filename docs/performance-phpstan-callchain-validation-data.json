@@ -1,0 +1,339 @@
+{
+  "status": "Verified read-only cost attribution with explicit residuals; no runtime change or speedup",
+  "baseline_commit": "2938b2fdb1d3459a842423eef16ccd0ce46b6ac2",
+  "accepted_runtime": "b2205e89",
+  "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+  "binary_sha256": "37138b687fd2430229c60a5c677047a281630ae1277a8d465226f135529a2bbd",
+  "profile_sha256": "0482307ee6aa1620eabd2d0e85aa2192dff64febc046807b13837bbf08ff335e",
+  "native_scorecard": {
+    "rphp_analysis_instructions": 67520990384.5,
+    "rphp_analysis_seconds": 6.00805676,
+    "php_analysis_instructions": 10338031140,
+    "php_analysis_seconds": 0.944525003
+  },
+  "capture": {
+    "event": "instructions:u",
+    "sample_period": 1000003,
+    "stack_bytes": 8192,
+    "samples": 67497,
+    "approx_event_count": 67497202491,
+    "lost_samples": 0,
+    "scope": "Saved exact current PGO analysis-only profile; no new PHPStan execution"
+  },
+  "validation": {
+    "independent_separate_core_vectors_verified": 600,
+    "samples_with_physical_parents": 67477,
+    "samples_with_recovered_main_vm_context": 65932,
+    "zero_frame_residual": 11,
+    "kernel_ip_residual": 18,
+    "all_raw_sample_offsets_ips_and_misc_matched": true,
+    "source_and_binary_unchanged": true,
+    "offline_unwind_defect_proven": "Same saved registers and stack: perf returns a corrupt return address; GDB CFI recovers sha256_digest, hash_algorithm_digest, fn_hash_file and main VM ancestors",
+    "exact_libdw_root_cause_identified": false,
+    "unclassified_main_source_context_samples": 5583
+  },
+  "closest_main_vm_child": {
+    "total_samples": 67497,
+    "rows": [
+      {
+        "symbol": "[main VM own body]",
+        "samples": 27519
+      },
+      {
+        "symbol": "rphp::vm::execute::execute_full_call",
+        "samples": 5781
+      },
+      {
+        "symbol": "rphp::vm::execute::retire_return_frame_owners",
+        "samples": 3789
+      },
+      {
+        "symbol": "rphp::stdlib::call_resolved_with_source_unpack",
+        "samples": 2271
+      },
+      {
+        "symbol": "rphp::vm::execute::op_instanceof",
+        "samples": 1623
+      },
+      {
+        "symbol": "[no recovered main VM ancestor]",
+        "samples": 1547
+      },
+      {
+        "symbol": "rphp::vm::execute::op_new_obj",
+        "samples": 1449
+      },
+      {
+        "symbol": "rphp::vm::execute::op_foreach_next::<false, false>",
+        "samples": 1414
+      },
+      {
+        "symbol": "[unresolved physical frame]",
+        "samples": 967
+      },
+      {
+        "symbol": "rphp::vm::execute::op_fetch_obj_r_slow",
+        "samples": 805
+      },
+      {
+        "symbol": "rphp::value::register_cycle_candidate_with_admission",
+        "samples": 729
+      },
+      {
+        "symbol": "rphp::stdlib::invoke_resolved_source_unpacked_call",
+        "samples": 716
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_replaced_value_tree_destructor_with_references",
+        "samples": 697
+      },
+      {
+        "symbol": "rphp::vm::execute::op_assign_obj_prop",
+        "samples": 688
+      },
+      {
+        "symbol": "rphp::vm::execute::op_init_dynamic_call",
+        "samples": 660
+      },
+      {
+        "symbol": "[other recorded buckets]",
+        "samples": 16842
+      }
+    ]
+  },
+  "boundary_children": {
+    "rphp::vm::execute::execute_full_call": {
+      "total_samples": 5781,
+      "rows": [
+        {
+          "symbol": "rphp::stdlib::fn_preg_match_all",
+          "samples": 1690
+        },
+        {
+          "symbol": "rphp::stdlib::fn_preg_replace",
+          "samples": 943
+        },
+        {
+          "symbol": "[boundary function own body]",
+          "samples": 571
+        },
+        {
+          "symbol": "rphp::stdlib::fn_preg_match",
+          "samples": 402
+        },
+        {
+          "symbol": "rphp::vm::execute::exact_call_argument_matches_in_scopes",
+          "samples": 402
+        },
+        {
+          "symbol": "rphp::stdlib::tokenizer::php_token_tokenize",
+          "samples": 321
+        },
+        {
+          "symbol": "rphp::stdlib::fn_array_map",
+          "samples": 197
+        },
+        {
+          "symbol": "rphp::stdlib::fn_var_export",
+          "samples": 190
+        },
+        {
+          "symbol": "[other recorded buckets]",
+          "samples": 1065
+        }
+      ]
+    },
+    "rphp::vm::execute::retire_return_frame_owners": {
+      "total_samples": 3789,
+      "rows": [
+        {
+          "symbol": "rphp::vm::execute::retire_owned_frame_value",
+          "samples": 2350
+        },
+        {
+          "symbol": "[boundary function own body]",
+          "samples": 1157
+        },
+        {
+          "symbol": "rphp::value::release_final_object",
+          "samples": 241
+        },
+        {
+          "symbol": "<alloc::rc::Rc<rphp::value::PhpString>>::drop_slow",
+          "samples": 29
+        },
+        {
+          "symbol": "rphp::value::release_final_closure",
+          "samples": 12
+        }
+      ]
+    },
+    "rphp::stdlib::call_resolved_with_source_unpack": {
+      "total_samples": 2271,
+      "rows": [
+        {
+          "symbol": "rphp::vm::execute::call_function_owned_iter_with_context_and_named::<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>, rphp::stdlib::call_resolved_owned_iter_with_named<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>::{closure#0}>>",
+          "samples": 720
+        },
+        {
+          "symbol": "rphp::stdlib::call_resolved_owned_iter_with_named_from::<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>>",
+          "samples": 566
+        },
+        {
+          "symbol": "rphp::vm::execute::displayed_function_name",
+          "samples": 381
+        },
+        {
+          "symbol": "rphp::stdlib::source_unpack_argument",
+          "samples": 169
+        },
+        {
+          "symbol": "[boundary function own body]",
+          "samples": 166
+        },
+        {
+          "symbol": "<alloc::vec::Vec<alloc::borrow::Cow<str>> as core::clone::Clone>::clone",
+          "samples": 137
+        },
+        {
+          "symbol": "core::ptr::drop_glue::<rphp::stdlib::ResolvedCallback>",
+          "samples": 41
+        },
+        {
+          "symbol": "<alloc::vec::Vec<rphp::value::Value> as alloc::vec::spec_extend::SpecExtend<rphp::value::Value, alloc::vec::into_iter::IntoIter<rphp::value::Value>>>::spec_extend",
+          "samples": 34
+        },
+        {
+          "symbol": "[other recorded buckets]",
+          "samples": 57
+        }
+      ]
+    }
+  },
+  "source_operation_groups": {
+    "total_samples": 65932,
+    "rows": [
+      {
+        "symbol": "DoFcall",
+        "samples": 9540
+      },
+      {
+        "symbol": "Return",
+        "samples": 8383
+      },
+      {
+        "symbol": "ReleaseTemps",
+        "samples": 5312
+      },
+      {
+        "symbol": "AssignCv|BindCvRef",
+        "samples": 3934
+      },
+      {
+        "symbol": "CallUserFuncArray",
+        "samples": 3803
+      },
+      {
+        "symbol": "FetchObjR",
+        "samples": 3609
+      },
+      {
+        "symbol": "FetchDimR",
+        "samples": 2577
+      },
+      {
+        "symbol": "AssignObjProp",
+        "samples": 2308
+      },
+      {
+        "symbol": "AssignDim",
+        "samples": 1975
+      },
+      {
+        "symbol": "InitMethodCall",
+        "samples": 1892
+      },
+      {
+        "symbol": "Instanceof",
+        "samples": 1749
+      },
+      {
+        "symbol": "NewObj",
+        "samples": 1465
+      },
+      {
+        "symbol": "ForeachNextPlain",
+        "samples": 1434
+      },
+      {
+        "symbol": "InitArray",
+        "samples": 948
+      },
+      {
+        "symbol": "BitwiseAnd|BitwiseOr|BitwiseXor",
+        "samples": 897
+      },
+      {
+        "symbol": "[other recorded buckets]",
+        "samples": 16106
+      }
+    ]
+  },
+  "limitations": [
+    "Period-scaled samples are approximate attribution, not exact instructions by operation or a removable-work budget.",
+    "The nearest-main child partition includes real stdlib computation under call boundaries; it is not all call overhead.",
+    "Source-arm grouping uses optimized line tables without machine-CFG proof; source motion, shared tails and inline debug locations can misattribute.",
+    "Captured 8 KiB stacks often end before outer ancestors. A missing outer caller is not proof of a root operation.",
+    "Unknown physical symbols and missing main ancestors remain separate. Kernel sample IPs use a separate residual; reconstructed user stacks are context only.",
+    "Eleven GDB inline-frame errors retain their samples as undecoded residuals; the original zero-error gate failed.",
+    "Measurements cover x86-64 only; no ARM64 performance claim."
+  ],
+  "diagnostic_failures": [
+    {
+      "stage": "Initial quoted GDB core paths",
+      "result": "600 no-frame results; rejected, not passing vectors"
+    },
+    {
+      "stage": "First streaming decoder",
+      "result": "Rejected at sample seven: kernel record IP differs from saved user-register IP"
+    },
+    {
+      "stage": "Full streaming decoder",
+      "exit": 1,
+      "result": "All 67497 rows and 600 vectors completed, but strict zero-frame gate failed for 11 inline-frame errors"
+    },
+    {
+      "stage": "Explicit-residual reconciliation",
+      "exit": 0,
+      "result": "All raw sample offsets/IPs/misc, 600 independent frame vectors and additive partitions match; no dropped samples"
+    }
+  ],
+  "artifact_restoration": {
+    "incident": "objcopy --dump-section without a separate output ELF rewrote the retained input",
+    "modified_binary_sha256": "e9ada70bb6b9978446a0f2dde9bcb9fed9e8e98b43a7d8299fca5f8d99ca2371",
+    "original_and_restored_binary_sha256": "37138b687fd2430229c60a5c677047a281630ae1277a8d465226f135529a2bbd",
+    "restored_bytes": 76428240,
+    "byte_exact": true,
+    "rebuild_seconds": 197.4929798200028,
+    "merged_training_profile_sha256": "43981e4295fb56d76aa2f91ecaa207759c0d0bb968f167d95b4b55df00b9d146",
+    "no_application_run_on_modified_artifact": true
+  },
+  "resources": {
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "oom_group": true,
+    "exclusive_benchmark_lock": true,
+    "full_decode_peak_bytes": 1057021952,
+    "full_decode_seconds": 42.054651246988215,
+    "oom_events": 0,
+    "workspace_and_worktree_cleanup": true,
+    "restoration_build_target_removed": true,
+    "private_host_configured": false
+  },
+  "decoder_sha256": {
+    "gdb-decode.py": "720ef1ebe08ca77f6f5dbdd905e187f63f772d19b8daa57d31dba6818c4e2e2d",
+    "gdb-full.py": "644defdf554e1792cf4c9ad7a369f110571631d76bc140489aced42ac49c441f",
+    "reconcile-full.py": "c3062602935a7dff39cd966f7159ec9bab7c52dcf2ec8a5b52f461d127226432",
+    "decode-main-lines.py": "1f4f312ed0a3be7af218c392df19ac3f8ddf7da39194591e4ae69889ef64b964"
+  }
+}

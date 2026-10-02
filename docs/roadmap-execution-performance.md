@@ -50,6 +50,16 @@ and its PGO parity scorecard stay unchanged. Execution coverage must be paired
 with removal of repeated operand/owner/publication work, not dispatch-count
 claims alone.
 
+[Native callchain validation](performance-phpstan-callchain-validation.md)
+repairs causal attribution of the saved current PGO profile. GDB reconstructs
+67,477 physical-parent samples; all 67,497 raw records reconcile, including
+11 undecoded and 18 kernel-IP residuals, and 600 separate-core vectors match.
+Main self remains approximately 27.519G. The 5.781G full-call boundary includes
+3.035G of actual `preg_*` computation, so its inclusive cost is not pure call
+protocol overhead. Runtime and the parity scorecard are unchanged. Missing
+outer memory, source-line motion and unknown symbols remain explicit; the
+strict initial zero-error decoder gate failed. No application rerun is needed.
+
 ### Preceding return checkpoint
 
 Outlined canonical return validation at baseline `deea219c` independently
