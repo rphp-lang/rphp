@@ -10443,7 +10443,7 @@ fn function_file_name(
 ) -> Result<(), VmError> {
     let value = reflected_user_function(ed).map_or_else(
         || Value::bool(false),
-        |function| Value::string(function.op_array.source_file.as_ref().clone()),
+        |function| Value::string(function.op_array.source_file.as_str().to_owned()),
     );
     return_value(rv, value)
 }

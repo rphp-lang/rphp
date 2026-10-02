@@ -2,6 +2,19 @@
 
 ## Current PHPStan scorecard
 
+[String-owner accounting](performance-phpstan-string-owner-accounting.md)
+confirms **68.6833 to 67.5210 billion analysis instructions (-1.692%)**,
+with exact PHP output and **6.5048/6.0081-second** paired medians. PHP uses
+10.3380 billion and 0.9445 seconds in the same confirmation. The **6.53x**
+instruction gap keeps simultaneous parity active. All 204 focused feature
+executions, twelve PGO/canonical CLI observations and all-target checks pass.
+The explicit instruction-priority tradeoff retains confirmed time regressions
+of 12.265%, 1.909% and 1.005% in controls; the strict global time gate is not
+satisfied. Independent RSS falls about 52.36 MiB. Measurements are x86-64;
+ARM64 performance and main integration remain separate.
+
+### Preceding return checkpoint
+
 Outlined canonical return validation at baseline `deea219c` independently
 reduces analysis **69.0510 to 68.6894 billion instructions (-0.524%)** with
 exact PHP output; time medians are **6.4377/6.3610 seconds (-1.192%)**. PHP uses
@@ -601,3 +614,17 @@ changed; this is not a runtime improvement. Both patches are fully removed,
 with accepted source restored. No PGO, broad feature or ARM64 performance gate
 is expanded after rejection. Parity stays open at 68.6894G / 6.3610s; continue
 quantifying common operation/storage and lifetime work across the executor.
+
+
+### Verified string-owner accounting checkpoint
+
+[Owner-based string charges](performance-phpstan-string-owner-accounting.md)
+remove the weak pointer table and confirm **68.6833 to 67.5210G (-1.692%)**,
+with exact findings and analysis medians **6.5048/6.0081 seconds**. Independent
+maximum RSS falls about 52.36 MiB. All 204 focused feature executions, twelve
+PGO/canonical CLI observations and all-target checks pass. Explicit instruction
+priority retains confirmed control time regressions of 12.265%, 1.909% and
+1.005%; this does not pass the strict global time gate or establish ARM64
+performance. Main is unchanged and parity remains open at roughly 6.53x
+instructions. Next admission must quantify a broader shared execution protocol;
+small lifetime/GC helper changes do not explain or remove the whole gap.

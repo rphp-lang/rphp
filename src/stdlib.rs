@@ -20662,7 +20662,7 @@ fn closure_debug_properties(closure: &PhpClosure, eg: &ExecutorGlobals) -> PhpAr
             .map_or(0, |(_, line)| i64::from(*line));
         Some((
             public_name.to_string(),
-            function.op_array.source_file.as_ref().clone(),
+            function.op_array.source_file.as_str().to_owned(),
             declaration_line,
         ))
     });

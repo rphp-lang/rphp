@@ -4386,7 +4386,7 @@ impl Compiler {
             global_vars: factory.global_vars,
             static_vars: factory.static_vars,
             name: "[constant expression]".to_string(),
-            source_file: std::rc::Rc::new(factory.source_file.clone()),
+            source_file: std::rc::Rc::new(factory.source_file.clone().into()),
             main_scope_vars: vec![],
             all_cvs,
             cache,
@@ -6549,7 +6549,7 @@ impl Compiler {
                 } else {
                     self.source_file.clone()
                 },
-                source_file: std::rc::Rc::new(self.source_file.clone()),
+                source_file: std::rc::Rc::new(self.source_file.clone().into()),
                 main_scope_vars,
                 all_cvs,
                 cache,
@@ -13463,7 +13463,7 @@ impl Compiler {
                     global_vars: func_compiler.global_vars,
                     static_vars: func_compiler.static_vars,
                     name: func_compiler.current_function_name,
-                    source_file: std::rc::Rc::new(func_compiler.source_file.clone()),
+                    source_file: std::rc::Rc::new(func_compiler.source_file.clone().into()),
                     main_scope_vars: vec![],
                     all_cvs: closure_all_cvs,
                     cache,

@@ -70,7 +70,7 @@ pub struct OpArray {
     /// bytecode assembled without source context.
     /// Shared source-unit name. Throwable origins clone this owner instead of
     /// allocating the same filename for every created exception.
-    pub source_file: std::rc::Rc<String>,
+    pub source_file: std::rc::Rc<crate::value::PhpString>,
     /// Main script scope CVs — all top-level variables synced to eg.globals before function calls.
     /// Empty for non-main-script op_arrays.
     pub main_scope_vars: Vec<(u32, String)>,

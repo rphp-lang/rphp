@@ -4075,11 +4075,81 @@ enum ArrayStorage {
     },
 }
 
+/// Reference-counted PHP string storage. The leading String preserves the
+/// existing byte/cache pointer projection; the trailing charge follows the
+/// physical owner without a request-wide weak lookup table.
+#[repr(C)]
+#[derive(Default)]
+pub struct PhpString {
+    storage: String,
+    pub(crate) allocation: RefCell<crate::request_memory::StringAllocation>,
+}
+
+const _: [(); 0] = [(); std::mem::offset_of!(PhpString, storage)];
+const _: [(); std::mem::align_of::<String>()] = [(); std::mem::align_of::<PhpString>()];
+
+impl From<String> for PhpString {
+    fn from(storage: String) -> Self {
+        Self {
+            storage,
+            allocation: RefCell::default(),
+        }
+    }
+}
+
+impl From<&str> for PhpString {
+    fn from(storage: &str) -> Self {
+        Self::from(storage.to_owned())
+    }
+}
+
+impl Deref for PhpString {
+    type Target = String;
+    #[inline]
+    fn deref(&self) -> &String {
+        &self.storage
+    }
+}
+
+impl std::fmt::Debug for PhpString {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        std::fmt::Debug::fmt(&self.storage, formatter)
+    }
+}
+
+impl std::fmt::Display for PhpString {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(&self.storage)
+    }
+}
+
+impl PartialEq for PhpString {
+    fn eq(&self, other: &Self) -> bool {
+        self.storage == other.storage
+    }
+}
+impl Eq for PhpString {}
+impl std::hash::Hash for PhpString {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        std::hash::Hash::hash(&self.storage, state)
+    }
+}
+impl PartialEq<PhpString> for String {
+    fn eq(&self, other: &PhpString) -> bool {
+        self == &other.storage
+    }
+}
+impl PartialEq<String> for PhpString {
+    fn eq(&self, other: &String) -> bool {
+        &self.storage == other
+    }
+}
+
 /// Thin shared string key used by hash entries and their string index.
-/// Keeping the `String` header behind one pointer makes `ArrayEntryKey` 16
+/// Keeping the string owner behind one pointer makes `ArrayEntryKey` 16
 /// bytes while both structures share the same key allocation.
 #[derive(Clone, PartialEq, Eq, Hash)]
-struct SharedStringKey(Rc<String>);
+struct SharedStringKey(Rc<PhpString>);
 
 impl SharedStringKey {
     #[inline]
@@ -4090,7 +4160,7 @@ impl SharedStringKey {
 
     #[inline]
     fn from_owned(value: String) -> Self {
-        let owner = Rc::new(value);
+        let owner = Rc::new(PhpString::from(value));
         crate::request_memory::reserve_string(&owner, owner.capacity());
         Self(owner)
     }
@@ -4099,7 +4169,10 @@ impl SharedStringKey {
     /// Later mutation of the source string detaches through normal COW.
     #[inline]
     fn from_value(value: &Value) -> Option<Self> {
-        let ptr = value.string_rc_ptr()?;
+        let ptr = value.string_rc_ptr()?.cast::<PhpString>();
+        // SAFETY: a live string Value owns an Rc<PhpString>. Its String field
+        // has offset zero and identical alignment, as asserted above. Retain
+        // one reference before reconstructing the new key's typed owner.
         unsafe {
             Rc::increment_strong_count(ptr);
             Some(Self(Rc::from_raw(ptr)))
@@ -7648,7 +7721,7 @@ impl Value {
             s.capacity()
                 .saturating_add(std::mem::size_of::<String>() + 16),
         );
-        let rc = Rc::new(s);
+        let rc = Rc::new(PhpString::from(s));
         Self::shared_string(rc)
     }
 
@@ -7799,7 +7872,7 @@ impl Value {
     /// Create a string value from an existing owner. Used by immutable
     /// compiled metadata whose PHP values can share the same bytes.
     #[inline]
-    pub(crate) fn shared_string(rc: Rc<String>) -> Self {
+    pub(crate) fn shared_string(rc: Rc<PhpString>) -> Self {
         crate::request_memory::reserve_string(&rc, rc.capacity());
         Self {
             data: ValueData {
@@ -8871,14 +8944,20 @@ impl Value {
     /// Add/remove the strong reference owned by a dynamic callback cache.
     /// String retention is PHP-observable only as memory lifetime: unlike
     /// objects, strings have no destructor side effects.
+    /// # Safety
+    /// `ptr` must be the leading String projection of a live Rc<PhpString>.
+    /// The caller must pair this retention with exactly one cache release.
     #[inline]
     pub(crate) unsafe fn retain_cached_string(ptr: *const String) {
-        Rc::increment_strong_count(ptr);
+        Rc::increment_strong_count(ptr.cast::<PhpString>());
     }
 
+    /// # Safety
+    /// `ptr` must identify the Rc<PhpString> reference retained by the cache,
+    /// using its leading String projection, and must not be released twice.
     #[inline]
     pub(crate) unsafe fn release_cached_string(ptr: *const String) {
-        Rc::decrement_strong_count(ptr);
+        Rc::decrement_strong_count(ptr.cast::<PhpString>());
     }
 
     /// Get mutable string reference with COW semantics.
@@ -8894,8 +8973,10 @@ impl Value {
             return None;
         }
         let rc_ptr = self.data.ptr as *mut String;
-        // Reconstruct Rc without consuming it (ManuallyDrop prevents decrement)
-        let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+        // SAFETY: string Values own Rc<PhpString>, with the String projection
+        // at offset zero. ManuallyDrop borrows that owner without consuming
+        // the Value's reference; actual release uses the complete owner type.
+        let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr.cast::<PhpString>()));
         if Rc::strong_count(&rc) == 1 {
             let needed = rc.len().saturating_add(additional);
             let capacity = if needed > rc.capacity() {
@@ -8918,7 +8999,7 @@ impl Value {
             let cloned = (*rc_ptr).clone();
             // Drop the ManuallyDrop wrapper and then the actual from_raw:
             // we need to decrement our old reference
-            let new_rc = Rc::new(cloned);
+            let new_rc = Rc::new(PhpString::from(cloned));
             let needed = new_rc.len().saturating_add(additional);
             let capacity = if needed > new_rc.capacity() {
                 needed.max(new_rc.capacity().saturating_mul(2)).max(8)
@@ -8926,7 +9007,7 @@ impl Value {
                 new_rc.capacity()
             };
             crate::request_memory::reserve_string(&new_rc, capacity);
-            Rc::decrement_strong_count(rc_ptr as *const String);
+            Rc::decrement_strong_count(rc_ptr.cast::<PhpString>());
             self.data.ptr = Rc::into_raw(new_rc) as *mut u8;
             self.type_info &= !(Self::IMMUTABLE_PROVENANCE_FLAG | Self::LITERAL_SOURCE_OWNER_FLAG);
             Some(&mut *(self.data.ptr as *mut String))
@@ -8943,7 +9024,10 @@ impl Value {
         }
         unsafe {
             let rc_ptr = self.data.ptr as *mut String;
-            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr));
+            // SAFETY: the Value owns Rc<PhpString>; its leading String has
+            // the same address/alignment. The non-consuming owner view checks
+            // uniqueness before publishing the mutable String projection.
+            let rc = std::mem::ManuallyDrop::new(Rc::from_raw(rc_ptr.cast::<PhpString>()));
             if Rc::strong_count(&rc) != 1 {
                 return None;
             }
@@ -10053,9 +10137,10 @@ impl Clone for Value {
         stats::inc_value_clone(self.value_type() as usize);
         match self.value_type() {
             ValueType::String => {
-                // Clone = Rc refcount bump. No heap allocation.
+                // SAFETY: a string Value retains the complete Rc<PhpString>
+                // owner, including the charge after its leading String.
                 unsafe {
-                    Rc::increment_strong_count(self.data.ptr as *const String);
+                    Rc::increment_strong_count(self.data.ptr as *const PhpString);
                 }
                 Self {
                     data: self.data,
@@ -10285,8 +10370,10 @@ impl Drop for Value {
         stats::inc_value_drop(self.value_type() as usize);
         match self.value_type() {
             ValueType::String => {
-                // Drop = Rc decrement. Frees String when refcount reaches 0.
-                unsafe { Rc::decrement_strong_count(self.data.ptr as *const String) };
+                // SAFETY: string Values hold Rc<PhpString>::into_raw owners.
+                // Release the complete owner so its charge retires exactly
+                // when the last strong string/cache/key reference disappears.
+                unsafe { Rc::decrement_strong_count(self.data.ptr as *const PhpString) };
             }
             ValueType::Array => {
                 // Keep the established inlined Rc decrement path. Only roots

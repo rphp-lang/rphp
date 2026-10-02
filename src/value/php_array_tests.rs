@@ -489,7 +489,7 @@ fn string_value_key_reuses_source_allocation_and_keeps_cow() {
     let Some((ArrayEntryKey::String(entry_key), _)) = array.hash_entry_at(0) else {
         panic!("entry should retain its string key");
     };
-    assert_eq!(Rc::as_ptr(&entry_key.0), original_ptr);
+    assert_eq!(Rc::as_ptr(&entry_key.0).cast::<String>(), original_ptr);
 
     // SAFETY: no borrowed slice survives here, and the exact append size is
     // reserved before detaching the shared key owner.

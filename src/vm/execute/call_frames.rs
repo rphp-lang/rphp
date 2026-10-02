@@ -3689,7 +3689,7 @@ fn release_statement_temps_with_mask(
 
 fn replace_throwable_first_trace_site(
     throwable: &Value,
-    file: std::rc::Rc<String>,
+    file: std::rc::Rc<crate::value::PhpString>,
     line: usize,
     eg: &ExecutorGlobals,
 ) {
@@ -5182,7 +5182,7 @@ fn attach_throwable_origin_mode(
 /// call as frame zero of the trace, so snapshot both before releasing it.
 fn attach_argument_type_error_origin(
     throwable: &Value,
-    source_file: std::rc::Rc<String>,
+    source_file: std::rc::Rc<crate::value::PhpString>,
     declaration_line: usize,
     mut trace: PhpArray,
     caller_op_array: &crate::compiler::OpArray,

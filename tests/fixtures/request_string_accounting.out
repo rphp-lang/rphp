@@ -1,0 +1,17 @@
+string(8) "literal!"
+string(7) "literal"
+0080ff:0080ff78
+int(129)
+string(5) "named"
+string(5) "named"
+array(1) {
+  [0]=>
+  string(33) "kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"
+}
+array(1) {
+  ["kkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkkk"]=>
+  string(7) "literal"
+}
+bool(true)
+bool(true)
+bool(true)

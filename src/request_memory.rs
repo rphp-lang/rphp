@@ -7,7 +7,6 @@
 //! mutating regions must side-exit while a finite budget is active.
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
 use std::rc::Rc;
 
 // Reporting can temporarily retain the failed array plus a callback's COW
@@ -25,25 +24,8 @@ struct State {
     exhausted_limit: Cell<usize>,
     final_limit: Cell<usize>,
     reporting: Cell<bool>,
-    strings: RefCell<StringCharges>,
-    // Sweep only once the map has grown past the live population measured by
-    // the previous sweep. Sweeps then cost O(1) amortized per reservation
-    // instead of one full map walk every fixed number of strings, which was
-    // quadratic in the number of live strings.
-    string_sweep_at: Cell<usize>,
     emergency: RefCell<Option<Box<[u8]>>>,
 }
-
-/// Pointer-keyed charge records. Identity keys are already well distributed
-/// after the cheap multiply-rotate mix; SipHash would dominate every string
-/// reservation.
-type StringCharges = HashMap<
-    usize,
-    (std::rc::Weak<String>, usize),
-    std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>,
->;
-
-const STRING_SWEEP_FLOOR: usize = 4096;
 
 #[derive(Clone, Debug, Default)]
 pub(crate) struct Budget(Rc<State>);
@@ -120,25 +102,10 @@ impl Budget {
         used
     }
 
-    pub(crate) fn collect_strings(&self) {
-        let mut released = 0usize;
-        let live = {
-            let mut strings = self.0.strings.borrow_mut();
-            strings.retain(|_, (owner, bytes)| {
-                if owner.strong_count() != 0 {
-                    true
-                } else {
-                    released = released.saturating_add(*bytes);
-                    false
-                }
-            });
-            strings.len()
-        };
-        self.0
-            .string_sweep_at
-            .set(live.saturating_mul(2).max(STRING_SWEEP_FLOOR));
-        self.release(released);
-    }
+    // String charges retire with their actual Rc owner. Existing callers need
+    // no sweep and retain this allocation-free accounting boundary.
+    #[inline]
+    pub(crate) fn collect_strings(&self) {}
 
     pub(crate) fn peak(&self) -> usize {
         self.0.peak.get()
@@ -295,48 +262,162 @@ pub(crate) fn is_limited() -> bool {
     ACTIVE.with(|active| active.borrow().as_ref().is_some_and(Budget::is_limited))
 }
 
-/// Strings keep their established Rc<String> ABI (also shared by array keys
-/// and call caches). Weak records do not keep the payload alive; bounded
-/// sweeps reclaim charges before the limit is tested, including cached owners.
-pub(crate) fn reserve_string(owner: &Rc<String>, capacity: usize) {
-    // Every string value passes through here; work inside the thread-local
-    // borrow instead of cloning the budget handle, and touch the charge table
-    // once per call. A sweep may run before a new record is admitted.
+/// Inline accounting owned by a string payload. Weak budget handles preserve
+/// the former string ledger's lifetime: a cached string must not keep an ended
+/// request or its emergency reserve alive. The uncommon linked records retain
+/// independent charges when two live requests adopt the same physical owner.
+#[derive(Debug, Default)]
+pub(crate) struct StringAllocation {
+    budget: std::rc::Weak<State>,
+    bytes: usize,
+    next: Option<Box<StringAllocation>>,
+}
+
+impl StringAllocation {
+    fn reserve(&mut self, budget: &Budget, bytes: usize) {
+        let mut record = self;
+        loop {
+            if std::ptr::eq(record.budget.as_ptr(), Rc::as_ptr(&budget.0)) {
+                if bytes > record.bytes {
+                    budget.charge(bytes - record.bytes);
+                    record.bytes = bytes;
+                }
+                return;
+            }
+            if record.budget.strong_count() == 0 {
+                // No live request owns this obsolete charge. Keep any other
+                // live records and replace only this vacant inline record.
+                budget.charge(bytes);
+                record.budget = Rc::downgrade(&budget.0);
+                record.bytes = bytes;
+                return;
+            }
+            if record.next.is_none() {
+                budget.charge(bytes);
+                record.next = Some(Box::new(Self {
+                    budget: Rc::downgrade(&budget.0),
+                    bytes,
+                    next: None,
+                }));
+                return;
+            }
+            record = record.next.as_mut().unwrap();
+        }
+    }
+}
+
+impl Drop for StringAllocation {
+    fn drop(&mut self) {
+        if let Some(state) = self.budget.upgrade() {
+            state.used.set(state.used.get().saturating_sub(self.bytes));
+        }
+        // Payload metadata can outlive many requests. Drain the auxiliary
+        // chain iteratively; every nested Drop has an empty `next` field.
+        while let Some(mut next) = self.next.take() {
+            self.next = next.next.take();
+            drop(next);
+        }
+    }
+}
+
+/// Charge the same PHP string payload as before; ownership bookkeeping lives
+/// beside it instead of in a request-wide pointer hash table. No string/charge
+/// borrow survives a PHP callback, and reserve failure leaves the old charge.
+pub(crate) fn reserve_string(owner: &Rc<crate::value::PhpString>, capacity: usize) {
     ACTIVE.with(|active| {
         let active = active.borrow();
         let Some(budget) = active.as_ref() else {
             return;
         };
-        let identity = Rc::as_ptr(owner) as usize;
         let bytes = capacity.saturating_add(std::mem::size_of::<String>() + 16);
-        let (previous, sweep) = {
-            let strings = budget.0.strings.borrow();
-            let previous = strings.get(&identity).map_or(0, |(_, bytes)| *bytes);
-            if bytes <= previous {
-                return;
-            }
-            (
-                previous,
-                previous == 0
-                    && strings.len() >= budget.0.string_sweep_at.get().max(STRING_SWEEP_FLOOR),
-            )
-        };
-        if sweep {
-            budget.collect_strings();
-        }
-        // The limit check may sweep the table itself; no borrow is held here.
-        budget.charge(bytes - previous);
-        budget
-            .0
-            .strings
-            .borrow_mut()
-            .insert(identity, (Rc::downgrade(owner), bytes));
+        owner.allocation.borrow_mut().reserve(budget, bytes);
     });
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn string_inline_charge_follows_cached_owner_and_independent_budgets() {
+        let first = Budget::default();
+        let second = Budget::default();
+        let string = Rc::new(crate::value::PhpString::from("retained"));
+        let bytes = string.capacity() + std::mem::size_of::<String>() + 16;
+        {
+            let _scope = first.enter();
+            reserve_string(&string, string.capacity());
+            reserve_string(&string, string.capacity());
+            assert_eq!(first.usage(), bytes);
+        }
+        {
+            let _scope = second.enter();
+            reserve_string(&string, string.capacity());
+            assert_eq!(second.usage(), bytes);
+        }
+        let cached = string.clone();
+        drop(string);
+        assert_eq!(first.usage(), bytes);
+        assert_eq!(second.usage(), bytes);
+        drop(cached);
+        assert_eq!(first.usage(), 0);
+        assert_eq!(second.usage(), 0);
+    }
+
+    #[test]
+    fn string_charge_growth_failure_keeps_alias_and_original_charge() {
+        let budget = Budget::default();
+        let _scope = budget.enter();
+        let string = Rc::new(crate::value::PhpString::from("original"));
+        reserve_string(&string, string.capacity());
+        let alias = string.clone();
+        let before = budget.usage();
+        assert!(budget.set_limit(before as i64));
+        let failed = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            reserve_string(&alias, string.capacity() + 1024);
+        }));
+        assert!(failed.unwrap_err().is::<Exhausted>());
+        assert!(Rc::ptr_eq(&string, &alias));
+        assert_eq!(string.as_str(), "original");
+        assert_eq!(alias.as_str(), "original");
+        assert_eq!(budget.usage(), before);
+    }
+
+    #[test]
+    fn cached_string_charge_does_not_retain_an_ended_request() {
+        let string = Rc::new(crate::value::PhpString::from("cached"));
+        let dead = {
+            let budget = Budget::default();
+            let weak = Rc::downgrade(&budget.0);
+            {
+                let _scope = budget.enter();
+                reserve_string(&string, string.capacity());
+            }
+            weak
+        };
+        assert_eq!(dead.strong_count(), 0);
+        let next = Budget::default();
+        {
+            let _scope = next.enter();
+            reserve_string(&string, string.capacity());
+        }
+        assert!(next.usage() > 0);
+        drop(string);
+        assert_eq!(next.usage(), 0);
+    }
+
+    #[test]
+    fn shared_string_charge_contexts_reserve_and_retire_iteratively() {
+        let string = Rc::new(crate::value::PhpString::from("shared"));
+        let budgets: Vec<_> = (0..2048).map(|_| Budget::default()).collect();
+        for budget in &budgets {
+            let _scope = budget.enter();
+            reserve_string(&string, string.capacity());
+        }
+        assert!(budgets.iter().all(|budget| budget.usage() > 0));
+        drop(string);
+        assert!(budgets.iter().all(|budget| budget.usage() == 0));
+    }
 
     #[test]
     fn request_memory_reservation_is_atomic_and_release_uses_its_owner() {

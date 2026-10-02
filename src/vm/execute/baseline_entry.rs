@@ -260,7 +260,7 @@ fn execute_request_inner(
     };
     if execution.is_ok()
         && !body_dispatches_handlers
-        && main_func.op_array.source_file.as_ref() != "Command line code"
+        && main_func.op_array.source_file.as_str() != "Command line code"
         && eg.exception.is_some()
         && eg.exception_handler.is_some()
     {
@@ -3792,7 +3792,7 @@ fn generator_resume_continuation_trace(
 fn extend_generator_delegation_trace(
     mut existing: Vec<Value>,
     continuation: &PhpArray,
-    origin: Option<&(std::rc::Rc<String>, usize)>,
+    origin: Option<&(std::rc::Rc<crate::value::PhpString>, usize)>,
 ) -> PhpArray {
     let boundary = existing
         .iter()
