@@ -1,0 +1,221 @@
+{
+  "complete": true,
+  "event": "instructions:u",
+  "counter_scope": "analysis FIFO",
+  "cpu": 2,
+  "rounds": 1,
+  "warmup": "none; fresh TMPDIR per run",
+  "memory_max_bytes": 6442450944,
+  "memory_swap_max_bytes": 0,
+  "outlier_policy": "retain every valid output-checked sample",
+  "samples": [
+    {
+      "runtime": "baseline",
+      "wall_seconds": 8.351724957989063,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 6.411633015,
+      "instructions": 68682525331,
+      "counter_running_percent": 100.0,
+      "round": 0
+    }
+  ],
+  "binaries": {
+    "baseline": "99e294a6bed65cb5e8d01d10582a3041464216f334f95ccb32d4964bc85a0fd5",
+    "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "inputs": [
+    "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+  ],
+  "reference": {
+    "runtime": "reference",
+    "wall_seconds": 1.3548627120035235,
+    "output": {
+      "exit": 1,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+    },
+    "analysis_seconds": 0.929031134,
+    "instructions": 10337848269,
+    "counter_running_percent": 100.0
+  },
+  "profile": {
+    "runtime": "baseline",
+    "wall_seconds": 8.644955988987931,
+    "output": {
+      "exit": 1,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+    },
+    "analysis_seconds": 6.562362671,
+    "period": 1000003,
+    "scope": "analysis FIFO",
+    "attribution": "sampled instruction share; not exact per-function counts"
+  },
+  "memory_peak_bytes": 654589952,
+  "memory_events": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0,
+    "sock_throttled": 0
+  },
+  "runtime_source_sha256": "f86729eb00a0b37058fdb228745baebf3933dae975aca2d44de071575c144146",
+  "runtime_commit": "724abb76",
+  "branch_checkpoint": "e6a7ef80",
+  "accepted_scorecard_unchanged": true,
+  "symbols": [
+    {
+      "percent": 40.42,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::execute_ex_inner"
+    },
+    {
+      "percent": 2.62,
+      "dso": "libc.so.6",
+      "symbol": "__memmove_avx512_unaligned_erms"
+    },
+    {
+      "percent": 2.05,
+      "dso": "candidate",
+      "symbol": "rphp::regex::match_seq_from"
+    },
+    {
+      "percent": 1.96,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::retire_return_frame_owners"
+    },
+    {
+      "percent": 1.88,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::op_instanceof"
+    },
+    {
+      "percent": 1.65,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::value_tree_requires_vm_release"
+    },
+    {
+      "percent": 1.1,
+      "dso": "libc.so.6",
+      "symbol": "__memcmp_evex_movbe"
+    },
+    {
+      "percent": 0.97,
+      "dso": "candidate",
+      "symbol": "<rphp::runtime::ExecutorGlobals>::find_class"
+    },
+    {
+      "percent": 0.83,
+      "dso": "candidate",
+      "symbol": "core::ptr::drop_glue::<rphp::value::Value>"
+    },
+    {
+      "percent": 0.82,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::execute_full_call"
+    },
+    {
+      "percent": 0.81,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::caller_scope"
+    },
+    {
+      "percent": 0.78,
+      "dso": "candidate",
+      "symbol": "<rphp::value::PhpArray>::try_push"
+    },
+    {
+      "percent": 0.77,
+      "dso": "candidate",
+      "symbol": "<rphp::value::Value>::string::<alloc::string::String>"
+    },
+    {
+      "percent": 0.73,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::op_foreach_next::<false, false>"
+    },
+    {
+      "percent": 0.72,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::retire_owned_frame_value"
+    },
+    {
+      "percent": 0.71,
+      "dso": "candidate",
+      "symbol": "<rphp::value::PhpArray>::prepare_string_key_for_write"
+    },
+    {
+      "percent": 0.64,
+      "dso": "candidate",
+      "symbol": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>>::insert"
+    },
+    {
+      "percent": 0.63,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::op_fetch_class_const"
+    },
+    {
+      "percent": 0.62,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>"
+    },
+    {
+      "percent": 0.61,
+      "dso": "candidate",
+      "symbol": "rphp::request_memory::reserve_string"
+    },
+    {
+      "percent": 0.6,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::retained_temp_containers::add"
+    },
+    {
+      "percent": 0.6,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::op_assign_obj_prop_completion"
+    },
+    {
+      "percent": 0.6,
+      "dso": "candidate",
+      "symbol": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert"
+    },
+    {
+      "percent": 0.58,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::finish_foreach_step"
+    },
+    {
+      "percent": 0.54,
+      "dso": "candidate",
+      "symbol": "rphp::vm::execute::check_type_hint_with_scope"
+    },
+    {
+      "percent": 0.52,
+      "dso": "candidate",
+      "symbol": "rphp::regex::match_quantifier"
+    },
+    {
+      "percent": 0.51,
+      "dso": "candidate",
+      "symbol": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>"
+    },
+    {
+      "percent": 0.51,
+      "dso": "candidate",
+      "symbol": "<rphp::runtime::ExecutorGlobals>::class_ancestors"
+    }
+  ],
+  "pc_attribution_caveat": "Native instruction-event IPs can skid, and optimized/shared code can carry misleading source lines; these are sampled candidate locations, not exact per-opcode counts.",
+  "pc_summary": {
+    "attribution": "native sampled PCs; source lines are approximate and not exact semantic instruction counts",
+    "main_samples": 27764,
+    "unique_main_pcs": 3454,
+    "main_symbol_start": "0x3a2a00"
+  }
+}

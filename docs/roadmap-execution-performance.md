@@ -46,7 +46,14 @@ remain provisional pending that reconciliation. The
 [consumed argument prototype](performance-phpstan-argument-transfer-rejected.md)
 is removed after only -0.599% ordinary analysis instructions; its separate
 lifetime counterexamples are not an accepted repair. No PGO or full feature
-matrix was run for the rejected candidate.
+matrix was run for the rejected candidate. The
+[actual-owner array retirement prototype](performance-phpstan-array-retirement-rejected.md)
+also has no material benefit (+0.02449% instructions) and is fully removed.
+Eight supported cases match PHP; the retained Fiber suspension failure remains
+a baseline compatibility gap. The
+[fresh accepted PGO instruction profile](performance-phpstan-current-executor-profile.md)
+reproduces 68.6825G with 40.42% of sampled instructions in the main executor;
+source-PC locations remain approximate and do not admit a blind rewrite.
 
 The [direct root-index candidate](performance-phpstan-direct-root-index-rejected.md)
 is fully removed: a 1.153% first-window PGO instruction win fails the independent

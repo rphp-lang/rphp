@@ -119,7 +119,10 @@ is reconciled. Complete profile/function totals and native A/B observations
 are unchanged. An argument-only owner-transfer prototype saves just 0.5992%
 in the ordinary native selector and is
 [removed](performance-phpstan-argument-transfer-rejected.md); no runtime gain
-or compatibility repair from it is accepted.
+or compatibility repair from it is accepted. The
+[actual-owner array retirement slice](performance-phpstan-array-retirement-rejected.md)
+is also completely removed after +0.02449% ordinary analysis instructions;
+combining its graph traversals does not produce a material application win.
 
 Exact binary identities, reconciled partitions, opcode body lower bounds and
 scope limits are in [the data](performance-phpstan-vm-contrast-data.json).

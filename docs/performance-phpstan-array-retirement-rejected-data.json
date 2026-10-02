@@ -1,0 +1,127 @@
+{
+  "accepted": false,
+  "reason": "No material whole-analysis instruction benefit: candidate adds 0.02449% against the same ordinary release baseline; no full feature/PGO expansion warranted.",
+  "runtime_source_sha256": "4c7b89b1bc92325cba9b276d8a72414c29646e577bcf5e75b159b3f2036ba3b4",
+  "baseline_commit": "e6a7ef80",
+  "comparison_profile": "ordinary release; not the accepted PGO scorecard",
+  "medians": {
+    "baseline": {
+      "instructions": 74651815427.5,
+      "analysis_seconds": 7.152948618
+    },
+    "candidate": {
+      "instructions": 74670098873.5,
+      "analysis_seconds": 7.1731683015
+    }
+  },
+  "delta_percent": {
+    "instructions": 0.024491629433653905,
+    "analysis_seconds": 0.2826762022184459
+  },
+  "reference": {
+    "runtime": "reference",
+    "wall_seconds": 1.3556903889984824,
+    "output": {
+      "exit": 1,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+    },
+    "analysis_seconds": 0.932916164,
+    "instructions": 10337750497,
+    "counter_running_percent": 100.0
+  },
+  "output": {
+    "exit": 1,
+    "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+    "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+  },
+  "focused_rust_tests": 4,
+  "differential_observations": 36,
+  "supported_cases": 8,
+  "baseline_gaps": [
+    {
+      "case": "array-callback-suspension.php",
+      "php_exit": 0,
+      "baseline_exit": 255,
+      "is_php_pass": false
+    }
+  ],
+  "memory_peak_bytes": 651137024,
+  "memory_events": {
+    "low": 0,
+    "high": 0,
+    "max": 0,
+    "oom": 0,
+    "oom_kill": 0,
+    "oom_group_kill": 0,
+    "sock_throttled": 0
+  },
+  "no_new_unsafe_blocks": true,
+  "full_matrix_and_pgo_not_run": true,
+  "original_parity_goal_open": true,
+  "restored_runtime_sha256": "f86729eb00a0b37058fdb228745baebf3933dae975aca2d44de071575c144146",
+  "binaries": {
+    "baseline": "e99eeb48edad7ed88ac7318449d462f652b0ba15e44a4149c5ebcbe08dfba584",
+    "candidate": "98bf997b41618710ec3af2543b884e2b3b3962842e46f46df3709d8332be9771",
+    "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+  },
+  "samples": [
+    {
+      "runtime": "baseline",
+      "wall_seconds": 9.288137380004628,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 7.137207031,
+      "instructions": 74646651210,
+      "counter_running_percent": 100.0,
+      "round": 0
+    },
+    {
+      "runtime": "candidate",
+      "wall_seconds": 9.278838928992627,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 7.115461588,
+      "instructions": 74670751287,
+      "counter_running_percent": 100.0,
+      "round": 0
+    },
+    {
+      "runtime": "candidate",
+      "wall_seconds": 9.442018819987425,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 7.230875015,
+      "instructions": 74669446460,
+      "counter_running_percent": 100.0,
+      "round": 1
+    },
+    {
+      "runtime": "baseline",
+      "wall_seconds": 9.33878931000072,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 7.168690205,
+      "instructions": 74656979645,
+      "counter_running_percent": 100.0,
+      "round": 1
+    }
+  ],
+  "counter_scope": "analysis FIFO",
+  "event": "instructions:u",
+  "cpu": 2,
+  "rounds": 2,
+  "outlier_policy": "retain every valid output-checked sample"
+}
