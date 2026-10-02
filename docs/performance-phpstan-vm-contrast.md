@@ -124,6 +124,14 @@ or compatibility repair from it is accepted. The
 is also completely removed after +0.02449% ordinary analysis instructions;
 combining its graph traversals does not produce a material application win.
 
+The [packed root-index follow-up](performance-phpstan-packed-root-index-rejected.md)
+removes ordinary root-address hashing without growing allocations. Its 0.812%
+PGO analysis instruction win fails independent controls, including +9.240%
+trait-property time. The whole prototype is removed. This excludes allocation
+growth as the sole explanation for the older direct-index regression, but does
+not establish a particular guard or machine-code-layout cause. The accepted
+runtime result stays at 68.6894G; bounded GC wins are not a parity strategy.
+
 Exact binary identities, reconciled partitions, opcode body lower bounds and
 scope limits are in [the data](performance-phpstan-vm-contrast-data.json).
 

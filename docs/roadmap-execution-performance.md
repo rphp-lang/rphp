@@ -62,6 +62,14 @@ its exact failed/valid evidence, do not stack a compensating patch, and do not
 claim its 67.881G as the accepted runtime result. Simultaneous parity remains
 active; next implementation admission requires quantified systemic evidence.
 
+The [packed root-index follow-up](performance-phpstan-packed-root-index-rejected.md)
+keeps every cycle allocation's size unchanged and saves 0.812% PGO analysis
+instructions, but is also fully removed: an independent five-pair control
+confirms +9.240% trait-property time, +2.286% shared-frame time and other failures.
+Allocation growth is therefore not the sole explanation for the preceding
+regression. The accepted source and 68.6894G scorecard remain unchanged;
+continue with larger quantified operation/storage and ownership costs.
+
 The [systemic controls](performance-phpstan-systemic-controls.md) add actual
 wide-tail visits (mean declared span 1.768 slots), a same-binary seven-plan
 counterfactual (+0.593% instructions disabled), and a same-source LLVM machine
