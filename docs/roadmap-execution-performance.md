@@ -961,3 +961,19 @@ Two ordinary pairs still increase instructions 74.910901G to 75.585755G
 Reject this variant too, without PGO/matrix or runtime adoption. Return to a
 compiler-proved whole-operation publication/consumption slice that replaces
 existing work instead of adding another per-edge dispatcher; parity stays open.
+
+### Rejected compiler-described read-input retirement
+
+The [ordered input prototype](performance-phpstan-architecture.md#compiler-described-read-inputs-semantic-boundaries-repaired-performance-rejected)
+replaces complete release ranges with actual key/name then receiver descriptors,
+and separately describes constructor/probe inputs where scratch remains. Eight
+compiler tests and forty PHP controls pass, also through independent canonical
+single-slot retirement; six new controls fail the prerequisite. Result publication
+is unchanged, so this is not a complete read/publication/consumption replacement.
+
+Two ordinary pairs add 1.866896% instructions (74.908715G to 76.307183G), with
+6.7054/6.8485s time medians; PHP is 10.338126G/0.9481s. Reject runtime adoption
+without PGO/full matrix, preserving semantic counterexamples, stopped/failed
+attempts and exact binaries. Flat self sampling shows the added input protocol
+but supplies no inclusive operation budget. Price complete read/cache/publication
+and call/frame work before another ownership rewrite; parity remains active.

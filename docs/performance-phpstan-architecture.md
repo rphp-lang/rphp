@@ -720,6 +720,72 @@ dispatcher is insufficient. The whole-operation proof and actual coverage must
 precede another native selector; owner counts and static opcode frequency alone
 are not a promised instruction reduction. PHPStan parity remains unachieved.
 
+### Compiler-described read inputs: semantic boundaries repaired, performance rejected
+
+The operation comparison finds concrete differences before performance changes.
+PHP consumes the key/name before the receiver in its read handler, then checks
+for exceptions. The prerequisite instead releases a temporary range in slot
+order. On ArrayAccess failure, Rust receiver/key helper handles can remain alive
+while the VM unwinds: final-owner checks see those handles and skip a PHP
+destructor which later host drop cannot execute. These are demonstrated lifetime
+faults, not an attribution of the whole native instruction gap.
+
+An offline screen of the retained older whole-request census finds 7,510,121
+complete read/input-release occurrences, including 7,090,364 dimension reads and
+419,757 property reads. All selected original markers are operand releases.
+This is a structural, execution-weighted envelope; it lacks catch-entry metadata
+and is neither current observed ownership nor a native savings budget. The new
+compiler checks actual branch and catch entries before replacing a marker.
+
+The private prototype describes actual inputs in PHP order. Complete original
+ranges become an ordered descriptor without another position. Constructor
+scratch makes other ranges incomplete, and isset has no original adjacent input
+release; those cases get an explicit input boundary while their remaining
+expression scratch retains canonical range cleanup. The result publication
+writer remains unchanged. This therefore tests input retirement, not the full
+read/publication/consumption replacement proposed above.
+
+Eight compiler tests pass, including real constructor/probe bytecode and
+independent branch/catch entries. Forty differential controls agree with PHP;
+all forty also pass the independent ordered single-slot canonical implementation
+selected at compiler finalization. Six controls fail on the prerequisite:
+ordinary order, callback exceptions, invalid receiver, throwing input
+destructors, Fiber suspension and initialized wide-frame input order. Passing
+these controls does not establish global correctness. Intermediate failures,
+the stopped partial build, and a faulty builtin-name test fixture remain recorded.
+
+| Build | Instructions, round 0 | Instructions, round 1 | Median analysis time |
+| --- | ---: | ---: | ---: |
+| Tested private prerequisite | 74,904,928,515 | 74,912,501,750 | 6.7054 s |
+| Ordered actual-input prototype | 76,310,245,650 | 76,304,119,777 | 6.8485 s |
+| Same-window PHP, one reference observation | 10,338,125,519 | — | 0.9481 s |
+
+The exact five-file/twenty-finding analysis increases **1.866896% instructions**
+and **2.133733% time**. Both pairs show the instruction regression. Reject this
+runtime candidate without PGO or the full matrix; retain the semantic
+counterexamples and exact sources/binaries. The comparison is ordinary release,
+not against the historical PGO figure.
+
+An output-checked flat instruction profile has 7,621 samples, zero lost samples
+and 76.210G sampled self periods. The new read-input protocol contributes 1.090G
+self periods; range retirement contributes 1.260G, actual retirement 1.190G,
+release preparation 0.950G and tree inspection 1.130G. The older exact-prerequisite
+flat profile observed range retirement 1.750G, actual retirement 0.950G and tree
+inspection 0.990G. These separate sampled observations support investigating the
+added protocol; they are not precise causal differences or inclusive costs of
+a read. Main still accounts for 24.360G in this prototype, so this implementation
+has not removed the large inlined lookup/publication execution machinery.
+
+The architecture decision is now narrower: static input knowledge and correct
+callback order are necessary, but routing every known input through generic
+retirement is insufficient. Keep lifetime repair separate from a speedup claim.
+Before another runtime rewrite, price complete cache-hit/read/publication and
+call/frame operations against PHP, including their remaining helpers. A simple
+ownership description does not by itself establish that it removes tens of
+billions of instructions. PHPStan instruction/time parity remains unachieved.
+The [packet](performance-phpstan-architecture-data.json) records every native
+observation, source identity, failure and effective 6 GiB/no-swap boundary.
+
 ## First implementation checkpoint and rejection rules
 
 Begin with **general read-result consumption and retirement**, covering ordinary

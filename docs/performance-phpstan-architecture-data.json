@@ -1494,5 +1494,372 @@
     "scorecard_changed": false,
     "parity_complete": false,
     "decision": "do not layer another per-edge dispatcher on top of generic Value drop; next measured slice must remove redundant whole-operation publication/consumption protocol"
+  },
+  "rejected_read_input_retirement_v4": {
+    "status": "rejected ordinary native performance selector; private semantic repair retained",
+    "source_sha256": "ef3689d0545419242b1e81fd5d2c07d1c1c1bb9de24f401bfd963d2cbda474b4",
+    "binary_sha256": "fb164f9224a847a4ada0b3b310d4484957e47533eeec209cb9a25505f7d54476",
+    "binary_bytes": 24472272,
+    "prerequisite_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "prerequisite_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "implementation": {
+      "compiler": "static ordered actual input descriptors replace complete original release intervals; mandatory input descriptors precede remaining scratch ranges elsewhere",
+      "runtime": "actual inputs are detached before callbacks; separate canonical single-slot range implementation; original result writer retained",
+      "canonical_control": "RPHP_READ_INPUTS_CANONICAL chooses bytecode during finalization; const-generic executors have no runtime policy selector",
+      "not_implemented": "fresh result publication or read dispatch fusion; not a complete elimination of publication/consumption machinery"
+    },
+    "offline_envelope": {
+      "complete": true,
+      "census_sha256": "540595f196e62f90e0e3803b0cfe3261aa21cd27b049b662d1b89e14616c45bb",
+      "source_sha256": "f842981ab10c95582c15091f60ad17bda62b9babeddd774120eda28987105453",
+      "binary_sha256": "dbbef0e82b099c571a5a1bee2811a60f2b318a777920365c3e13632ef5953cab",
+      "scope": "offline whole-request execution-weighted static read/input-release envelope, not actual ownership proof or native budget; independent catch entries are not captured by this old packet",
+      "totals": {
+        "all_reads": 36729546,
+        "special_context": 3450269,
+        "not_followed_by_release": 23713177,
+        "complete_read_input_release": 7510121,
+        "unrelated_owner_in_range": 2055979
+      },
+      "by_operation": {
+        "FetchDimR": 7090364,
+        "FetchObjR": 419757
+      },
+      "selected_static_sites": 1841,
+      "selected_executed_sites": 1068,
+      "parity_complete": false,
+      "native_performance_claim": false
+    },
+    "semantic": {
+      "compiler_tests": 8,
+      "differential_controls": 40,
+      "canonical_read_input_controls": 40,
+      "provenance": "39 unchanged controls retained from v1 exact same source/bin; fixed builtin-name collision fixture alone rerun",
+      "global_correctness": false,
+      "baseline_counterexamples": [
+        "read-input-exception-order.php",
+        "read-input-invalid-receiver.php",
+        "read-input-release-order.php",
+        "read-input-suspension.php",
+        "read-input-throwing-destructors.php",
+        "read-input-wide-frame.php"
+      ]
+    },
+    "native": {
+      "scope": "analysis FIFO",
+      "cpu": 2,
+      "warmup": "none; fresh TMPDIR per run",
+      "rounds": 2,
+      "build": "ordinary release, same toolchain and flags; historical PGO is not this baseline",
+      "samples": [
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.549581836996367,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.651171207,
+          "instructions": 74904928515,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.799192188016605,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.885938883,
+          "instructions": 76310245650,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.723925919010071,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.811001539,
+          "instructions": 76304119777,
+          "counter_running_percent": 100.0,
+          "round": 1
+        },
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.691560855979333,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.759618759,
+          "instructions": 74912501750,
+          "counter_running_percent": 100.0,
+          "round": 1
+        }
+      ],
+      "reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.37869615200907,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.948054075,
+        "instructions": 10338125519,
+        "counter_running_percent": 100.0
+      },
+      "instruction_medians": {
+        "baseline": 74908715132.5,
+        "candidate": 76307182713.5
+      },
+      "delta_instructions_percent": 1.8668956990202767,
+      "analysis_time_medians_seconds": {
+        "baseline": 6.705394983,
+        "candidate": 6.848470211
+      },
+      "delta_time_percent": 2.1337330367970253,
+      "output_exit": 1,
+      "analyzed_files": 5,
+      "findings": 20
+    },
+    "regression_profile": {
+      "source_sha256": "ef3689d0545419242b1e81fd5d2c07d1c1c1bb9de24f401bfd963d2cbda474b4",
+      "binary_sha256": "fb164f9224a847a4ada0b3b310d4484957e47533eeec209cb9a25505f7d54476",
+      "period": 10000019,
+      "samples": 7621,
+      "sampled_self_periods": 76210144799,
+      "lost_samples": 0,
+      "profile_sha256": "93b340fcd30e98ebca1bd9bb85533724260741cc6deab1e9b66d46e36d3ac894",
+      "profile_bytes": 494416,
+      "self_periods": {
+        "main": 24360046284,
+        "range_retirement": 1260002394,
+        "actual_retirement": 1190002261,
+        "tree_inspection": 1130002147,
+        "read_input_protocol": 1090002071,
+        "release_preparation": 950001805
+      },
+      "interpretation": "flat self sample observations, no inclusive operation budget or precise causal subtraction"
+    },
+    "failed_attempts": [
+      {
+        "kind": "compiler test fixture move-out error",
+        "runtime_ran": false
+      },
+      {
+        "kind": "stale control runner unique count",
+        "runtime_ran": false
+      },
+      {
+        "kind": "successful read and isset remain outside complete-range envelope",
+        "preserved_source_sha256": "07989a748786c534f5b0af7aed0fc4783ac70bc3942732f0398d9e82077f9cf7",
+        "preserved_binary_sha256": "d102ef9f6146a37c3c8e8463d8553f5e4dbf244d357545fc741783b23e8d6086",
+        "regression_introduced": false
+      },
+      {
+        "kind": "partial preparation assertion; dependent build mistakenly started and stopped as whole service",
+        "termination": "SIGTERM",
+        "passed": false,
+        "memory_limits_verified": true,
+        "effective_peak_unavailable": true,
+        "runtime_ran": false
+      },
+      {
+        "kind": "invalid receiver guards hide final language owners",
+        "preserved_source_sha256": "57e6eb2996b8f3d91d41d13c4a0aeb848f600ea9f0967fc8195af70184804f48",
+        "preserved_binary_sha256": "fc356922fac55735301bf9b9a10567cd1638ce9f26c88d581c539ecc1c0f797c",
+        "regression_introduced": false
+      },
+      {
+        "kind": "control fixture redeclared builtin array_values; fatal renderer differs",
+        "runtime_operation_ran": false,
+        "runtime_regression": false,
+        "unchanged_controls_retained": 39
+      }
+    ],
+    "boundaries": {
+      "consuming-read-build-v1": {
+        "complete": true,
+        "exit": 101,
+        "seconds": 15.584873340994818,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 1999630336,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-build-v2": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 144.82929629899445,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3225595904,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-build-v4": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 145.14634054497583,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3234103296,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-build-v5": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 72.724536032998,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2852233216,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-controls-v2": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 0.17722718298318796,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 69083136,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-controls-v3": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 0.18380797799909487,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 68661248,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-controls-v4": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 2.1334226470207796,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 73527296,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-values-v1": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 0.15265521701076068,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 68292608,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "consuming-read-profile-v1": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 9.215127865987597,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 606904320,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "selector_boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 36.70737051800825,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 604651520,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "no_pgo_or_full_matrix": true,
+    "runtime_adopted": false,
+    "parity_complete": false
   }
 }
