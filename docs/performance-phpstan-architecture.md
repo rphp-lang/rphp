@@ -34,6 +34,12 @@ the active private prerequisite now finds a stale temporary losing its final
 object under a result-slot overwrite. This is a concrete ownership-contract
 failure, not a measured explanation of the entire performance gap.
 
+The subsequent [private prerequisite screen](#private-ownership-prerequisite-and-its-measured-limit)
+repairs the tested entry/consumer boundaries and removes all nine false
+live-slot claims in the exact application. It reduces ordinary analysis
+instructions by only 0.798%. That is below the material selector: semantic
+repair establishes a prerequisite, while most of the performance gap remains.
+
 ## What the measurements establish
 
 The independent repair window uses the same five files, twenty findings,
@@ -301,11 +307,82 @@ The compiler edit is restored after preserving exact source, binary and failed
 output. The exception control is not rerun after this earlier control fails;
 there is no claim that it is repaired. No PHPStan or native timing run follows.
 
+### Private ownership prerequisite and its measured limit
+
+A later private revision gives original positional argument tails distinct
+stack-owned cells outside the compiled CV/TMP region. Its compiler proof permits
+ownership transfer only for a single-definition argument temporary with one
+consumer and no independent control-flow entry between producer and send.
+The same rule applies to ordinary, indirect, named and callback argument sends;
+by-value references retain their referent before the temporary wrapper retires.
+Completed Echo expressions release their complete bounded temporary interval.
+Call validation failures use the existing VM-aware owner retirement boundary.
+
+This is ordinary Rust with the existing Value representation. It fixes the
+tested lifetime boundary without another callback check in each result writer.
+It does not introduce a fresh writer, borrow ordinary call arguments, remove
+release instructions or implement the proposed general read-consumption model.
+
+Eight new entry/consumer controls and twenty-four broader controls match PHP in
+exit, stdout and stderr. They cover originals, references/COW/coercion, closures,
+traces, generator/Fiber argument storage, nested array entry order, resurrection,
+throwing destructors and suspended post-Echo retirement. All thirty-two also
+match with the seven retained optimization-disable switches. These switches
+exercise the available canonical controls; they are not proof that every
+optimized path has been disabled.
+
+The broader fifth revision failed post-Echo Fiber suspension because the new
+ordinary owner loop bypassed the existing suspendable release entry. The sixth
+revision restores that entry before retirement. A separate initial TypeError
+lifetime difference came from unequal default exception-argument INI. Explicit
+equal INI removes that difference; an additional validation specimen matches
+both settings for type, arity, internal and named argument failures. The exact
+PHPStan comparison already explicitly sets that INI equally, so it does not
+explain the application gap. Failed intermediate sources and observations stay
+retained in the [packet](performance-phpstan-architecture-data.json).
+
+The unchanged conservative CFG diagnostic then checks the live frame against
+its static absent-owner facts. Its six solver tests and sixteen retained
+ownership controls pass. The actual five-file/twenty-finding request has **zero
+violations, down from nine**. Unknown effects still kill facts, and unsupported
+effects, resumable and finally bodies decline. This validates the stated
+diagnostic envelope; it does not turn an unproved slot into a fresh destination.
+
+Two alternating ordinary pairs measure this private prerequisite separately
+from the earlier PGO baseline:
+
+| Analysis measure | Frozen ordinary repair | Private ordinary prerequisite | PHP in this window |
+| --- | ---: | ---: | ---: |
+| User instructions, median | 75.512893 billion | 74.910462 billion | 10.338186 billion |
+| Analysis time, median | 6.7201 seconds | 6.4888 seconds | 0.9245 seconds |
+
+All observations preserve the same exit, output, five files and twenty findings.
+There is no warmup; every run uses a fresh temporary cache, the same CPU and
+explicit INI, with analysis FIFO boundaries. All counters ran at 100%, all valid
+observations remain visible and the verified 6 GiB/no-swap boundary has no OOM.
+The instruction change is **-0.797786%**, below the required -2% selector. Two
+pairs do not establish a globally accepted time improvement. The frozen repair
+still fails the stronger lifetime controls, and this ordinary window must not
+be compared with the earlier PGO medians as a build regression.
+
+No PGO, broad feature matrix, architecture acceptance or production runtime
+adoption follows. The private contract remains a prerequisite for subsequent
+consuming-publication work, rather than an accepted performance solution.
+
+An offline screen also limits the next design: plain immediately adjacent
+read/move assignment has only **1,152,255 read hits** in the retained
+269,826,212-step whole-request census. This is a structural envelope before
+CFG/live-owner proof, not analysis-only native coverage. No read/assignment
+fusion or speedup is admitted from it. A useful shared design must reach broader
+producer/consumer boundaries and demonstrate its actual removed work; simply
+fusing this narrow adjacent shape is not a justified explanation of the gap.
+
 ### What this architecture review decides
 
 The next performance slice remains a complete general read/assignment operation
-with compiler-proved consumption and one result/owner protocol. Fixing entry
-geometry and the failing lifetime edge is its prerequisite. Array physical-copy
+with compiler-proved consumption and one result/owner protocol. The private
+prerequisite now establishes the tested entry geometry and consumer boundaries,
+without globally accepting its semantics or performance. Array physical-copy
 counts do not support mass standard-library snapshots as the next explanation;
 dispatch and allocator replacement alone cannot close the measured budget.
 

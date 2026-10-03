@@ -1,5 +1,5 @@
 {
-  "status": "architecture comparison with complete operation ledgers and a failed private lifetime prerequisite; no runtime adoption",
+  "status": "complete operation comparison with a private ownership prerequisite; focused and live-slot gates pass, material instruction selector fails; no runtime adoption",
   "date": "2026-10-03",
   "production_commit_at_intake": "2a2358acf05d7b5d7cfbdf28ae72bc4d100277bb",
   "production_changed": false,
@@ -551,5 +551,332 @@
       "remaining_controls_not_run": "Exception-tail, generator, Fiber and reference/coercion controls are not reached after the Echo control fails.",
       "phpstan_or_native_benchmark_run": false
     }
+  },
+  "owned_storage_prerequisite_v6": {
+    "status": "private semantic and live-slot prerequisite passed within the stated envelope; application instruction selector failed",
+    "production_runtime_changed": false,
+    "full_feature_matrix_run": false,
+    "pgo_acceptance": false,
+    "architecture_parity_verified": false,
+    "baseline_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+    "candidate_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "candidate_ordinary_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "candidate_ordinary_binary_bytes": 24538040,
+    "protocol": "Separate original argument-tail owners from compiled CV/TMP storage. Compiler-proved argument TMP consumption applies to ordinary, indirect, named and callback sends. Completed Echo expressions retire their bounded TMP interval. Failed call validation and ordinary release preserve existing VM-aware callback and Fiber boundaries.",
+    "compile_proof_tests": 4,
+    "frame_storage_tests": 2,
+    "focused_controls": 8,
+    "broader_controls": 24,
+    "forced_canonical_controls": 32,
+    "canonical_scope": "Seven retained optimization-disable switches; same explicit exception argument INI; equality of exit, stdout and stderr. This is not proof that every optimized path was disabled.",
+    "additional_validation_ini_controls": [
+      {
+        "exception_ignore_args": "0",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "timeout": false,
+            "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+            "stdout_sha256": "cd33de9bc14ae69a2f7dec93dba927901da40131f11254d7ad72aac49630274b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "matches_reference": true
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "timeout": false,
+            "binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+            "stdout_sha256": "cd33de9bc14ae69a2f7dec93dba927901da40131f11254d7ad72aac49630274b",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "matches_reference": true
+          }
+        ]
+      },
+      {
+        "exception_ignore_args": "1",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "timeout": false,
+            "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+            "stdout_sha256": "591f04dbf56fa1076eb953761c56f8a4e8580678ea35f8c7f83be3e430fffa75",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "matches_reference": true
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "timeout": false,
+            "binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+            "stdout_sha256": "591f04dbf56fa1076eb953761c56f8a4e8580678ea35f8c7f83be3e430fffa75",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "matches_reference": true
+          }
+        ]
+      }
+    ],
+    "live_slot_diagnostic": {
+      "source_sha256": "115ebe7f76759e0a50098241f4fb08ebc4cbc9ce1cc9f3f9c1d971f5dfb05c72",
+      "binary_sha256": "18bac6a55ebe6d78393872ec837e8998ad7fcb7416c8524c5aab6f8b345e9ebc",
+      "files": 5,
+      "findings": 20,
+      "violations_before": 9,
+      "violations_after": 0,
+      "scope": "Unchanged conservative actual-CFG diagnostic; unknown effects still kill facts, resumable/finally bodies and unsupported storage/effects decline. No fresh writer or release elision selected.",
+      "contract": {
+        "temp_owner_bodies": 10686,
+        "temp_owner_declined": 290,
+        "temp_owner_slots": 15585,
+        "temp_owner_violations": [],
+        "temp_owner_op_2": 54171,
+        "temp_owner_op_2.mismatch": 0,
+        "temp_owner_op_11": 7675,
+        "temp_owner_op_11.mismatch": 0,
+        "temp_owner_op_13": 268041,
+        "temp_owner_op_13.mismatch": 0,
+        "temp_owner_op_15": 5,
+        "temp_owner_op_15.mismatch": 0,
+        "temp_owner_op_17": 28440,
+        "temp_owner_op_17.mismatch": 0,
+        "temp_owner_op_18": 12058,
+        "temp_owner_op_18.mismatch": 0,
+        "temp_owner_op_19": 247206,
+        "temp_owner_op_19.mismatch": 0,
+        "temp_owner_op_20": 234180,
+        "temp_owner_op_20.mismatch": 0,
+        "temp_owner_op_72": 422149,
+        "temp_owner_op_72.mismatch": 0,
+        "temp_owner_op_101": 2382104,
+        "temp_owner_op_101.mismatch": 0,
+        "temp_owner_op_107": 2594972,
+        "temp_owner_op_107.mismatch": 0,
+        "temp_owner_op_113": 2,
+        "temp_owner_op_113.mismatch": 0,
+        "temp_owner_op_215": 124413,
+        "temp_owner_op_215.mismatch": 0,
+        "temp_owner_op_216": 36521,
+        "temp_owner_op_216.mismatch": 0
+      },
+      "native_performance_acceptance": false
+    },
+    "ordinary_native_screen": {
+      "scope": "Analysis FIFO; user instructions; same CPU, toolchain, ordinary release profile, five files/twenty findings and explicit INI; fresh temporary cache; alternating baseline/candidate/candidate/baseline; no warmup; retain every valid observation",
+      "samples": [
+        {
+          "runtime": "baseline",
+          "round": 0,
+          "instructions": 75513669313,
+          "analysis_seconds": 6.742144823,
+          "counter_running_percent": 100.0,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 74910421903,
+          "analysis_seconds": 6.518645525,
+          "counter_running_percent": 100.0,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 1,
+          "instructions": 74910501305,
+          "analysis_seconds": 6.458882809,
+          "counter_running_percent": 100.0,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 75512116468,
+          "analysis_seconds": 6.698000431,
+          "counter_running_percent": 100.0,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          }
+        }
+      ],
+      "instruction_medians": {
+        "baseline": 75512892890.5,
+        "candidate": 74910461604.0
+      },
+      "analysis_seconds_medians": {
+        "baseline": 6.720072627,
+        "candidate": 6.488764167
+      },
+      "delta_instructions_percent": -0.7977859984434343,
+      "reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.355091119010467,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.924542904,
+        "instructions": 10338185525,
+        "counter_running_percent": 100.0
+      },
+      "binaries": {
+        "baseline": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+        "candidate": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+        "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      "inputs": [
+        "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+      ],
+      "material_selector_percent": -2.0,
+      "selector_passed": false,
+      "limitation": "The baseline still fails the stronger argument-lifetime controls. This ordinary window is distinct from earlier PGO evidence; do not compare its medians as a PGO regression. Two pairs do not establish a globally accepted time improvement."
+    },
+    "retained_failures": [
+      {
+        "revision": "v5",
+        "source_sha256": "dc67458dbfbeed89fcef36af732da14e99020f4cb1aefe2c5d564f934282e21e",
+        "binary_sha256": "3a5f143ea6dee0ea35cc1d4f6d6ec569894b8e16327a2b4ee415a13985c31b0e",
+        "failure": "Ordinary post-Echo release bypassed the existing suspendable release entry; destructor Fiber suspension fails. v6 restores the entry before owner retirement."
+      },
+      {
+        "revision": "v5/v6 initial broader runner",
+        "failure": "One TypeError lifetime difference under unmatched default exception argument INI. The same program passes with explicit equal INI. The final additional validation control matches both 0 and 1; not a remaining runtime counterexample."
+      },
+      {
+        "revision": "diagnostic v1",
+        "exit": 101,
+        "failure": "New diagnostic-only OpArray field omitted in eight compiler initializers; no application run. Initializers repaired and the same focused solver/live request gate passes."
+      }
+    ],
+    "read_assignment_structural_screen": {
+      "counts": {
+        "adjacent_read_assign_hits": 1400132,
+        "FetchDimR.all": 648912,
+        "FetchDimR.plain_move": 401035,
+        "FetchObjR.all": 750510,
+        "FetchObjR.plain_move": 750510,
+        "FetchCvR.all": 710,
+        "FetchCvR.plain_move": 710
+      },
+      "census_sha256": "540595f196e62f90e0e3803b0cfe3261aa21cd27b049b662d1b89e14616c45bb",
+      "scope": "Retained whole-request PC census, not native analysis-only coverage. Plain adjacent read/move assignment covers 1,152,255 read hits before CFG/live-owner proof; no fused implementation or native gain admitted."
+    },
+    "resource_boundaries": {
+      "focused_v5": {
+        "complete": true,
+        "exit": 0,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2831335424,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "focused_v6": {
+        "complete": true,
+        "exit": 1,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2829729792,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "equal_ini_v6": {
+        "complete": true,
+        "exit": 0,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 72724480,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "live_proof_v6": {
+        "complete": true,
+        "exit": 0,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3214876672,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "native_v6": {
+        "complete": true,
+        "exit": 0,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 601174016,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "validation_ini": {
+        "complete": true,
+        "exit": 0,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 56274944,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "decision": "Retain the private owner contract as the prerequisite for broader consuming-publication work, without production adoption or PGO/full matrix expansion. Approximately 0.8 percent instruction reduction does not meet the material selector and does not explain the large PHP gap.",
+    "remaining_goal": "Simultaneous actual PHPStan instruction/time parity with PHP remains active and unachieved."
   }
 }

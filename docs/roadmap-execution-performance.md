@@ -885,3 +885,27 @@ runtime adoption or PHPStan benchmark follows, and the native scorecard and
 parity goal remain unchanged. The [packet](performance-phpstan-architecture-data.json)
 records both partial gates and the verified memory boundaries, including the
 failed semantic service exit.
+
+### Architecture checkpoint: tested ownership prerequisite, small native effect
+
+The [private prerequisite screen](performance-phpstan-architecture.md#private-ownership-prerequisite-and-its-measured-limit)
+separates original argument-tail storage, shares compiler-proved TMP argument
+consumption across send forms and completes Echo expression retirement. Eight
+entry controls, twenty-four broader controls and all thirty-two with the retained
+canonical-disable switches match PHP. A further validation control matches both
+exception-argument INI settings. The intermediate Fiber release failure and
+unmatched-default-INI observation remain explicit.
+
+Six conservative CFG solver tests and sixteen retained controls pass. One exact
+five-file/twenty-finding request removes all nine false live-slot claims without
+selecting a fresh writer or eliding release. Two alternating ordinary pairs
+reduce instructions 75.512893G to 74.910462G (-0.797786%); analysis medians are
+6.7201/6.4888s, with same-window PHP 10.338186G/0.9245s. The material two-percent
+selector fails, so no PGO/full matrix, architecture acceptance, production
+runtime adoption or scorecard change follows. All boundaries have zero OOM.
+
+The retained PC screen limits plain adjacent read/move assignment to 1.152M
+whole-request read hits before CFG/live-owner proof. Keep the private owner
+contract as a prerequisite; design broader consuming publication and account
+for removed work before another implementation selector. Simultaneous PHPStan
+instruction/time parity remains active and unachieved.
