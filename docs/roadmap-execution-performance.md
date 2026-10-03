@@ -845,3 +845,21 @@ entry/layout/VM-retirement contract must establish that role before read-result
 publication is simplified. Exact failures and resource evidence remain in the
 [packet](performance-phpstan-temp-ownership-contract-data.json). Application
 instruction/time parity remains active and unachieved.
+
+
+### Architecture checkpoint: physical copies and original argument identity
+
+The [physical array-copy census](performance-phpstan-array-copy-census.md)
+separates physical storage copies from Rc-only Value clones on the frozen
+repair. Three diagnostic controls and sixteen retained-output comparisons pass;
+one exact five-file/twenty-finding request records 201,526 copies and 2.674M
+copied items, mostly COW. Whole-request counters reconcile without site overflow;
+they are not analysis-only native budgets. Broad snapshot-copy replacement is
+not selected as the explanation for the instruction gap.
+
+A stronger two-runtime argument control shows null original contents after
+variadic CV replacement in ordinary and reflected RPHP entry, while PHP retains
+the objects and retires both. The [architecture decision](performance-phpstan-architecture.md)
+therefore requires explicit storage roles before consuming publication, while
+keeping the unassigned native gap visible. No runtime optimization, feature
+matrix, PGO acceptance or parity result follows from this diagnostic checkpoint.

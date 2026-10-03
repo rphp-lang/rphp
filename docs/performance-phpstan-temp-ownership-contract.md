@@ -108,6 +108,13 @@ regression in this control; the baseline already fails. That still prevents
 acceptance of a complete frame-entry/lifetime contract. No native selector,
 PGO cycle or full feature matrix follows this failed semantic gate.
 
+The subsequent [original-argument identity control](performance-phpstan-array-copy-census.md)
+strengthens this result. After replacing the variadic CV, PHP still returns
+the original object; repaired RPHP returns null under both ordinary and
+reflected entry. The matching count therefore did not establish retained
+contents. This existing baseline defect remains a prerequisite to resolve,
+with no newly accepted runtime change.
+
 ## Consequence for the redesign
 
 The next contract must describe three separate storage roles: compiled CV

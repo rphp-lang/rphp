@@ -8,7 +8,7 @@ operand consumption and frame retirement pass through more execution machinery.
 This is a measured direction for a redesign, not a complete attribution of the
 instruction gap or a promised speedup.
 
-This review compares the correct private owned-frame repair with the actual PHP
+This review compares the frozen private owned-frame repair with the actual PHP
 8.5.11 reference executable. It changes documentation only. The repair has not
 passed the performance acceptance gates, and production still has the ownership
 defects described in [the lifetime review](performance-phpstan-call-frame-ownership.md).
@@ -20,6 +20,13 @@ adds a reference-PHP counterexample for reflected variadic argument retirement.
 The repaired baseline is not a globally verified lifetime implementation.
 A uniform entry-storage contract is required before fresh result publication.
 
+The [physical-copy control](performance-phpstan-array-copy-census.md) subsequently
+separates real array storage copies from refcount copies. One whole request
+copies 2.674M items in 201,526 physical copies, predominantly COW. Repeated
+standard-library snapshots do not emerge as the large-gap explanation. A
+stronger argument-identity control also shows why matching counts alone did
+not validate original-argument retention on the repaired baseline.
+
 ## What the measurements establish
 
 The independent repair window uses the same five files, twenty findings,
@@ -28,7 +35,7 @@ Startup and result rendering are excluded. The RPHP values are two-pair medians;
 PHP is the reference observation in that same window. This is an x86-64
 comparison, not an ARM64 result or an assertion about every PHP application.
 
-| Analysis measure | Correct repaired RPHP with PGO | Reference PHP |
+| Analysis measure | Frozen owned-frame RPHP with PGO | Reference PHP |
 | --- | ---: | ---: |
 | User instructions | 68.478394 billion | 10.338209 billion |
 | Analysis time | 5.9759 seconds | 0.9283 seconds |
@@ -142,7 +149,7 @@ it has no owner to drop.
 
 ## Where the cost is and what remains unexplained
 
-The repaired [inline caller budget](performance-phpstan-main-inline-budget.md)
+The frozen repair’s [inline caller budget](performance-phpstan-main-inline-budget.md)
 correlates main samples with the following source arms:
 
 | Main source arm | Billion self instruction periods |
@@ -220,6 +227,40 @@ interpreter or whole-body Cartesian expansion.
 
 ## Proposed shared ownership and effect contract
 
+### Architectural decision and cost envelope
+
+The unit of redesign is a complete PHP operation: resolve its input, perform
+the language action, publish the result, consume dead inputs and handle the
+observable boundary. The review must compare all those steps with PHP before
+optimizing one Rust helper. Both implementations already have 16-byte values,
+refcounting, COW and cached reads. Rust versus C and allocator origin are not
+the demonstrated architectural distinction.
+
+| Proposed contract | Work it should remove | Proof before adoption |
+| --- | --- | --- |
+| Separate CV, expression TMP, original extra-argument and capture storage roles at entry | Recovering accidental physical-slot ownership and retaining duplicate raw cells through unrelated scratch work | Ordinary, detached, variadic, closure and resumable entries preserve argument values, references, traces and callback retirement |
+| A consuming operation owns input retirement and result publication | Separate dispatches and repeated slot/provenance decisions for one read/assignment | All Value kinds, alias/COW behavior, callback order and exceptional exits match canonical PHP behavior |
+| One compiler lifetime/effect description used by canonical and typed/native execution | Reconstructing static lifetime facts at execution time or maintaining another interpreter's state | Actual CFG, exceptional/resumable roots and unknown effects are modeled; no owner-absence false positives |
+| Smaller successful-operation state exposed to Rust code generation | Repeated materialization and spills around the large executor | Equal semantics and real native instruction reduction; no new hot selector, handler-matrix explosion or unexplained architecture regression |
+
+These are related contracts, not a forecast that one frame-layout fix closes
+the gap. The known main read/assignment/release/return arms cover 13.671G
+sampled self periods, overlapping the getter/writer attribution. Even removing
+all those periods would leave more than 54G in that profile. Eliminating the
+entire main executor would still leave about 40.7G. Neither hypothetical
+removal is implementable; their purpose is to show that a local improvement
+cannot by itself justify a parity claim.
+
+First establish the semantic entry/storage prerequisite, then measure a
+complete ordinary operation before and after consuming-publication changes.
+Account for remaining outlined VM, standard-library, container and external
+work with disjoint native partitions. Every accepted slice must remove work
+across ordinary programs rather than compensate with PHPStan-specific guards.
+If the first slice fails its material instruction selector, reject the design
+instead of treating a cleaner source file as performance progress.
+
+### Shared lifetime representation
+
 This is a proposed architecture, not implemented behavior. The compiler should
 attach one lifetime/effect description to the operation that consumes a value.
 Canonical execution and typed/native lowering should use that same description.
@@ -261,13 +302,20 @@ cost remains in lookup, frame construction, calls, builtins and data layout.
 ## First implementation checkpoint and rejection rules
 
 Begin with **general read-result consumption and retirement**, covering ordinary
-FetchObjR and FetchDimR results used by assignment. Use the correct frozen repair,
+FetchObjR and FetchDimR results used by assignment. Use the frozen owned-frame repair,
 not current production ownership. Keep one semantic executor for every Value
 kind; use compiler facts to combine operations, without introducing another
 typed interpreter or requiring every result to be Long. Calls, heap writes,
 re-entrant access, unknown aliases and unproved exception/interrupt boundaries
 end any borrowed read view. Source ownership at a later callback cannot be
 guessed from the earlier syntax alone.
+
+The later entry diagnostics make this implementation conditional: do not
+enable a fresh result writer until the entry/storage role contract above is
+established. The frozen repair passes the retained repair controls but fails
+the newly added original-argument identity/lifetime control; it is not a
+globally correct entry baseline. A new design must fix that invariant rather
+than add a compensating ownership check to every hot result write.
 
 Before editing, trace one complete canonical protocol in the retained per-PC
 packet, enumerate the eliminated decisions and state the alias/lifetime proof.

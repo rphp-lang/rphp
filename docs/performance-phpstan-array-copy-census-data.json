@@ -1,0 +1,2126 @@
+{
+  "status": "verified diagnostic; no runtime or performance acceptance",
+  "baseline_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+  "baseline_ordinary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+  "reference_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+  "diagnostic_source_sha256": "1499fd71f26a693b6cd9e50a1135aeea0b63d50e097ffc5e419a18ba0f47ad3c",
+  "diagnostic_binary_sha256": "3918980e64d220f8493dd919d8cf908d541cb8ab10fa5a35ddc6c3ffdf5f1a67",
+  "diagnostic_binary_bytes": 24754768,
+  "diagnostic_patch_sha256": "c35069833763e5f0e568af2f11a53a3a0131d418d31e52f73d879f4cf6694155",
+  "scope": "whole-request-after-stats-reset",
+  "phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+  "files": 5,
+  "findings": 20,
+  "copy_counts": {
+    "overflow_copies": 0,
+    "rows": [
+      {
+        "bucket": 0,
+        "column": 0,
+        "file": "<trait-or-unknown>",
+        "kind": 0,
+        "line": 0,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 0,
+        "file": "<trait-or-unknown>",
+        "kind": 0,
+        "line": 0,
+        "measure": {
+          "copies": 18,
+          "integer_index_capacity": 0,
+          "items": 27,
+          "max_items": 2,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 34,
+        "file": "src/stdlib.rs",
+        "kind": 1,
+        "line": 1828,
+        "measure": {
+          "copies": 37,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 52,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 115,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 54,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 116,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 58,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 117,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 31,
+        "file": "src/value/mod.rs",
+        "kind": 1,
+        "line": 5005,
+        "measure": {
+          "copies": 13798,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 50,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 101,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 5,
+          "max_items": 4,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 31,
+        "file": "src/value/mod.rs",
+        "kind": 1,
+        "line": 5005,
+        "measure": {
+          "copies": 2102,
+          "integer_index_capacity": 0,
+          "items": 2102,
+          "max_items": 1,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 31,
+        "file": "src/value/mod.rs",
+        "kind": 1,
+        "line": 5005,
+        "measure": {
+          "copies": 6366,
+          "integer_index_capacity": 0,
+          "items": 8588,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 0,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 31,
+        "file": "src/value/mod.rs",
+        "kind": 1,
+        "line": 5005,
+        "measure": {
+          "copies": 155,
+          "integer_index_capacity": 0,
+          "items": 871,
+          "max_items": 8,
+          "string_index_capacity": 1131
+        },
+        "owners": 0,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 21,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 86,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 106,
+          "max_items": 53,
+          "string_index_capacity": 112
+        },
+        "owners": 0,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 60,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 118,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 106,
+          "max_items": 53,
+          "string_index_capacity": 112
+        },
+        "owners": 0,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 58,
+        "file": "src/stdlib/superglobals.rs",
+        "kind": 1,
+        "line": 119,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 124,
+          "max_items": 62,
+          "string_index_capacity": 224
+        },
+        "owners": 0,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 31,
+        "file": "src/value/mod.rs",
+        "kind": 1,
+        "line": 5005,
+        "measure": {
+          "copies": 359,
+          "integer_index_capacity": 0,
+          "items": 5995,
+          "max_items": 35,
+          "string_index_capacity": 8050
+        },
+        "owners": 0,
+        "storage": 3
+      },
+      {
+        "bucket": 0,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 3532,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 682,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 654,
+        "measure": {
+          "copies": 4,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 1204,
+        "measure": {
+          "copies": 1832,
+          "integer_index_capacity": 0,
+          "items": 2194,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 1222,
+        "measure": {
+          "copies": 373,
+          "integer_index_capacity": 0,
+          "items": 1270,
+          "max_items": 4,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 3532,
+        "measure": {
+          "copies": 3,
+          "integer_index_capacity": 0,
+          "items": 4,
+          "max_items": 2,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 726,
+          "integer_index_capacity": 0,
+          "items": 1525,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 4428,
+          "integer_index_capacity": 0,
+          "items": 5415,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 17067,
+          "integer_index_capacity": 0,
+          "items": 35345,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 89,
+          "integer_index_capacity": 0,
+          "items": 115,
+          "max_items": 6,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 654,
+        "measure": {
+          "copies": 3462,
+          "integer_index_capacity": 0,
+          "items": 4512,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 3578,
+          "integer_index_capacity": 0,
+          "items": 4517,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 42,
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "kind": 2,
+        "line": 5068,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 2,
+          "max_items": 2,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 1204,
+        "measure": {
+          "copies": 13,
+          "integer_index_capacity": 0,
+          "items": 226,
+          "max_items": 57,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 21,
+          "integer_index_capacity": 0,
+          "items": 364,
+          "max_items": 52,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 47,
+          "integer_index_capacity": 0,
+          "items": 1419,
+          "max_items": 53,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 13339,
+          "integer_index_capacity": 0,
+          "items": 358064,
+          "max_items": 64,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 11,
+          "max_items": 11,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 654,
+        "measure": {
+          "copies": 20,
+          "integer_index_capacity": 0,
+          "items": 340,
+          "max_items": 56,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 45,
+          "integer_index_capacity": 0,
+          "items": 1000,
+          "max_items": 52,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 3,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 3471,
+          "integer_index_capacity": 0,
+          "items": 672106,
+          "max_items": 396,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 3,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 6,
+          "integer_index_capacity": 0,
+          "items": 952,
+          "max_items": 305,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 393,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 10,
+          "integer_index_capacity": 0,
+          "items": 16,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 7731,
+          "integer_index_capacity": 0,
+          "items": 11045,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 6345,
+          "integer_index_capacity": 0,
+          "items": 7351,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 832,
+          "integer_index_capacity": 0,
+          "items": 1735,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 42,
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "kind": 2,
+        "line": 5068,
+        "measure": {
+          "copies": 14,
+          "integer_index_capacity": 0,
+          "items": 14,
+          "max_items": 1,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 29,
+          "integer_index_capacity": 0,
+          "items": 155,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 2
+      },
+      {
+        "bucket": 1,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 1222,
+        "measure": {
+          "copies": 5,
+          "integer_index_capacity": 0,
+          "items": 15,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 4,
+          "integer_index_capacity": 0,
+          "items": 24,
+          "max_items": 7,
+          "string_index_capacity": 28
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 18010,
+          "integer_index_capacity": 27,
+          "items": 106879,
+          "max_items": 8,
+          "string_index_capacity": 127718
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 825,
+          "integer_index_capacity": 448,
+          "items": 2685,
+          "max_items": 8,
+          "string_index_capacity": 931
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 17,
+          "integer_index_capacity": 0,
+          "items": 84,
+          "max_items": 8,
+          "string_index_capacity": 102
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 83,
+          "max_items": 56,
+          "string_index_capacity": 84
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 5309,
+          "integer_index_capacity": 1568,
+          "items": 117665,
+          "max_items": 64,
+          "string_index_capacity": 164571
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 5,
+          "integer_index_capacity": 196,
+          "items": 268,
+          "max_items": 60,
+          "string_index_capacity": 140
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 1120,
+          "integer_index_capacity": 339,
+          "items": 18724,
+          "max_items": 64,
+          "string_index_capacity": 28126
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 8,
+          "integer_index_capacity": 0,
+          "items": 201,
+          "max_items": 56,
+          "string_index_capacity": 252
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 42,
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "kind": 2,
+        "line": 5068,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 14,
+          "max_items": 14,
+          "string_index_capacity": 14
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 3671,
+          "integer_index_capacity": 36960,
+          "items": 631898,
+          "max_items": 512,
+          "string_index_capacity": 1295298
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 56,
+          "items": 66,
+          "max_items": 66,
+          "string_index_capacity": 28
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 193,
+          "integer_index_capacity": 0,
+          "items": 23930,
+          "max_items": 194,
+          "string_index_capacity": 47925
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 3,
+          "integer_index_capacity": 0,
+          "items": 494,
+          "max_items": 323,
+          "string_index_capacity": 672
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 4,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 462,
+          "integer_index_capacity": 10752,
+          "items": 344352,
+          "max_items": 1114,
+          "string_index_capacity": 473088
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 4,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 524,
+          "max_items": 524,
+          "string_index_capacity": 894
+        },
+        "owners": 2,
+        "storage": 3
+      },
+      {
+        "bucket": 0,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 14,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 217,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 1204,
+        "measure": {
+          "copies": 777,
+          "integer_index_capacity": 0,
+          "items": 922,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 1222,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 4,
+          "max_items": 4,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 1428,
+          "integer_index_capacity": 0,
+          "items": 2229,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29064,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 1,
+          "max_items": 1,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 430,
+          "integer_index_capacity": 0,
+          "items": 981,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 6340,
+          "integer_index_capacity": 0,
+          "items": 11098,
+          "max_items": 7,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 5296,
+          "integer_index_capacity": 0,
+          "items": 11882,
+          "max_items": 7,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 654,
+        "measure": {
+          "copies": 5392,
+          "integer_index_capacity": 0,
+          "items": 23866,
+          "max_items": 5,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 2892,
+          "integer_index_capacity": 0,
+          "items": 3071,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 42,
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "kind": 2,
+        "line": 5068,
+        "measure": {
+          "copies": 23,
+          "integer_index_capacity": 0,
+          "items": 46,
+          "max_items": 2,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 18,
+          "integer_index_capacity": 0,
+          "items": 268,
+          "max_items": 26,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29064,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 11,
+          "max_items": 11,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 11,
+          "max_items": 11,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 277,
+          "integer_index_capacity": 0,
+          "items": 5817,
+          "max_items": 41,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 77,
+          "integer_index_capacity": 0,
+          "items": 911,
+          "max_items": 13,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 2,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 27,
+          "integer_index_capacity": 0,
+          "items": 732,
+          "max_items": 52,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 3,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9083,
+        "measure": {
+          "copies": 6,
+          "integer_index_capacity": 0,
+          "items": 760,
+          "max_items": 389,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 3,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 7,
+          "integer_index_capacity": 0,
+          "items": 1060,
+          "max_items": 305,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 166,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 0,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 143,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 265,
+          "integer_index_capacity": 0,
+          "items": 388,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29064,
+        "measure": {
+          "copies": 3,
+          "integer_index_capacity": 0,
+          "items": 3,
+          "max_items": 1,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 1975,
+          "integer_index_capacity": 0,
+          "items": 3279,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 584,
+          "integer_index_capacity": 0,
+          "items": 773,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 68,
+          "integer_index_capacity": 0,
+          "items": 83,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 42,
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "kind": 2,
+        "line": 5068,
+        "measure": {
+          "copies": 13,
+          "integer_index_capacity": 0,
+          "items": 24,
+          "max_items": 2,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 106,
+          "integer_index_capacity": 0,
+          "items": 557,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 2
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 57,
+          "integer_index_capacity": 0,
+          "items": 248,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 2
+      },
+      {
+        "bucket": 1,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 13,
+          "integer_index_capacity": 0,
+          "items": 61,
+          "max_items": 7,
+          "string_index_capacity": 91
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29064,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 8,
+          "max_items": 8,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 4809,
+          "integer_index_capacity": 117,
+          "items": 28641,
+          "max_items": 8,
+          "string_index_capacity": 33874
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 333,
+          "integer_index_capacity": 0,
+          "items": 2110,
+          "max_items": 8,
+          "string_index_capacity": 2534
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 16,
+          "integer_index_capacity": 0,
+          "items": 95,
+          "max_items": 8,
+          "string_index_capacity": 119
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 1,
+        "column": 42,
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "kind": 2,
+        "line": 5068,
+        "measure": {
+          "copies": 26,
+          "integer_index_capacity": 0,
+          "items": 78,
+          "max_items": 3,
+          "string_index_capacity": 182
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 18,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29059,
+        "measure": {
+          "copies": 4,
+          "integer_index_capacity": 0,
+          "items": 44,
+          "max_items": 15,
+          "string_index_capacity": 70
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 2,
+        "line": 29064,
+        "measure": {
+          "copies": 3,
+          "integer_index_capacity": 59,
+          "items": 57,
+          "max_items": 22,
+          "string_index_capacity": 28
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 2279,
+          "integer_index_capacity": 136,
+          "items": 44954,
+          "max_items": 64,
+          "string_index_capacity": 60657
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 1799,
+          "integer_index_capacity": 0,
+          "items": 35067,
+          "max_items": 64,
+          "string_index_capacity": 47845
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 9,
+          "integer_index_capacity": 0,
+          "items": 224,
+          "max_items": 56,
+          "string_index_capacity": 280
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 120,
+          "integer_index_capacity": 7168,
+          "items": 14105,
+          "max_items": 381,
+          "string_index_capacity": 13661
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 85,
+          "integer_index_capacity": 0,
+          "items": 6026,
+          "max_items": 74,
+          "string_index_capacity": 9509
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 3,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 4,
+          "integer_index_capacity": 0,
+          "items": 596,
+          "max_items": 323,
+          "string_index_capacity": 784
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 4,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 6,
+          "integer_index_capacity": 10752,
+          "items": 5952,
+          "max_items": 992,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 4,
+        "column": 30,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 2,
+        "line": 1965,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 969,
+          "max_items": 969,
+          "string_index_capacity": 1792
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 5,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 8940,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 12326,
+          "max_items": 12326,
+          "string_index_capacity": 14307
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 5,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 2,
+        "line": 9628,
+        "measure": {
+          "copies": 6,
+          "integer_index_capacity": 0,
+          "items": 74077,
+          "max_items": 12375,
+          "string_index_capacity": 85917
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 0,
+        "column": 27,
+        "file": "src/stdlib.rs",
+        "kind": 3,
+        "line": 1204,
+        "measure": {
+          "copies": 23,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 14,
+        "file": "src/stdlib.rs",
+        "kind": 3,
+        "line": 3532,
+        "measure": {
+          "copies": 2,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 8940,
+        "measure": {
+          "copies": 847,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 9083,
+        "measure": {
+          "copies": 2082,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 9628,
+        "measure": {
+          "copies": 808,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 3,
+        "line": 654,
+        "measure": {
+          "copies": 28,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 2,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 8940,
+        "measure": {
+          "copies": 37007,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 50,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 9083,
+        "measure": {
+          "copies": 4183,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 34,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 9628,
+        "measure": {
+          "copies": 378,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 0,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 3,
+        "line": 654,
+        "measure": {
+          "copies": 941,
+          "integer_index_capacity": 0,
+          "items": 0,
+          "max_items": 0,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 38,
+        "file": "src/vm/execute/baseline_iteration.rs",
+        "kind": 3,
+        "line": 654,
+        "measure": {
+          "copies": 2047,
+          "integer_index_capacity": 0,
+          "items": 4285,
+          "max_items": 4,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 0
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 8940,
+        "measure": {
+          "copies": 4,
+          "integer_index_capacity": 0,
+          "items": 9,
+          "max_items": 3,
+          "string_index_capacity": 0
+        },
+        "owners": 3,
+        "storage": 1
+      },
+      {
+        "bucket": 1,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 8940,
+        "measure": {
+          "copies": 4,
+          "integer_index_capacity": 0,
+          "items": 24,
+          "max_items": 7,
+          "string_index_capacity": 28
+        },
+        "owners": 3,
+        "storage": 3
+      },
+      {
+        "bucket": 2,
+        "column": 44,
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "kind": 3,
+        "line": 8940,
+        "measure": {
+          "copies": 1,
+          "integer_index_capacity": 0,
+          "items": 27,
+          "max_items": 27,
+          "string_index_capacity": 28
+        },
+        "owners": 3,
+        "storage": 3
+      }
+    ],
+    "scope": "whole-request-after-stats-reset",
+    "shared_mutations": 178675,
+    "total": {
+      "copies": 201526,
+      "integer_index_capacity": 68578,
+      "items": 2674287,
+      "max_items": 12375,
+      "string_index_capacity": 2421206
+    },
+    "unique_mutations": 7538376
+  },
+  "copy_groups": [
+    {
+      "kind": 0,
+      "name": "trait-or-unknown",
+      "copies": 20,
+      "items": 27
+    },
+    {
+      "kind": 1,
+      "name": "explicit-direct",
+      "copies": 22831,
+      "items": 17897
+    },
+    {
+      "kind": 2,
+      "name": "shared-cow",
+      "copies": 130320,
+      "items": 2652018
+    },
+    {
+      "kind": 3,
+      "name": "immutable-literal-cow",
+      "copies": 48355,
+      "items": 4345
+    }
+  ],
+  "checks": {
+    "unit_controls": 3,
+    "unit_controls_passed": true,
+    "focused_controls": 16,
+    "retained_observations": 32,
+    "focused_passed": true,
+    "application_output_equal": true,
+    "application_new_executions": 1,
+    "rows_reconcile_to_totals": true,
+    "cow_copies_equal_shared_accesses": true,
+    "no_site_overflow": true,
+    "patch_dry_run_passed": true
+  },
+  "original_argument_counterexample": {
+    "complete": true,
+    "equal": false,
+    "control_sha256": "41fa8c7cdf3df82d271eeaea95dd46221ba6224dba59f727439de048adc1989b",
+    "rows": [
+      {
+        "runtime": "php",
+        "exit": 0,
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "stdout_sha256": "b9f841d728f36eb89b28798272e4ac4f70e633c3cad9753f1946630edb36ac0e",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      {
+        "runtime": "repair",
+        "exit": 0,
+        "binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+        "stdout_sha256": "20201a423d56c74abaad1522e4bb8882bc6a5874dba6e240db5725b7c6cb7465",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      }
+    ]
+  },
+  "resource_boundaries": {
+    "owned-array-copy-build-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 144.54921407799702,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3634909184,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-array-copy-run-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 9.734689552016789,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 627089408,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "original-arg-control-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.0741440340061672,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 42786816,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "performance_claim": false,
+  "production_runtime_changed": false,
+  "parity_complete": false,
+  "cleanup": {
+    "local_complete": true,
+    "private_host_configured": false,
+    "candidate_target_removed": true,
+    "exact_source_and_binary_retained": true
+  },
+  "limits": [
+    "Whole request copy counts include startup; they are not an analysis-only denominator or an instruction budget.",
+    "Unique mutable accesses are as_array_mut API entries, not committed PHP writes.",
+    "Native outlined clone self periods omit inlined descendants and generic allocation/hash/drop work.",
+    "One request cannot establish scaling with number of analysed files.",
+    "Output equality on this request is not global correctness; original argument identity/destructor control fails on the baseline."
+  ]
+}
