@@ -1,5 +1,11 @@
 # PHPStan execution architecture comparison
 
+Start with the [current execution-model decision](performance-phpstan-architecture-decision.md)
+for a compact RPHP/PHP comparison, the broader function-body work control and
+the measured limit of the shared-owner prototype. This detailed review retains
+the earlier hypotheses and their rejection evidence; its historical next-step
+sections must be read together with that current decision.
+
 The next change should reduce the work required to execute ordinary PHP values,
 using one compiler and VM ownership contract. Another allocator replacement or
 Long-only native region does not address the evidence below. RPHP and PHP perform

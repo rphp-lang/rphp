@@ -997,3 +997,24 @@ storage-edge lifetime protocol that replaces VM preparation plus host-drop
 classification; preserve original allocation, callback commits, weak/resurrection,
 GC and suspendable/native ownership. All effective boundaries have zero OOM.
 PHPStan instruction/time parity remains active and unachieved.
+
+### Execution-model comparison before another runtime rewrite
+
+The [current architectural decision](performance-phpstan-architecture-decision.md)
+compares complete RPHP/PHP operations and separates application work, VM cost
+and removable overhead. Broad private body counters observe 9,075,686 PHP and
+9,072,411 RPHP analysis entries (−0.036085%); 5,617 of 5,688 active traditional
+bodies match exactly. Preserve all 71 differences and the exclusions for arrows,
+builtins, internal loops and generated sources. Instrumented timing is not
+ordinary runtime performance or proof of global work equivalence.
+
+The common storage-owner/host-Drop prototype passes eight default/six no-default
+primitive tests and matches 41 canonical prerequisite controls, retaining three
+known PHP lifetime failures. Two ordinary pairs reduce instructions 1.908183%
+(74.934355G to 73.504470G), but time rises 1.302222% (6.6614/6.7481s). Reject it
+without PGO/matrix or runtime adoption. Price a complete repeated operation and
+its helper work before another implementation; a final design must replace the
+old publication/consumption protocol rather than layer more decisions onto it.
+The wider call census weakens application replay as the large-gap explanation
+within its coverage. The whole instruction gap is still not causally attributed,
+and simultaneous PHPStan instruction/time parity remains open.

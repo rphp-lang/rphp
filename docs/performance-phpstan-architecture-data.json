@@ -2764,5 +2764,1370 @@
     "no_pgo_or_full_matrix": true,
     "runtime_adopted": false,
     "parity_complete": false
+  },
+  "shared_storage_owner_retirement_v1": {
+    "status": "rejected nonmaterial selector",
+    "source_sha256": "b942f4c51cc83a70177fa0d4e468c308e9b1d7e7d21253a05aab7d93013444cc",
+    "binary_sha256": "97e5e0662f2a8a383293d08cebb12ce3f4016614b9883ca649acc7989edbea4d",
+    "binary_bytes": 24384176,
+    "baseline_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "changed_source": [
+      "src/value/mod.rs",
+      "src/vm/execute/call_frames.rs"
+    ],
+    "change": "Common storage-edge/host-Drop primitive consumes ordinary non-final owners once and retains possible final owners in the same allocation for unchanged VM retirement. No new per-child dispatcher; final-payload protocol not replaced.",
+    "primitive_gates": {
+      "default": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 74.79696873296052,
+        "source_sha256": "b942f4c51cc83a70177fa0d4e468c308e9b1d7e7d21253a05aab7d93013444cc",
+        "features": [],
+        "tests_passed": 8
+      },
+      "no_default": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 65.63129607704468,
+        "source_sha256": "b942f4c51cc83a70177fa0d4e468c308e9b1d7e7d21253a05aab7d93013444cc",
+        "features": [
+          "--no-default-features"
+        ],
+        "prior_explicit_resource_gate": "same effective feature set as default via stream-registry; duplicate confirmation, not an independent variant",
+        "tests_passed": 6
+      },
+      "resource_explicit": "Duplicate default feature set via stream-registry; not a distinct variant"
+    },
+    "semantic": {
+      "baseline_equivalent": 41,
+      "reference_passes": 38,
+      "known_baseline_reference_failures": [
+        "payload-order-and-identity.php",
+        "payload-resurrection-and-alias.php",
+        "payload-unset-global-boundary.php"
+      ],
+      "global_semantic_acceptance": false
+    },
+    "native": {
+      "complete": true,
+      "purpose": "exploratory instruction feedback, not an acceptance gate",
+      "event": "instructions:u",
+      "counter_scope": "analysis FIFO",
+      "cpu": 2,
+      "rounds": 2,
+      "warmup": "none; fresh TMPDIR per run",
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "outlier_policy": "retain every valid output-checked sample",
+      "samples": [
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.557317198021337,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.66545701,
+          "instructions": 74931116547,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.617549168993719,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.72258234,
+          "instructions": 73501128877,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.677778383018449,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.773658752,
+          "instructions": 73507812112,
+          "counter_running_percent": 100.0,
+          "round": 1
+        },
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.551567497022916,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.657292366,
+          "instructions": 74937593791,
+          "counter_running_percent": 100.0,
+          "round": 1
+        }
+      ],
+      "binaries": {
+        "baseline": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+        "candidate": "97e5e0662f2a8a383293d08cebb12ce3f4016614b9883ca649acc7989edbea4d",
+        "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      "inputs": [
+        "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+      ],
+      "reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.3940112870186567,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.970293045,
+        "instructions": 10338014997,
+        "counter_running_percent": 100.0
+      },
+      "medians": {
+        "baseline": 74934355169.0,
+        "candidate": 73504470494.5
+      },
+      "delta_percent": {
+        "baseline": 0.0,
+        "candidate": -1.908183064063429
+      },
+      "memory_peak_bytes": 601010176,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "selector_result": {
+      "status": "rejected nonmaterial selector",
+      "baseline_instructions": 74934355169.0,
+      "candidate_instructions": 73504470494.5,
+      "delta_instructions_percent": -1.908183064063429,
+      "analysis_medians_seconds": {
+        "baseline": 6.661374688,
+        "candidate": 6.748120546
+      },
+      "delta_time_percent": 1.30222156931461,
+      "runtime_adopted": false,
+      "parity_complete": false
+    },
+    "boundaries": {
+      "shared-owner-build-v1": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 157.79864370799623,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3629506560,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "shared-owner-nodefault-v1": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 65.7475088199717,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2949378048,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "shared-owner-controls-v1": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 2.2329862440237775,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 73748480,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "runtime_adopted": false,
+    "native_scorecard_changed": false,
+    "parity_complete": false
+  },
+  "application_function_body_equivalence_v3": {
+    "status": "completed partial work-equivalence diagnostic; ordinary performance not measured by this instrumentation",
+    "reference_binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+    "baseline_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "instrumented_phar_sha256": "a8ae8d9d39697af5edb7a7cdf4b1c3b4e092aa4bac2d8c45ceb8542f17935ab5",
+    "metadata_sha256": "c5e6b1210914885dc1267222d011b4721b665bad40a8774901e389801350bcf5",
+    "report_sha256": "9ceeede62456636b857c8ce026dac65536eb3985d4b5ed9a3eb380d0805a4c5f",
+    "count_packets_sha256": {
+      "php": "52f115838f0a7ddeef13bfe862330a1b4a5e9037f2ec09d95e34021e9e8c0c49",
+      "rphp": "ab4d75968945e84a8e944a1180252df5e33c91908b730ec7b7f8cb3e13ae6ad8"
+    },
+    "builder_sha256": "0a2ee070cf803e7ab1fa43d747e7113145077badcc3d5456f010b202b074da8e",
+    "runner_sha256": "c6924eb61cc8f3d3361a799b25c2278858c070ec84ace4b2ab0198f13f20f4dd",
+    "selected_archive_files": 2587,
+    "instrumented_archive_files": 2348,
+    "traditional_bodies": 18385,
+    "excluded_arrow_declarations": 1003,
+    "included_source_counts": {
+      "php": {
+        "before": 2468,
+        "after": 2587,
+        "outside_archive_counts": {
+          "before": 2,
+          "after": 2
+        }
+      },
+      "rphp": {
+        "before": 2467,
+        "after": 2585,
+        "outside_archive_counts": {
+          "before": 2,
+          "after": 2
+        }
+      }
+    },
+    "included_only_php": [
+      "vendor/ondrejmirtes/better-reflection/src/Reflection/Adapter/ReflectionEnumBackedCase.php",
+      "vendor/symfony/polyfill-mbstring/Mbstring.php"
+    ],
+    "included_only_rphp": [],
+    "outside_archive_roles": [
+      "archive entry stub",
+      "one generated dependency container per request"
+    ],
+    "phase": "before/after analysis snapshots; body entry increments inline without added source lines",
+    "counter_storage": "Preinitialized stdClass properties, not a large global COW array. Markers uniformly guard existence for late shutdown after globals are removed. Counters retain no application owners.",
+    "active_union_bodies": 5688,
+    "equal_active_bodies": 5617,
+    "differing_bodies": 71,
+    "rows": [
+      {
+        "runtime": "php",
+        "complete": true,
+        "timeout": false,
+        "exit": 1,
+        "diagnostic_wall_seconds": 1.5696933509898372,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "analysis_body_entries": 9075686,
+        "active_bodies": 5688
+      },
+      {
+        "runtime": "rphp",
+        "complete": true,
+        "timeout": false,
+        "exit": 1,
+        "diagnostic_wall_seconds": 38.94079140998656,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+        "analysis_body_entries": 9072411,
+        "active_bodies": 5685
+      }
+    ],
+    "extra_entries_rphp": 1849,
+    "fewer_entries_rphp": -5124,
+    "absolute_entry_differences": 6973,
+    "net_entry_delta_percent": -0.0360854264900734,
+    "differences": [
+      {
+        "id": 3489,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 195,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 385,
+        "rphp": 386,
+        "delta": 1
+      },
+      {
+        "id": 3493,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 295,
+        "name": "getName",
+        "body_ordinal": 4,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 2190,
+        "rphp": 2333,
+        "delta": 143
+      },
+      {
+        "id": 3530,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 907,
+        "name": "is",
+        "body_ordinal": 41,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 333,
+        "rphp": 334,
+        "delta": 1
+      },
+      {
+        "id": 3565,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 1432,
+        "name": "getTemplateTypeMap",
+        "body_ordinal": 76,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 309,
+        "rphp": 310,
+        "delta": 1
+      },
+      {
+        "id": 3573,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 1518,
+        "name": "isGeneric",
+        "body_ordinal": 84,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 447,
+        "rphp": 448,
+        "delta": 1
+      },
+      {
+        "id": 3574,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 1531,
+        "name": "typeMapFromList",
+        "body_ordinal": 85,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 180,
+        "rphp": 181,
+        "delta": 1
+      },
+      {
+        "id": 3575,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 1546,
+        "name": "<closure>",
+        "body_ordinal": 86,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 333,
+        "rphp": 335,
+        "delta": 2
+      },
+      {
+        "id": 3579,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 1610,
+        "name": "withTypes",
+        "body_ordinal": 90,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 180,
+        "rphp": 181,
+        "delta": 1
+      },
+      {
+        "id": 3584,
+        "file": "src/Reflection/ClassReflection.php",
+        "line": 1665,
+        "name": "getResolvedPhpDoc",
+        "body_ordinal": 95,
+        "source_sha256": "1c737fa3da55be6536eafc51d415694550ea7f469563b08f070ab70d6c1aff49",
+        "php": 1261,
+        "rphp": 1262,
+        "delta": 1
+      },
+      {
+        "id": 3635,
+        "file": "src/Reflection/Dummy/ChangedTypeMethodReflection.php",
+        "line": 46,
+        "name": "getDeclaringClass",
+        "body_ordinal": 1,
+        "source_sha256": "d2a1931c96e235ec31dbfba7f9782b47a244f916f11ec6696dbabdb0de2a7bdb",
+        "php": 272,
+        "rphp": 413,
+        "delta": 141
+      },
+      {
+        "id": 4536,
+        "file": "src/Reflection/ReflectionProvider/MemoizingReflectionProvider.php",
+        "line": 29,
+        "name": "hasClass",
+        "body_ordinal": 1,
+        "source_sha256": "922ba69b8d83e57c1967b5acbe6edbd8fe20d2614a4d325ecca5bbbbaee9ac8b",
+        "php": 1197,
+        "rphp": 1198,
+        "delta": 1
+      },
+      {
+        "id": 4537,
+        "file": "src/Reflection/ReflectionProvider/MemoizingReflectionProvider.php",
+        "line": 46,
+        "name": "getClass",
+        "body_ordinal": 2,
+        "source_sha256": "922ba69b8d83e57c1967b5acbe6edbd8fe20d2614a4d325ecca5bbbbaee9ac8b",
+        "php": 1428,
+        "rphp": 1429,
+        "delta": 1
+      },
+      {
+        "id": 4551,
+        "file": "src/Reflection/ReflectionProviderStaticAccessor.php",
+        "line": 16,
+        "name": "getInstance",
+        "body_ordinal": 2,
+        "source_sha256": "a5aa04a301026462a31e5322f3da1f1e5d1f5d5b71443b43440dfd5761fc23f8",
+        "php": 1324,
+        "rphp": 1325,
+        "delta": 1
+      },
+      {
+        "id": 4607,
+        "file": "src/Reflection/ResolvedMethodReflection.php",
+        "line": 79,
+        "name": "getDeclaringClass",
+        "body_ordinal": 7,
+        "source_sha256": "b644acab1a02dcd0f3cbe990cddafd44ab485ad06216473b80f55633104afe54",
+        "php": 272,
+        "rphp": 413,
+        "delta": 141
+      },
+      {
+        "id": 8020,
+        "file": "src/TrinaryLogic.php",
+        "line": 58,
+        "name": "createYes",
+        "body_ordinal": 1,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 190602,
+        "rphp": 190603,
+        "delta": 1
+      },
+      {
+        "id": 8021,
+        "file": "src/TrinaryLogic.php",
+        "line": 62,
+        "name": "createNo",
+        "body_ordinal": 2,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 96415,
+        "rphp": 96414,
+        "delta": -1
+      },
+      {
+        "id": 8022,
+        "file": "src/TrinaryLogic.php",
+        "line": 66,
+        "name": "createMaybe",
+        "body_ordinal": 3,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 151246,
+        "rphp": 151250,
+        "delta": 4
+      },
+      {
+        "id": 8025,
+        "file": "src/TrinaryLogic.php",
+        "line": 83,
+        "name": "yes",
+        "body_ordinal": 6,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 366162,
+        "rphp": 366158,
+        "delta": -4
+      },
+      {
+        "id": 8029,
+        "file": "src/TrinaryLogic.php",
+        "line": 110,
+        "name": "and",
+        "body_ordinal": 10,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 179760,
+        "rphp": 179765,
+        "delta": 5
+      },
+      {
+        "id": 8091,
+        "file": "src/Type/Accessory/AccessoryArrayListType.php",
+        "line": 92,
+        "name": "isSubTypeOf",
+        "body_ordinal": 9,
+        "source_sha256": "89e7d7f2da678d7576af649af5390d3ac1d7669ac8e65ea8e3d001c70315bfbe",
+        "php": 1112,
+        "rphp": 1114,
+        "delta": 2
+      },
+      {
+        "id": 8729,
+        "file": "src/Type/Accessory/HasOffsetValueType.php",
+        "line": 133,
+        "name": "describe",
+        "body_ordinal": 11,
+        "source_sha256": "8c6c85b6aab478ded5bbe8f5944135aa7705c9c5a4fb39c60fd35964e9244774",
+        "php": 865,
+        "rphp": 999,
+        "delta": 134
+      },
+      {
+        "id": 8847,
+        "file": "src/Type/Accessory/NonEmptyArrayType.php",
+        "line": 94,
+        "name": "isSubTypeOf",
+        "body_ordinal": 9,
+        "source_sha256": "f8cd0a2615b0aa2541ce1bfa6b42840c3801085ed0bc609910fbd8edad33c42b",
+        "php": 3684,
+        "rphp": 3685,
+        "delta": 1
+      },
+      {
+        "id": 9115,
+        "file": "src/Type/BooleanType.php",
+        "line": 56,
+        "name": "describe",
+        "body_ordinal": 4,
+        "source_sha256": "2cc2213fd0e318333527ba3df451bcfd9649febb3ea6eff1b6a755586769c8aa",
+        "php": 263,
+        "rphp": 294,
+        "delta": 31
+      },
+      {
+        "id": 9535,
+        "file": "src/Type/Constant/ConstantBooleanType.php",
+        "line": 42,
+        "name": "describe",
+        "body_ordinal": 2,
+        "source_sha256": "d849663d13dc3ac4726a0c8b9beef6f4b8c178a0c23c3ff9d7f0d01713f06617",
+        "php": 1504,
+        "rphp": 1495,
+        "delta": -9
+      },
+      {
+        "id": 9558,
+        "file": "src/Type/Constant/ConstantFloatType.php",
+        "line": 61,
+        "name": "describe",
+        "body_ordinal": 4,
+        "source_sha256": "af7a6a626d5f3304ae3d5e1fa12bb609941bfded03b8840c8634d997c37cba01",
+        "php": 434,
+        "rphp": 432,
+        "delta": -2
+      },
+      {
+        "id": 9581,
+        "file": "src/Type/Constant/ConstantStringType.php",
+        "line": 85,
+        "name": "getValue",
+        "body_ordinal": 1,
+        "source_sha256": "11c42ed647f37f80ec383562e6d2350b451ab2ab3ba1aa3176c7974962d7ee2a",
+        "php": 26024,
+        "rphp": 26366,
+        "delta": 342
+      },
+      {
+        "id": 9586,
+        "file": "src/Type/Constant/ConstantStringType.php",
+        "line": 112,
+        "name": "describe",
+        "body_ordinal": 6,
+        "source_sha256": "11c42ed647f37f80ec383562e6d2350b451ab2ab3ba1aa3176c7974962d7ee2a",
+        "php": 9614,
+        "rphp": 9768,
+        "delta": 154
+      },
+      {
+        "id": 9657,
+        "file": "src/Type/ErrorType.php",
+        "line": 13,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "db607dccaa92032e49a1e26c382593b073d7e024e546cd04d0ef0324509ceda7",
+        "php": 1274,
+        "rphp": 1276,
+        "delta": 2
+      },
+      {
+        "id": 9725,
+        "file": "src/Type/FloatType.php",
+        "line": 170,
+        "name": "isString",
+        "body_ordinal": 29,
+        "source_sha256": "65dd0e5722d91266ffba7911e076520e1306ce8425078d86237440900da7ac22",
+        "php": 626,
+        "rphp": 624,
+        "delta": -2
+      },
+      {
+        "id": 9859,
+        "file": "src/Type/Generic/TemplateTypeMap.php",
+        "line": 55,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "78ac33460478715914412d339421537ad5a55075f37718313a8c3724d5c31107",
+        "php": 8407,
+        "rphp": 8409,
+        "delta": 2
+      },
+      {
+        "id": 9864,
+        "file": "src/Type/Generic/TemplateTypeMap.php",
+        "line": 100,
+        "name": "getTypes",
+        "body_ordinal": 5,
+        "source_sha256": "78ac33460478715914412d339421537ad5a55075f37718313a8c3724d5c31107",
+        "php": 3387,
+        "rphp": 3389,
+        "delta": 2
+      },
+      {
+        "id": 9872,
+        "file": "src/Type/Generic/TemplateTypeMap.php",
+        "line": 218,
+        "name": "map",
+        "body_ordinal": 13,
+        "source_sha256": "78ac33460478715914412d339421537ad5a55075f37718313a8c3724d5c31107",
+        "php": 812,
+        "rphp": 813,
+        "delta": 1
+      },
+      {
+        "id": 9968,
+        "file": "src/Type/IntegerRangeType.php",
+        "line": 227,
+        "name": "isSubTypeOf",
+        "body_ordinal": 13,
+        "source_sha256": "7a3339255c16575bab6d424f28441ffb261f1ee558f6701659c984b4432123cd",
+        "php": 2986,
+        "rphp": 2990,
+        "delta": 4
+      },
+      {
+        "id": 9993,
+        "file": "src/Type/IntegerType.php",
+        "line": 41,
+        "name": "describe",
+        "body_ordinal": 1,
+        "source_sha256": "4de02bb0c3d0d2df812dfaea204c042437c600c58bf47ba6cc0e35fcf55e249e",
+        "php": 1851,
+        "rphp": 1879,
+        "delta": 28
+      },
+      {
+        "id": 10033,
+        "file": "src/Type/IntersectionType.php",
+        "line": 316,
+        "name": "describe",
+        "body_ordinal": 15,
+        "source_sha256": "b5f015368f16c58d73187185285c3fd7c74646e07e58588d5962f51f00427c81",
+        "php": 1636,
+        "rphp": 1649,
+        "delta": 13
+      },
+      {
+        "id": 10167,
+        "file": "src/Type/IsSuperTypeOfResult.php",
+        "line": 61,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "4f0df3c27751d3dac48db96a4931e20f7450f79538fff48e312274bd8ac520bb",
+        "php": 172188,
+        "rphp": 172191,
+        "delta": 3
+      },
+      {
+        "id": 10173,
+        "file": "src/Type/IsSuperTypeOfResult.php",
+        "line": 112,
+        "name": "createNo",
+        "body_ordinal": 6,
+        "source_sha256": "4f0df3c27751d3dac48db96a4931e20f7450f79538fff48e312274bd8ac520bb",
+        "php": 49773,
+        "rphp": 49777,
+        "delta": 4
+      },
+      {
+        "id": 10316,
+        "file": "src/Type/MixedType.php",
+        "line": 57,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "d01f776530bbdebd743636ece6ade388b876c88e1e9995fc28a750dd744cd6b6",
+        "php": 65041,
+        "rphp": 65043,
+        "delta": 2
+      },
+      {
+        "id": 10413,
+        "file": "src/Type/MixedType.php",
+        "line": 657,
+        "name": "traverse",
+        "body_ordinal": 97,
+        "source_sha256": "d01f776530bbdebd743636ece6ade388b876c88e1e9995fc28a750dd744cd6b6",
+        "php": 3654,
+        "rphp": 3656,
+        "delta": 2
+      },
+      {
+        "id": 10813,
+        "file": "src/Type/ObjectType.php",
+        "line": 931,
+        "name": "isIterableAtLeastOnce",
+        "body_ordinal": 53,
+        "source_sha256": "425f4bf4a509039662963631ad7c0f30ef5e0736431271559d78b272da2283dc",
+        "php": 6,
+        "rphp": 7,
+        "delta": 1
+      },
+      {
+        "id": 10861,
+        "file": "src/Type/ObjectType.php",
+        "line": 1307,
+        "name": "isInstanceOf",
+        "body_ordinal": 101,
+        "source_sha256": "425f4bf4a509039662963631ad7c0f30ef5e0736431271559d78b272da2283dc",
+        "php": 71,
+        "rphp": 72,
+        "delta": 1
+      },
+      {
+        "id": 10871,
+        "file": "src/Type/ObjectType.php",
+        "line": 1447,
+        "name": "getClassReflection",
+        "body_ordinal": 111,
+        "source_sha256": "425f4bf4a509039662963631ad7c0f30ef5e0736431271559d78b272da2283dc",
+        "php": 249,
+        "rphp": 250,
+        "delta": 1
+      },
+      {
+        "id": 11894,
+        "file": "src/Type/StringType.php",
+        "line": 45,
+        "name": "describe",
+        "body_ordinal": 1,
+        "source_sha256": "52f69d24019fcbefc53cf80106901a61cd7797a86c8cd12d6956f4647554c126",
+        "php": 1961,
+        "rphp": 1991,
+        "delta": 30
+      },
+      {
+        "id": 12215,
+        "file": "src/Type/Traits/NonArrayTypeTrait.php",
+        "line": 19,
+        "name": "isArray",
+        "body_ordinal": 2,
+        "source_sha256": "06fb085b30cc441a6d58a2413fe1c8dee754c6dc37623d6f9a4bed84615cf7b7",
+        "php": 8536,
+        "rphp": 8537,
+        "delta": 1
+      },
+      {
+        "id": 12216,
+        "file": "src/Type/Traits/NonArrayTypeTrait.php",
+        "line": 23,
+        "name": "isConstantArray",
+        "body_ordinal": 3,
+        "source_sha256": "06fb085b30cc441a6d58a2413fe1c8dee754c6dc37623d6f9a4bed84615cf7b7",
+        "php": 5187,
+        "rphp": 5185,
+        "delta": -2
+      },
+      {
+        "id": 12218,
+        "file": "src/Type/Traits/NonArrayTypeTrait.php",
+        "line": 31,
+        "name": "isList",
+        "body_ordinal": 5,
+        "source_sha256": "06fb085b30cc441a6d58a2413fe1c8dee754c6dc37623d6f9a4bed84615cf7b7",
+        "php": 973,
+        "rphp": 975,
+        "delta": 2
+      },
+      {
+        "id": 12403,
+        "file": "src/Type/TypeTraverser.php",
+        "line": 35,
+        "name": "map",
+        "body_ordinal": 0,
+        "source_sha256": "db5d762a5f9c2cc55e8de183f406de0559edaa7ecfaa6040df66a26ce8854a88",
+        "php": 8370,
+        "rphp": 8372,
+        "delta": 2
+      },
+      {
+        "id": 12404,
+        "file": "src/Type/TypeTraverser.php",
+        "line": 41,
+        "name": "__construct",
+        "body_ordinal": 1,
+        "source_sha256": "db5d762a5f9c2cc55e8de183f406de0559edaa7ecfaa6040df66a26ce8854a88",
+        "php": 8370,
+        "rphp": 8372,
+        "delta": 2
+      },
+      {
+        "id": 12405,
+        "file": "src/Type/TypeTraverser.php",
+        "line": 50,
+        "name": "mapInternal",
+        "body_ordinal": 2,
+        "source_sha256": "db5d762a5f9c2cc55e8de183f406de0559edaa7ecfaa6040df66a26ce8854a88",
+        "php": 23714,
+        "rphp": 23716,
+        "delta": 2
+      },
+      {
+        "id": 12406,
+        "file": "src/Type/TypeTraverser.php",
+        "line": 55,
+        "name": "traverseInternal",
+        "body_ordinal": 3,
+        "source_sha256": "db5d762a5f9c2cc55e8de183f406de0559edaa7ecfaa6040df66a26ce8854a88",
+        "php": 21885,
+        "rphp": 21887,
+        "delta": 2
+      },
+      {
+        "id": 12444,
+        "file": "src/Type/UnionType.php",
+        "line": 408,
+        "name": "describe",
+        "body_ordinal": 19,
+        "source_sha256": "b62774ff511c25b30dc1735d68138d744770eae28cbaec6ddf0c369ce0b18322",
+        "php": 1570,
+        "rphp": 1589,
+        "delta": 19
+      },
+      {
+        "id": 12583,
+        "file": "src/Type/UnionTypeHelper.php",
+        "line": 28,
+        "name": "<closure>",
+        "body_ordinal": 1,
+        "source_sha256": "a4fb78b7d25d3560ce5650d624bc32d194dd28ea38f79a49a6238945e8c897eb",
+        "php": 2459,
+        "rphp": 2688,
+        "delta": 229
+      },
+      {
+        "id": 12584,
+        "file": "src/Type/UnionTypeHelper.php",
+        "line": 104,
+        "name": "compareStrings",
+        "body_ordinal": 2,
+        "source_sha256": "a4fb78b7d25d3560ce5650d624bc32d194dd28ea38f79a49a6238945e8c897eb",
+        "php": 1609,
+        "rphp": 1845,
+        "delta": 236
+      },
+      {
+        "id": 12602,
+        "file": "src/Type/VerbosityLevel.php",
+        "line": 77,
+        "name": "typeOnly",
+        "body_ordinal": 2,
+        "source_sha256": "153a33a7d67668e9f4d380ff16c06bf18411578757a49ff82b4b4bdd995df967",
+        "php": 1548,
+        "rphp": 1544,
+        "delta": -4
+      },
+      {
+        "id": 12603,
+        "file": "src/Type/VerbosityLevel.php",
+        "line": 82,
+        "name": "value",
+        "body_ordinal": 3,
+        "source_sha256": "153a33a7d67668e9f4d380ff16c06bf18411578757a49ff82b4b4bdd995df967",
+        "php": 3544,
+        "rphp": 3678,
+        "delta": 134
+      },
+      {
+        "id": 12613,
+        "file": "src/Type/VerbosityLevel.php",
+        "line": 219,
+        "name": "handle",
+        "body_ordinal": 13,
+        "source_sha256": "153a33a7d67668e9f4d380ff16c06bf18411578757a49ff82b4b4bdd995df967",
+        "php": 9969,
+        "rphp": 9965,
+        "delta": -4
+      },
+      {
+        "id": 12720,
+        "file": "vendor/composer/ClassLoader.php",
+        "line": 423,
+        "name": "loadClass",
+        "body_ordinal": 19,
+        "source_sha256": "d4b2313e562edf942838ec316d983c1a3459ca67da3e5658e861200b0b3693c2",
+        "php": 118,
+        "rphp": 117,
+        "delta": -1
+      },
+      {
+        "id": 12721,
+        "file": "vendor/composer/ClassLoader.php",
+        "line": 442,
+        "name": "findFile",
+        "body_ordinal": 20,
+        "source_sha256": "d4b2313e562edf942838ec316d983c1a3459ca67da3e5658e861200b0b3693c2",
+        "php": 118,
+        "rphp": 117,
+        "delta": -1
+      },
+      {
+        "id": 12725,
+        "file": "vendor/composer/ClassLoader.php",
+        "line": 575,
+        "name": "<closure>",
+        "body_ordinal": 24,
+        "source_sha256": "d4b2313e562edf942838ec316d983c1a3459ca67da3e5658e861200b0b3693c2",
+        "php": 105,
+        "rphp": 104,
+        "delta": -1
+      },
+      {
+        "id": 13168,
+        "file": "vendor/nette/di/src/DI/Container.php",
+        "line": 106,
+        "name": "getService",
+        "body_ordinal": 9,
+        "source_sha256": "947946458c976d203ed7c57c1a827d908c87596af04d123ecb97d47c6785f31c",
+        "php": 5636,
+        "rphp": 5647,
+        "delta": 11
+      },
+      {
+        "id": 14029,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/BuilderHelpers.php",
+        "line": 179,
+        "name": "normalizeValue",
+        "body_ordinal": 7,
+        "source_sha256": "95cd31daa25905f71502a84525ebb288fe59bb54721b9fd2097d4be4c8280f9c",
+        "php": 2281,
+        "rphp": 1155,
+        "delta": -1126
+      },
+      {
+        "id": 14352,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/Node/Expr/ConstFetch.php",
+        "line": 18,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "b876535f7a2b70486645ac833c91e1228c6b7a02c4a3d24bb7f108f00f41c0d7",
+        "php": 3803,
+        "rphp": 3797,
+        "delta": -6
+      },
+      {
+        "id": 14469,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/Node/Name.php",
+        "line": 22,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "de0292b636021c22c73d7348275091f8b0860669b74d95accaca5d2e5e08d85c",
+        "php": 40294,
+        "rphp": 40288,
+        "delta": -6
+      },
+      {
+        "id": 14485,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/Node/Name.php",
+        "line": 239,
+        "name": "prepareName",
+        "body_ordinal": 16,
+        "source_sha256": "de0292b636021c22c73d7348275091f8b0860669b74d95accaca5d2e5e08d85c",
+        "php": 41104,
+        "rphp": 41098,
+        "delta": -6
+      },
+      {
+        "id": 14531,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/Node/Scalar/Int_.php",
+        "line": 23,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "8e5fdee356a8af933e746fba0e6a77868aa40e8a969a6f1df6596641f1eb035a",
+        "php": 6474,
+        "rphp": 5409,
+        "delta": -1065
+      },
+      {
+        "id": 14558,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/Node/Scalar/String_.php",
+        "line": 25,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "d685bfeedfdf9071286dd244941178076846aa745ec4e88c61bf496641d33958",
+        "php": 11870,
+        "rphp": 11815,
+        "delta": -55
+      },
+      {
+        "id": 16142,
+        "file": "vendor/ondrejmirtes/better-reflection/src/Reflection/Adapter/ReflectionClass.php",
+        "line": 90,
+        "name": "getName",
+        "body_ordinal": 4,
+        "source_sha256": "a82f1c05303d5bfeace2331ff9598130f9b511797c3323de9facbef2006052f8",
+        "php": 220,
+        "rphp": 221,
+        "delta": 1
+      },
+      {
+        "id": 16543,
+        "file": "vendor/ondrejmirtes/better-reflection/src/Reflection/ReflectionClass.php",
+        "line": 327,
+        "name": "getName",
+        "body_ordinal": 8,
+        "source_sha256": "e7901a761c71d378450019fb61cb82140a95de92c808543055eaf4438dce4905",
+        "php": 1710,
+        "rphp": 1711,
+        "delta": 1
+      },
+      {
+        "id": 18137,
+        "file": "vendor/symfony/polyfill-mbstring/Mbstring.php",
+        "line": 549,
+        "name": "mb_strlen",
+        "body_ordinal": 18,
+        "source_sha256": "cbdc6701cea2d03ed2f20f45c53c13d199f9ecf100e52055a2783f311ee4e317",
+        "php": 943,
+        "rphp": 0,
+        "delta": -943
+      },
+      {
+        "id": 18169,
+        "file": "vendor/symfony/polyfill-mbstring/Mbstring.php",
+        "line": 1026,
+        "name": "getEncoding",
+        "body_ordinal": 50,
+        "source_sha256": "cbdc6701cea2d03ed2f20f45c53c13d199f9ecf100e52055a2783f311ee4e317",
+        "php": 943,
+        "rphp": 0,
+        "delta": -943
+      },
+      {
+        "id": 18231,
+        "file": "vendor/symfony/polyfill-mbstring/bootstrap80.php",
+        "line": 57,
+        "name": "mb_strlen",
+        "body_ordinal": 14,
+        "source_sha256": "950efa2d6ced009bf51d281068680f2e92e5fd90ec2c6a5b21d245a0d5b0340d",
+        "php": 943,
+        "rphp": 0,
+        "delta": -943
+      }
+    ],
+    "most_frequent_bodies": [
+      {
+        "id": 8025,
+        "file": "src/TrinaryLogic.php",
+        "line": 83,
+        "name": "yes",
+        "body_ordinal": 6,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 366162,
+        "rphp": 366158
+      },
+      {
+        "id": 8020,
+        "file": "src/TrinaryLogic.php",
+        "line": 58,
+        "name": "createYes",
+        "body_ordinal": 1,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 190602,
+        "rphp": 190603
+      },
+      {
+        "id": 14824,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/NodeVisitorAbstract.php",
+        "line": 19,
+        "name": "leaveNode",
+        "body_ordinal": 2,
+        "source_sha256": "5f805e5a7a9ee2161da997f48ee0667be9f4674fc0b0fcbfa4f7acdb96fc783b",
+        "php": 185774,
+        "rphp": 185774
+      },
+      {
+        "id": 8029,
+        "file": "src/TrinaryLogic.php",
+        "line": 110,
+        "name": "and",
+        "body_ordinal": 10,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 179760,
+        "rphp": 179765
+      },
+      {
+        "id": 10167,
+        "file": "src/Type/IsSuperTypeOfResult.php",
+        "line": 61,
+        "name": "__construct",
+        "body_ordinal": 0,
+        "source_sha256": "4f0df3c27751d3dac48db96a4931e20f7450f79538fff48e312274bd8ac520bb",
+        "php": 172188,
+        "rphp": 172191
+      },
+      {
+        "id": 8022,
+        "file": "src/TrinaryLogic.php",
+        "line": 66,
+        "name": "createMaybe",
+        "body_ordinal": 3,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 151246,
+        "rphp": 151250
+      },
+      {
+        "id": 8027,
+        "file": "src/TrinaryLogic.php",
+        "line": 99,
+        "name": "no",
+        "body_ordinal": 8,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 136024,
+        "rphp": 136024
+      },
+      {
+        "id": 17432,
+        "file": "vendor/phpstan/phpdoc-parser/src/Parser/TokenIterator.php",
+        "line": 98,
+        "name": "isCurrentTokenType",
+        "body_ordinal": 11,
+        "source_sha256": "5f3bc21d21e73b2b1128574de9ce836d301ee7b56328203db7f817aa9c227903",
+        "php": 129527,
+        "rphp": 129527
+      },
+      {
+        "id": 15798,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/ParserAbstract.php",
+        "line": 413,
+        "name": "getAttributes",
+        "body_ordinal": 7,
+        "source_sha256": "841f974b5a3370aca1b4a25b10c34520eb4791b0357549cca301e431fe6ae038",
+        "php": 124426,
+        "rphp": 124426
+      },
+      {
+        "id": 11993,
+        "file": "src/Type/Traits/ConstantScalarTypeTrait.php",
+        "line": 60,
+        "name": "equals",
+        "body_ordinal": 3,
+        "source_sha256": "3f5eeeec3647640be978d088dedaf7ebe98ab87be8e5d34165f33e0cf2b4a081",
+        "php": 120803,
+        "rphp": 120803
+      },
+      {
+        "id": 9599,
+        "file": "src/Type/Constant/ConstantStringType.php",
+        "line": 308,
+        "name": "toArrayKey",
+        "body_ordinal": 19,
+        "source_sha256": "11c42ed647f37f80ec383562e6d2350b451ab2ab3ba1aa3176c7974962d7ee2a",
+        "php": 106826,
+        "rphp": 106826
+      },
+      {
+        "id": 8021,
+        "file": "src/TrinaryLogic.php",
+        "line": 62,
+        "name": "createNo",
+        "body_ordinal": 2,
+        "source_sha256": "089c9f32c6d9c7004fb0464d56afb23b3f125152573e27f03b61ecc0f08d8cc9",
+        "php": 96415,
+        "rphp": 96414
+      },
+      {
+        "id": 14762,
+        "file": "vendor/nikic/php-parser/lib/PhpParser/NodeAbstract.php",
+        "line": 158,
+        "name": "getAttribute",
+        "body_ordinal": 13,
+        "source_sha256": "e2a8be61083e714b10c23985f7d95d1c23811604e3d5a35ab9379791cde2d789",
+        "php": 85314,
+        "rphp": 85314
+      },
+      {
+        "id": 10172,
+        "file": "src/Type/IsSuperTypeOfResult.php",
+        "line": 104,
+        "name": "createYes",
+        "body_ordinal": 5,
+        "source_sha256": "4f0df3c27751d3dac48db96a4931e20f7450f79538fff48e312274bd8ac520bb",
+        "php": 81754,
+        "rphp": 81754
+      },
+      {
+        "id": 9681,
+        "file": "src/Type/FileTypeMapper.php",
+        "line": 622,
+        "name": "processNodes",
+        "body_ordinal": 12,
+        "source_sha256": "9a55452b9adfe0f77f5477285cac302d5d691d92a82ef5bd86761f0cbd86ee23",
+        "php": 81110,
+        "rphp": 81110
+      },
+      {
+        "id": 11997,
+        "file": "src/Type/Traits/ConstantScalarTypeTrait.php",
+        "line": 88,
+        "name": "isConstantScalarValue",
+        "body_ordinal": 7,
+        "source_sha256": "3f5eeeec3647640be978d088dedaf7ebe98ab87be8e5d34165f33e0cf2b4a081",
+        "php": 78639,
+        "rphp": 78639
+      },
+      {
+        "id": 599,
+        "file": "src/Analyser/ExpressionTypeHolder.php",
+        "line": 80,
+        "name": "getCertainty",
+        "body_ordinal": 8,
+        "source_sha256": "bf5da4bd2ac37729f459c2b913fbabfa1ec5d82a15355a8e0746ead9d7811231",
+        "php": 74681,
+        "rphp": 74681
+      },
+      {
+        "id": 10177,
+        "file": "src/Type/IsSuperTypeOfResult.php",
+        "line": 134,
+        "name": "and",
+        "body_ordinal": 10,
+        "source_sha256": "4f0df3c27751d3dac48db96a4931e20f7450f79538fff48e312274bd8ac520bb",
+        "php": 74078,
+        "rphp": 74078
+      }
+    ],
+    "line_counts_preserved": true,
+    "output_passed": true,
+    "limits": [
+      "Executable included-archive union only; entry stub/generated container not counted",
+      "Traditional body entries, not builtin/arrow/loop/opcode counts; generator body entry means resume",
+      "Instrumentation inhibits some optimized plans and adds work; no native performance acceptance or global equal-work claim",
+      "Individual differences retained; net total is not an instruction-cost bound"
+    ],
+    "failed_stages": {
+      "v1": {
+        "status": "failed builder timeout before interpreter execution",
+        "timeout_seconds": 120,
+        "boundary": "source-function-equivalence-v1",
+        "output_accepted": false,
+        "complete": false
+      },
+      "v2": {
+        "status": "archive built; PHP observation rejected at shutdown before RPHP execution",
+        "cause": "Counter global is gone before late user destructor; unguarded marker adds fatal diagnostic effect",
+        "expected_stdout_passed": true,
+        "reference_exit": 255,
+        "output_accepted": false,
+        "complete": false
+      }
+    },
+    "build_process": {
+      "exit": 0,
+      "seconds": 1.384453613020014
+    },
+    "boundaries": {
+      "source-equivalence-discovery-v1": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 10.558803991007153,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 661016576,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "source-function-equivalence-v1": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 120.2276416909881,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 244563968,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "source-function-equivalence-v2": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 3.106319839018397,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 304386048,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "source-function-equivalence-v3": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 42.13973666500533,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 734703616,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "runtime_adopted": false,
+    "native_scorecard_changed": false,
+    "parity_complete": false
   }
 }
