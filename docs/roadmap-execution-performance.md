@@ -712,3 +712,17 @@ priority retains confirmed control time regressions of 12.265%, 1.909% and
 performance. Main is unchanged and parity remains open at roughly 6.53x
 instructions. Next admission must quantify a broader shared execution protocol;
 small lifetime/GC helper changes do not explain or remove the whole gap.
+
+
+### Call-frame lifetime counterexamples and preserved repair
+
+The [ownership review](performance-phpstan-call-frame-ownership.md) proves that
+ordinary raw argument/receiver borrowing can read freed memory, violate array
+COW and close a resource before a call finishes. The preserved private repair
+passes 178 focused feature executions, sixteen PHP controls in ordinary/PGO and
+actual diagnostic projection fallback, and four clean Memchecks. Independent
+PGO analysis regresses 66.8050G to 68.4784G (+2.505%), and multiple controls fail
+the one-percent limit. No production migration or performance improvement is
+accepted. Keep the repair and exact evidence for a measured shared ownership
+protocol; do not reintroduce unsound borrowing to recover its apparent saving.
+Production scorecard and simultaneous parity goal remain unchanged/open.
