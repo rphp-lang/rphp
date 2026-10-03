@@ -1,0 +1,404 @@
+{
+  "status": "verified architecture comparison and rejected read-region closure; no runtime migration",
+  "date": "2026-10-03",
+  "production_commit_at_intake": "2a2358acf05d7b5d7cfbdf28ae72bc4d100277bb",
+  "production_changed": false,
+  "native_scorecard_changed": false,
+  "parity_complete": false,
+  "reference": {
+    "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+    "live_installed_configuration": {
+      "version": "8.5.11",
+      "zts": false,
+      "opcache_enable_cli": "0",
+      "opcache_jit": "disable",
+      "zend_enable_gc": "1",
+      "vm_kind": 4,
+      "global_regs": 1
+    },
+    "configuration_query_scope": "short standalone CLI introspection with FFI enabled only to read the two exported VM configuration APIs; not a benchmark run",
+    "official_tag": "php-8.5.11",
+    "official_commit": "678778973bb4d4185c06ef1320de50f1a975d3c8",
+    "official_files": [
+      {
+        "file": "main/php_version.h",
+        "bytes": 266,
+        "sha256": "70e0599a4fdd1237b77711cd343fb01110231fbaad7cd12518e07f2728839f7a",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/main/php_version.h"
+      },
+      {
+        "file": "Zend/zend_vm_def.h",
+        "bytes": 306286,
+        "sha256": "87f6d73c31a0c2865fc841efba911d512c14d672f31be25d140b10fb43451a41",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm_def.h"
+      },
+      {
+        "file": "Zend/zend_vm_execute.h",
+        "bytes": 4197462,
+        "sha256": "a56271d648ec65e34cbb55f7db89f46f17fb17492725ac3e9af34d09b0aadf4e",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm_execute.h"
+      },
+      {
+        "file": "Zend/zend_vm_gen.php",
+        "bytes": 157836,
+        "sha256": "3c7d944dca840a9d5fde806cbf870eda175609b4094180b8b035d3a2193999c2",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm_gen.php"
+      },
+      {
+        "file": "Zend/zend_vm.h",
+        "bytes": 2350,
+        "sha256": "67821466204a890453539eec2e5f6e87007c0f270c20311cd3e333eebb55d218",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm.h"
+      },
+      {
+        "file": "Zend/zend_execute.c",
+        "bytes": 186122,
+        "sha256": "5479cd6fd4025f013713cee297028c93c8c6a70bbf10481a8374da6e207773c8",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_execute.c"
+      },
+      {
+        "file": "Zend/zend_execute.h",
+        "bytes": 27234,
+        "sha256": "7f9703c44405a98a6f1fabde592c109ccc2e5bcffb497901a9ab2db7e739a86b",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_execute.h"
+      },
+      {
+        "file": "Zend/zend_types.h",
+        "bytes": 53087,
+        "sha256": "601ed337205b2258ff0de217d40aaf38afd3a52f67a8edf0f91182414a6bcccd",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_types.h"
+      },
+      {
+        "file": "Zend/zend_hash.c",
+        "bytes": 88151,
+        "sha256": "b1cb1c89213ae91a9c21ee69abaf9f05a0dbe5f8358bf0076a7b1dfe251914e5",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_hash.c"
+      },
+      {
+        "file": "Zend/zend_hash.h",
+        "bytes": 52470,
+        "sha256": "9ce2315a2f2a8b08223c43615ed2cf4c6c302cc6a71faeb9c226617944663904",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_hash.h"
+      },
+      {
+        "file": "Zend/zend_gc.c",
+        "bytes": 63451,
+        "sha256": "ab0d9eefd826a6ad2a1a05ded43a101d487efb530e7a094026a748a56a844ed7",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_gc.c"
+      },
+      {
+        "file": "Zend/zend_compile.c",
+        "bytes": 380691,
+        "sha256": "25190ee20f2660aa66577f5da71b43be63268e90fa7c0ecb2e3cf8f1e621b225",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_compile.c"
+      },
+      {
+        "file": "Zend/zend_alloc.c",
+        "bytes": 109313,
+        "sha256": "ad436db77a81c496a307ae127566bd7dda00340e24bf0c450a39c26fea6c1cf9",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_alloc.c"
+      },
+      {
+        "file": "Zend/zend_objects.c",
+        "bytes": 11885,
+        "sha256": "e6aae9046016b65af7b0a417e3ed1d42b4cc827312111a792a28c594f1ef0603",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_objects.c"
+      },
+      {
+        "file": "Zend/zend_operators.h",
+        "bytes": 36757,
+        "sha256": "6a2f96d8dcc2310d1f1a5ee3400f9c515ad054b53192aa0f7576a0dc6cc956ee",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_operators.h"
+      },
+      {
+        "file": "Zend/zend_compile.h",
+        "bytes": 54482,
+        "sha256": "9f6b0fc3cb3398810c5ba17eb8b993e7d856b304f5dff43901d80dcbec1c7f61",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_compile.h"
+      },
+      {
+        "file": "Zend/zend_variables.h",
+        "bytes": 3138,
+        "sha256": "2f529c7c4a3eebfe25e5034c71c36585bc0024efa19406e7f0068d835bb6e092",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_variables.h"
+      },
+      {
+        "file": "Zend/zend_variables.c",
+        "bytes": 5008,
+        "sha256": "13abee4e3dcf1dec216653a77625d2e3b7cc9fcd6514ffade3aab882372d6440",
+        "url": "https://raw.githubusercontent.com/php/php-src/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_variables.c"
+      }
+    ],
+    "official_source_reproduces_distribution_build": false,
+    "x86_64_hot_execute_ex": {
+      "symbol_bytes": 42998,
+      "stack_local_bytes": 152,
+      "pushed_register_bytes": 32,
+      "stack_prologue_bytes": 184,
+      "frame_register": "r14",
+      "instruction_register": "r15",
+      "dispatch": "indirect jump via instruction handler",
+      "scope": "hot executor symbol only, excluding cold handlers; native prologue excluding incoming return address; not PHP VM stack frame size"
+    }
+  },
+  "correct_private_baseline": {
+    "runtime_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+    "ordinary_binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+    "pgo_binary_sha256": "2a11d6083672cc69125c53d962b3c238295bbc3b645fb8352f9a912847cb578c",
+    "ordinary_x86_64_architecture": {
+      "main_text_bytes": 336537,
+      "stack_local_bytes": 3048,
+      "stack_probe_pages": 0,
+      "saved_register_bytes": 48,
+      "stack_prologue_bytes": 3096,
+      "binary_bytes": 24566008,
+      "binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b"
+    },
+    "production_performance_accepted": false,
+    "independent_pgo_window": {
+      "scope": "analysis FIFO",
+      "event": "instructions:u",
+      "rounds": 2,
+      "candidate_instruction_median": 68478393981.5,
+      "candidate_analysis_seconds_median": 5.9758950475,
+      "reference_instructions": 10338208674,
+      "reference_analysis_seconds": 0.928279877,
+      "instruction_ratio": 6.623816189135282,
+      "scope_limit": "reference is the one observed reference run in this repair window, not a reference distribution; diagnostic/ordinary results do not replace PGO medians"
+    }
+  },
+  "current_native_self_profile": {
+    "total_period": 68458205374,
+    "samples": 68458,
+    "lost_samples": 0,
+    "main_period": 27761083283,
+    "other_named_vm_period": 18123054369,
+    "combined_vm_percent": 67.02503724911625,
+    "remaining_period_if_main_were_zero": 40697122091,
+    "attribution_limit": "symbol self partitions, not semantic or removable costs; inline source groups overlap helper ancestry"
+  },
+  "canonical_whole_request": {
+    "scope": "Whole-request canonical instructions actually decoded by baseline executor, per actual OpArray. Synthetic fused counts, wholly native/typed plans and hot executor instructions excluded. Sequences are not function entries; backward PC transitions are not complete semantic loop counts.",
+    "totals": {
+      "decoded_steps": 269826212,
+      "executed_oparray_records": 10686,
+      "backward_pc_transitions": 5380850,
+      "sequence_starts": 17361589
+    },
+    "release_steps": 38177072,
+    "release_share_percent": 14.148763278787756,
+    "fetch_cv_r_steps": 1733175,
+    "parser_loop_control": {
+      "counts_equal": true,
+      "comparison": {
+        "before": {
+          "entry": {
+            "php": 0,
+            "repair": 0,
+            "delta": 0
+          },
+          "outer_iteration": {
+            "php": 0,
+            "repair": 0,
+            "delta": 0
+          },
+          "token_read": {
+            "php": 0,
+            "repair": 0,
+            "delta": 0
+          },
+          "inner_iteration": {
+            "php": 0,
+            "repair": 0,
+            "delta": 0
+          },
+          "reduce": {
+            "php": 0,
+            "repair": 0,
+            "delta": 0
+          }
+        },
+        "after": {
+          "entry": {
+            "php": 331,
+            "repair": 331,
+            "delta": 0
+          },
+          "outer_iteration": {
+            "php": 333081,
+            "repair": 333081,
+            "delta": 0
+          },
+          "token_read": {
+            "php": 263696,
+            "repair": 263696,
+            "delta": 0
+          },
+          "inner_iteration": {
+            "php": 435666,
+            "repair": 435666,
+            "delta": 0
+          },
+          "reduce": {
+            "php": 435335,
+            "repair": 435335,
+            "delta": 0
+          }
+        },
+        "analysis_delta": {
+          "entry": {
+            "php": 331,
+            "repair": 331,
+            "delta": 0
+          },
+          "outer_iteration": {
+            "php": 333081,
+            "repair": 333081,
+            "delta": 0
+          },
+          "token_read": {
+            "php": 263696,
+            "repair": 263696,
+            "delta": 0
+          },
+          "inner_iteration": {
+            "php": 435666,
+            "repair": 435666,
+            "delta": 0
+          },
+          "reduce": {
+            "php": 435335,
+            "repair": 435335,
+            "delta": 0
+          }
+        }
+      },
+      "scope": "five parser source events, not all application loops or canonical VM transitions; added diagnostic statements can inhibit optimized paths",
+      "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+      "counted_phar_sha256": "9d0c017ffbad48d28f52057dfa66240b89410d681a86b00d871ae03af8aecd2d",
+      "output_signatures": [
+        {
+          "runtime": "php",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        {
+          "runtime": "repair",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        }
+      ]
+    },
+    "native_analysis_denominator": false
+  },
+  "rejected_connected_read_region": {
+    "source_sha256": "7b4103c724061ffc42c088f27d332a3858dac3650e321653daf2abbd7fa3b0e2",
+    "binaries": {
+      "candidate-release": {
+        "sha256": "c8fdd3e6514b52120945027af84d0d9074f4666f86c4f2b98d01d532c3d8bb28",
+        "bytes": 24651320
+      },
+      "candidate-stats": {
+        "sha256": "d233af71096a58bc272519164ad92dea2a151ead85372fa1d118ea8de87a8b3f",
+        "bytes": 24885528
+      }
+    },
+    "planner_tests_passed": 2,
+    "focused_controls": 16,
+    "new_control_observations": 64,
+    "smoke_observations": 5,
+    "coverage": {
+      "read_region_attempts": 871234,
+      "read_region_completed_steps": 15,
+      "read_region_poll_boundary": 39285,
+      "read_region_old_owner": 284602,
+      "read_region_input_type": 0,
+      "read_region_property": 411412,
+      "read_region_gc_generation": 0,
+      "read_region_native_exit": 135841,
+      "read_region_pending_effect": 0,
+      "read_region_warmup": 93,
+      "read_region_compile": 0
+    },
+    "rejected_attempts": 871233,
+    "completed_entries": 1,
+    "ordinary_single_observation_instructions": 76382459554,
+    "paired_performance_claim": false,
+    "pgo_or_full_matrix_expanded": false,
+    "reason": "Only 15 original steps completed versus 871234 attempts. Predeclared coverage stop; no PGO or broad matrix on this design.",
+    "source_and_binaries_preserved": true,
+    "disposable_target_removed": true,
+    "local_cleanup": true,
+    "private_benchmark_host_configured": false,
+    "planning_interaction_limit": "Region annotation precedes existing whole-function plan detection; detector interaction is unresolved. This is not an isolated architecture comparison."
+  },
+  "proposed_next_checkpoint": {
+    "status": "design proposal; implementation has not begun",
+    "scope": "general read-result consumption and retirement using shared lifetime/effect metadata and all existing Value kinds",
+    "baseline": "correct preserved owned-frame repair",
+    "minimum_ordinary_instruction_improvement_percent": 2,
+    "threshold_is_forecast": false,
+    "forbidden_shortcuts": [
+      "workload identity",
+      "ordinary argument borrowing",
+      "global no-GC mode",
+      "Long-only admission for the proposed canonical protocol",
+      "second hot storage selector",
+      "duplicated full handler matrix"
+    ],
+    "required_before_broad_gates": [
+      "compiler alias/lifetime/effect proof",
+      "focused reference and forced-canonical controls",
+      "material actual coverage",
+      "two alternating ordinary analysis pairs",
+      "no unexplained text or stack expansion"
+    ],
+    "later_gates": [
+      "PGO and independent confirmation",
+      "representative corpus and holdout",
+      "feature and memory gates",
+      "x86-64 and ARM64 verification"
+    ]
+  },
+  "retained_public_evidence": [
+    {
+      "file": "performance-phpstan-call-frame-ownership-data.json",
+      "sha256": "74ed7b7afba3086672a288508c0e4aeb6fdaaad37bcb310555ce8f54cce71efe"
+    },
+    {
+      "file": "performance-phpstan-main-inline-budget-data.json",
+      "sha256": "e81108a45b6939e75f8d366cb56433a7ca74b1399cdba20fddd7ee2c8fda1995"
+    },
+    {
+      "file": "performance-phpstan-release-boundary-control-data.json",
+      "sha256": "163d7533301c6ea22a72271c1dd4b9304cb72e3f41bdbaa2627b266c01510375"
+    },
+    {
+      "file": "performance-phpstan-body-work-data.json",
+      "sha256": "b99a94aa57f323eef6f7607e73309ba9d4dcc2d82034488b953fa9e82bccf676"
+    },
+    {
+      "file": "performance-phpstan-bytecode-sites-data.json",
+      "sha256": "dfd873a600d4bf6343e1fa8ce8deed008c7ea3416cb33fb4c6ec64e8d00dd22c"
+    },
+    {
+      "file": "performance-phpstan-owned-storage-screen-data.json",
+      "sha256": "0904675453c22261621c0a0a9b32dee710607f737bd2bd490067c3d86ec5a859"
+    },
+    {
+      "file": "performance-phpstan-pc-reconciliation-data.json",
+      "sha256": "07aebbc35ae51104111db6516adb54275bcce0c362760faec90b54baa11c22ff"
+    }
+  ],
+  "new_phpstan_requests_for_architecture_review": 0,
+  "validation": {
+    "official_source_hashes_checked": 18,
+    "live_configuration_and_machine_code_checked": true,
+    "frozen_baseline_binaries_checked": true,
+    "native_partition_sum_checked": true,
+    "rejected_attempt_partition_checked": true,
+    "focused_or_full_runtime_tests_added_for_documentation": false
+  }
+}

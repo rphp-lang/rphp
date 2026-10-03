@@ -805,3 +805,24 @@ alias/retirement/GC/exit and native-saving proofs remain open. Do not interpret
 these overlapping envelopes as successful IR coverage or speedup. Reject the
 scalar-only direction; prototype the connected read/retirement representation
 on the correct owned baseline. Production/scorecard and parity stay unchanged.
+
+
+### PHPStan architecture comparison and read-region rejection
+
+The [architecture review](performance-phpstan-architecture.md) compares the
+correct owned-frame repair with pinned PHP 8.5.11 sources and the actual installed
+VM configuration/disassembly. PHP uses hybrid dispatch/global VM registers here
+with CLI opcache and JIT disabled; both VMs copy/refcount ordinary read values.
+Matching dominant-parser source iterations exclude extra work at those counted
+sites. Shared operand consumption, result publication and release roles are the
+next architectural hypothesis, with no complete removable budget or parity
+forecast. The read-region prototype completes only 15 original steps from
+871,234 attempts and is rejected by its coverage stop despite focused equality.
+Exact sources/binaries remain, its disposable target is removed and cleanup is
+complete. The documentation checkpoint reuses all application evidence and adds
+no PHPStan request. Eighteen reference source hashes, baseline binary identities,
+native partitions and rejection counts reconcile. Production is unchanged;
+parity remains open at the correct repair's independent 68.4784G / 5.9759s versus
+the same window's PHP 10.3382G / 0.9283s observation. Begin the general all-Value
+read-consumption/lifetime contract only with alias/effect proof and real coverage;
+the two-percent ordinary selector precedes PGO and broad verification.
