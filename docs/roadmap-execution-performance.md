@@ -790,3 +790,18 @@ medians 6.8040/6.9779s. Its large text/stack remains architecture ineligible.
 The exact whole-body matrix is rejected without PGO/full feature expansion;
 no production gain or scorecard change follows. A different shared representation
 must remove work without a second per-operation selector. Parity stays open.
+
+
+### Canonical PC census and connected read-region design screen
+
+The [PC census](performance-phpstan-bytecode-sites.md) reconciles 408,600 static
+positions and 269.826M canonical decoded steps with unchanged body work/output.
+Six counter tests and 16 new controls pass against 32 hash-verified retained
+PHP/repair observations; one exact request is reused after a preserved reader
+identity failure is repaired offline. The standalone audit reproduces saved
+ranges without another run. A strict local metadata subset covers 0.410% scalar,
+0.468% scalar/array and 18.190% connected property/array steps; live kinds,
+alias/retirement/GC/exit and native-saving proofs remain open. Do not interpret
+these overlapping envelopes as successful IR coverage or speedup. Reject the
+scalar-only direction; prototype the connected read/retirement representation
+on the correct owned baseline. Production/scorecard and parity stay unchanged.

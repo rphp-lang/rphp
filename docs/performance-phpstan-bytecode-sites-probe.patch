@@ -1,0 +1,335 @@
+--- a/src/compiler/compile/statements.rs
++++ b/src/compiler/compile/statements.rs
+@@ -3567,0 +3568,2 @@
++                    #[cfg(feature = "vm-stats")]
++                    body_census: std::cell::OnceCell::new(),
+@@ -6099,0 +6102,2 @@
++                        #[cfg(feature = "vm-stats")]
++                        body_census: std::cell::OnceCell::new(),
+@@ -6895,0 +6900,2 @@
++                        #[cfg(feature = "vm-stats")]
++                        body_census: std::cell::OnceCell::new(),
+@@ -7280,0 +7287,2 @@
++                        #[cfg(feature = "vm-stats")]
++                        body_census: std::cell::OnceCell::new(),
+@@ -8313,0 +8322,2 @@
++                        #[cfg(feature = "vm-stats")]
++                        body_census: std::cell::OnceCell::new(),
+--- a/src/compiler/compile.rs
++++ b/src/compiler/compile.rs
+@@ -4398,0 +4399,2 @@
++            #[cfg(feature = "vm-stats")]
++            body_census: std::cell::OnceCell::new(),
+@@ -6561,0 +6564,2 @@
++                #[cfg(feature = "vm-stats")]
++                body_census: std::cell::OnceCell::new(),
+@@ -13475,0 +13480,2 @@
++                    #[cfg(feature = "vm-stats")]
++                    body_census: std::cell::OnceCell::new(),
+--- a/src/compiler/mod.rs
++++ b/src/compiler/mod.rs
+@@ -85,0 +86,3 @@
++    /// Diagnostic counters only; the record owns no bytecode or PHP values.
++    #[cfg(feature = "vm-stats")]
++    pub(crate) body_census: std::cell::OnceCell<std::rc::Rc<crate::vm::body_census::Record>>,
+@@ -6711,0 +6715,2 @@
++        #[cfg(feature = "vm-stats")]
++        body_census: std::cell::OnceCell::new(),
+--- /dev/null
++++ b/src/vm/body_census.rs
+@@ -0,0 +1,271 @@
++//! Canonical per-PC census. Retains scalar instruction metadata, never PHP values.
++use std::cell::{Cell, RefCell};
++use std::io::Write;
++use std::rc::Rc;
++
++const OPCODES: usize = 256;
++thread_local! {
++    static RECORDS: RefCell<Vec<Rc<Record>>> = const { RefCell::new(Vec::new()) };
++    static DECODED: [Cell<u64>; OPCODES] = [const { Cell::new(0) }; OPCODES];
++}
++
++pub(crate) struct Record {
++    name: String,
++    source_file: String,
++    instructions: usize,
++    cvs: u32,
++    temps: u32,
++    generator: bool,
++    main_script: bool,
++    anonymous: bool,
++    counts: [Cell<u64>; OPCODES],
++    site_counts: Box<[Cell<u64>]>,
++    instruction_fields: Vec<[u32; 9]>,
++    literal_facts: Vec<(u8, Option<i64>)>,
++    block_ranges: Vec<(u32, u32)>,
++    steps: Cell<u64>,
++    backedges: Cell<u64>,
++    sequences: Cell<u64>,
++}
++
++impl Record {
++    fn new(
++        name: String,
++        source_file: String,
++        instructions: usize,
++        cvs: u32,
++        temps: u32,
++        generator: bool,
++        main_script: bool,
++        anonymous: bool,
++    ) -> Self {
++        Self {
++            name,
++            source_file,
++            instructions,
++            cvs,
++            temps,
++            generator,
++            main_script,
++            anonymous,
++            counts: [const { Cell::new(0) }; OPCODES],
++            site_counts: (0..instructions).map(|_| Cell::new(0)).collect(),
++            instruction_fields: Vec::new(),
++            literal_facts: Vec::new(),
++            block_ranges: Vec::new(),
++            steps: Cell::new(0),
++            backedges: Cell::new(0),
++            sequences: Cell::new(0),
++        }
++    }
++    fn add(&self, opcode: usize, ip: usize, previous: Option<usize>) {
++        self.site_counts[ip].set(self.site_counts[ip].get() + 1);
++        self.counts[opcode].set(self.counts[opcode].get() + 1);
++        self.steps.set(self.steps.get() + 1);
++        if let Some(previous) = previous {
++            if ip <= previous {
++                self.backedges.set(self.backedges.get() + 1);
++            }
++        } else {
++            self.sequences.set(self.sequences.get() + 1);
++        }
++    }
++    pub(crate) fn step(&self, opcode: usize, ip: usize, previous: Option<usize>) {
++        self.add(opcode, ip, previous);
++        DECODED.with(|counts| counts[opcode].set(counts[opcode].get() + 1));
++    }
++    fn reset(&self) {
++        for count in &self.counts {
++            count.set(0);
++        }
++        for count in &self.site_counts {
++            count.set(0);
++        }
++        self.steps.set(0);
++        self.backedges.set(0);
++        self.sequences.set(0);
++    }
++    fn counters(&self) -> Vec<(usize, u64)> {
++        self.counts
++            .iter()
++            .enumerate()
++            .filter_map(|(opcode, count)| {
++                let count = count.get();
++                (count != 0).then_some((opcode, count))
++            })
++            .collect()
++    }
++}
++
++pub(crate) fn register(op_array: &crate::compiler::OpArray) -> Rc<Record> {
++    let mut record = Record::new(
++        op_array.name.clone(),
++        op_array.source_file.as_str().to_string(),
++        op_array.instructions.len(),
++        op_array.num_cvs,
++        op_array.num_temps,
++        op_array.is_generator,
++        op_array.is_main_script(),
++        op_array.is_anonymous(),
++    );
++    record.instruction_fields = op_array
++        .instructions
++        .iter()
++        .map(|i| {
++            [
++                i.opcode as u32,
++                i.op1_type as u32,
++                i.op2_type as u32,
++                i.result_type as u32,
++                u32::from(i.op1),
++                u32::from(i.op2),
++                u32::from(i.result),
++                u32::from(i._pad),
++                i.extended_value,
++            ]
++        })
++        .collect();
++    record.literal_facts = op_array
++        .literals
++        .iter()
++        .map(|value| {
++            (
++                value.value_type() as u8,
++                (value.value_type() == crate::value::ValueType::Long)
++                    .then(|| value.as_long().unwrap()),
++            )
++        })
++        .collect();
++    record.block_ranges = op_array
++        .block_info
++        .iter()
++        .map(|b| (b.start_ip, b.end_ip))
++        .collect();
++    let record = Rc::new(record);
++    RECORDS.with(|records| records.borrow_mut().push(record.clone()));
++    record
++}
++
++pub(crate) fn reset() {
++    DECODED.with(|counts| {
++        for count in counts {
++            count.set(0);
++        }
++    });
++    RECORDS.with(|records| {
++        let mut records = records.borrow_mut();
++        // Dead bodies cannot execute again; live OpArrays retain their record.
++        records.retain(|record| Rc::strong_count(record) > 1);
++        for record in records.iter() {
++            record.reset();
++        }
++    });
++}
++
++pub(crate) fn dump(writer: &mut impl Write) -> std::io::Result<()> {
++    let decoded: Vec<(usize, u64)> = DECODED.with(|counts| {
++        counts
++            .iter()
++            .enumerate()
++            .filter_map(|(opcode, count)| {
++                let count = count.get();
++                (count != 0).then_some((opcode, count))
++            })
++            .collect()
++    });
++    RECORDS.with(|records| {
++        let records = records.borrow();
++        let active: Vec<_> = records.iter().filter(|record| record.steps.get() != 0).collect();
++        writeln!(writer, "-- canonical body opcode census --")?;
++        writeln!(writer, "body_census_totals={}", serde_json::json!({
++            "decoded_steps": decoded.iter().map(|(_, count)| *count).sum::<u64>(),
++            "opcodes": decoded,
++            "record_count": active.len(),
++            "backedges": active.iter().map(|record| record.backedges.get()).sum::<u64>(),
++            "sequences": active.iter().map(|record| record.sequences.get()).sum::<u64>()
++        }))?;
++        for (id, record) in active.iter().enumerate() {
++            writeln!(writer, "body_census_record={}", serde_json::json!({
++                "id": id, "name": record.name, "source_file": record.source_file,
++                "instructions": record.instructions, "cv_slots": record.cvs, "tmp_slots": record.temps,
++                "is_generator": record.generator, "is_main_script": record.main_script,
++                "is_anonymous": record.anonymous, "decoded_steps": record.steps.get(),
++                "backedges": record.backedges.get(), "sequences": record.sequences.get(),
++                "opcodes": record.counters(),
++                "instruction_fields": record.instruction_fields,
++                "literal_facts": record.literal_facts,
++                "block_ranges": record.block_ranges,
++                "site_counts": record.site_counts.iter().map(Cell::get).collect::<Vec<_>>(),
++            }))?;
++        }
++        Ok(())
++    })
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    fn record() -> Record {
++        Record::new("f".into(), "unit".into(), 10, 1, 2, false, false, false)
++    }
++    #[test]
++    fn body_census_sites_include_unexecuted_positions() {
++        let r = record();
++        r.add(1, 3, None);
++        r.add(1, 3, Some(3));
++        r.add(42, 9, Some(3));
++        let counts: Vec<_> = r.site_counts.iter().map(Cell::get).collect();
++        assert_eq!(counts.len(), 10);
++        assert_eq!(counts[0], 0);
++        assert_eq!(counts[3], 2);
++        assert_eq!(counts[9], 1);
++        assert_eq!(counts.iter().sum::<u64>(), r.steps.get());
++    }
++    #[test]
++    fn body_census_sites_reset_with_other_counters() {
++        let r = record();
++        r.add(1, 8, None);
++        r.reset();
++        assert!(r.site_counts.iter().all(|count| count.get() == 0));
++        assert_eq!(r.steps.get(), 0);
++    }
++    #[test]
++    fn body_census_straight_sequence() {
++        let r = record();
++        r.add(1, 0, None);
++        r.add(2, 1, Some(0));
++        r.add(1, 2, Some(1));
++        assert_eq!(r.counters(), vec![(1, 2), (2, 1)]);
++        assert_eq!(r.steps.get(), 3);
++        assert_eq!(r.sequences.get(), 1);
++        assert_eq!(r.backedges.get(), 0);
++    }
++    #[test]
++    fn body_census_backward_and_self_edges() {
++        let r = record();
++        r.add(42, 5, None);
++        r.add(42, 2, Some(5));
++        r.add(42, 2, Some(2));
++        assert_eq!(r.backedges.get(), 2);
++        assert_eq!(r.steps.get(), 3);
++    }
++    #[test]
++    fn body_census_resumption_is_not_backedge() {
++        let r = record();
++        r.add(60, 5, None);
++        r.add(62, 1, None);
++        assert_eq!(r.sequences.get(), 2);
++        assert_eq!(r.backedges.get(), 0);
++    }
++    #[test]
++    fn body_census_reset_clears_all_counters() {
++        let r = record();
++        r.add(1, 3, None);
++        r.add(42, 0, Some(3));
++        r.reset();
++        assert_eq!(r.steps.get(), 0);
++        assert_eq!(r.backedges.get(), 0);
++        assert_eq!(r.sequences.get(), 0);
++        assert!(r.counters().is_empty());
++    }
++}
+--- a/src/vm/execute/baseline_dispatch.rs
++++ b/src/vm/execute/baseline_dispatch.rs
+@@ -2660,0 +2661,10 @@
++            #[cfg(feature = "vm-stats")]
++            if crate::vm::stats::enabled() {
++                let base = op_array.instructions.as_ptr();
++                let ip = opline_ptr.offset_from(base) as usize;
++                let previous = previous_opline.map(|previous: std::ptr::NonNull<Instruction>| {
++                    previous.as_ptr().offset_from(base) as usize
++                });
++                op_array.body_census.get_or_init(|| crate::vm::body_census::register(op_array))
++                    .step(opline.opcode as usize, ip, previous);
++            }
+--- a/src/vm/mod.rs
++++ b/src/vm/mod.rs
+@@ -0,0 +1,2 @@
++#[cfg(feature = "vm-stats")]
++pub(crate) mod body_census;
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -209,0 +210 @@
++        crate::vm::body_census::reset();
+@@ -1328,0 +1330 @@
++        let _ = crate::vm::body_census::dump(&mut err);
