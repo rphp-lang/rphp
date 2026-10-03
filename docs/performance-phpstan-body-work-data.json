@@ -1,0 +1,675 @@
+{
+  "status": "verified diagnostic; no runtime optimization accepted",
+  "production_changed": false,
+  "ownership_changed": false,
+  "parity_complete": false,
+  "native_performance_acceptance": false,
+  "production_commit": "158f66f6f29516aa7513012a6b91114a1bc32d67",
+  "production_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+  "repair_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+  "repair_binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+  "diagnostic_build": {
+    "complete": true,
+    "source_sha256": "68dbb5d684cc237ee1967f16d0f3549cd0d3c4bd41111de2da9c64944ed92a41",
+    "binary_sha256": "ed8610a41118f39cb2b1c1e01ba0dd90412de80935dfe852f6b726e243768817",
+    "binary_bytes": 24878016,
+    "commands": [
+      {
+        "label": "format-new-module",
+        "exit": 0,
+        "seconds": 0.015577826998196542
+      },
+      {
+        "label": "counter-tests",
+        "exit": 0,
+        "seconds": 31.11949715501396
+      },
+      {
+        "label": "release",
+        "exit": 0,
+        "seconds": 69.03785587000311
+      }
+    ],
+    "changed_files": [
+      "src/compiler/compile/statements.rs",
+      "src/compiler/compile.rs",
+      "src/compiler/mod.rs",
+      "src/vm/body_census.rs",
+      "src/vm/execute/baseline_dispatch.rs",
+      "src/vm/mod.rs",
+      "src/vm/stats.rs"
+    ],
+    "unsafe_counts": [
+      1745,
+      319
+    ],
+    "features": "default+vm-stats",
+    "pgo": false,
+    "ownership_changed": false
+  },
+  "scope": "Whole-request canonical instructions actually decoded by baseline executor, per actual OpArray. Synthetic fused counts, wholly native/typed plans and hot executor instructions excluded. Sequences are not function entries; backward PC transitions are not complete semantic loop counts.",
+  "totals": {
+    "decoded_steps": 269826212,
+    "executed_oparray_records": 10686,
+    "backward_pc_transitions": 5380850,
+    "sequence_starts": 17361589
+  },
+  "coverage": {
+    "anonymous_records": 660,
+    "anonymous_decoded_steps": 12262463,
+    "anonymous_share_percent": 4.544578122751099,
+    "main_records": 2623,
+    "main_decoded_steps": 85105
+  },
+  "top_n_shares_percent": {
+    "1": 27.143637179326372,
+    "5": 36.639868034763055,
+    "10": 44.196502302748854,
+    "20": 54.60386035438247,
+    "50": 65.89609018415157,
+    "100": 74.94675721126752,
+    "500": 93.01800004515499,
+    "1000": 97.40067729224172
+  },
+  "top_bodies": [
+    {
+      "name": "PhpParser\\ParserAbstract::doParse",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/ParserAbstract.php",
+      "decoded_steps": 73240648,
+      "share_percent": 27.143637179326372,
+      "backward_pc_transitions": 607678,
+      "sequence_starts": 288472
+    },
+    {
+      "name": "PHPStan\\Type\\TypeCombinator::doIntersect",
+      "archive_origin": "src/Type/TypeCombinator.php",
+      "decoded_steps": 9902652,
+      "share_percent": 3.670011125531422,
+      "backward_pc_transitions": 218307,
+      "sequence_starts": 237442
+    },
+    {
+      "name": "PhpParser\\NodeTraverser::traverseNode",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/NodeTraverser.php",
+      "decoded_steps": 6213094,
+      "share_percent": 2.3026280337804987,
+      "backward_pc_transitions": 679209,
+      "sequence_starts": 461260
+    },
+    {
+      "name": "PhpParser\\Lexer::postprocessTokens",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/Lexer.php",
+      "decoded_steps": 4754811,
+      "share_percent": 1.7621753515926022,
+      "backward_pc_transitions": 263373,
+      "sequence_starts": 662
+    },
+    {
+      "name": "PHPStan\\PhpDocParser\\Parser\\TokenIterator::joinUntil",
+      "archive_origin": "vendor/phpstan/phpdoc-parser/src/Parser/TokenIterator.php",
+      "decoded_steps": 4752763,
+      "share_percent": 1.7614163445321613,
+      "backward_pc_transitions": 153543,
+      "sequence_starts": 17648
+    },
+    {
+      "name": "_PHPStan_395468aef\\Nette\\DI\\ContainerBuilder::addDefinition",
+      "archive_origin": "vendor/nette/di/src/DI/ContainerBuilder.php",
+      "decoded_steps": 4254621,
+      "share_percent": 1.576800477783085,
+      "backward_pc_transitions": 467733,
+      "sequence_starts": 3852
+    },
+    {
+      "name": "PhpParser\\NodeVisitor\\CommentAnnotatingVisitor::__construct",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/NodeVisitor/CommentAnnotatingVisitor.php",
+      "decoded_steps": 4246256,
+      "share_percent": 1.5737003341988138,
+      "backward_pc_transitions": 263696,
+      "sequence_starts": 331
+    },
+    {
+      "name": "PHPStan\\Type\\IsSuperTypeOfResult::and",
+      "archive_origin": "src/Type/IsSuperTypeOfResult.php",
+      "decoded_steps": 4094422,
+      "share_percent": 1.5174293000118164,
+      "backward_pc_transitions": 88102,
+      "sequence_starts": 148156
+    },
+    {
+      "name": "_PHPStan_395468aef\\Nette\\Utils\\Reflection::parseUseStatements",
+      "archive_origin": "vendor/nette/utils/src/Utils/Reflection.php",
+      "decoded_steps": 3956423,
+      "share_percent": 1.4662856401808733,
+      "backward_pc_transitions": 68402,
+      "sequence_starts": 49001
+    },
+    {
+      "name": "PHPStan\\PhpDocParser\\Lexer\\Lexer::tokenize",
+      "archive_origin": "vendor/phpstan/phpdoc-parser/src/Lexer/Lexer.php",
+      "decoded_steps": 3838058,
+      "share_percent": 1.4224185158112066,
+      "backward_pc_transitions": 205542,
+      "sequence_starts": 2483
+    },
+    {
+      "name": "PhpParser\\NodeTraverser::traverseArray",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/NodeTraverser.php",
+      "decoded_steps": 3570578,
+      "share_percent": 1.3232880428977745,
+      "backward_pc_transitions": 340512,
+      "sequence_starts": 231284
+    },
+    {
+      "name": "{closure:PHPStan\\Type\\FileTypeMapper::createPhpDocNodeMap():368}",
+      "archive_origin": "src/Type/FileTypeMapper.php",
+      "decoded_steps": 3400368,
+      "share_percent": 1.2602066992661187,
+      "backward_pc_transitions": 89,
+      "sequence_starts": 73117
+    },
+    {
+      "name": "PhpParser\\NodeVisitor\\NameResolver::enterNode",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/NodeVisitor/NameResolver.php",
+      "decoded_steps": 3261712,
+      "share_percent": 1.2088195493772118,
+      "backward_pc_transitions": 715,
+      "sequence_starts": 73100
+    },
+    {
+      "name": "PhpParser\\ParserAbstract::getAttributes",
+      "archive_origin": "vendor/nikic/php-parser/lib/PhpParser/ParserAbstract.php",
+      "decoded_steps": 3110325,
+      "share_percent": 1.1527141773757696,
+      "backward_pc_transitions": 0,
+      "sequence_starts": 124413
+    },
+    {
+      "name": "_PHPStan_395468aef\\Nette\\Utils\\Reflection::fetch",
+      "archive_origin": "vendor/nette/utils/src/Utils/Reflection.php",
+      "decoded_steps": 3093030,
+      "share_percent": 1.1463044961695568,
+      "backward_pc_transitions": 29175,
+      "sequence_starts": 48017
+    },
+    {
+      "name": "PHPStan\\TrinaryLogic::and",
+      "archive_origin": "src/TrinaryLogic.php",
+      "decoded_steps": 2991932,
+      "share_percent": 1.1088366759564485,
+      "backward_pc_transitions": 14819,
+      "sequence_starts": 179765
+    },
+    {
+      "name": "PHPStan\\Type\\TypeCombinator::doUnion",
+      "archive_origin": "src/Type/TypeCombinator.php",
+      "decoded_steps": 2924235,
+      "share_percent": 1.0837475641543677,
+      "backward_pc_transitions": 123349,
+      "sequence_starts": 173405
+    },
+    {
+      "name": "PHPStan\\Type\\FileTypeMapper::processNodes",
+      "archive_origin": "src/Type/FileTypeMapper.php",
+      "decoded_steps": 1995034,
+      "share_percent": 0.7393773885837304,
+      "backward_pc_transitions": 110156,
+      "sequence_starts": 253872
+    },
+    {
+      "name": "PHPStan\\Type\\Accessory\\HasOffsetValueType::isSuperTypeOf",
+      "archive_origin": "src/Type/Accessory/HasOffsetValueType.php",
+      "decoded_steps": 1903777,
+      "share_percent": 0.7055567307152502,
+      "backward_pc_transitions": 61891,
+      "sequence_starts": 448230
+    },
+    {
+      "name": "PHPStan\\TrinaryLogic::yes",
+      "archive_origin": "src/TrinaryLogic.php",
+      "decoded_steps": 1830789,
+      "share_percent": 0.6785067271373917,
+      "backward_pc_transitions": 0,
+      "sequence_starts": 366158
+    }
+  ],
+  "source_group_decoded_steps": {
+    "vendor/nikic/php-parser": 116716038,
+    "src/Type": 54935805,
+    "src/Analyser": 24429612,
+    "vendor/phpstan/phpdoc-parser": 21613669,
+    "src/TrinaryLogic.php": 8812057,
+    "vendor/nette/utils": 7850924,
+    "vendor/nette/di": 6695242,
+    "src/Reflection": 5364340,
+    "vendor/ondrejmirtes/better-reflection": 4878187,
+    "vendor/nette/php-generator": 3412627,
+    "vendor/nette/neon": 2526858,
+    "vendor/hoa/compiler": 2239919,
+    "src/Parser": 2170410,
+    "src/Rules": 2024325,
+    "src/Node": 1574925,
+    "src/Dependency": 1110275,
+    "src/DependencyInjection": 731383,
+    "vendor/symfony/string": 636888,
+    "vendor/nette/schema": 394234,
+    "outside archive": 318199,
+    "src/PhpDoc": 283081,
+    "vendor/symfony/console": 277625,
+    "vendor/symfony/polyfill-intl-normalizer": 255319,
+    "src/File": 117011,
+    "vendor/symfony/polyfill-intl-grapheme": 71508,
+    "other archive origin": 71284,
+    "src/Collectors": 67261,
+    "src/Internal": 64405,
+    "src/Cache": 47465,
+    "vendor/hoa/iterator": 38236,
+    "vendor/ondrejmirtes/composer-attribute-collector": 27041,
+    "vendor/attributes.php": 17487,
+    "src/Command": 10911,
+    "vendor/composer/ClassLoader.php": 10308,
+    "vendor/symfony/polyfill-mbstring": 8566,
+    "src/Php": 7803,
+    "vendor/symfony/finder": 4119,
+    "vendor/phpstan/php-8-stubs": 2919,
+    "vendor/hoa/consistency": 2889,
+    "vendor/composer/installed.php": 1198,
+    "vendor/hoa/protocol": 785,
+    "vendor/ondram/ci-detector": 628,
+    "vendor/composer/autoload_real.php": 450,
+    "vendor/nette/bootstrap": 341,
+    "vendor/composer/xdebug-handler": 241,
+    "vendor/autoload.php": 230,
+    "vendor/hoa/event": 229,
+    "vendor/hoa/stream": 164,
+    "src/Broker": 153,
+    "vendor/hoa/file": 144,
+    "src/autoloadFunctions.php": 122,
+    "vendor/symfony/polyfill-ctype": 81,
+    "src/Turbo": 67,
+    "src/Parallel": 43,
+    "src/Process": 31,
+    "vendor/composer/autoload_static.php": 20,
+    "vendor/guzzlehttp/guzzle": 19,
+    "vendor/sebastian/diff": 19,
+    "vendor/react/promise": 16,
+    "src/Fixable": 16,
+    "vendor/ralouphie/getallheaders": 15,
+    "vendor/symfony/deprecation-contracts": 7,
+    "src/Diagnose": 6,
+    "src/Testing": 5,
+    "src/dumpType.php": 4,
+    "vendor/jetbrains/phpstorm-stubs": 2,
+    "src/debugScope.php": 2,
+    "vendor/composer/InstalledVersions.php": 2,
+    "src/AnalysedCodeException.php": 2,
+    "src/Classes": 2,
+    "src/NeverException.php": 2,
+    "src/ShouldNotHappenException.php": 2,
+    "vendor/symfony/service-contracts": 2,
+    "vendor/hoa/visitor": 2,
+    "vendor/symfony/polyfill-php80": 1,
+    "vendor/symfony/polyfill-php81": 1,
+    "vendor/symfony/polyfill-php83": 1,
+    "vendor/symfony/polyfill-php84": 1,
+    "vendor/symfony/polyfill-php85": 1
+  },
+  "canonical_opcode_counts": {
+    "JmpFinally": 17032,
+    "Add": 711554,
+    "Sub": 1465348,
+    "Mul": 33361,
+    "Div": 1333,
+    "Mod": 10186,
+    "Concat": 684000,
+    "AssignConcat": 271440,
+    "AssignCv": 24698014,
+    "FetchCvR": 1733175,
+    "BoolNot": 2285262,
+    "IsEqual": 897592,
+    "IsNotEqual": 1388,
+    "IsSmaller": 2887844,
+    "IsSmallerOrEqual": 1424126,
+    "IsIdentical": 4687872,
+    "IsNotIdentical": 1620099,
+    "Isset": 1656965,
+    "Cast": 568441,
+    "PreInc": 1108095,
+    "PreDec": 274853,
+    "PostInc": 935679,
+    "PostDec": 26279,
+    "Jmp": 11286414,
+    "JmpZ": 30898812,
+    "JmpNZ": 5778939,
+    "DoFcall": 12793763,
+    "InitFcall": 4466128,
+    "Return": 8849538,
+    "SendVal": 8448236,
+    "SendRef": 159412,
+    "SendVarEx": 8567505,
+    "SendNamed": 1,
+    "CallUserFuncArray": 356497,
+    "InitUserCall": 1,
+    "InitArray": 2798326,
+    "AddArrayElement": 3234982,
+    "FetchDimR": 12854846,
+    "AssignDim": 2462517,
+    "ArrayPushOp": 873273,
+    "UnsetDim": 54849,
+    "AddArrayUnpack": 188,
+    "AddCallArgument": 227242,
+    "AddCallUnpack": 366474,
+    "ForeachInit": 1197158,
+    "ForeachNext": 425254,
+    "ForeachNextRef": 36276,
+    "ForeachWriteback": 9412,
+    "ForeachNextPlain": 2471781,
+    "Throw": 1336,
+    "NewObj": 1313616,
+    "FetchObjR": 23876152,
+    "AssignObjProp": 5533402,
+    "InitMethodCall": 7783389,
+    "FetchStaticProp": 1079792,
+    "InitStaticCall": 1449969,
+    "InitDynamicCall": 585531,
+    "Instanceof": 7099867,
+    "FetchConst": 3526430,
+    "BindDefaultParam": 2364131,
+    "Yield": 532,
+    "Spaceship": 3029,
+    "BitwiseAnd": 274259,
+    "BitwiseOr": 18882,
+    "ShiftLeft": 269,
+    "ShiftRight": 2282,
+    "BitwiseNot": 950,
+    "BindGlobal": 70,
+    "CheckStatic": 25041,
+    "BindStatic": 10,
+    "Include": 2775,
+    "CloneObj": 19092,
+    "CreateClosure": 230146,
+    "ClosureUseVar": 148147,
+    "DirectInternalCall2": 458,
+    "InitLateStaticCall": 558,
+    "FetchLateStaticProp": 2277,
+    "AssignStaticProp": 1978,
+    "AssignLateStaticProp": 2,
+    "FetchClassConst": 3058431,
+    "FetchLateClassConst": 52497,
+    "FetchDynamicClassConst": 524,
+    "IssetObj": 410,
+    "UnsetObj": 1928,
+    "ReleaseTemps": 38177072,
+    "BindObjPropRef": 1336928,
+    "BindArrayDimRef": 828,
+    "FetchGlobal": 66,
+    "AssignGlobal": 26,
+    "BindCvRef": 2623,
+    "AssertCheck": 67533,
+    "ReportDeprecatedTraitUses": 188,
+    "DeclareClass": 2577,
+    "InitDynamicStaticCall": 31,
+    "CheckDefaultType": 171186,
+    "SnapshotDiagnosticWrite": 648,
+    "DeclareFunction": 85,
+    "Add_TmpTmp": 493563,
+    "Sub_CvConst": 13172,
+    "Add_CvTmp": 207122,
+    "Sub_TmpTmp": 95086,
+    "JmpZ_Le_CvConst": 280,
+    "JmpZ_Lt_CvConst": 4523,
+    "JmpNZ_Lt_CvConst": 7234,
+    "QuickLongLoopJmp": 34,
+    "Strlen_Cv": 1329,
+    "Add_LongLong": 136767,
+    "Sub_LongLong": 515835,
+    "Mul_LongLong": 34,
+    "Concat_StringString": 126634,
+    "Strlen_String": 2,
+    "BitwiseAnd_LongLong": 294,
+    "BitwiseOr_LongLong": 4,
+    "JmpZ_Identical": 1704258,
+    "JmpNZ_Identical": 1684326
+  },
+  "parser_opcode_counts": {
+    "Add": 587739,
+    "Sub": 736784,
+    "Mul": 19979,
+    "AssignCv": 8342035,
+    "FetchCvR": 1131537,
+    "BoolNot": 166925,
+    "IsSmaller": 2017132,
+    "IsSmallerOrEqual": 899782,
+    "IsIdentical": 1521586,
+    "IsNotIdentical": 621970,
+    "PreInc": 865625,
+    "Jmp": 4093867,
+    "JmpZ": 7621981,
+    "JmpNZ": 783865,
+    "DoFcall": 294953,
+    "Return": 331,
+    "SendVarEx": 589906,
+    "InitArray": 1324,
+    "AddArrayElement": 662,
+    "FetchDimR": 6034071,
+    "AssignDim": 2054982,
+    "FetchObjR": 11492944,
+    "AssignObjProp": 1841696,
+    "InitDynamicCall": 294953,
+    "FetchClassConst": 483909,
+    "ReleaseTemps": 18759954,
+    "Add_TmpTmp": 435335,
+    "Add_CvTmp": 147463,
+    "Sub_TmpTmp": 91022,
+    "JmpZ_Identical": 871001,
+    "JmpNZ_Identical": 435335
+  },
+  "parser_loop_control": {
+    "counts_equal": true,
+    "comparison": {
+      "before": {
+        "entry": {
+          "php": 0,
+          "repair": 0,
+          "delta": 0
+        },
+        "outer_iteration": {
+          "php": 0,
+          "repair": 0,
+          "delta": 0
+        },
+        "token_read": {
+          "php": 0,
+          "repair": 0,
+          "delta": 0
+        },
+        "inner_iteration": {
+          "php": 0,
+          "repair": 0,
+          "delta": 0
+        },
+        "reduce": {
+          "php": 0,
+          "repair": 0,
+          "delta": 0
+        }
+      },
+      "after": {
+        "entry": {
+          "php": 331,
+          "repair": 331,
+          "delta": 0
+        },
+        "outer_iteration": {
+          "php": 333081,
+          "repair": 333081,
+          "delta": 0
+        },
+        "token_read": {
+          "php": 263696,
+          "repair": 263696,
+          "delta": 0
+        },
+        "inner_iteration": {
+          "php": 435666,
+          "repair": 435666,
+          "delta": 0
+        },
+        "reduce": {
+          "php": 435335,
+          "repair": 435335,
+          "delta": 0
+        }
+      },
+      "analysis_delta": {
+        "entry": {
+          "php": 331,
+          "repair": 331,
+          "delta": 0
+        },
+        "outer_iteration": {
+          "php": 333081,
+          "repair": 333081,
+          "delta": 0
+        },
+        "token_read": {
+          "php": 263696,
+          "repair": 263696,
+          "delta": 0
+        },
+        "inner_iteration": {
+          "php": 435666,
+          "repair": 435666,
+          "delta": 0
+        },
+        "reduce": {
+          "php": 435335,
+          "repair": 435335,
+          "delta": 0
+        }
+      }
+    },
+    "scope": "five parser source events, not all application loops or canonical VM transitions; added diagnostic statements can inhibit optimized paths",
+    "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "counted_phar_sha256": "9d0c017ffbad48d28f52057dfa66240b89410d681a86b00d871ae03af8aecd2d",
+    "output_signatures": [
+      {
+        "runtime": "php",
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      {
+        "runtime": "repair",
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      }
+    ]
+  },
+  "gates": {
+    "counter_tests": 4,
+    "reader_checks": {
+      "passed": true,
+      "compound_and_repeated_json": true,
+      "incomplete_duplicate_and_inconsistent_rejected": true
+    },
+    "ownership_controls": 16,
+    "ownership_observations": 48,
+    "actual_analysis": {
+      "files": 5,
+      "findings": 20,
+      "exit": 1,
+      "identical_stdout_and_ordinary_stderr": true,
+      "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+      "binaries": {
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "repair": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+        "diagnostic": "ed8610a41118f39cb2b1c1e01ba0dd90412de80935dfe852f6b726e243768817"
+      }
+    }
+  },
+  "failures": [
+    "First loop-control reader rejected a valid empty pre-analysis PHP array encoded as []; completed PHP process/output/archive hashes were retained and reused after reader repair. No failed diagnostic is counted as a pass."
+  ],
+  "reconciliation": {
+    "all_rows_retained": true,
+    "per_row_opcode_sum": true,
+    "full_opcode_matrix": true,
+    "total_backedges_and_sequences": true,
+    "dedicated_decoded_opcodes_do_not_exceed_global_including_fused_counts": true,
+    "full_private_census_sha256": "b5251637241355132730cf68efae204c4b5cf3640b59f8c93df81d0a01d9ddff",
+    "private_diagnostic_patch_sha256": "319b9733c8d3d8d04bcbeb34444abd10f1ebecf7dc055c40e01b4eeb3f64c155"
+  },
+  "boundaries": {
+    "owned-body-opcode-census-build-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 103.13591519600595,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4610379776,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-body-opcode-census-run-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 21.98960477899527,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 669294592,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-body-loop-control-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 2.112344168999698,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 257236992,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-body-loop-control-resume-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 9.614030528988224,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 630497280,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "next_admission": "Investigate a shared operand/result/retirement protocol in the owned baseline. The dominant parser source events match PHP; anonymous execution adds 4.545% of decoded steps. Do not optimize a named PHP body or infer removable/native instruction budgets from opcode frequency. No isolated ownership transfer, empty-cleanup removal or broad error-ABI rewrite is admitted by this packet."
+}

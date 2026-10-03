@@ -765,3 +765,16 @@ clone/drop code totals only 1.100G sampled periods, excluding outlined/unknown
 costs. These are source correlations, not removable budgets. Production and the
 scorecard stay unchanged; quantify whole publication/retirement protocols before
 a new representation, with simultaneous PHPStan parity still open.
+
+
+### Canonical body work and parser iteration control
+
+The [body census](performance-phpstan-body-work.md) reconciles all 269.826M
+whole-request canonical decoded steps, including anonymous bodies. doParse
+accounts for 27.144%; its five source-event counts exactly match PHP, with all
+331 entries, 333,081 outer iterations and 435,335 reductions inside analysis.
+Extra dominant-parser iterations are excluded at these sites, not everywhere.
+Four counter tests, sixteen ownership controls and exact findings pass; one
+reader failure is preserved and repaired without repeating the valid PHP run.
+No runtime speedup is accepted. Investigate shared operation/publication/
+retirement work on the owned baseline; simultaneous parity remains open.
