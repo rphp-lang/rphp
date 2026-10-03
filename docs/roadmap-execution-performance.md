@@ -1018,3 +1018,50 @@ old publication/consumption protocol rather than layer more decisions onto it.
 The wider call census weakens application replay as the large-gap explanation
 within its coverage. The whole instruction gap is still not causally attributed,
 and simultaneous PHPStan instruction/time parity remains open.
+
+### Complete-operation event ledger and actual opcode interval diagnostic
+
+The [architecture review](performance-phpstan-architecture-decision.md#trace-the-same-expression-through-both-engines)
+now traces property read, dimension read, assignment and owner consumption in
+both engines. The retained whole-request census finds 76 five-instruction
+read/release/assignment sequences with 2,786,647 entries. This establishes
+coverage, not analysis cost. The writer already uses vacant bitmap bits;
+`SendVarEx` consumption also depends on runtime by-reference selection, so its
+flag alone cannot admit a fresh-owner proof.
+
+Two private hardware diagnostics observe identical 269,824,195 canonical match
+entries, 263,577 samples and 101,457 nested entries. The second subtracts immediate
+nested canonical intervals exactly once. Each passes three focused counter/scope
+tests, preserves 41 prerequisite controls and the exact five-file/twenty-finding
+output, and retains the three known reference failures. Four limited jobs have
+zero OOM, caps and multiplex failures. Source/binary identities and raw intervals
+are retained privately; public aggregates state scope and limitations.
+
+Guard/layout costs raise diagnostic FIFO counts to 101.292G/102.253G; these are
+not ordinary prices or a production regression. Canonical-exclusive call costs
+still include native helpers, optimized bodies and other necessary work; sparse
+tails prevent treating their means as removable budgets. No runtime, PGO, matrix
+or scorecard adoption follows. Use the explicit event ledger and complete native
+cost evidence to choose a protocol replacement; instruction/time parity stays
+active and unachieved.
+
+### Packaging, GC and sparse application phase isolation
+
+The [controls and disjoint ledgers](performance-phpstan-architecture-decision.md#isolate-packaging-process-mode-and-actual-gc-state)
+verify serial process mode and actual analysis GC state in both unchanged
+interpreters. Sixteen valid PHAR/extracted/off/on/startup-off observations match
+PHP output. PHPStan already disables GC; enabling it gives 76.711253G RPHP /
+10.436963G PHP, versus 74.938467G / 10.336641G off. Physical extraction only
+reduces RPHP instructions 0.406%. Startup-disabled GC reduces them 0.792% but
+raises median RSS 77.943% and does not improve analysis time. These do not
+explain the large gap or justify a runtime change.
+
+Unchanged native sampling reconciles all self periods, with zero lost samples
+and explicit unknown PHP static handlers / incomplete RPHP callers. Four valid
+sparse-boundary captures then sum all 37 hardware intervals exactly to their
+frozen totals. Their medians, 74.640175G / 10.386858G, remain within 0.018% of
+the extracted control. Five node/rule intervals account for 97.324% of excess
+instructions; they include called parser/reflection/inference work, so further
+component isolation is needed. Retain the failed perf interval attempt and ABI
+preflight; all limited jobs have zero OOM. No production, PGO, native acceptance
+or scorecard change follows. Simultaneous instruction/time parity stays open.

@@ -4129,5 +4129,3017 @@
     "runtime_adopted": false,
     "native_scorecard_changed": false,
     "parity_complete": false
+  },
+  "actual_operation_instruction_diagnostic_v2": {
+    "status": "verified private operation-identity and nested-interval diagnostic; not production prices or an implementation acceptance",
+    "date": "2026-10-04",
+    "baseline_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "baseline_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "event": "instructions:u",
+    "scope": "request VM capture up to CLI dump on the interpreter thread; thread counter opens after read_source, native teardown after dump excluded",
+    "sampling": {
+      "probability": 0.0009765625,
+      "algorithm": "xorshift PRNG",
+      "deterministic_same_entry_selection": true,
+      "canonical_entries": 269824195,
+      "sampled_intervals": 263577,
+      "nested_entries": 101457,
+      "all_version_counts_match": true,
+      "cap_or_multiplex_failures": 0
+    },
+    "exclusive_definition": "inclusive hardware interval minus immediate nested canonical-opcode hardware intervals; includes native helper work and diagnostic work outside those child intervals",
+    "versions": [
+      {
+        "version": "inclusive-v1",
+        "build": {
+          "complete": true,
+          "exit": 0,
+          "seconds": 83.00780487200245,
+          "source_sha256": "d525bd694b97df725a1698d206a7d51a21f98fecb286012316a629b3a99734d3",
+          "cargo_toml_sha256": "2d2960c84e92d3b3e0f6a94a9d50e93a4f1929adda6ab2f5a2f624bf541850ad",
+          "toolchain": "1.98.1",
+          "features": [
+            "default",
+            "vm-operation-instructions"
+          ],
+          "binary_sha256": "5c2e56ae4058588745f1dcc1e24b05d8eb4a8066cad962028186ac053aa66f7b",
+          "binary_bytes": 24610136
+        },
+        "focused_tests": {
+          "complete": true,
+          "exit": 0,
+          "seconds": 73.19323780201375,
+          "source_sha256": "d525bd694b97df725a1698d206a7d51a21f98fecb286012316a629b3a99734d3",
+          "cargo_toml_sha256": "2d2960c84e92d3b3e0f6a94a9d50e93a4f1929adda6ab2f5a2f624bf541850ad",
+          "toolchain": "1.98.1",
+          "features": [
+            "default",
+            "vm-operation-instructions"
+          ],
+          "tests_passed": 3
+        },
+        "capture": {
+          "exit": 1,
+          "timeout": false,
+          "diagnostic_wall_seconds": 10.572072201990522,
+          "signature": {
+            "exit": 1,
+            "timeout": false,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "complete": true,
+          "binary_sha256": "5c2e56ae4058588745f1dcc1e24b05d8eb4a8066cad962028186ac053aa66f7b",
+          "source_sha256": "d525bd694b97df725a1698d206a7d51a21f98fecb286012316a629b3a99734d3",
+          "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+          "native_performance_acceptance": false,
+          "external_analysis_instructions": 101292003615,
+          "external_counter_running_percent": 100.0,
+          "whole_request_thread_instructions": 122706713891,
+          "canonical_opcodes": 269824195,
+          "sampled_intervals": 263577,
+          "nested_skips": 101457,
+          "calibration": {
+            "max": 91,
+            "median": 90,
+            "min": 90,
+            "p90": 90,
+            "p99": 90
+          },
+          "profile_sha256": "604f6418de1fa78613e5dfcc82d3329ed0f3999ab37b8d9302edbba678081ac2"
+        },
+        "semantic": {
+          "baseline_equivalent": 41,
+          "retained_reference_passes": 38,
+          "retained_reference_observations": true,
+          "known_reference_failures": [
+            "payload-order-and-identity.php",
+            "payload-resurrection-and-alias.php",
+            "payload-unset-global-boundary.php"
+          ],
+          "global_semantic_acceptance": false
+        },
+        "boundaries": [
+          {
+            "label": "operation-instruction-price-build-v1",
+            "complete": true,
+            "exit": 0,
+            "seconds": 156.38299244997324,
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0,
+            "memory_peak_bytes": 3602063360,
+            "memory_events": {
+              "low": 0,
+              "high": 0,
+              "max": 0,
+              "oom": 0,
+              "oom_kill": 0,
+              "oom_group_kill": 0,
+              "sock_throttled": 0
+            }
+          },
+          {
+            "label": "operation-instruction-price-run-v1",
+            "complete": true,
+            "exit": 0,
+            "seconds": 11.714410900953226,
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0,
+            "memory_peak_bytes": 628039680,
+            "memory_events": {
+              "low": 0,
+              "high": 0,
+              "max": 0,
+              "oom": 0,
+              "oom_kill": 0,
+              "oom_group_kill": 0,
+              "sock_throttled": 0
+            }
+          }
+        ],
+        "time_running_percent": 100.0,
+        "empty_calibration_samples": 4096,
+        "profile_sha256": "604f6418de1fa78613e5dfcc82d3329ed0f3999ab37b8d9302edbba678081ac2",
+        "all_opcode_count_signature_sha256": "26e23e9ca7a0f83556762b9b1c965ff922e1bf74de277416ab5852444a180bc7"
+      },
+      {
+        "version": "canonical-exclusive-v2",
+        "build": {
+          "complete": true,
+          "exit": 0,
+          "seconds": 83.4610621620086,
+          "source_sha256": "e2e4509ceb479fade10193784bc978eeb3179fa122aae2145d2525d4e1bb7450",
+          "cargo_toml_sha256": "2d2960c84e92d3b3e0f6a94a9d50e93a4f1929adda6ab2f5a2f624bf541850ad",
+          "toolchain": "1.98.1",
+          "features": [
+            "default",
+            "vm-operation-instructions"
+          ],
+          "binary_sha256": "d2d3886d18badb09eb81d5d3799a2a9668c2a5d2b2fa30b42cb834d7a2765657",
+          "binary_bytes": 24289808
+        },
+        "focused_tests": {
+          "complete": true,
+          "exit": 0,
+          "seconds": 76.39811599097447,
+          "source_sha256": "e2e4509ceb479fade10193784bc978eeb3179fa122aae2145d2525d4e1bb7450",
+          "cargo_toml_sha256": "2d2960c84e92d3b3e0f6a94a9d50e93a4f1929adda6ab2f5a2f624bf541850ad",
+          "toolchain": "1.98.1",
+          "features": [
+            "default",
+            "vm-operation-instructions"
+          ],
+          "tests_passed": 3
+        },
+        "capture": {
+          "exit": 1,
+          "timeout": false,
+          "diagnostic_wall_seconds": 11.243136995995883,
+          "signature": {
+            "exit": 1,
+            "timeout": false,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "complete": true,
+          "binary_sha256": "d2d3886d18badb09eb81d5d3799a2a9668c2a5d2b2fa30b42cb834d7a2765657",
+          "source_sha256": "e2e4509ceb479fade10193784bc978eeb3179fa122aae2145d2525d4e1bb7450",
+          "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+          "native_performance_acceptance": false,
+          "external_analysis_instructions": 102252564484,
+          "external_counter_running_percent": 100.0,
+          "whole_request_thread_instructions": 123742901409,
+          "canonical_opcodes": 269824195,
+          "sampled_intervals": 263577,
+          "nested_skips": 101457,
+          "calibration": {
+            "max": 96,
+            "median": 95,
+            "min": 95,
+            "p90": 95,
+            "p99": 95
+          },
+          "profile_sha256": "72842c8e7a55d4b783822213c11ab4f1203522967e41f8e53b4b58cc7882cdee"
+        },
+        "semantic": {
+          "baseline_equivalent": 41,
+          "retained_reference_passes": 38,
+          "retained_reference_observations": true,
+          "known_reference_failures": [
+            "payload-order-and-identity.php",
+            "payload-resurrection-and-alias.php",
+            "payload-unset-global-boundary.php"
+          ],
+          "global_semantic_acceptance": false
+        },
+        "boundaries": [
+          {
+            "label": "operation-instruction-exclusive-build-v2",
+            "complete": true,
+            "exit": 0,
+            "seconds": 160.05119279399514,
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0,
+            "memory_peak_bytes": 3602731008,
+            "memory_events": {
+              "low": 0,
+              "high": 0,
+              "max": 0,
+              "oom": 0,
+              "oom_kill": 0,
+              "oom_group_kill": 0,
+              "sock_throttled": 0
+            }
+          },
+          {
+            "label": "operation-instruction-exclusive-run-v2",
+            "complete": true,
+            "exit": 0,
+            "seconds": 12.459711985953618,
+            "memory_max_bytes": 6442450944,
+            "memory_swap_max_bytes": 0,
+            "memory_peak_bytes": 633741312,
+            "memory_events": {
+              "low": 0,
+              "high": 0,
+              "max": 0,
+              "oom": 0,
+              "oom_kill": 0,
+              "oom_group_kill": 0,
+              "sock_throttled": 0
+            }
+          }
+        ],
+        "time_running_percent": 100.0,
+        "empty_calibration_samples": 4096,
+        "profile_sha256": "72842c8e7a55d4b783822213c11ab4f1203522967e41f8e53b4b58cc7882cdee",
+        "all_opcode_count_signature_sha256": "26e23e9ca7a0f83556762b9b1c965ff922e1bf74de277416ab5852444a180bc7"
+      }
+    ],
+    "selected_actual_opcode_rows": [
+      {
+        "name": "DoFcall",
+        "opcode": 60,
+        "executions": 12793539,
+        "eligible": 12787109,
+        "nested_skips": 6430,
+        "samples": 12617,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 1320.0932868352222,
+        "raw_quantiles": {
+          "max": 1805930,
+          "median": 654,
+          "min": 278,
+          "p90": 1543,
+          "p99": 7550
+        },
+        "exclusive_mean": 1223.0633272568757,
+        "exclusive_quantiles": {
+          "max": 1805930,
+          "median": 654,
+          "min": 278,
+          "p90": 1543,
+          "p99": 7376
+        }
+      },
+      {
+        "name": "Return",
+        "opcode": 62,
+        "executions": 8849455,
+        "eligible": 8843847,
+        "nested_skips": 5608,
+        "samples": 8513,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 1447.276635733584,
+        "raw_quantiles": {
+          "max": 225092,
+          "median": 1058,
+          "min": 225,
+          "p90": 1986,
+          "p99": 7073
+        },
+        "exclusive_mean": 1447.276635733584,
+        "exclusive_quantiles": {
+          "max": 225092,
+          "median": 1058,
+          "min": 225,
+          "p90": 1986,
+          "p99": 7073
+        }
+      },
+      {
+        "name": "ReleaseTemps",
+        "opcode": 149,
+        "executions": 38176885,
+        "eligible": 38167540,
+        "nested_skips": 9345,
+        "samples": 37617,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 313.75160166945795,
+        "raw_quantiles": {
+          "max": 29861,
+          "median": 191,
+          "min": 164,
+          "p90": 355,
+          "p99": 990
+        },
+        "exclusive_mean": 313.75160166945795,
+        "exclusive_quantiles": {
+          "max": 29861,
+          "median": 191,
+          "min": 164,
+          "p90": 355,
+          "p99": 990
+        }
+      },
+      {
+        "name": "AssignCv",
+        "opcode": 10,
+        "executions": 24697811,
+        "eligible": 24688023,
+        "nested_skips": 9788,
+        "samples": 23988,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 437.0386443221611,
+        "raw_quantiles": {
+          "max": 2754142,
+          "median": 275,
+          "min": 186,
+          "p90": 353,
+          "p99": 723
+        },
+        "exclusive_mean": 437.0386443221611,
+        "exclusive_quantiles": {
+          "max": 2754142,
+          "median": 275,
+          "min": 186,
+          "p90": 353,
+          "p99": 723
+        }
+      },
+      {
+        "name": "FetchObjR",
+        "opcode": 101,
+        "executions": 23876086,
+        "eligible": 23869766,
+        "nested_skips": 6320,
+        "samples": 23163,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 337.62215602469456,
+        "raw_quantiles": {
+          "max": 6638,
+          "median": 289,
+          "min": 243,
+          "p90": 317,
+          "p99": 3840
+        },
+        "exclusive_mean": 337.62215602469456,
+        "exclusive_quantiles": {
+          "max": 6638,
+          "median": 289,
+          "min": 243,
+          "p90": 317,
+          "p99": 3840
+        }
+      },
+      {
+        "name": "FetchDimR",
+        "opcode": 72,
+        "executions": 12854824,
+        "eligible": 12850546,
+        "nested_skips": 4278,
+        "samples": 12562,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 356.7548161120841,
+        "raw_quantiles": {
+          "max": 4994,
+          "median": 332,
+          "min": 261,
+          "p90": 418,
+          "p99": 640
+        },
+        "exclusive_mean": 356.7548161120841,
+        "exclusive_quantiles": {
+          "max": 4994,
+          "median": 332,
+          "min": 261,
+          "p90": 418,
+          "p99": 640
+        }
+      },
+      {
+        "name": "CallUserFuncArray",
+        "opcode": 67,
+        "executions": 356497,
+        "eligible": 355836,
+        "nested_skips": 661,
+        "samples": 362,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 204029.59392265193,
+        "raw_quantiles": {
+          "max": 39117992,
+          "median": 14882,
+          "min": 6607,
+          "p90": 192427,
+          "p99": 1532436
+        },
+        "exclusive_mean": 52550.50276243094,
+        "exclusive_quantiles": {
+          "max": 9537860,
+          "median": 10450,
+          "min": 6607,
+          "p90": 39450,
+          "p99": 239648
+        }
+      },
+      {
+        "name": "Jmp",
+        "opcode": 42,
+        "executions": 11286353,
+        "eligible": 11283435,
+        "nested_skips": 2918,
+        "samples": 10929,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 152.00137249519628,
+        "raw_quantiles": {
+          "max": 166,
+          "median": 152,
+          "min": 152,
+          "p90": 152,
+          "p99": 152
+        },
+        "exclusive_mean": 152.00137249519628,
+        "exclusive_quantiles": {
+          "max": 166,
+          "median": 152,
+          "min": 152,
+          "p90": 152,
+          "p99": 152
+        }
+      },
+      {
+        "name": "JmpZ",
+        "opcode": 43,
+        "executions": 30898588,
+        "eligible": 30885711,
+        "nested_skips": 12877,
+        "samples": 30159,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 167.7331476507842,
+        "raw_quantiles": {
+          "max": 184,
+          "median": 169,
+          "min": 162,
+          "p90": 169,
+          "p99": 171
+        },
+        "exclusive_mean": 167.7331476507842,
+        "exclusive_quantiles": {
+          "max": 184,
+          "median": 169,
+          "min": 162,
+          "p90": 169,
+          "p99": 171
+        }
+      },
+      {
+        "name": "InitMethodCall",
+        "opcode": 103,
+        "executions": 7783350,
+        "eligible": 7779549,
+        "nested_skips": 3801,
+        "samples": 7636,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 519.0979570455736,
+        "raw_quantiles": {
+          "max": 4973,
+          "median": 442,
+          "min": 356,
+          "p90": 578,
+          "p99": 3964
+        },
+        "exclusive_mean": 519.0979570455736,
+        "exclusive_quantiles": {
+          "max": 4973,
+          "median": 442,
+          "min": 356,
+          "p90": 578,
+          "p99": 3964
+        }
+      },
+      {
+        "name": "SendVarEx",
+        "opcode": 65,
+        "executions": 8567386,
+        "eligible": 8564958,
+        "nested_skips": 2428,
+        "samples": 8361,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 227.24997009927043,
+        "raw_quantiles": {
+          "max": 413,
+          "median": 219,
+          "min": 202,
+          "p90": 275,
+          "p99": 282
+        },
+        "exclusive_mean": 227.24997009927043,
+        "exclusive_quantiles": {
+          "max": 413,
+          "median": 219,
+          "min": 202,
+          "p90": 275,
+          "p99": 282
+        }
+      },
+      {
+        "name": "SendVal",
+        "opcode": 63,
+        "executions": 8447994,
+        "eligible": 8445234,
+        "nested_skips": 2760,
+        "samples": 8242,
+        "cap_skips": 0,
+        "multiplex_failures": 0,
+        "nested_counter_failures": 0,
+        "raw_mean": 215.26595486532395,
+        "raw_quantiles": {
+          "max": 242,
+          "median": 216,
+          "min": 190,
+          "p90": 233,
+          "p99": 236
+        },
+        "exclusive_mean": 215.26595486532395,
+        "exclusive_quantiles": {
+          "max": 242,
+          "median": 216,
+          "min": 190,
+          "p90": 233,
+          "p99": 236
+        }
+      }
+    ],
+    "limits": [
+      "Counter guard and diagnostic layout significantly change native costs; ordinary baseline remains74.934G analysis instructions",
+      "The separately compiled empty-scope calibration is not an exact ordinary-cost correction",
+      "A canonical-exclusive interval still includes native helpers, optimized PHP bodies outside matches, callbacks, GC and other necessary work",
+      "Opcode entries may include an existing compound handler; not a complete logical opcode census",
+      "Intervals are whole-request; do not mix them with analysis FIFO counts or physical source partitions",
+      "Sparse high-cost call tails and one large CallUserFuncArray outlier substantially affect means; weighted means are not a disjoint removable total",
+      "Three known prerequisite reference failures retained; no global compatibility or runtime acceptance"
+    ],
+    "runtime_adopted": false,
+    "native_performance_acceptance": false,
+    "parity_complete": false,
+    "cleanup": {
+      "local_hook": "before and after each of four bounded jobs",
+      "superseded_diagnostic_build_caches_removed": true,
+      "exact_source_and_binary_retained": true,
+      "private_benchmark_host_configured": false
+    }
+  },
+  "complete_read_assignment_event_ledger_v1": {
+    "status": "architectural comparison and coverage only; no implementation or cost acceptance",
+    "source": "retained whole-request canonical bytecode-site census",
+    "census_sha256": "540595f196e62f90e0e3803b0cfe3261aa21cd27b049b662d1b89e14616c45bb",
+    "opcode_chain": [
+      "FetchObjR",
+      "FetchDimR",
+      "ReleaseTemps",
+      "AssignCv",
+      "ReleaseTemps"
+    ],
+    "sites": 76,
+    "whole_request_entries": 2786647,
+    "static_proof_constraint": "SendVarEx runtime by-reference selection means a consume-temporary flag alone cannot prove an absent source after every success edge",
+    "proposal": "Replace the complete result-publication/actual-consumption protocol; do not retain old release markers beside new descriptors or weaken RC/COW, callbacks, references and exceptional state",
+    "removable_instruction_budget_established": false
+  },
+  "packaging_gc_process_controls_v1": {
+    "status": "verified isolation diagnostic; no runtime adoption or parity claim",
+    "date": "2026-10-04",
+    "binaries": {
+      "rphp": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "original_phar_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "controlled_phar_sha256": "cf297b626a0beb03edaf5ee0a29d7cc938a22e6292b92e332e350be547ce4db9",
+    "archive_files_verified": 7001,
+    "policy": "Two alternating rounds, four cases, both unchanged binaries, CPU2, fresh temporary directory. Identical disabled proc_open, pcntl_signal, pcntl_exec and pcntl_fork; exception args retained.",
+    "gc_modes": {
+      "phar-off": "PHPStan startup gc_disable; explicitly disabled again before analysis",
+      "unpacked-off": "Exact controlled archive bytes extracted; same analysis GC mode",
+      "phar-on": "Original startup off; gc_enable immediately before analysis, verified on after it",
+      "phar-startup-off": "INI zend.enable_gc=0 from request startup; ordinary RC/drop is still required"
+    },
+    "samples": [
+      {
+        "case": "phar-off",
+        "runtime": "php",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10336638992,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 0.989641905,
+        "wall_seconds": 1.4633943809894845,
+        "rss_kib": 178188,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 32768,
+              "roots": 13762,
+              "application_time": 0.386319927,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 262144,
+              "roots": 181937,
+              "application_time": 1.37616516,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-off",
+        "runtime": "rphp",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74938800762,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.086387873,
+        "wall_seconds": 9.067331980040763,
+        "rss_kib": 572168,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 14587,
+              "application_time": 1.6570568300000001,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 187725,
+              "application_time": 8.748777196,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "unpacked-off",
+        "runtime": "php",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10385074531,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 1.015148878,
+        "wall_seconds": 1.4138398109935224,
+        "rss_kib": 149412,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 32768,
+              "roots": 13762,
+              "application_time": 0.331060489,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 262144,
+              "roots": 182282,
+              "application_time": 1.346443112,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "unpacked-off",
+        "runtime": "rphp",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74628389705,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.090492725,
+        "wall_seconds": 9.026270776987076,
+        "rss_kib": 511644,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 14586,
+              "application_time": 1.620816168,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 188066,
+              "application_time": 8.718846023,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-on",
+        "runtime": "php",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10436973329,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 1.040071964,
+        "wall_seconds": 1.4942113479482941,
+        "rss_kib": 177488,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 32768,
+              "roots": 13762,
+              "application_time": 0.383506768,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 7,
+              "collected": 607,
+              "threshold": 40001,
+              "buffer_size": 65536,
+              "roots": 17521,
+              "application_time": 1.423792742,
+              "collector_time": 0.045628988,
+              "destructor_time": 0,
+              "free_time": 3.8654e-05
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-on",
+        "runtime": "rphp",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 76714715596,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.235843658,
+        "wall_seconds": 9.223893956979737,
+        "rss_kib": 550564,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 14587,
+              "application_time": 1.679886791,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 7,
+              "collected": 722,
+              "threshold": 60001,
+              "buffer_size": 16384,
+              "roots": 47238,
+              "application_time": 8.709860789,
+              "collector_time": 0.190777553,
+              "destructor_time": 0,
+              "free_time": 0.022309679
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-startup-off",
+        "runtime": "php",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10392245759,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 1.008217096,
+        "wall_seconds": 1.464994246023707,
+        "rss_kib": 176396,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 0.386761818,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 1.395198636,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-startup-off",
+        "runtime": "rphp",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74347343541,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.254261971,
+        "wall_seconds": 9.490095540997572,
+        "rss_kib": 1017800,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 1.6809026249999999,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 8.935386995,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-startup-off",
+        "runtime": "rphp",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74342636660,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.196524858,
+        "wall_seconds": 9.506466494000051,
+        "rss_kib": 1017936,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 1.765250788,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 8.96200803,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-startup-off",
+        "runtime": "php",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10392245197,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 1.000340939,
+        "wall_seconds": 1.4513769110199064,
+        "rss_kib": 176292,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 0.381535332,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": true,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 0,
+              "buffer_size": 0,
+              "roots": 0,
+              "application_time": 1.382092632,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-on",
+        "runtime": "rphp",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 76707791138,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.153088331,
+        "wall_seconds": 9.097448727989104,
+        "rss_kib": 550428,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 14587,
+              "application_time": 1.6411357340000001,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 7,
+              "collected": 722,
+              "threshold": 60001,
+              "buffer_size": 16384,
+              "roots": 47238,
+              "application_time": 8.591563779,
+              "collector_time": 0.186650339,
+              "destructor_time": 0,
+              "free_time": 0.022342035
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-on",
+        "runtime": "php",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10436952800,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 1.093459129,
+        "wall_seconds": 1.5610401710146107,
+        "rss_kib": 177456,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 32768,
+              "roots": 13762,
+              "application_time": 0.396942427,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": true,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 7,
+              "collected": 607,
+              "threshold": 40001,
+              "buffer_size": 65536,
+              "roots": 17521,
+              "application_time": 1.490605705,
+              "collector_time": 0.052057059,
+              "destructor_time": 0,
+              "free_time": 3.696e-05
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "unpacked-off",
+        "runtime": "rphp",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74640126210,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.081732512,
+        "wall_seconds": 9.02975389099447,
+        "rss_kib": 511360,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 14586,
+              "application_time": 1.639729854,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 188066,
+              "application_time": 8.727134688,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "unpacked-off",
+        "runtime": "php",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10385072227,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 1.008975029,
+        "wall_seconds": 1.4041301980032586,
+        "rss_kib": 149440,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 32768,
+              "roots": 13762,
+              "application_time": 0.326428772,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 262144,
+              "roots": 182282,
+              "application_time": 1.335628033,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-off",
+        "runtime": "rphp",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74938132254,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 7.220594645,
+        "wall_seconds": 9.276702785980888,
+        "rss_kib": 571868,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 14587,
+              "application_time": 1.66138198,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 16384,
+              "roots": 187725,
+              "application_time": 8.887737077,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      },
+      {
+        "case": "phar-off",
+        "runtime": "php",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10336643669,
+        "counter_running_percent": 100.0,
+        "analysis_seconds": 0.979934931,
+        "wall_seconds": 1.4320017670397647,
+        "rss_kib": 177948,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "state_snapshots": [
+          {
+            "phase": "before",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 32768,
+              "roots": 13762,
+              "application_time": 0.381134062,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          },
+          {
+            "phase": "after",
+            "gc_enabled": false,
+            "gc_status": {
+              "running": false,
+              "protected": false,
+              "full": false,
+              "runs": 0,
+              "collected": 0,
+              "threshold": 10001,
+              "buffer_size": 262144,
+              "roots": 181937,
+              "application_time": 1.361262971,
+              "collector_time": 0,
+              "destructor_time": 0,
+              "free_time": 0
+            },
+            "proc_open_available": false,
+            "fork_available": false,
+            "disable_functions": "proc_open,pcntl_signal,pcntl_exec,pcntl_fork"
+          }
+        ]
+      }
+    ],
+    "medians": {
+      "phar-off": {
+        "rphp": {
+          "instructions": 74938466508.0,
+          "analysis_seconds": 7.153491259,
+          "wall_seconds": 9.172017383010825,
+          "rss_kib": 572018.0
+        },
+        "php": {
+          "instructions": 10336641330.5,
+          "analysis_seconds": 0.9847884179999999,
+          "wall_seconds": 1.4476980740146246,
+          "rss_kib": 178068.0
+        }
+      },
+      "unpacked-off": {
+        "rphp": {
+          "instructions": 74634257957.5,
+          "analysis_seconds": 7.0861126185,
+          "wall_seconds": 9.028012333990773,
+          "rss_kib": 511502.0
+        },
+        "php": {
+          "instructions": 10385073379.0,
+          "analysis_seconds": 1.0120619535,
+          "wall_seconds": 1.4089850044983905,
+          "rss_kib": 149426.0
+        }
+      },
+      "phar-on": {
+        "rphp": {
+          "instructions": 76711253367.0,
+          "analysis_seconds": 7.1944659945,
+          "wall_seconds": 9.16067134248442,
+          "rss_kib": 550496.0
+        },
+        "php": {
+          "instructions": 10436963064.5,
+          "analysis_seconds": 1.0667655465,
+          "wall_seconds": 1.5276257594814524,
+          "rss_kib": 177472.0
+        }
+      },
+      "phar-startup-off": {
+        "rphp": {
+          "instructions": 74344990100.5,
+          "analysis_seconds": 7.2253934145,
+          "wall_seconds": 9.498281017498812,
+          "rss_kib": 1017868.0
+        },
+        "php": {
+          "instructions": 10392245478.0,
+          "analysis_seconds": 1.0042790175,
+          "wall_seconds": 1.4581855785218067,
+          "rss_kib": 176344.0
+        }
+      }
+    },
+    "boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 86.15618099499261,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 1221107712,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "interpretation": [
+      "proc_open/fork unavailable in both runtimes before and after analysis; this comparison is serial",
+      "Cycle collection has zero runs before/after ordinary off analysis in both runtimes; root admission/bookkeeping and RC/drop are distinct",
+      "Unpacking reduces RPHP instructions 0.405944%, not the sevenfold gap",
+      "Enabling analysis GC adds 2.365657% RPHP instructions and 0.970545% PHP instructions",
+      "INI-disabled startup reduces RPHP instructions 0.791952%, but RSS increases 77.943351% and analysis time does not improve"
+    ],
+    "runtime_adopted": false,
+    "native_performance_acceptance": false,
+    "parity_complete": false
+  },
+  "unchanged_native_self_ledger_v1": {
+    "status": "complete disjoint sampled self-period accounting; caller/inline causal attribution incomplete",
+    "date": "2026-10-04",
+    "event": "instructions:u",
+    "sampling_period": 10000003,
+    "binary_sha256": {
+      "rphp": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "scope": "Original analysis FIFO, unchanged executables, user-only instruction sampling, DWARF unwind requested with 16384 stack bytes",
+    "lost_samples": {
+      "rphp": 0,
+      "php": 0
+    },
+    "ledgers": {
+      "rphp": {
+        "samples": 7483,
+        "sampled_periods": 74830022449,
+        "self_rows": 518,
+        "known_leaf_symbol_periods": 74830022449,
+        "unknown_leaf_symbol_periods": 0,
+        "top_disjoint_self_rows": [
+          {
+            "period": 24470007341,
+            "samples": 2447,
+            "symbol": "[.] rphp::vm::execute::execute_ex_inner"
+          },
+          {
+            "period": 3780001134,
+            "samples": 378,
+            "symbol": "[.] rphp::vm::execute::retire_return_frame_owners"
+          },
+          {
+            "period": 2200000660,
+            "samples": 220,
+            "symbol": "[.] rphp::vm::execute::release_statement_temps_with_mask"
+          },
+          {
+            "period": 1740000522,
+            "samples": 174,
+            "symbol": "[.] __memmove_avx512_unaligned_erms"
+          },
+          {
+            "period": 1480000444,
+            "samples": 148,
+            "symbol": "[.] rphp::regex::match_seq_from"
+          },
+          {
+            "period": 1070000321,
+            "samples": 107,
+            "symbol": "[.] rphp::vm::execute::prepare_replaced_value_destructor_with_references"
+          },
+          {
+            "period": 1040000312,
+            "samples": 104,
+            "symbol": "[.] rphp::vm::execute::value_tree_requires_vm_release"
+          },
+          {
+            "period": 900000270,
+            "samples": 90,
+            "symbol": "[.] rphp::vm::execute::retire_owned_value"
+          }
+        ],
+        "remaining_disjoint_self_periods": 38150011445,
+        "dso_partitions": {
+          "runtime_executable": 72130021639,
+          "libc.so.6": 2700000810
+        }
+      },
+      "php": {
+        "samples": 1033,
+        "sampled_periods": 10330003099,
+        "self_rows": 411,
+        "known_leaf_symbol_periods": 6030001809,
+        "unknown_leaf_symbol_periods": 4300001290,
+        "top_disjoint_self_rows": [
+          {
+            "period": 3210000963,
+            "samples": 321,
+            "symbol": "[.] execute_ex"
+          },
+          {
+            "period": 250000075,
+            "samples": 25,
+            "symbol": "[.] instanceof_function_slow"
+          },
+          {
+            "period": 240000072,
+            "samples": 24,
+            "symbol": "[.] zend_hash_find"
+          },
+          {
+            "period": 240000072,
+            "samples": 24,
+            "symbol": "[.] zend_std_write_property"
+          },
+          {
+            "period": 120000036,
+            "samples": 12,
+            "symbol": "[.] lex_scan"
+          },
+          {
+            "period": 100000030,
+            "samples": 10,
+            "symbol": "[.] _efree"
+          },
+          {
+            "period": 100000030,
+            "samples": 10,
+            "symbol": "[.] _emalloc"
+          },
+          {
+            "period": 100000030,
+            "samples": 10,
+            "symbol": "[.] zend_hash_next_index_insert"
+          }
+        ],
+        "remaining_disjoint_self_periods": 5970001791,
+        "dso_partitions": {
+          "runtime_executable": 10110003033,
+          "libc.so.6": 90000027,
+          "libpcre2-8.so.0.11.2": 40000012,
+          "regex_jit_mapping": 60000018,
+          "tokenizer.so": 30000009
+        }
+      }
+    },
+    "limits": [
+      "These are sampled period sums, not exact per-function hardware counts",
+      "RPHP symbol leaves resolve but most physical callers are not unwound; inlined main work cannot be called dispatch overhead",
+      "PHP has 4.300001G unresolved static-handler address periods; executable DSO is known",
+      "perf report per-thread statistics did not expose a main-thread aggregate count; no exact total claim comes from it",
+      "Regex JIT mapping does not mean PHP VM JIT is enabled"
+    ],
+    "boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 11.541571008972824,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 756334592,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "runtime_adopted": false,
+    "parity_complete": false
+  },
+  "outer_application_phase_ledger_v3": {
+    "status": "verified sparse-boundary diagnostic; complete frozen hardware interval sum",
+    "date": "2026-10-04",
+    "binaries": {
+      "rphp": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+      "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "controlled_phar_sha256": "6b48125b9c4d3507975ef4f0343f5ad4adda66ea29c5359ece6cc932d1d8d208",
+    "archive_files_verified": 7001,
+    "modified_archive_sources": [
+      "src/Command/AnalyseApplication.php",
+      "src/Analyser/Analyser.php",
+      "src/Analyser/FileAnalyser.php"
+    ],
+    "policy": "Two alternating pairs, physical unpacked archive, same five-file/twenty-finding serial analysis with GC off; 37 sparse outer phases, no runtime instrumentation",
+    "counter": "External perf_event_open user-only instruction event, inherited descendants, initial disabled state; disable/read/ack at every phase boundary. All enabled/running times match; all intervals sum exactly to the frozen total.",
+    "samples": [
+      {
+        "runtime": "php",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10386848374,
+        "analysis_seconds": 1.028168917,
+        "wall_seconds": 1.4288514530053362,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "phases": [
+          {
+            "phase": "prepare",
+            "instructions": 60221,
+            "seconds": 5.1022e-05
+          },
+          {
+            "phase": "restore",
+            "instructions": 9665832,
+            "seconds": 0.000940084
+          },
+          {
+            "phase": "runner",
+            "instructions": 367213,
+            "seconds": 0.00012207
+          },
+          {
+            "phase": "file_1_pre",
+            "instructions": 7263,
+            "seconds": 6.199e-06
+          },
+          {
+            "phase": "file_1_parse",
+            "instructions": 43741687,
+            "seconds": 0.003750086
+          },
+          {
+            "phase": "file_1_setup",
+            "instructions": 3981931,
+            "seconds": 0.00120306
+          },
+          {
+            "phase": "file_1_nodes",
+            "instructions": 4437917965,
+            "seconds": 0.402929783
+          },
+          {
+            "phase": "file_1_cleanup",
+            "instructions": 25774,
+            "seconds": 1.7166e-05
+          },
+          {
+            "phase": "file_1_aggregate",
+            "instructions": 9638,
+            "seconds": 5.007e-06
+          },
+          {
+            "phase": "file_2_pre",
+            "instructions": 6008,
+            "seconds": 9.06e-06
+          },
+          {
+            "phase": "file_2_parse",
+            "instructions": 123106383,
+            "seconds": 0.009585142
+          },
+          {
+            "phase": "file_2_setup",
+            "instructions": 80806,
+            "seconds": 3.2902e-05
+          },
+          {
+            "phase": "file_2_nodes",
+            "instructions": 3157476411,
+            "seconds": 0.301606178
+          },
+          {
+            "phase": "file_2_cleanup",
+            "instructions": 35541,
+            "seconds": 1.2875e-05
+          },
+          {
+            "phase": "file_2_aggregate",
+            "instructions": 8591,
+            "seconds": 5.96e-06
+          },
+          {
+            "phase": "file_3_pre",
+            "instructions": 6014,
+            "seconds": 6.914e-06
+          },
+          {
+            "phase": "file_3_parse",
+            "instructions": 8415,
+            "seconds": 4.053e-06
+          },
+          {
+            "phase": "file_3_setup",
+            "instructions": 90379,
+            "seconds": 3.3855e-05
+          },
+          {
+            "phase": "file_3_nodes",
+            "instructions": 464452597,
+            "seconds": 0.050580025
+          },
+          {
+            "phase": "file_3_cleanup",
+            "instructions": 18348,
+            "seconds": 1.0014e-05
+          },
+          {
+            "phase": "file_3_aggregate",
+            "instructions": 8227,
+            "seconds": 5.007e-06
+          },
+          {
+            "phase": "file_4_pre",
+            "instructions": 6008,
+            "seconds": 6.199e-06
+          },
+          {
+            "phase": "file_4_parse",
+            "instructions": 8385,
+            "seconds": 5.96e-06
+          },
+          {
+            "phase": "file_4_setup",
+            "instructions": 81085,
+            "seconds": 3.6001e-05
+          },
+          {
+            "phase": "file_4_nodes",
+            "instructions": 1054702303,
+            "seconds": 0.115146875
+          },
+          {
+            "phase": "file_4_cleanup",
+            "instructions": 23585,
+            "seconds": 1.0967e-05
+          },
+          {
+            "phase": "file_4_aggregate",
+            "instructions": 9056,
+            "seconds": 5.007e-06
+          },
+          {
+            "phase": "file_5_pre",
+            "instructions": 6008,
+            "seconds": 6.199e-06
+          },
+          {
+            "phase": "file_5_parse",
+            "instructions": 69548531,
+            "seconds": 0.005470037
+          },
+          {
+            "phase": "file_5_setup",
+            "instructions": 81085,
+            "seconds": 2.9802e-05
+          },
+          {
+            "phase": "file_5_nodes",
+            "instructions": 954780766,
+            "seconds": 0.112224817
+          },
+          {
+            "phase": "file_5_cleanup",
+            "instructions": 22083,
+            "seconds": 1.4067e-05
+          },
+          {
+            "phase": "file_5_aggregate",
+            "instructions": 20798,
+            "seconds": 1.502e-05
+          },
+          {
+            "phase": "stubs",
+            "instructions": 40477,
+            "seconds": 1.4067e-05
+          },
+          {
+            "phase": "cache_process",
+            "instructions": 65962845,
+            "seconds": 0.009027958
+          },
+          {
+            "phase": "finalize",
+            "instructions": 331309,
+            "seconds": 9.3937e-05
+          },
+          {
+            "phase": "ignored",
+            "instructions": 148806,
+            "seconds": 2.5034e-05
+          }
+        ]
+      },
+      {
+        "runtime": "rphp",
+        "round": 0,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74638848175,
+        "analysis_seconds": 7.087593079,
+        "wall_seconds": 9.01877337397309,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "phases": [
+          {
+            "phase": "prepare",
+            "instructions": 951132,
+            "seconds": 0.000197887
+          },
+          {
+            "phase": "restore",
+            "instructions": 5665982,
+            "seconds": 0.000696898
+          },
+          {
+            "phase": "runner",
+            "instructions": 1115645,
+            "seconds": 0.000447989
+          },
+          {
+            "phase": "file_1_pre",
+            "instructions": 94716,
+            "seconds": 2.6226e-05
+          },
+          {
+            "phase": "file_1_parse",
+            "instructions": 274724284,
+            "seconds": 0.020297766
+          },
+          {
+            "phase": "file_1_setup",
+            "instructions": 52672084,
+            "seconds": 0.006245852
+          },
+          {
+            "phase": "file_1_nodes",
+            "instructions": 30838169158,
+            "seconds": 2.74761796
+          },
+          {
+            "phase": "file_1_cleanup",
+            "instructions": 484180,
+            "seconds": 0.000102282
+          },
+          {
+            "phase": "file_1_aggregate",
+            "instructions": 118625,
+            "seconds": 2.6226e-05
+          },
+          {
+            "phase": "file_2_pre",
+            "instructions": 50353,
+            "seconds": 1.9789e-05
+          },
+          {
+            "phase": "file_2_parse",
+            "instructions": 750177162,
+            "seconds": 0.051891565
+          },
+          {
+            "phase": "file_2_setup",
+            "instructions": 654113,
+            "seconds": 0.000147581
+          },
+          {
+            "phase": "file_2_nodes",
+            "instructions": 24197684294,
+            "seconds": 2.299783707
+          },
+          {
+            "phase": "file_2_cleanup",
+            "instructions": 328710,
+            "seconds": 0.000126839
+          },
+          {
+            "phase": "file_2_aggregate",
+            "instructions": 66917,
+            "seconds": 3.1948e-05
+          },
+          {
+            "phase": "file_3_pre",
+            "instructions": 53791,
+            "seconds": 3.8624e-05
+          },
+          {
+            "phase": "file_3_parse",
+            "instructions": 113963,
+            "seconds": 3.6955e-05
+          },
+          {
+            "phase": "file_3_setup",
+            "instructions": 719024,
+            "seconds": 0.000223875
+          },
+          {
+            "phase": "file_3_nodes",
+            "instructions": 3254161764,
+            "seconds": 0.339539051
+          },
+          {
+            "phase": "file_3_cleanup",
+            "instructions": 213224,
+            "seconds": 4.5776e-05
+          },
+          {
+            "phase": "file_3_aggregate",
+            "instructions": 76691,
+            "seconds": 1.9789e-05
+          },
+          {
+            "phase": "file_4_pre",
+            "instructions": 50895,
+            "seconds": 2.1219e-05
+          },
+          {
+            "phase": "file_4_parse",
+            "instructions": 123318,
+            "seconds": 3.3379e-05
+          },
+          {
+            "phase": "file_4_setup",
+            "instructions": 663118,
+            "seconds": 0.000122309
+          },
+          {
+            "phase": "file_4_nodes",
+            "instructions": 7544800508,
+            "seconds": 0.760023832
+          },
+          {
+            "phase": "file_4_cleanup",
+            "instructions": 241780,
+            "seconds": 5.1498e-05
+          },
+          {
+            "phase": "file_4_aggregate",
+            "instructions": 87603,
+            "seconds": 2.3127e-05
+          },
+          {
+            "phase": "file_5_pre",
+            "instructions": 50512,
+            "seconds": 2.0981e-05
+          },
+          {
+            "phase": "file_5_parse",
+            "instructions": 421335168,
+            "seconds": 0.02994895
+          },
+          {
+            "phase": "file_5_setup",
+            "instructions": 662655,
+            "seconds": 0.000169039
+          },
+          {
+            "phase": "file_5_nodes",
+            "instructions": 6766884227,
+            "seconds": 0.762607574
+          },
+          {
+            "phase": "file_5_cleanup",
+            "instructions": 237652,
+            "seconds": 5.3883e-05
+          },
+          {
+            "phase": "file_5_aggregate",
+            "instructions": 319650,
+            "seconds": 7.6294e-05
+          },
+          {
+            "phase": "stubs",
+            "instructions": 368947,
+            "seconds": 7.5579e-05
+          },
+          {
+            "phase": "cache_process",
+            "instructions": 520493246,
+            "seconds": 0.044086933
+          },
+          {
+            "phase": "finalize",
+            "instructions": 3418030,
+            "seconds": 0.000500917
+          },
+          {
+            "phase": "ignored",
+            "instructions": 815054,
+            "seconds": 0.000127077
+          }
+        ]
+      },
+      {
+        "runtime": "rphp",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 74641501262,
+        "analysis_seconds": 7.449170351,
+        "wall_seconds": 9.434932008036412,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "phases": [
+          {
+            "phase": "prepare",
+            "instructions": 947579,
+            "seconds": 0.000163078
+          },
+          {
+            "phase": "restore",
+            "instructions": 5666074,
+            "seconds": 0.000556707
+          },
+          {
+            "phase": "runner",
+            "instructions": 1115210,
+            "seconds": 0.000371456
+          },
+          {
+            "phase": "file_1_pre",
+            "instructions": 94692,
+            "seconds": 2.5988e-05
+          },
+          {
+            "phase": "file_1_parse",
+            "instructions": 274773989,
+            "seconds": 0.020709038
+          },
+          {
+            "phase": "file_1_setup",
+            "instructions": 52664674,
+            "seconds": 0.006341696
+          },
+          {
+            "phase": "file_1_nodes",
+            "instructions": 30840683068,
+            "seconds": 2.747268438
+          },
+          {
+            "phase": "file_1_cleanup",
+            "instructions": 484346,
+            "seconds": 0.00010252
+          },
+          {
+            "phase": "file_1_aggregate",
+            "instructions": 118591,
+            "seconds": 2.7895e-05
+          },
+          {
+            "phase": "file_2_pre",
+            "instructions": 50353,
+            "seconds": 2.0742e-05
+          },
+          {
+            "phase": "file_2_parse",
+            "instructions": 749826008,
+            "seconds": 0.054565191
+          },
+          {
+            "phase": "file_2_setup",
+            "instructions": 653794,
+            "seconds": 0.000181198
+          },
+          {
+            "phase": "file_2_nodes",
+            "instructions": 24197665777,
+            "seconds": 2.484794378
+          },
+          {
+            "phase": "file_2_cleanup",
+            "instructions": 328541,
+            "seconds": 0.000101089
+          },
+          {
+            "phase": "file_2_aggregate",
+            "instructions": 66942,
+            "seconds": 2.5272e-05
+          },
+          {
+            "phase": "file_3_pre",
+            "instructions": 50409,
+            "seconds": 3.6001e-05
+          },
+          {
+            "phase": "file_3_parse",
+            "instructions": 113963,
+            "seconds": 3.9816e-05
+          },
+          {
+            "phase": "file_3_setup",
+            "instructions": 718730,
+            "seconds": 0.000224113
+          },
+          {
+            "phase": "file_3_nodes",
+            "instructions": 3254143841,
+            "seconds": 0.390027285
+          },
+          {
+            "phase": "file_3_cleanup",
+            "instructions": 213388,
+            "seconds": 5.7459e-05
+          },
+          {
+            "phase": "file_3_aggregate",
+            "instructions": 76704,
+            "seconds": 2.265e-05
+          },
+          {
+            "phase": "file_4_pre",
+            "instructions": 50895,
+            "seconds": 2.3127e-05
+          },
+          {
+            "phase": "file_4_parse",
+            "instructions": 123318,
+            "seconds": 3.624e-05
+          },
+          {
+            "phase": "file_4_setup",
+            "instructions": 662825,
+            "seconds": 0.000145912
+          },
+          {
+            "phase": "file_4_nodes",
+            "instructions": 7545168594,
+            "seconds": 0.767196178
+          },
+          {
+            "phase": "file_4_cleanup",
+            "instructions": 241854,
+            "seconds": 5.3644e-05
+          },
+          {
+            "phase": "file_4_aggregate",
+            "instructions": 87641,
+            "seconds": 2.265e-05
+          },
+          {
+            "phase": "file_5_pre",
+            "instructions": 50512,
+            "seconds": 1.955e-05
+          },
+          {
+            "phase": "file_5_parse",
+            "instructions": 421332148,
+            "seconds": 0.029439926
+          },
+          {
+            "phase": "file_5_setup",
+            "instructions": 662427,
+            "seconds": 0.000137091
+          },
+          {
+            "phase": "file_5_nodes",
+            "instructions": 6766996756,
+            "seconds": 0.874774694
+          },
+          {
+            "phase": "file_5_cleanup",
+            "instructions": 237779,
+            "seconds": 9.2983e-05
+          },
+          {
+            "phase": "file_5_aggregate",
+            "instructions": 319787,
+            "seconds": 9.9421e-05
+          },
+          {
+            "phase": "stubs",
+            "instructions": 368896,
+            "seconds": 0.000110388
+          },
+          {
+            "phase": "cache_process",
+            "instructions": 520508686,
+            "seconds": 0.05269146
+          },
+          {
+            "phase": "finalize",
+            "instructions": 3417476,
+            "seconds": 0.000672817
+          },
+          {
+            "phase": "ignored",
+            "instructions": 814995,
+            "seconds": 0.00015378
+          }
+        ]
+      },
+      {
+        "runtime": "php",
+        "round": 1,
+        "exit": 1,
+        "timeout": false,
+        "complete": true,
+        "instructions": 10386867467,
+        "analysis_seconds": 1.034520149,
+        "wall_seconds": 1.4377081490238197,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "phases": [
+          {
+            "phase": "prepare",
+            "instructions": 61018,
+            "seconds": 2.2888e-05
+          },
+          {
+            "phase": "restore",
+            "instructions": 9663827,
+            "seconds": 0.000893831
+          },
+          {
+            "phase": "runner",
+            "instructions": 367261,
+            "seconds": 9.7036e-05
+          },
+          {
+            "phase": "file_1_pre",
+            "instructions": 7263,
+            "seconds": 6.199e-06
+          },
+          {
+            "phase": "file_1_parse",
+            "instructions": 43741652,
+            "seconds": 0.003689051
+          },
+          {
+            "phase": "file_1_setup",
+            "instructions": 3981930,
+            "seconds": 0.000844955
+          },
+          {
+            "phase": "file_1_nodes",
+            "instructions": 4437927270,
+            "seconds": 0.407185078
+          },
+          {
+            "phase": "file_1_cleanup",
+            "instructions": 25774,
+            "seconds": 1.5974e-05
+          },
+          {
+            "phase": "file_1_aggregate",
+            "instructions": 9638,
+            "seconds": 5.007e-06
+          },
+          {
+            "phase": "file_2_pre",
+            "instructions": 6008,
+            "seconds": 5.96e-06
+          },
+          {
+            "phase": "file_2_parse",
+            "instructions": 123106758,
+            "seconds": 0.008836031
+          },
+          {
+            "phase": "file_2_setup",
+            "instructions": 80806,
+            "seconds": 2.9087e-05
+          },
+          {
+            "phase": "file_2_nodes",
+            "instructions": 3157480940,
+            "seconds": 0.297894001
+          },
+          {
+            "phase": "file_2_cleanup",
+            "instructions": 35541,
+            "seconds": 1.3113e-05
+          },
+          {
+            "phase": "file_2_aggregate",
+            "instructions": 8591,
+            "seconds": 5.007e-06
+          },
+          {
+            "phase": "file_3_pre",
+            "instructions": 6008,
+            "seconds": 7.153e-06
+          },
+          {
+            "phase": "file_3_parse",
+            "instructions": 8409,
+            "seconds": 5.96e-06
+          },
+          {
+            "phase": "file_3_setup",
+            "instructions": 90379,
+            "seconds": 8.3923e-05
+          },
+          {
+            "phase": "file_3_nodes",
+            "instructions": 464454793,
+            "seconds": 0.052444935
+          },
+          {
+            "phase": "file_3_cleanup",
+            "instructions": 18348,
+            "seconds": 1.0014e-05
+          },
+          {
+            "phase": "file_3_aggregate",
+            "instructions": 8227,
+            "seconds": 5.007e-06
+          },
+          {
+            "phase": "file_4_pre",
+            "instructions": 6014,
+            "seconds": 6.914e-06
+          },
+          {
+            "phase": "file_4_parse",
+            "instructions": 8391,
+            "seconds": 5.96e-06
+          },
+          {
+            "phase": "file_4_setup",
+            "instructions": 81085,
+            "seconds": 3.1948e-05
+          },
+          {
+            "phase": "file_4_nodes",
+            "instructions": 1054703928,
+            "seconds": 0.11686182
+          },
+          {
+            "phase": "file_4_cleanup",
+            "instructions": 23585,
+            "seconds": 1.4067e-05
+          },
+          {
+            "phase": "file_4_aggregate",
+            "instructions": 9056,
+            "seconds": 8.106e-06
+          },
+          {
+            "phase": "file_5_pre",
+            "instructions": 6014,
+            "seconds": 8.106e-06
+          },
+          {
+            "phase": "file_5_parse",
+            "instructions": 69548038,
+            "seconds": 0.005677938
+          },
+          {
+            "phase": "file_5_setup",
+            "instructions": 81085,
+            "seconds": 3.1948e-05
+          },
+          {
+            "phase": "file_5_nodes",
+            "instructions": 954783649,
+            "seconds": 0.127467155
+          },
+          {
+            "phase": "file_5_cleanup",
+            "instructions": 22083,
+            "seconds": 1.1921e-05
+          },
+          {
+            "phase": "file_5_aggregate",
+            "instructions": 20801,
+            "seconds": 1.502e-05
+          },
+          {
+            "phase": "stubs",
+            "instructions": 40477,
+            "seconds": 1.5974e-05
+          },
+          {
+            "phase": "cache_process",
+            "instructions": 65962705,
+            "seconds": 0.010017157
+          },
+          {
+            "phase": "finalize",
+            "instructions": 331309,
+            "seconds": 0.000196934
+          },
+          {
+            "phase": "ignored",
+            "instructions": 148806,
+            "seconds": 4.4107e-05
+          }
+        ]
+      }
+    ],
+    "medians": {
+      "rphp": {
+        "instructions": 74640174718.5,
+        "analysis_seconds": 7.268381715,
+        "phases": {
+          "prepare": {
+            "instructions": 949355.5,
+            "seconds": 0.0001804825
+          },
+          "restore": {
+            "instructions": 5666028.0,
+            "seconds": 0.0006268025
+          },
+          "runner": {
+            "instructions": 1115427.5,
+            "seconds": 0.0004097225
+          },
+          "file_1_pre": {
+            "instructions": 94704.0,
+            "seconds": 2.6107e-05
+          },
+          "file_1_parse": {
+            "instructions": 274749136.5,
+            "seconds": 0.020503401999999997
+          },
+          "file_1_setup": {
+            "instructions": 52668379.0,
+            "seconds": 0.006293774
+          },
+          "file_1_nodes": {
+            "instructions": 30839426113.0,
+            "seconds": 2.747443199
+          },
+          "file_1_cleanup": {
+            "instructions": 484263.0,
+            "seconds": 0.000102401
+          },
+          "file_1_aggregate": {
+            "instructions": 118608.0,
+            "seconds": 2.70605e-05
+          },
+          "file_2_pre": {
+            "instructions": 50353.0,
+            "seconds": 2.0265499999999998e-05
+          },
+          "file_2_parse": {
+            "instructions": 750001585.0,
+            "seconds": 0.053228378
+          },
+          "file_2_setup": {
+            "instructions": 653953.5,
+            "seconds": 0.0001643895
+          },
+          "file_2_nodes": {
+            "instructions": 24197675035.5,
+            "seconds": 2.3922890425
+          },
+          "file_2_cleanup": {
+            "instructions": 328625.5,
+            "seconds": 0.00011396400000000001
+          },
+          "file_2_aggregate": {
+            "instructions": 66929.5,
+            "seconds": 2.861e-05
+          },
+          "file_3_pre": {
+            "instructions": 52100.0,
+            "seconds": 3.7312500000000006e-05
+          },
+          "file_3_parse": {
+            "instructions": 113963.0,
+            "seconds": 3.83855e-05
+          },
+          "file_3_setup": {
+            "instructions": 718877.0,
+            "seconds": 0.00022399399999999998
+          },
+          "file_3_nodes": {
+            "instructions": 3254152802.5,
+            "seconds": 0.364783168
+          },
+          "file_3_cleanup": {
+            "instructions": 213306.0,
+            "seconds": 5.16175e-05
+          },
+          "file_3_aggregate": {
+            "instructions": 76697.5,
+            "seconds": 2.1219500000000002e-05
+          },
+          "file_4_pre": {
+            "instructions": 50895.0,
+            "seconds": 2.2173e-05
+          },
+          "file_4_parse": {
+            "instructions": 123318.0,
+            "seconds": 3.48095e-05
+          },
+          "file_4_setup": {
+            "instructions": 662971.5,
+            "seconds": 0.0001341105
+          },
+          "file_4_nodes": {
+            "instructions": 7544984551.0,
+            "seconds": 0.763610005
+          },
+          "file_4_cleanup": {
+            "instructions": 241817.0,
+            "seconds": 5.2570999999999995e-05
+          },
+          "file_4_aggregate": {
+            "instructions": 87622.0,
+            "seconds": 2.2888500000000003e-05
+          },
+          "file_5_pre": {
+            "instructions": 50512.0,
+            "seconds": 2.02655e-05
+          },
+          "file_5_parse": {
+            "instructions": 421333658.0,
+            "seconds": 0.029694438
+          },
+          "file_5_setup": {
+            "instructions": 662541.0,
+            "seconds": 0.000153065
+          },
+          "file_5_nodes": {
+            "instructions": 6766940491.5,
+            "seconds": 0.818691134
+          },
+          "file_5_cleanup": {
+            "instructions": 237715.5,
+            "seconds": 7.3433e-05
+          },
+          "file_5_aggregate": {
+            "instructions": 319718.5,
+            "seconds": 8.78575e-05
+          },
+          "stubs": {
+            "instructions": 368921.5,
+            "seconds": 9.29835e-05
+          },
+          "cache_process": {
+            "instructions": 520500966.0,
+            "seconds": 0.0483891965
+          },
+          "finalize": {
+            "instructions": 3417753.0,
+            "seconds": 0.000586867
+          },
+          "ignored": {
+            "instructions": 815024.5,
+            "seconds": 0.0001404285
+          }
+        }
+      },
+      "php": {
+        "instructions": 10386857920.5,
+        "analysis_seconds": 1.031344533,
+        "phases": {
+          "prepare": {
+            "instructions": 60619.5,
+            "seconds": 3.6955e-05
+          },
+          "restore": {
+            "instructions": 9664829.5,
+            "seconds": 0.0009169575
+          },
+          "runner": {
+            "instructions": 367237.0,
+            "seconds": 0.000109553
+          },
+          "file_1_pre": {
+            "instructions": 7263.0,
+            "seconds": 6.199e-06
+          },
+          "file_1_parse": {
+            "instructions": 43741669.5,
+            "seconds": 0.0037195685
+          },
+          "file_1_setup": {
+            "instructions": 3981930.5,
+            "seconds": 0.0010240075
+          },
+          "file_1_nodes": {
+            "instructions": 4437922617.5,
+            "seconds": 0.4050574305
+          },
+          "file_1_cleanup": {
+            "instructions": 25774.0,
+            "seconds": 1.657e-05
+          },
+          "file_1_aggregate": {
+            "instructions": 9638.0,
+            "seconds": 5.007e-06
+          },
+          "file_2_pre": {
+            "instructions": 6008.0,
+            "seconds": 7.509999999999999e-06
+          },
+          "file_2_parse": {
+            "instructions": 123106570.5,
+            "seconds": 0.0092105865
+          },
+          "file_2_setup": {
+            "instructions": 80806.0,
+            "seconds": 3.09945e-05
+          },
+          "file_2_nodes": {
+            "instructions": 3157478675.5,
+            "seconds": 0.29975008950000004
+          },
+          "file_2_cleanup": {
+            "instructions": 35541.0,
+            "seconds": 1.2994e-05
+          },
+          "file_2_aggregate": {
+            "instructions": 8591.0,
+            "seconds": 5.483499999999999e-06
+          },
+          "file_3_pre": {
+            "instructions": 6011.0,
+            "seconds": 7.0335e-06
+          },
+          "file_3_parse": {
+            "instructions": 8412.0,
+            "seconds": 5.0065e-06
+          },
+          "file_3_setup": {
+            "instructions": 90379.0,
+            "seconds": 5.8889e-05
+          },
+          "file_3_nodes": {
+            "instructions": 464453695.0,
+            "seconds": 0.05151248
+          },
+          "file_3_cleanup": {
+            "instructions": 18348.0,
+            "seconds": 1.0014e-05
+          },
+          "file_3_aggregate": {
+            "instructions": 8227.0,
+            "seconds": 5.007e-06
+          },
+          "file_4_pre": {
+            "instructions": 6011.0,
+            "seconds": 6.556500000000001e-06
+          },
+          "file_4_parse": {
+            "instructions": 8388.0,
+            "seconds": 5.96e-06
+          },
+          "file_4_setup": {
+            "instructions": 81085.0,
+            "seconds": 3.3974500000000005e-05
+          },
+          "file_4_nodes": {
+            "instructions": 1054703115.5,
+            "seconds": 0.1160043475
+          },
+          "file_4_cleanup": {
+            "instructions": 23585.0,
+            "seconds": 1.2516999999999999e-05
+          },
+          "file_4_aggregate": {
+            "instructions": 9056.0,
+            "seconds": 6.5565e-06
+          },
+          "file_5_pre": {
+            "instructions": 6011.0,
+            "seconds": 7.1525e-06
+          },
+          "file_5_parse": {
+            "instructions": 69548284.5,
+            "seconds": 0.0055739875000000005
+          },
+          "file_5_setup": {
+            "instructions": 81085.0,
+            "seconds": 3.0875e-05
+          },
+          "file_5_nodes": {
+            "instructions": 954782207.5,
+            "seconds": 0.119845986
+          },
+          "file_5_cleanup": {
+            "instructions": 22083.0,
+            "seconds": 1.2994e-05
+          },
+          "file_5_aggregate": {
+            "instructions": 20799.5,
+            "seconds": 1.502e-05
+          },
+          "stubs": {
+            "instructions": 40477.0,
+            "seconds": 1.50205e-05
+          },
+          "cache_process": {
+            "instructions": 65962775.0,
+            "seconds": 0.0095225575
+          },
+          "finalize": {
+            "instructions": 331309.0,
+            "seconds": 0.0001454355
+          },
+          "ignored": {
+            "instructions": 148806.0,
+            "seconds": 3.4570500000000004e-05
+          }
+        }
+      }
+    },
+    "boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 21.444713887001853,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 551559168,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "retained_failed_attempts": [
+      {
+        "version": 1,
+        "reason": "Installed perf stat emits one interval total, not phase counter rows, and its interval mode reports exit0 although PHPStan output indicates expected failure. Correct output preserved; no phase instruction interpretation accepted.",
+        "boundary": {
+          "complete": true,
+          "exit": 1,
+          "seconds": 2.393834782007616,
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0,
+          "memory_peak_bytes": 292675584,
+          "memory_events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          }
+        }
+      },
+      {
+        "version": 2,
+        "reason": "ABI structure-size preflight failed before launching a target; corrected missing config1 field.",
+        "boundary": {
+          "complete": true,
+          "exit": 1,
+          "seconds": 0.15956241701496765,
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0,
+          "memory_peak_bytes": 72245248,
+          "memory_events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          }
+        }
+      }
+    ],
+    "limits": [
+      "Phase transitions add small source-level work and acknowledgment latency; neither phase build is an accepted production speed result",
+      "Node intervals include called rules, type inference, reflection and parser work; they are not pure NodeScopeResolver overhead",
+      "Similar per-file ratios do not prove absence of quadratic scaling for larger projects",
+      "Source/PHP lifetime prerequisite failures remain visible and unchanged"
+    ],
+    "interpretation": {
+      "rphp_node_instructions": 72603178993.5,
+      "php_node_instructions": 10069340311.0,
+      "rphp_instruction_delta_from_unpacked_control_percent": 0.007927674451280176,
+      "php_instruction_delta_from_unpacked_control_percent": 0.017183715847490788
+    },
+    "runtime_adopted": false,
+    "native_performance_acceptance": false,
+    "parity_complete": false
   }
 }

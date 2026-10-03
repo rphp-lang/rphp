@@ -27,7 +27,7 @@ and binary digest
 It has known differential lifetime failures; it is not a globally correct
 replacement for production. The public documentation baseline is `c024f157`.
 
-In the latest ordinary-build window, two prerequisite observations have medians
+In the preceding ordinary-build window, two prerequisite observations have medians
 **74.934355G instructions / 6.6614s**. Same-window PHP, one observation, executes
 **10.338015G / 0.9703s**. Both use an analysis FIFO boundary, CPU affinity, serial
 analysis and a fresh temporary directory. Startup and output rendering are
@@ -113,6 +113,51 @@ The PHP comparison uses pinned primary source:
 The installed reference has CLI opcache and JIT disabled. Its advantage here
 does not require a JIT or an assembler implementation of the allocator.
 
+## Trace the same expression through both engines
+
+Consider `$out = $object->items[$key]`, with an ordinary declared array property,
+a CV key and a heap-valued element. This example names storage roles, not
+runtime admission conditions. References, magic, undefined access, overwritten
+owners and exceptional effects still belong to the operation contract.
+
+The retained RPHP site census has **76** contiguous sequences of
+`FetchObjR → FetchDimR → ReleaseTemps → AssignCv → ReleaseTemps`, entered
+**2,786,647** times across the whole request. This establishes coverage for that
+sequence, not analysis-only cost or a removable instruction budget. Other
+storage shapes and intervening effects are not included in this count.
+
+| Boundary | RPHP prerequisite event | Corresponding PHP event |
+| --- | --- | --- |
+| Property read | Validate the object/property cache and initialized property; copy the array handle to the first expression slot; classify/publish its ownership through the frame writer. | Validate the cache and initialized property; copy/dereference the array handle to the expression result. Operand storage is embodied in the generated handler. |
+| Element read | Resolve the key, receiver and destination storage again; perform the dimension lookup and copy/dereference the element into a second owned expression slot. The first expression owner remains for a separate release. | Resolve the key/receiver, perform the lookup and publish the element. The read handler then frees its actual temporary operands before checking the exception boundary. |
+| Consume first result | Dispatch a bounded release marker, load its cached mask, inspect live prefix/tail ownership, select the release role and enter VM retirement if needed. | The array-read handler already consumed that actual owner. No corresponding range-discovery operation is needed for this edge. |
+| Assign second result | An eligible non-reference source already moves; clear its expression ownership, prepare the overwritten destination's observable release work, commit the CV and complete callbacks/exceptions in order. | Assignment owns source consumption and destination replacement; the assignment helper consumes operand two itself. |
+| Complete expression | A second release marker still reconciles the expression interval, even when assignment consumed the last heap source. Later frame cleanup uses the retained runtime ownership state. | Consumed expression operands are already retired; function exit still releases its actual CVs, extra arguments and receiver as required. |
+
+Both engines need the initial array/result owners when their language storage
+requires them. The proposal is not to borrow across a callback, drop RC/COW,
+skip destination destruction or turn references into values. It is to establish
+expression-owner state and exact last use once, and let the actual consumer
+perform the release at its required boundary. This can remove a separate
+range-discovery/dispatch protocol and repeated old-result reconciliation;
+necessary final-payload destruction remains.
+
+The difference is already visible in pinned
+[dimension consumption](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm_def.h#L1933)
+and [assignment consumption](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm_def.h#L2810).
+The RPHP writer already avoids reading/dropping a vacant tracked slot when its
+bitmap bit is clear. A new fresh writer therefore cannot claim to eliminate a
+drop on every current result write. Its gain must be the complete protocol it
+replaces, with new bookkeeping charged too.
+
+A finalized ownership proof must follow actual success edges. In particular,
+`SendVarEx` chooses by-reference behavior from the selected runtime callee;
+its consume-temporary flag alone does not prove consumption on that branch.
+Do not enable a fresh-result/empty-release fact from that flag. Catch entries,
+re-entry, mutable aliases, finally, suspension and memory-exhaustion exits also
+need their actual live-owner state. A normal-path proof is not automatically an
+unwind or final-owner proof.
+
 ## The measured budget limits the redesign
 
 The recovered diagnostic caller recording partitions 77.760G sampled periods by
@@ -143,6 +188,149 @@ this candidate: it fails the declared 2% instruction selector and proves no time
 improvement. No PGO, full matrix, production adoption or scorecard update follows.
 This prices one duplicated release decision; it is not a full replacement for
 final-payload retirement.
+
+## Price actual operations without mistaking nested work for overhead
+
+A private Linux diagnostic now samples `instructions:u` between hardware reads
+at actual canonical match entries and their exits. It observes the real opcode
+tag, including delegated native helpers; source-line joins no longer choose
+that tag. Every continuation/activation switch exits the same lexical scope.
+Its guard owns no PHP value or frame pointer. Sampling uses a deterministic
+PRNG with probability 1/1,024; raw intervals, caps, nesting and counter failures
+are retained privately.
+
+The first version records inclusive intervals. The second also subtracts
+immediate nested canonical intervals: those inclusive child intervals already
+contain their descendants, so deeper intervals must not be subtracted again.
+Three focused tests verify the ABI/counter, nested scope invariant and empty
+calibration. Both versions preserve all 41 prerequisite controls and the exact
+five-file/twenty-finding output. The three known reference failures remain
+failures; no global compatibility acceptance follows.
+
+Both observe **269,824,195 canonical match entries**, **263,577 sampled
+intervals** and **101,457 nested entries** covered by a sampled parent, across
+request execution up to the CLI dump. The thread counter starts after the CLI
+reads the source and ends at that dump; later native teardown is outside it.
+No caps or multiplex failures occur. This is not the
+analysis-only FIFO scope and excludes direct optimized body execution outside
+canonical matches as a separately identified entry. An interval can also
+contain a compound operation already implemented by its handler.
+
+| Actual match entry | Whole-request entries | Samples | Raw exclusive interval median |
+| --- | ---: | ---: | ---: |
+| `DoFcall` | 12,793,539 | 12,617 | 654 |
+| `Return` | 8,849,455 | 8,513 | 1,058 |
+| `ReleaseTemps` | 38,176,885 | 37,617 | 191 |
+| `AssignCv` | 24,697,811 | 23,988 | 275 |
+| `FetchObjR` | 23,876,086 | 23,163 | 289 |
+| `FetchDimR` | 12,854,824 | 12,562 | 332 |
+| `CallUserFuncArray` | 356,497 | 362 | 10,450 |
+
+These are **diagnostic hardware intervals**, not ordinary-build costs. Their
+empty-scope median is 95 instructions. That separately compiled empty scope is
+not an exact correction for every handler's register allocation and guard
+exit. Profiling changes the build substantially: its FIFO analysis counters
+are 101.292G/102.253G, whereas the unchanged ordinary prerequisite median is
+74.934G. Never report the former as a production regression or subtract the
+calibration and call the result a production instruction price.
+
+For example, the second version's sampled `CallUserFuncArray` inclusive mean
+is 204,030 instructions and the canonical-exclusive mean 52,551. A 9.538M
+exclusive outlier has substantial influence among 362 samples. Exclusion
+removes nested canonical handler intervals; it does not remove optimized PHP
+bodies, native callbacks/builtins, GC or other necessary work outside them.
+Thus this row is not the intrinsic cost of forwarding a call. Do not multiply
+these means into a disjoint, removable whole-program budget. The diagnostic
+narrows operation identity and nesting; it has not closed the instruction ledger
+or justified a rewrite of that call from its mean alone.
+
+The useful architectural conclusion is more limited: repeated result, release,
+call and return protocols have broad coverage; their useful work, intrinsic
+protocol and nested execution must be separated before choosing a replacement.
+The private sampler supplies that distinction and distribution evidence, while
+ordinary A/B measurements remain the acceptance authority. Four build/capture
+jobs finish within verified 6 GiB/no-swap boundaries with zero OOM; no ordinary
+runtime implementation is adopted by this diagnostic.
+
+## Isolate packaging, process mode and actual GC state
+
+The requested control uses both unchanged executables, the same disabled
+`proc_open`/fork functions, fresh temporary directories and two alternating
+rounds. Before/after markers verify that both analyses are serial. The controlled
+archive and its physical extraction have identical contents for all 7,001 files.
+All sixteen observations preserve the five-file/twenty-finding output.
+
+PHPStan already calls `gc_disable()` at startup. An explicit off analysis reports
+zero cycle-collector runs before and after in both interpreters. The forced-on
+control enables GC just before analysis and verifies that it stays enabled after
+it. These statements concern cycle collection, not required RC/drop work or
+candidate bookkeeping.
+
+| Input / analysis GC mode | PHP instructions / analysis time | RPHP instructions / analysis time |
+| --- | ---: | ---: |
+| PHAR, off | 10.336641G / 0.9848s | 74.938467G / 7.1535s |
+| Physical extraction, off | 10.385073G / 1.0121s | 74.634258G / 7.0861s |
+| PHAR, on before analysis | 10.436963G / 1.0668s | 76.711253G / 7.1945s |
+| PHAR, INI GC off from request startup | 10.392245G / 1.0043s | 74.344990G / 7.2254s |
+
+Unpacking reduces RPHP instructions only 0.406%. Enabling analysis GC increases
+RPHP instructions 2.366% and PHP instructions 0.971%; PHP remains about seven
+times cheaper. Disabling GC from request startup reduces RPHP instructions
+0.792%, but raises median peak RSS from 558.61 to 994.01 MiB and does not improve
+analysis time. None of these controls supplies a production change or explains
+the large gap. Compare times within this window; do not mix them with earlier
+ordinary or PGO builds/windows.
+
+## Close the native self-period and outer application ledgers
+
+A separate unchanged-binary capture reconciles every sampled instruction period
+to one self row: RPHP 74.830022G over 7,483 samples, PHP 10.330003G over 1,033.
+Both report zero lost samples. RPHP leaf symbols resolve; PHP has 4.300001G at
+unresolved static-handler addresses inside its known executable. Requested
+DWARF unwind does not recover most RPHP callers, so the capture does not close
+causal attribution of inline work. Sampling is not an exact per-function count.
+For example, RPHP main self is 24.470007G, return-owner retirement 3.780001G,
+statement-temp release 2.200001G, and native memmove 1.740001G. The main self row
+includes inlined semantic work and cannot be labeled pure dispatch overhead.
+The public packet preserves disjoint top rows, DSO totals and the full residual;
+it does not sum inclusive caller costs.
+
+To cut the application with minimal distortion, only three archive sources gain
+sparse outer phase boundaries. An external user-only hardware counter freezes
+and reads each interval; it does not instrument the runtime or function bodies.
+Each of four valid runs contains 37 nonoverlapping intervals whose counts sum
+exactly to its final frozen total, with equal enabled/running times. The two
+alternating-pair medians are **74.640175G RPHP / 10.386858G PHP**. Relative to the
+preceding extracted-input control, these totals differ by only **+0.007928% /
++0.017183%** respectively; acknowledgment latency is not an accepted native
+runtime speed result.
+
+| File ordinal, node/rule interval | PHP instructions | RPHP instructions | RPHP / PHP |
+| --- | ---: | ---: | ---: |
+| 1 | 4.437923G | 30.839426G | 6.949x |
+| 2 | 3.157479G | 24.197675G | 7.664x |
+| 3 | 0.464454G | 3.254153G | 7.006x |
+| 4 | 1.054703G | 7.544985G | 7.154x |
+| 5 | 0.954782G | 6.766940G | 7.087x |
+
+Together the five node/rule intervals consume **72.603179G RPHP / 10.069340G
+PHP**, accounting for **97.324% of the excess instructions**. They include
+called rules, inference, reflection and additional parsing, not only the
+resolver's own statements. Initial per-file parsing is 1.446322G / 0.236413G;
+cache processing is 0.520501G / 0.065963G. The remaining initialization,
+aggregation, finalization and ignore handling are small disjoint residuals.
+This localizes the difference inside language execution during node work; it
+does not yet identify which repeated runtime protocol can remove it. Similar
+ratios across these five files also do not prove scaling for a larger project.
+The next cut must separate called parser/reflection work from rule/inference
+work before choosing a runtime replacement.
+
+The first phase attempt retains correct output but fails its counter/exit gate:
+the installed perf interval mode emits one total, not phase rows. The second
+fails the counter ABI-size preflight before launching PHPStan. Both failures
+are retained; only the corrected external counter capture above passes. All
+three limited jobs and the PHAR/GC/native captures finish with zero OOM. No
+runtime, scorecard or parity acceptance follows from these diagnostics.
 
 ## The next design must eliminate a whole repeated protocol
 
