@@ -863,3 +863,25 @@ the objects and retires both. The [architecture decision](performance-phpstan-ar
 therefore requires explicit storage roles before consuming publication, while
 keeping the unassigned native gap visible. No runtime optimization, feature
 matrix, PGO acceptance or parity result follows from this diagnostic checkpoint.
+
+### Architecture checkpoint: complete operation and owner lifetime
+
+The [operation ledgers](performance-phpstan-architecture.md#operation-ledgers-and-the-architecture-decision)
+compare reads, assignment, nested release and call/exception boundaries step by
+step with pinned PHP source. PHP consumes temporary inputs within their handler
+and links final refcount release to payload/callback destruction. RPHP splits
+publication, range release, callback planning and generic Rust drop; removing
+that repeated protocol is the shared hypothesis, not a complete gap attribution.
+
+The private stack-tail prerequisite passes original argument and closure
+controls, but fails trace lifetime. A targeted final-owner diagnostic finds the
+first destructor-enabled object dropping under a later result-slot overwrite.
+A small completed-Echo cleanup control fixes several stale-owner cases, then
+fails call-argument callback order: PHP retires that argument before Echo, while
+the candidate retires it afterward. The compiler change is restored; all failed
+sources, binaries and outputs remain preserved. This requires consumption at
+each complete operation rather than a later compensating writer check. No
+runtime adoption or PHPStan benchmark follows, and the native scorecard and
+parity goal remain unchanged. The [packet](performance-phpstan-architecture-data.json)
+records both partial gates and the verified memory boundaries, including the
+failed semantic service exit.

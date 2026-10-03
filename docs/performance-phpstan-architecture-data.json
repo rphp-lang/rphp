@@ -1,5 +1,5 @@
 {
-  "status": "verified architecture comparison and rejected read-region closure; no runtime migration",
+  "status": "architecture comparison with complete operation ledgers and a failed private lifetime prerequisite; no runtime adoption",
   "date": "2026-10-03",
   "production_commit_at_intake": "2a2358acf05d7b5d7cfbdf28ae72bc4d100277bb",
   "production_changed": false,
@@ -165,7 +165,8 @@
       "reference_analysis_seconds": 0.928279877,
       "instruction_ratio": 6.623816189135282,
       "scope_limit": "reference is the one observed reference run in this repair window, not a reference distribution; diagnostic/ordinary results do not replace PGO medians"
-    }
+    },
+    "verification_limit": "Historical key retained. Frozen repair passes its original packet but subsequently fails original-argument identity/lifetime controls; not globally lifetime-correct."
   },
   "current_native_self_profile": {
     "total_period": 68458205374,
@@ -335,9 +336,9 @@
     "planning_interaction_limit": "Region annotation precedes existing whole-function plan detection; detector interaction is unresolved. This is not an isolated architecture comparison."
   },
   "proposed_next_checkpoint": {
-    "status": "design proposal; implementation has not begun",
+    "status": "general consuming-operation design; private entry/lifetime prerequisite active and not accepted",
     "scope": "general read-result consumption and retirement using shared lifetime/effect metadata and all existing Value kinds",
-    "baseline": "correct preserved owned-frame repair",
+    "baseline": "frozen owned-frame repair, with later original-argument identity/lifetime failures retained explicitly",
     "minimum_ordinary_instruction_improvement_percent": 2,
     "threshold_is_forecast": false,
     "forbidden_shortcuts": [
@@ -400,5 +401,155 @@
     "native_partition_sum_checked": true,
     "rejected_attempt_partition_checked": true,
     "focused_or_full_runtime_tests_added_for_documentation": false
+  },
+  "active_ownership_prerequisite": {
+    "status": "private v2; lifetime gate failed; no native performance measurement",
+    "source_sha256": "77fd3d6ce587d035701be9d4d46f946cad0d8faa1c19409cec8f110642df4e8d",
+    "ordinary_binary_sha256": "bf8e08e503cce06ea49c04f9db0e7ff434bb226b966e97a2d4158f26b6ed12e4",
+    "ordinary_binary_bytes": 24352704,
+    "layout": "64-byte ExecuteData header retained; original argument tails live in separate appended owned stack cells",
+    "low_level_frame_tests_passed": 2,
+    "focused_gate_complete": false,
+    "focused_gate_passed": false,
+    "focused_rows": [
+      {
+        "control": "original-arguments.php",
+        "control_sha256": "41fa8c7cdf3df82d271eeaea95dd46221ba6224dba59f727439de048adc1989b",
+        "passed": true,
+        "baseline_matches_reference": false
+      },
+      {
+        "control": "closure-tail.php",
+        "control_sha256": "bc28d67ff15c60246b99a37b99262d1d96795f9183c3cc988e18665e4c8a7480",
+        "passed": true,
+        "baseline_matches_reference": false
+      },
+      {
+        "control": "exception-tail.php",
+        "control_sha256": "2afecba4b97510aab596540f71b758a0b4ea0e6ecb828ee625c7135b43ebc328",
+        "passed": false,
+        "baseline_matches_reference": false
+      }
+    ],
+    "unrun_entry_controls": [
+      "fiber-generator-tail.php",
+      "generator-tail.php",
+      "references-cow-coercion.php"
+    ],
+    "exception_control_outputs": {
+      "php": {
+        "stdout": "TraceOwner:1\ndrop:1\ncaught\nTraceOwner:2\ndrop:2\ncaught\n",
+        "stdout_sha256": "db58dfd93a1cacb1db0d01cd96cff097d6377d6a0fd22cfc770d74a0d3709e94",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit": 0
+      },
+      "candidate": {
+        "stdout": "TraceOwner:1\ncaught\nTraceOwner:2\ncaught\ndrop:2\n",
+        "stdout_sha256": "aee4da7db3298b41ee427e090ff3c98e81089c8a9991e82a6a5b2f14dae7aeb7",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "exit": 0
+      }
+    },
+    "last_owner_diagnostic": {
+      "source_sha256": "cf9a9428155dff30f74fea84a0ddf58988d8f54261d3fdc2b66dbbdfed093c78",
+      "binary_sha256": "e136abafd09e2e2f0cf4361ed58fb9511c83183e02a460513183ab14d00c7b9c",
+      "build_and_run_boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 71.66395352501422,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2845388800,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "instrumentation": "Feature-only Value object Drop logs RC/lifecycle and captures a native backtrace only for strong_count==1; no PHP owners or runtime alternate path. Raw addresses and paths remain private.",
+      "scope": "single small exception-tail control, not PHPStan or a performance profile",
+      "first_object": {
+        "destructor_retired_at_final_drop": false,
+        "sanitized_native_path": [
+          "rphp::vm::execute::bitmap_drop_and_update",
+          "rphp::vm::execute::write_fetch_dim_result",
+          "rphp::vm::execute::execute_ex_inner"
+        ]
+      },
+      "second_object": {
+        "destructor_retired_at_final_drop": true,
+        "sanitized_native_path": [
+          "rphp::vm::execute::finish_request_shutdown",
+          "rphp::vm::execute::execute_request"
+        ]
+      },
+      "conclusion": "First final object owner survives until a subsequent result-slot overwrite, bypassing PHP callback retirement; second destructor is delayed until shutdown.",
+      "unproved": [
+        "exact producer/consumer/exception edge responsible for the stale owner",
+        "frequency or native instruction cost of that edge in PHPStan",
+        "complete lifetime semantics of the new frame contract"
+      ]
+    },
+    "compiler_source_audit": {
+      "file": "src/compiler/compile/statements.rs",
+      "finding": "Echo emits expression TMP cleanup conditionally on an outer Expr::ArrayAccess or released private CVs. A nested call or null-coalescing expression may retain a read owner.",
+      "classification": "candidate cause requiring a causal differential control, not an established complete fix",
+      "next_control": "general cleanup of the compiler-established completed Echo expression interval; preserve callback timing and ordinary call ownership"
+    },
+    "completed_echo_interval_control": {
+      "status": "rejected complete-fix hypothesis; compiler change restored after preserving exact source and binary",
+      "source_sha256": "8f03ba5995af4f91b86cc884410f33e71869dfad7dadd790f3d9c03c5343f05b",
+      "ordinary_binary_sha256": "580b7b5ed6c50d58262a07451e00f8a1982a515ef0d2232a594667e56b78966d",
+      "ordinary_binary_bytes": 24352960,
+      "control_sha256": "2d1064646b2910dc202f557f9d52752c602d4083e98557372fb377793a5a81f8",
+      "focused_gate_complete": false,
+      "focused_gate_passed": false,
+      "focused_rows": [
+        {
+          "control": "original-arguments.php",
+          "passed": true,
+          "baseline_matches_reference": false
+        },
+        {
+          "control": "closure-tail.php",
+          "passed": true,
+          "baseline_matches_reference": false
+        },
+        {
+          "control": "echo-temporary-consumers.php",
+          "passed": false,
+          "baseline_matches_reference": false
+        }
+      ],
+      "build_and_run_boundary": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 71.54808656798559,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2830430208,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "outputs": {
+        "php": "value:1drop:1|after-one|drop:2|EchoOwnerafter-two|EchoOwner|3|drop:3|after-array|EchoOwner|4|drop:4|after-array|",
+        "repair": "value:1after-one|EchoOwnerafter-two|EchoOwner|3|after-array|EchoOwner|4|after-array|drop:4|drop:2|drop:1|",
+        "candidate": "value:1drop:1|after-one|EchoOwnerdrop:2|after-two|EchoOwner|3|drop:3|after-array|EchoOwner|4|drop:4|after-array|"
+      },
+      "finding": "Completed-Echo cleanup fixes returned-object and wrapped-array-read lifetime cases in this fixture. The function-argument case still releases its object after printing the result, whereas PHP releases it before printing. A completed expression boundary does not replace each operation consumer boundary.",
+      "remaining_controls_not_run": "Exception-tail, generator, Fiber and reference/coercion controls are not reached after the Echo control fails.",
+      "phpstan_or_native_benchmark_run": false
+    }
   }
 }

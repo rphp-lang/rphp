@@ -27,6 +27,13 @@ standard-library snapshots do not emerge as the large-gap explanation. A
 stronger argument-identity control also shows why matching counts alone did
 not validate original-argument retention on the repaired baseline.
 
+The [operation ledgers below](#operation-ledgers-and-the-architecture-decision)
+make the proposed redesign explicit: compare complete language operations,
+including the disappearance of their last input owner. A targeted diagnostic of
+the active private prerequisite now finds a stale temporary losing its final
+object under a result-slot overwrite. This is a concrete ownership-contract
+failure, not a measured explanation of the entire performance gap.
+
 ## What the measurements establish
 
 The independent repair window uses the same five files, twenty findings,
@@ -146,6 +153,169 @@ request; in the dominant parser it accounts for 18.760 million, 25.61% of that
 body. Frequency identifies a shared protocol. Its native cost must still be
 measured, and an empty release marker can carry an exception boundary even when
 it has no owner to drop.
+
+## Operation ledgers and the architecture decision
+
+The comparison unit is a complete PHP action, rather than a Rust function or a
+VM dispatch. The following ledgers describe ordinary successful paths; warnings,
+references, hooks, callbacks and exceptional exits remain part of the operation
+contract. Each proposed saving is a hypothesis until the complete path is
+measured against the same-output baseline.
+
+### Reading an array element and assigning it
+
+| Phase | RPHP protocol | PHP protocol | Proposed architectural change |
+| --- | --- | --- | --- |
+| Locate inputs | Resolve storage classes, dereference inputs and obtain the existing property/array cache or storage path. | Generated operand-specific handler resolves compiled addresses and uses the existing cache/table path. | Finalize static address and lifetime facts once; preserve dynamic lookup and reference checks. |
+| Read the value | Existing read paths clone or create the result as required. A heap clone normally copies a handle and increments RC. | The read handler uses ZVAL_COPY_DEREF; heap results also retain an owner. | Preserve required owners. Removing every read clone would change the language semantics. |
+| Publish the temporary | The common writer accounts for previous slot ownership, metadata and possible Rust drop. | The handler writes the result into its compiler-managed temporary. | Prove the result slot's state at every entry and predecessor. A dead expression owner must already have been consumed, rather than rediscovered by the next writer. |
+| Consume read inputs | Subsequent release markers reconcile a range of slots, provenance, callback work and the observable boundary where emitted. | FETCH_DIM_R performs FREE_OP2/FREE_OP1 and its exception check before the next dispatch. | Put proved last-input consumption in the read operation, with the same callback order and resume position. |
+| Assign and finish | Assignment can already move its source; destination replacement and later range release remain distinct protocols. | Assignment takes care of its source, releases the overwritten destination and copies an expression result only when used. | Use the same consumption description for assignment. Delete a release marker only after replacing every remaining owner and boundary effect. |
+
+This removes repeated ownership decisions only if the compiler and executor
+agree about the entire chain. Merely fusing dispatch while retaining the old
+getters, writers and release planner is the rejected eager value-graph design.
+Likewise, a bitmap test added to every fresh writer would compensate for an
+unproved contract rather than establish one.
+
+### Releasing a value containing objects
+
+PHP's ordinary
+[release primitive](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_variables.h#L32)
+decrements the payload's count. Only the final decrement dispatches to a payload
+destructor. The
+[array destructor](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_hash.c#L1814)
+then releases its actual entries in storage order. The
+[type dispatch](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_variables.c#L39)
+connects that release to object, resource and reference destruction; PHP's
+[object callback](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_objects.c#L114)
+also handles pending exceptions. Cycle collection is a separate operation when
+ordinary decrements leave a cycle alive. This does not mean PHP never traverses
+objects, collects cycles or pays callback costs.
+
+RPHP's Rust drop releases host Rc payloads but cannot itself run an ordinary PHP
+object callback. VM code therefore prepares callbacks before allowing some
+owners to disappear. The repaired baseline uses final-owner tests, value-tree
+inspection, retained handles, alias counting and callback plans in different
+release roles. Some general retirement paths repeat planning after a destructor
+replaces an exception. There are existing shallow/shared exclusions; this is
+not a claim that every scalar or shared array receives a graph walk.
+
+| Phase | RPHP distinction | Required replacement contract |
+| --- | --- | --- |
+| Commit the language effect | Several writers prepare retained callback owners around their write; frame and temporary retirement have different callers. | Detach the real old owner at the opcode's committed write/consume boundary and publish the new observable state before re-entry. |
+| Determine final ownership | Host owners, temporary snapshots and runtime mirrors can enter count/planning proofs. | State which owners are semantic storage edges and which are internal retained handles. Check actual final ownership when that edge is released. |
+| Retire nested values | Inspection and alias plans arrange callbacks before the later Rust payload drop. | A single VM-aware owner protocol must preserve actual entry order, outside aliases, references, resurrection and remaining siblings after exceptions. |
+| Finish storage teardown | Generic nested Rust drops can still lose a final PHP object if a release path bypassed the planner. | Every final language owner must reach the semantic release boundary; a later unrelated slot overwrite must not finish its lifetime. |
+| Preserve GC and suspension | Candidate admission, reference cells, generators and Fibers have separate state. | Keep GC-aware storage release, proved snapshot release and resumable callback roots explicit in the same contract. |
+
+The recommended design keeps ordinary Rust and the current Value representation
+for the first slice. It moves static lifetime work to compiler finalization and
+gives a consuming operation one VM-aware owner-retirement contract. It does not
+require a global mutable ExecutorGlobals pointer from arbitrary Rust Drop, a
+new allocator, or a custom refcount representation before establishing the
+semantic boundary.
+
+Importantly, an earlier
+[unique-array owner-consumption prototype](performance-phpstan-array-retirement-rejected.md)
+already yielded **+0.02449% instructions**, not a material improvement. Changing
+that helper alone is rejected evidence. A new slice must actually remove the
+surrounding publication/consumption work and demonstrate coverage; the simpler
+release model is not itself a speedup forecast.
+
+### Calls, argument introspection and exceptional exit
+
+Both VMs must retain by-value arguments and preserve reference cells. PHP places
+extra arguments after the compiled CV/TMP region; variadic packing does not
+authorize discarding the original arguments seen by func_get_args or a trace.
+RPHP's frozen repair retains originals through separate snapshot/storage paths,
+but its raw entry owners can overlap compiled TMPs. The active private
+prerequisite moves original tails to separate stack-owned cells while retaining
+the 64-byte frame header. This addresses a semantic precondition, not the
+application instruction gap.
+
+The private second revision passes the original-argument identity/destructor
+control and the closure-tail control. Its next control still fails:
+
+```php
+class TraceOwner {
+    function __construct(public int $id) {}
+    function __destruct() { echo "drop:", $this->id, "\n"; }
+}
+function original_throw(...$args) {
+    $args = [];
+    throw new Exception('control');
+}
+foreach ([1, 2] as $mode) {
+    try {
+        if ($mode === 1) original_throw(new TraceOwner($mode));
+        else (new ReflectionFunction('original_throw'))
+            ->invokeArgs([new TraceOwner($mode)]);
+    } catch (Throwable $e) {
+        $args = $e->getTrace()[0]['args'];
+        echo get_debug_type($args[0]), ':', $args[0]->id ?? 'missing', "\n";
+        unset($args, $e);
+        echo "caught\n";
+    }
+}
+```
+
+With exception arguments enabled, PHP prints each destructor before `caught`.
+The private revision preserves both identities but omits `drop:1` and defers
+`drop:2` until shutdown. A feature-only last-owner trace places the first
+destructor-enabled final object drop under
+`bitmap_drop_and_update -> write_fetch_dim_result -> execute_ex_inner`.
+The second final drop is under request shutdown after its destructor ran late.
+Raw pointers, native backtraces and local paths remain private; the
+[architecture packet](performance-phpstan-architecture-data.json) records exact
+identities, output and the sanitized paths.
+
+This establishes a stale owner ending at result overwrite on this control.
+It does not yet establish which compiler/exception edge left it live, how often
+that edge occurs in PHPStan, or an instruction saving. The next prerequisite is
+to trace its real producer, consumers and exceptional successors and make the
+same lifetime description govern normal, catch and resumable execution. Adding
+another result-writer callback check would preserve the architectural split.
+No PHPStan performance cycle is admitted while this control fails.
+
+A subsequent small causal control replaces the compiler's outer-ArrayAccess
+condition for Echo cleanup with cleanup of its complete compiled expression
+interval. It fixes returned-object and wrapped-array-read lifetimes in that
+fixture, but still fails a call-argument boundary:
+
+```php
+class EchoOwner {
+    function __construct(public int $id) {}
+    function __destruct() { echo "drop:", $this->id, "|"; }
+}
+function echo_type($value) { return get_debug_type($value); }
+echo echo_type(new EchoOwner(2)), "after-two|";
+```
+
+PHP destroys the argument before printing `EchoOwner`; the private revision
+prints `EchoOwner` before destroying it. Both retain the argument while the
+function runs. Post-Echo cleanup releases the extra caller temporary too late.
+This rejects that revision as a complete fix and confirms that the consuming
+**operation**, including a completed call, needs its own lifetime boundary.
+The compiler edit is restored after preserving exact source, binary and failed
+output. The exception control is not rerun after this earlier control fails;
+there is no claim that it is repaired. No PHPStan or native timing run follows.
+
+### What this architecture review decides
+
+The next performance slice remains a complete general read/assignment operation
+with compiler-proved consumption and one result/owner protocol. Fixing entry
+geometry and the failing lifetime edge is its prerequisite. Array physical-copy
+counts do not support mass standard-library snapshots as the next explanation;
+dispatch and allocator replacement alone cannot close the measured budget.
+
+The unassigned budget remains substantial. Regex computation has its own native
+engine, named VM helpers include lookup/scope/type work, and generic hash/drop/
+allocation descendants are not fully attributed to semantic callers. A complete
+VM ownership slice must be followed by disjoint attribution of those residuals.
+The review establishes why the current protocol can do extra work and how to
+test a cheaper one; it does not establish that one architecture change removes
+the entire approximately 58-billion difference.
 
 ## Where the cost is and what remains unexplained
 
