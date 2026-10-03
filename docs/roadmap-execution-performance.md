@@ -726,3 +726,16 @@ the one-percent limit. No production migration or performance improvement is
 accepted. Keep the repair and exact evidence for a measured shared ownership
 protocol; do not reintroduce unsound borrowing to recover its apparent saving.
 Production scorecard and simultaneous parity goal remain unchanged/open.
+
+
+### Rejected owned-release code-generation boundary
+
+The [release-boundary control](performance-phpstan-release-boundary-control.md)
+preserves the correct private ownership repair but reduces ordinary analysis
+instructions by only 0.064612%, below its two-percent selector. Sixteen PHP
+controls pass and native main text/stack barely change; no PGO or broad feature
+cycle follows rejection. Fresh zero-loss self profiles reconcile and put roughly
+two thirds of instruction samples in main and other explicitly named VM code,
+without establishing a removable budget. Production and the accepted scorecard
+remain unchanged. Quantify actual redundant ownership/publication on the owned
+baseline before any new transfer design; simultaneous parity stays open.

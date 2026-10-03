@@ -1,0 +1,53 @@
+--- a/src/vm/execute/call_frames.rs
++++ b/src/vm/execute/call_frames.rs
+@@ -2139 +2139 @@
+-#[cold]
++#[inline]
+@@ -2179 +2178,0 @@
+-#[cold]
+@@ -2579 +2578 @@
+-#[cold]
++#[inline]
+@@ -2590 +2589 @@
+-#[cold]
++#[inline]
+@@ -2616 +2615,14 @@
+-    let requires_vm_release = value_tree_requires_vm_release(
++    let requires_vm_release = inspect_final_release_tree(eg, value);
++    requires_vm_release.then(|| PreparedValueDestructor::Direct {
++        owner: value.clone(),
++        replaced_references,
++        fiber_owned_references,
++    })
++}
++
++/// Keep final-root inspection scratch outside ordinary owner classification.
++/// The same proof and scratch lifetime apply before constructing either plan.
++#[cold]
++#[inline(never)]
++fn inspect_final_release_tree(eg: &ExecutorGlobals, value: &Value) -> bool {
++    value_tree_requires_vm_release(
+@@ -2623,6 +2635 @@
+-    );
+-    requires_vm_release.then(|| PreparedValueDestructor::Direct {
+-        owner: value.clone(),
+-        replaced_references,
+-        fiber_owned_references,
+-    })
++    )
+@@ -2635 +2642 @@
+-#[cold]
++#[inline]
+@@ -2658,8 +2665 @@
+-        || !value_tree_requires_vm_release(
+-            eg,
+-            value,
+-            &mut InspectionIdentitySet::default(),
+-            &mut InspectionIdentitySet::default(),
+-            &mut InspectionIdentitySet::default(),
+-            &mut InspectionIdentitySet::default(),
+-        )
++        || !inspect_final_release_tree(eg, value)
+@@ -2675 +2675 @@
+-#[cold]
++#[inline]
