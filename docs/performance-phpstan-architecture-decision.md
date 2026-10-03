@@ -332,6 +332,54 @@ are retained; only the corrected external counter capture above passes. All
 three limited jobs and the PHAR/GC/native captures finish with zero OOM. No
 runtime, scorecard or parity acceptance follows from these diagnostics.
 
+## Separate called components inside the node intervals
+
+A further four-method diagnostic restores the previous interval through
+`finally`, so nested parser work is counted separately from node callbacks and
+inference. Both unchanged executables preserve all output hashes in two
+alternating pairs; their hardware intervals again sum exactly to the frozen
+total. Relative to the preceding outer-boundary control, measurement adds
+**0.370056% RPHP / 0.316074% PHP instructions**. Its many FIFO transitions add
+substantial wall latency, so its 7.8088s / 1.4404s medians are diagnostic times,
+not a new ordinary performance scorecard.
+
+| Disjoint component | PHP instructions | RPHP instructions |
+| --- | ---: | ---: |
+| Parser core | 0.761329G | 4.482621G |
+| Parser wrapper / transforms | 0.386401G | 2.655725G |
+| Node callbacks, excluding nested parser work | 1.638865G | 12.532547G |
+| Remaining node / inference intervals | 7.555804G | 54.705864G |
+| All other outer intervals | 0.077290G | 0.539629G |
+| Total | 10.419688G | 74.916385G |
+
+Parser work is not the large-gap explanation by itself. The remaining
+node/inference interval still costs about **7.24x** PHP instructions. That
+interval includes PHPDoc processing and other called operations; it is not a
+price for a single resolver helper. The broad body-entry census already shows
+many repeated short type/logic methods with matching calls. These component
+counts direct the next experiment toward repeated general VM operations, not
+application-name recognition or changes to PHPStan behavior. The four-method
+capture has zero OOM and changes no runtime or accepted native scorecard.
+
+## Incorrect cold hints do not explain the instruction multiplier
+
+Native sampling shows that return-owner retirement, statement-temp release and
+individual owner retirement are common work despite `#[cold]` annotations.
+An isolated Rust candidate removes only those three attributes; all function
+bodies, ownership rules and callback/exception behavior stay byte-for-byte
+unchanged. This is a code-generation hypothesis, not a new value-type shortcut.
+
+The candidate preserves all 41 prerequisite controls, including the three known
+PHP lifetime discrepancies. Two ordinary alternating pairs reduce analysis from
+**74.910516G to 74.905426G instructions
+(-0.006795%)**. Analysis-time medians are
+**7.1671s / 7.2644s
+(+1.357703%)**. The executable grows only 160 bytes.
+The 2% admission screen fails, so reject the candidate without PGO, a feature
+matrix or adoption. Compiler annotations are not the large-gap explanation in
+this build. All three limited jobs have zero OOM; exact source/binary are
+retained and the superseded build cache is removed.
+
 ## The next design must eliminate a whole repeated protocol
 
 Use ordinary Rust and one canonical executor. Define a finalized operation

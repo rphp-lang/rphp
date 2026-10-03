@@ -1065,3 +1065,27 @@ instructions; they include called parser/reflection/inference work, so further
 component isolation is needed. Retain the failed perf interval attempt and ABI
 preflight; all limited jobs have zero OOM. No production, PGO, native acceptance
 or scorecard change follows. Simultaneous instruction/time parity stays open.
+
+### Nested component ledger inside node processing
+
+The [four-method component cut](performance-phpstan-architecture-decision.md#separate-called-components-inside-the-node-intervals)
+keeps parser periods disjoint from callbacks and remaining inference. Four
+matching requests reconcile every frozen interval; instruction distortion is
++0.370056% RPHP / +0.316074% PHP versus outer controls. Parser core/wrappers
+cost 7.138345G / 1.147730G; callbacks 12.532547G / 1.638865G; remaining node
+work 54.705864G / 7.555804G. The large multiplier persists in ordinary type
+analysis. FIFO latency makes these diagnostic times ineligible as native speed
+results. No runtime or scorecard adoption follows; parity remains open.
+
+### Frequent owner retirement: cold-hint screen rejected
+
+The [annotation screen](performance-phpstan-architecture-decision.md#incorrect-cold-hints-do-not-explain-the-instruction-multiplier)
+removes only three cold attributes from native-profiled retirement functions.
+All 41 prerequisite controls preserve their output; three known reference
+lifetime failures remain visible. Two native pairs yield
+74.910516G / 74.905426G
+(-0.006795%) and 7.1671s /
+7.2644s (+1.357703%).
+Reject below the 2% instruction screen without PGO or matrix. Binary growth is
+160 bytes; all three limited jobs have zero OOM and superseded build cache is
+removed. No production or parity adoption follows.
