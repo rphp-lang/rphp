@@ -878,5 +878,202 @@
     },
     "decision": "Retain the private owner contract as the prerequisite for broader consuming-publication work, without production adoption or PGO/full matrix expansion. Approximately 0.8 percent instruction reduction does not meet the material selector and does not explain the large PHP gap.",
     "remaining_goal": "Simultaneous actual PHPStan instruction/time parity with PHP remains active and unachieved."
+  },
+  "owner_effect_model_v1": {
+    "status": "diagnostic-only broader scratch ownership effects; no writer selection or release elision",
+    "baseline_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "source_sha256": "c8479d89a99126abda650c77f2336b5a81b4e3cf2881d8cd90580c425e5972ac",
+    "binary_sha256": "19443a3d76db5cfe3eb0b67bd2e04e118285b7b53d836b0bc557b4494368e4f1",
+    "binary_bytes": 24650656,
+    "proof": {
+      "effects": "explicit ordinary Value producers, private TMP-preserving call/CV effects and already proved by-value argument consumption; unknown effects kill facts",
+      "eligibility": "at most one explicit TMP definition and modeled non-escaping uses; hidden writes, reference/VAR exposure and reserved scope cells excluded",
+      "control_flow": "actual jumps and joins, foreach empty edge and independently unknown catch roots; finally, resumable and unsupported skip effects decline",
+      "range_observation": "prefix ownership bits must be clear even for scalar Values; initialized wide slots must own no payload",
+      "compiler_solver_tests": 13,
+      "retained_controls": 16,
+      "extra_entry_consumer_controls": 13,
+      "extra_control_ini": "zend.exception_ignore_args=0 on both runtimes",
+      "all_focused_outputs_match": true
+    },
+    "request": {
+      "files": 5,
+      "findings": 20,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+      "compiled_bodies": 10686,
+      "declined_bodies": 290,
+      "tracked_slots": 48623,
+      "absent_result_observations": 17616251,
+      "empty_release_observations": 4367166,
+      "empty_release_pending_exception_observations": 0,
+      "all_live_mismatches": 0,
+      "whole_request_decoded_steps": 269905727,
+      "whole_request_release_steps": 38177072,
+      "empty_release_share": 0.11439237666000159,
+      "analysis_only_instruction_denominator": false
+    },
+    "build_and_application_boundary": {
+      "exit": 0,
+      "seconds": 153.61588164200657,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3183796224,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "extra_entry_boundary": {
+      "exit": 0,
+      "seconds": 0.42309474499779753,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 73515008,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "native_selector_run": false,
+    "production_changed": false,
+    "parity_complete": false
+  },
+  "ordinary_stack_diagnostic": {
+    "status": "output-checked flat self profile retained; semantic caller attribution rejected due incomplete unwind",
+    "baseline_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "build": "ordinary default release, not PGO",
+    "scope": "analysis FIFO only",
+    "event": "instructions:u",
+    "sampling_period": 10000019,
+    "dwarf_capture_bytes": 16384,
+    "decoded_max_stack": 64,
+    "samples": 7482,
+    "sampled_self_periods": 74820142158,
+    "lost_samples": 0,
+    "unwind_quality": {
+      "samples": 7482,
+      "periods": 74820142158,
+      "no_frames": 7134,
+      "only_leaf": 314,
+      "unknown_tail": 30,
+      "multi_known": 5
+    },
+    "outputs": {
+      "exit": 1,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+    },
+    "profile_sha256": "3499fd3447bc166b8574eae09f2755386c20b7ad21d18de9aae24914bdcda683",
+    "profile_bytes": 125986872,
+    "initial_recorder_attempt": {
+      "analysis_started": false,
+      "boundary_exit": 1,
+      "reason": "decoder-only max-stack option rejected before interpreter launch; source and outputs retained"
+    },
+    "successful_boundary": {
+      "exit": 0,
+      "seconds": 17.40849343201262,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 734494720,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "selected_flat_self_rows": [
+      {
+        "symbol": "rphp::vm::execute::execute_ex_inner",
+        "sampled_periods": 24400046360
+      },
+      {
+        "symbol": "rphp::vm::execute::retire_return_frame_owners",
+        "sampled_periods": 3530006707
+      },
+      {
+        "symbol": "__memmove_avx512_unaligned_erms",
+        "sampled_periods": 1770003363
+      },
+      {
+        "symbol": "rphp::vm::execute::release_statement_temps_with_mask",
+        "sampled_periods": 1750003325
+      },
+      {
+        "symbol": "rphp::regex::match_seq_from",
+        "sampled_periods": 1300002470
+      },
+      {
+        "symbol": "core::ptr::drop_glue::<rphp::value::Value>",
+        "sampled_periods": 1140002166
+      },
+      {
+        "symbol": "rphp::vm::execute::value_tree_requires_vm_release",
+        "sampled_periods": 990001881
+      },
+      {
+        "symbol": "rphp::vm::execute::retire_owned_value",
+        "sampled_periods": 950001805
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_replaced_value_destructor_with_references",
+        "sampled_periods": 890001691
+      },
+      {
+        "symbol": "__memcmp_evex_movbe",
+        "sampled_periods": 830001577
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::try_push",
+        "sampled_periods": 770001463
+      },
+      {
+        "symbol": "rphp::vm::execute::prepare_replaced_value_release",
+        "sampled_periods": 730001387
+      },
+      {
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_class",
+        "sampled_periods": 670001273
+      },
+      {
+        "symbol": "rphp::vm::execute::op_instanceof",
+        "sampled_periods": 660001254
+      },
+      {
+        "symbol": "<rphp::value::PhpArray>::prepare_string_key_for_write",
+        "sampled_periods": 640001216
+      },
+      {
+        "symbol": "<alloc::raw_vec::RawVecInner>::try_allocate_in",
+        "sampled_periods": 600001140
+      },
+      {
+        "symbol": "rphp::value::register_cycle_candidate_with_admission",
+        "sampled_periods": 580001102
+      },
+      {
+        "symbol": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+        "sampled_periods": 540001026
+      }
+    ],
+    "semantic_caller_partition_accepted": false,
+    "native_performance_claim": false,
+    "scorecard_changed": false
   }
 }

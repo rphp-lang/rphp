@@ -846,7 +846,6 @@ publication is simplified. Exact failures and resource evidence remain in the
 [packet](performance-phpstan-temp-ownership-contract-data.json). Application
 instruction/time parity remains active and unachieved.
 
-
 ### Architecture checkpoint: physical copies and original argument identity
 
 The [physical array-copy census](performance-phpstan-array-copy-census.md)
@@ -909,3 +908,27 @@ whole-request read hits before CFG/live-owner proof. Keep the private owner
 contract as a prerequisite; design broader consuming publication and account
 for removed work before another implementation selector. Simultaneous PHPStan
 instruction/time parity remains active and unachieved.
+
+### Architecture evidence: broader scratch facts and rejected stack attribution
+
+The [broader effect diagnostic](performance-phpstan-architecture.md#broader-scratch-effects-distinguish-a-proof-from-a-useful-redesign)
+models ordinary Value producers, private call/CV effects and existing proved
+argument consumption. Thirteen solver tests, sixteen retained controls and
+thirteen additional entry/consumer controls pass. The exact five-file/twenty-
+finding request observes 17.616M absent result owners and 4.367M strictly empty
+release intervals with zero live mismatches. Those intervals cover only 11.439%
+of 38.177M whole-request releases; no native reduction follows from that count.
+No writer is selected, release elided or runtime change adopted.
+
+A separate ordinary native diagnostic preserves output and all 7,482 samples,
+but 7,134 have no decoded stack. Semantic caller attribution is rejected and
+the partial fragments are not used to assign generic costs. The initial recorder
+option failure launched no interpreter. Verified boundaries remain 6 GiB,
+zero swap and zero OOM; this is no PGO/time scorecard update.
+
+The [payload-retirement proposal](performance-phpstan-architecture.md#a-concrete-payload-retirement-design-to-evaluate)
+would release detached actual owners through one VM-aware protocol, preserving
+callback order, resurrection, aliases, cycles and suspension before eliminating
+repeated preparation. It must cover complete operations and outlined helpers;
+merely replacing currently empty cleanup markers is not a large-gap solution.
+Simultaneous PHPStan instruction/time parity remains active and unachieved.

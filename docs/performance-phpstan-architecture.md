@@ -394,6 +394,46 @@ The review establishes why the current protocol can do extra work and how to
 test a cheaper one; it does not establish that one architecture change removes
 the entire approximately 58-billion difference.
 
+### Broader scratch effects: distinguish a proof from a useful redesign
+
+A later private diagnostic broadens the same ownership model to ordinary Value
+producers, explicit call/CV effects and already-proved argument consumption.
+Unknown effects still kill facts. At most one explicit definition and modeled
+non-escaping uses admit a scratch cell; reference/VAR exposure, hidden writes
+and reserved scope cells exclude it. Actual CFG joins include the foreach empty
+edge, and catch roots start unknown. Unsupported resumable/finally and skip
+effects decline. These are compiler facts, without payload-type or workload
+guards in ordinary execution.
+
+Thirteen solver tests, sixteen retained controls and thirteen further
+entry/consumer controls pass. The latter use the same explicit exception-argument
+INI on both runtimes. The exact five-file/twenty-finding request observes
+**17.616251M absent result owners** and **4.367166M empty release intervals**,
+with zero live mismatches. An empty interval requires clear prefix owner bits,
+even for scalar bytes, and no payload owner in initialized wide slots.
+
+The diagnostic decodes 269.905727M whole-request steps, including 38.177072M
+release steps. Its proved empty intervals cover only **11.439% of those release
+executions**. These counts do not use the native analysis-only denominator and
+do not measure an instruction saving. No empty release is deleted and no fresh
+writer is selected. Zero observed pending exceptions at the empty intervals
+does not establish that their exception boundary is unnecessary.
+
+This limits the architectural choice: merely making the currently empty
+release intervals cheaper leaves most temporary consumption intact. The next
+slice must change the complete consuming operation and payload retirement,
+rather than adopt this diagnostic as a performance fix. The
+[packet](performance-phpstan-architecture-data.json) preserves exact source and
+binary identities, all focused results and verified 6 GiB/no-swap boundaries.
+
+One separate output-checked ordinary analysis records 7,482 native self samples
+with zero lost samples and a 10,000,019-instruction sampling period. Its flat
+self periods are valid, but **7,134 samples have no decoded stack**. Semantic
+caller attribution is therefore rejected; plausible fragments are not a
+disjoint caller partition. The ordinary build is distinct from the PGO scorecard.
+An initial recorder-option failure launched no interpreter and remains recorded.
+No timing result or new performance acceptance follows from either diagnostic.
+
 ## Where the cost is and what remains unexplained
 
 The frozen repair’s [inline caller budget](performance-phpstan-main-inline-budget.md)
@@ -546,16 +586,60 @@ than changing a Drop annotation but is not yet a proof that this saves the
 roughly 58-billion difference. A successful first slice must reveal how much
 cost remains in lookup, frame construction, calls, builtins and data layout.
 
+### A concrete payload-retirement design to evaluate
+
+The current owner boundary calls `prepare_replaced_value_release`, may inspect
+the value tree and retain a prepared root, runs callbacks, then ultimately lets
+Rust drop the payload. Existing shared/final-owner exclusions already avoid
+many walks. PHP's release primitive instead decrements the real payload count;
+a final count invokes the payload destructor, which releases its actual child
+owners. This motivates a single VM-aware retirement protocol for detached
+owners. It is a design proposal, not an implemented or measured shortcut.
+
+The proposed sequence is:
+
+1. Commit the write or consumption and detach its actual owner from observable
+   storage before any callback. Keep the operation's source position and pending
+   exception policy. An ordinary call argument remains an owned language edge.
+2. Release a shared payload's edge without a speculative child walk. On final
+   ownership, visit the actual array entries, reference target or object
+   properties in language order. Reuse the existing ownership/drop-stack
+   primitives where sound; do not clone a graph merely to inspect it again.
+3. Run a final object's callback while the object can still be resurrected.
+   Re-check the real remaining owners after re-entry before tearing down its
+   children. A Rust `Rc::try_unwrap` before that callback would destroy this
+   possibility and is not a general implementation of PHP object release.
+4. Preserve aliases, COW, property constraints, resource callbacks, exception
+   replacement, remaining siblings, cycle admission and Fiber/generator
+   suspension. Use an explicit bounded/iterative worklist for deep teardown;
+   never retain a Rust borrow across PHP re-entry.
+5. Let the same owner protocol serve read consumption, destination replacement,
+   argument failure and frame exit. Reject a slice that only relocates the old
+   graph planner or leaves its callers doing both protocols.
+
+The possible saving includes preparation and repeated ownership decisions in
+outlined helpers, not just release dispatch. The ordinary diagnostic samples
+0.99G self periods in `value_tree_requires_vm_release`, 0.89G in
+`prepare_replaced_value_destructor_with_references`, 0.73G in
+`prepare_replaced_value_release`, and 0.95G in `retire_owned_value`. They are
+disjoint function self periods in that one ordinary profile; they are not a
+removable budget, an inclusive operation cost or a PGO comparison. Much larger
+costs remain elsewhere, so even a successful owner protocol cannot by itself
+close the approximately sixfold instruction gap.
+
 ## First implementation checkpoint and rejection rules
 
 Begin with **general read-result consumption and retirement**, covering ordinary
-FetchObjR and FetchDimR results used by assignment. Use the frozen owned-frame repair,
-not current production ownership. Keep one semantic executor for every Value
-kind; use compiler facts to combine operations, without introducing another
-typed interpreter or requiring every result to be Long. Calls, heap writes,
-re-entrant access, unknown aliases and unproved exception/interrupt boundaries
-end any borrowed read view. Source ownership at a later callback cannot be
-guessed from the earlier syntax alone.
+FetchObjR and FetchDimR results used by assignment and their detached actual
+owners. Use the tested private entry-storage prerequisite for a new semantic
+comparison; keep the frozen owned-frame repair as historical evidence because
+it fails the stronger entry controls. Its repair is not globally adopted.
+Keep one semantic executor for every Value kind; use compiler facts to combine
+operations, without introducing another typed interpreter or requiring every
+result to be Long. The adjacent read/move envelope is too narrow to stand in
+for the general ownership design. Calls, heap writes, re-entrant access, unknown
+aliases and unproved exception/interrupt boundaries end any borrowed read view.
+Source ownership at a later callback cannot be guessed from syntax alone.
 
 The later entry diagnostics make this implementation conditional: do not
 enable a fresh result writer until the entry/storage role contract above is
