@@ -14,6 +14,12 @@ passed the performance acceptance gates, and production still has the ownership
 defects described in [the lifetime review](performance-phpstan-call-frame-ownership.md).
 PHPStan instruction and time parity remains unachieved.
 
+The subsequent [temporary ownership contract review](performance-phpstan-temp-ownership-contract.md)
+finds that raw argument owners can overlap compiled scratch slots at entry and
+adds a reference-PHP counterexample for reflected variadic argument retirement.
+The repaired baseline is not a globally verified lifetime implementation.
+A uniform entry-storage contract is required before fresh result publication.
+
 ## What the measurements establish
 
 The independent repair window uses the same five files, twenty findings,

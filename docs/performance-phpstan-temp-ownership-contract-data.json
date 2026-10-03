@@ -1,0 +1,284 @@
+{
+  "status": "architecture and diagnostic checkpoint; no runtime optimization accepted",
+  "baseline_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+  "baseline_binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+  "native_performance_acceptance": false,
+  "production_changed": false,
+  "parity_complete": false,
+  "local_screen": {
+    "census_sha256": "540595f196e62f90e0e3803b0cfe3261aa21cd27b049b662d1b89e14616c45bb",
+    "decoded_steps": 269826212,
+    "body_count": 10686,
+    "totals": {
+      "unknown_effect_hits": 111015710,
+      "release_hits": 38177072,
+      "unproved_release_hits": 31314293,
+      "unproved_private_slot_hits": 24492229,
+      "unproved_state_slot_hits": 15154983,
+      "live_owner_slot_hits": 15077231,
+      "effect_release_hits": 2334227,
+      "consuming_assignment_hits": 11069257,
+      "read_result_hits": 32402760,
+      "local_empty_release_hits": 4528552,
+      "local_vacant_read_result_hits": 0
+    },
+    "range_count": 279
+  },
+  "diagnostic": {
+    "source_sha256": "045febc34a3d1e121d8b8b80b964beb10ecb2e7c753e0a4ceee054a29a092f11",
+    "binary_sha256": "562712261a6bf6c85377cb8180773164552f47d6cf927aef96605ecfc1fbedae",
+    "same_phpstan_output": true,
+    "files": 5,
+    "findings": 20,
+    "ordinary_acceptance": false,
+    "counters": {
+      "temp_owner_bodies": 10686,
+      "temp_owner_declined": 290,
+      "temp_owner_slots": 15585,
+      "temp_owner_op_2": 54171,
+      "temp_owner_op_2.mismatch": 0,
+      "temp_owner_op_11": 7675,
+      "temp_owner_op_11.mismatch": 0,
+      "temp_owner_op_13": 268041,
+      "temp_owner_op_13.mismatch": 9,
+      "temp_owner_op_15": 5,
+      "temp_owner_op_15.mismatch": 0,
+      "temp_owner_op_17": 28440,
+      "temp_owner_op_17.mismatch": 0,
+      "temp_owner_op_18": 12058,
+      "temp_owner_op_18.mismatch": 0,
+      "temp_owner_op_19": 247206,
+      "temp_owner_op_19.mismatch": 0,
+      "temp_owner_op_20": 234180,
+      "temp_owner_op_20.mismatch": 0,
+      "temp_owner_op_72": 422149,
+      "temp_owner_op_72.mismatch": 0,
+      "temp_owner_op_101": 2382104,
+      "temp_owner_op_101.mismatch": 0,
+      "temp_owner_op_107": 2594972,
+      "temp_owner_op_107.mismatch": 0,
+      "temp_owner_op_113": 2,
+      "temp_owner_op_113.mismatch": 0,
+      "temp_owner_op_215": 124413,
+      "temp_owner_op_215.mismatch": 0,
+      "temp_owner_op_216": 36521,
+      "temp_owner_op_216.mismatch": 0
+    },
+    "owner_absence_proof_rejected": true,
+    "first_preflight_failure": {
+      "missing_control_fifo": true,
+      "analysis_started": false,
+      "preserved": true
+    },
+    "solver_controls": 6,
+    "existing_lifetime_controls": 16,
+    "minimal_entry_counterexamples": 2
+  },
+  "entry_normalization": {
+    "source_sha256": "e7ef32a6e33a03bb1a4e66adf383e4b606643346da3d927732da19e8f8d3c500",
+    "ordinary_sha256": "c013fca3000bb53befd59edb0df9ded0e881508991eaff05bce088c1f1728e5e",
+    "diagnostic_sha256": "480514c2998b4c68ee725b5322fe35fe6364297add4a3dd77ffb0f266d20c1f9",
+    "entry_control": true,
+    "lifetime_control_passed": false,
+    "observations": [
+      {
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "direct\ninside:1\ndrop\nreflection\ninside:1\ndrop\ndone\n",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      {
+        "runtime": "repair",
+        "exit": 0,
+        "stdout": "direct\ninside:1\ndrop\nreflection\ninside:1\ndone\n",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b"
+      },
+      {
+        "runtime": "candidate",
+        "exit": 0,
+        "stdout": "direct\ninside:1\ndrop\nreflection\ninside:1\ndone\n",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "binary_sha256": "c013fca3000bb53befd59edb0df9ded0e881508991eaff05bce088c1f1728e5e"
+      }
+    ],
+    "native_gate_run": false,
+    "accepted": false
+  },
+  "resources": {
+    "owned-consumer-lifetime-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 1.173632924008416,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 213147648,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-temp-slot-contract-build-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 142.5336125799804,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3567800320,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-temp-slot-contract-debug-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 71.12654107500566,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 2845745152,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-temp-slot-contract-check-v2-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 9.784980647003977,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 623411200,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-temp-entry-controls-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.05097735198796727,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 44154880,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-frame-entry-build-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 211.78601389800315,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3543011328,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-frame-entry-check-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 0.1262060499866493,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 45244416,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-temp-reader-close-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 1.206887721986277,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 213725184,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-temp-reader-final-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 1.206556866003666,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 213016576,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "cleanup": {
+    "complete": true,
+    "removed_disposable_targets": [
+      "rphp-candidate-owned-temp-slot-contract",
+      "rphp-candidate-owned-frame-entry-contract"
+    ],
+    "preserved_source_snapshots_and_exact_binaries": true,
+    "preserved_active_baseline": true,
+    "cleanup": [
+      {
+        "scope": "primary",
+        "exit": 0
+      },
+      {
+        "scope": "isolated",
+        "exit": 0
+      }
+    ],
+    "private_host_configured": false
+  }
+}

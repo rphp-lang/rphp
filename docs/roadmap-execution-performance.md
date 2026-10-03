@@ -826,3 +826,22 @@ parity remains open at the correct repair's independent 68.4784G / 5.9759s versu
 the same window's PHP 10.3382G / 0.9283s observation. Begin the general all-Value
 read-consumption/lifetime contract only with alias/effect proof and real coverage;
 the two-percent ordinary selector precedes PGO and broad verification.
+
+
+### Checkpoint: frame entry precedes temporary ownership proofs
+
+The [temporary ownership contract review](performance-phpstan-temp-ownership-contract.md)
+adds an offline local-lifetime reader (seven focused controls), preserving the
+38.177M release census and screening 4.529M local empty-range hits without
+admitting elision. A private actual-CFG/live-slot diagnostic preserves PHPStan's
+five files/twenty findings but rejects nine fresh-entry ownership claims. Two
+minimal controls expose raw argument owners overlapping compiled TMPs.
+
+The entry-normalization attempt clears those two violations, but both baseline
+and candidate fail the new PHP differential destructor control for reflected
+variadic entry. No runtime change, native gate, PGO or full matrix is accepted.
+PHP keeps original extra-argument owners after the CV/TMP region; a shared
+entry/layout/VM-retirement contract must establish that role before read-result
+publication is simplified. Exact failures and resource evidence remain in the
+[packet](performance-phpstan-temp-ownership-contract-data.json). Application
+instruction/time parity remains active and unachieved.
