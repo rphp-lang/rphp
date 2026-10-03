@@ -778,3 +778,15 @@ Four counter tests, sixteen ownership controls and exact findings pass; one
 reader failure is preserved and repaired without repeating the valid PHP run.
 No runtime speedup is accepted. Investigate shared operation/publication/
 retirement work on the owned baseline; simultaneous parity remains open.
+
+
+### Rejected owned storage-constant execution screen
+
+The [owned storage screen](performance-phpstan-owned-storage-screen.md) supplies
+the earlier expansion's missing execution evidence on the correct repair.
+Twenty-five controls give 75 equal observations, but two alternating ordinary
+pairs increase analysis instructions 75.5094G to 77.1080G (+2.117%) and time
+medians 6.8040/6.9779s. Its large text/stack remains architecture ineligible.
+The exact whole-body matrix is rejected without PGO/full feature expansion;
+no production gain or scorecard change follows. A different shared representation
+must remove work without a second per-operation selector. Parity stays open.

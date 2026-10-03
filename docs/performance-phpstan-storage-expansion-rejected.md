@@ -85,3 +85,13 @@ source, executable and PHAR hashes, the native prologue/text audit, all current
 request observations and the sampled flat self partition. Broader removal of
 operand, ownership and publication work remains the next required direction;
 simultaneous PHPStan instruction/time parity is not complete.
+
+
+## Subsequent executed screen on the owned repair
+
+The [owned execution screen](performance-phpstan-owned-storage-screen.md)
+regenerates all bodies from the separately preserved correct ownership repair.
+After 25 focused controls pass, bounded diagnostic execution records +2.117%
+ordinary analysis instructions. This supplies evidence that was deliberately
+absent above; it does not rewrite the original architecture rejection, claim
+this earlier executable was executed, or accept a production optimization.
