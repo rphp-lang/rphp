@@ -588,13 +588,14 @@ cost remains in lookup, frame construction, calls, builtins and data layout.
 
 ### A concrete payload-retirement design to evaluate
 
-The current owner boundary calls `prepare_replaced_value_release`, may inspect
+The tested private owner boundary calls `prepare_replaced_value_release`, may inspect
 the value tree and retain a prepared root, runs callbacks, then ultimately lets
 Rust drop the payload. Existing shared/final-owner exclusions already avoid
 many walks. PHP's release primitive instead decrements the real payload count;
 a final count invokes the payload destructor, which releases its actual child
 owners. This motivates a single VM-aware retirement protocol for detached
-owners. It is a design proposal, not an implemented or measured shortcut.
+owners. The private prototype below tests this direction; no version has been
+adopted into the runtime or accepted as a performance improvement.
 
 The proposed sequence is:
 
@@ -626,6 +627,98 @@ disjoint function self periods in that one ordinary profile; they are not a
 removable budget, an inclusive operation cost or a PGO comparison. Much larger
 costs remain elsewhere, so even a successful owner protocol cannot by itself
 close the approximately sixfold instruction gap.
+
+### First actual-payload prototype: preparation removed, new protocol rejected
+
+The private prototype retires actual children instead of cloning a root graph
+for preparation. It preserves the original object allocation through callbacks
+and all child retirement, rechecks resurrection, releases dynamic properties
+before declared slots, and removes each typed-reference constraint at its own
+edge. Native, lazy and suspension boundaries retain canonical handling.
+
+Four extraction tests and forty focused PHP differential controls pass, also
+with the seven retained optimization-disable switches. These are limited
+controls, not global correctness acceptance. They expose three existing
+baseline differences: dynamic/declared payload order, nested retirement after
+root resurrection, and global unset. The latter published Undef through Rust
+drop without a VM callback boundary; the prototype detaches the actual global
+and active CV mirror before retiring them. All failed intermediate sources and
+outputs remain preserved privately.
+
+A later exception/weak-reference control also rejects this candidate's
+semantics: after the parent's throwing destructor, its child sees a live weak
+reference where PHP and the prerequisite see null. This failure remains visible
+and is corrected only in the subsequent compact prototype's explicit phases.
+
+Two ordinary alternating analysis pairs reject the performance hypothesis:
+
+| Build | Instructions, round 0 | Instructions, round 1 | Median analysis time |
+| --- | ---: | ---: | ---: |
+| Tested private prerequisite | 74,909,308,339 | 74,908,736,137 | 6.7729 s |
+| Actual-payload prototype | 78,983,992,712 | 78,985,102,310 | 7.1860 s |
+| Same-window PHP, one reference observation | 10,338,060,854 | — | 0.9546 s |
+
+The candidate adds **5.440633% instructions**, retaining the exact five files,
+twenty findings and output hashes. This is the ordinary build comparison;
+the historical 68.478G PGO result is not its baseline. There is no PGO cycle,
+full matrix, architecture acceptance, runtime adoption or scorecard update.
+
+One output-checked native instruction profile of the rejected candidate has
+7,892 samples, zero lost samples and 78.920G sampled self periods. The
+retirement dispatcher rises from 0.950G to 7.420G sampled self periods while
+value-tree inspection falls from 0.990G to 0.370G; these are flat samples from
+separate observations, not a precise causal subtraction. Disassembly shows
+144-byte payload continuation copies. Every child also re-enters the VM
+dispatcher. The hot sampled instruction region supports examining this
+protocol, but imprecise sampling cannot price a particular SIMD move or supply
+inclusive caller attribution.
+
+The next private design must keep a compact owner/cursor continuation, retain
+the original payload allocation, handle ownerless leaves within the release
+primitive, and allocate a worklist only for genuinely unfinished nested
+containers. It must separate callback exceptions from weak invalidation before
+children. This is a new implementation hypothesis; compact storage alone is
+not evidence of a speedup. The [packet](performance-phpstan-architecture-data.json)
+records exact source/binary identities, every native observation and boundaries.
+
+### Compact actual-owner continuation: correct focused phases, selector fails
+
+The second private design holds the original 16-byte Value plus a cursor in a
+24-byte continuation, avoiding whole-payload moves. It keeps the first
+unfinished payload inline, allocates a worklist only for nested unfinished
+containers, handles ownerless scalar leaves within the release primitive, and
+drops ordinary shared edges without a speculative graph walk. Native and
+suspension boundaries still use canonical handling. The object phases now
+capture a callback exception, invalidate weak observers, retire actual weak-map
+owners, then release properties; a throwing callback cannot skip invalidation.
+
+Five extraction tests pass on the byte-identical value module; the changed VM
+phases pass forty-one PHP differential controls and all forty-one with retained
+optimization plans disabled. Compilation, the initial weak/exception regression
+and a stale control-count preflight are preserved as failures. No application
+measurement ran on those failed revisions.
+
+| Build | Instructions, round 0 | Instructions, round 1 | Median analysis time |
+| --- | ---: | ---: | ---: |
+| Tested private prerequisite | 74,905,516,283 | 74,916,285,517 | 6.7412 s |
+| Compact continuation | 75,585,496,530 | 75,586,013,411 | 6.9058 s |
+| Same-window PHP, one reference observation | 10,338,114,608 | — | 0.9736 s |
+
+The exact five-file/twenty-finding analysis still adds **0.900876% instructions**,
+so this version is also rejected. Compact storage removes much of the first
+prototype's regression but establishes no speedup over the tested prerequisite.
+Both instruction and time observations stay in the packet; no PGO, full matrix,
+production adoption or architecture acceptance follows. All effective aggregate
+boundaries have 6 GiB maximum, zero swap and zero OOM.
+
+This rules out these two added per-edge dispatch designs, not every possible
+ownership representation. The next bounded slice returns to the complete
+read/publication/consumption operation described above: compiler-proved fresh
+result storage and last-use operand release must replace existing work and
+preserve its observable boundary. Moving graph preparation into another
+dispatcher is insufficient. The whole-operation proof and actual coverage must
+precede another native selector; owner counts and static opcode frequency alone
+are not a promised instruction reduction. PHPStan parity remains unachieved.
 
 ## First implementation checkpoint and rejection rules
 

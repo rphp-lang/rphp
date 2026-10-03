@@ -932,3 +932,32 @@ callback order, resurrection, aliases, cycles and suspension before eliminating
 repeated preparation. It must cover complete operations and outlined helpers;
 merely replacing currently empty cleanup markers is not a large-gap solution.
 Simultaneous PHPStan instruction/time parity remains active and unachieved.
+
+### Rejected actual-payload retirement prototype
+
+The [first payload prototype](performance-phpstan-architecture.md#first-actual-payload-prototype-preparation-removed-new-protocol-rejected)
+passes four extraction tests and forty focused differential controls, including
+forced optimization-plan disable. It exposes existing object ordering and
+global-unset lifetime defects; these controls do not establish global semantic
+acceptance. Two ordinary alternating analysis pairs increase the exact analysis
+from 74.909022G to 78.984548G instructions (+5.440633%), with time medians
+6.7729/7.1860s. Same-window PHP is 10.338061G/0.9546s.
+
+The rejected candidate's native profile points at the replacement retirement
+dispatcher; assembly copies 144-byte continuation payloads and every child
+re-enters that dispatcher. No PGO/full matrix, runtime adoption, architecture
+acceptance or scorecard change follows. A compact actual-owner continuation and
+explicit callback/weak/child phases are a new private hypothesis, subject to
+the same correctness and material instruction selector. PHPStan parity remains
+active and unachieved.
+
+The [compact continuation](performance-phpstan-architecture.md#compact-actual-owner-continuation-correct-focused-phases-selector-fails)
+keeps a 24-byte actual owner/cursor, avoids whole-payload copies and separates
+callback exceptions from weak invalidation. Five tests on its unchanged value
+module and forty-one differential/plan-disabled controls pass. A prior revision's
+weak/exception regression and a control-count preflight failure remain visible.
+Two ordinary pairs still increase instructions 74.910901G to 75.585755G
+(+0.900876%), with time medians 6.7412/6.9058s; PHP is 10.338115G/0.9736s.
+Reject this variant too, without PGO/matrix or runtime adoption. Return to a
+compiler-proved whole-operation publication/consumption slice that replaces
+existing work instead of adding another per-edge dispatcher; parity stays open.

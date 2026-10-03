@@ -1075,5 +1075,424 @@
     "semantic_caller_partition_accepted": false,
     "native_performance_claim": false,
     "scorecard_changed": false
+  },
+  "rejected_payload_retirement_v3": {
+    "status": "rejected private actual-payload retirement prototype: instruction regression and subsequently confirmed weak/exception semantic regression",
+    "source_sha256": "1f9af9b28d3cd513881325e948ce8646c5b5e20517c9b6c5d7e4bd04d770362d",
+    "binary_sha256": "f0a36d11ca3ce93a036b89b7502e8eff386f9d082c325f3b4e2103d6154623fb",
+    "binary_bytes": 24366336,
+    "baseline_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "baseline_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "build": "ordinary default release; identical toolchain/features; no PGO",
+    "protocol": "actual child owners in insertion/dynamic-before-declared order; root allocation held through callbacks and child retirement; opaque boundaries canonical",
+    "controls": {
+      "extraction_tests": 4,
+      "differential": 40,
+      "optimized_plans_disabled": 40,
+      "passed": true,
+      "equal_exception_ignore_args": 0,
+      "exposed_existing_baseline_defects": [
+        "payload-order-and-identity.php",
+        "payload-resurrection-and-alias.php",
+        "payload-unset-global-boundary.php"
+      ],
+      "later_reference_control": {
+        "control": "payload-exception-weak-boundary.php",
+        "control_sha256": "f33096ac2b981e494d1f6c646b9cb2003ed5490f6f6a45fc6fde1bdde235124e",
+        "binary_sha256": "f0a36d11ca3ce93a036b89b7502e8eff386f9d082c325f3b4e2103d6154623fb",
+        "exit": 0,
+        "timeout": false,
+        "stdout_sha256": "8a2c236341877aa46da435b627cc577922c2d78ef532450d4ccd3f9776a24e6d",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        "matches_reference": false,
+        "candidate_regression": true
+      }
+    },
+    "ordinary_selector": {
+      "scope": "same analysis FIFO, five files, twenty findings",
+      "cpu": 2,
+      "rounds": 2,
+      "warmup": "none; fresh TMPDIR per run",
+      "event": "instructions:u",
+      "samples": [
+        {
+          "runtime": "baseline",
+          "round": 0,
+          "instructions": 74909308339,
+          "analysis_seconds": 6.858866453,
+          "counter_running_percent": 100.0
+        },
+        {
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 78983992712,
+          "analysis_seconds": 7.041923523,
+          "counter_running_percent": 100.0
+        },
+        {
+          "runtime": "candidate",
+          "round": 1,
+          "instructions": 78985102310,
+          "analysis_seconds": 7.330072403,
+          "counter_running_percent": 100.0
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 74908736137,
+          "analysis_seconds": 6.687006235,
+          "counter_running_percent": 100.0
+        }
+      ],
+      "medians": {
+        "baseline": 74909022238.0,
+        "candidate": 78984547511.0
+      },
+      "instruction_delta_percent": 5.440633385990923,
+      "analysis_time_medians": {
+        "baseline": 6.772936344,
+        "candidate": 7.185997963
+      },
+      "reference": {
+        "instructions": 10338060854,
+        "analysis_seconds": 0.954550982,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        }
+      },
+      "outputs": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "threshold_passed": false,
+      "boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 37.666152902995236,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 610336768,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "regression_profile": {
+      "event": "instructions:u",
+      "sampling_period": 10000019,
+      "samples": 7892,
+      "sampled_periods": 78920149948,
+      "lost_samples": 0,
+      "profile_sha256": "7cc77062db2cc9112acb42cf44ab4642a6741b4ab309f09ec7dafe56b881bccc",
+      "profile_bytes": 505248,
+      "selected_self_rows": [
+        {
+          "symbol": "<&mut rphp::vm::execute::call_function_value_iter<core::iter::adapters::map::Map<core::iter::adapters::enumerate::Enumerate<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, core::iter::sources::once::Once<rphp::value::Value>>, core::iter::sources::once::Once<rphp::value::Value>>, core::iter::adapters::cloned::Cloned<core::option::IntoIter<&rphp::value::Value>>>, core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>>>, rphp::stdlib::call_resolved_owned_iter_readback_arg0<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, core::iter::sources::once::Once<rphp::value::Value>>, core::iter::sources::once::Once<rphp::value::Value>>, core::iter::adapters::cloned::Cloned<core::option::IntoIter<&rphp::value::Value>>>, core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>>>::{closure#0}>, true, false>::{closure#16}::{closure#0} as core::ops::function::FnMut<(usize,)>>::call_mut",
+          "sampled_periods": 10000019,
+          "samples": 1
+        },
+        {
+          "symbol": "<&str as core::str::pattern::Pattern>::is_contained_in",
+          "sampled_periods": 60000114,
+          "samples": 6
+        },
+        {
+          "symbol": "<[u8]>::eq_ignore_ascii_case_chunks::<16>",
+          "sampled_periods": 20000038,
+          "samples": 2
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<(&rphp::generics::GenericDeclaration, alloc::vec::Vec<rphp::generics::GenericType>)> as core::ops::drop::Drop>::drop",
+          "sampled_periods": 10000019,
+          "samples": 1
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<(rphp::vm::execute::value_tree_requires_vm_release::TreeHandle, u32)>>::grow_one",
+          "sampled_periods": 60000114,
+          "samples": 6
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<(usize, *mut rphp::runtime::fiber::native::NativeCallback)>>::grow_one",
+          "sampled_periods": 20000038,
+          "samples": 2
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<(usize, *mut rphp::vm::frame::ExecuteData, alloc::rc::Rc<core::cell::RefCell<rphp::vm::generator::Generator>>)> as core::ops::drop::Drop>::drop",
+          "sampled_periods": 30000057,
+          "samples": 3
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<(usize, usize, core::option::Option<alloc::vec::Vec<core::option::Option<rphp::regex::Match>>>, core::option::Option<alloc::string::String>, core::option::Option<alloc::vec::Vec<(alloc::string::String, usize)>>)>>::grow_one",
+          "sampled_periods": 10000019,
+          "samples": 1
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<alloc::boxed::Box<dyn core::ops::function::FnMut<(), Output = core::result::Result<(), core::io::error::Error>> + core::marker::Send + core::marker::Sync>> as core::ops::drop::Drop>::drop",
+          "sampled_periods": 10000019,
+          "samples": 1
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<rphp::compiler::compile::declared_method_facts::Visit> as core::ops::drop::Drop>::drop",
+          "sampled_periods": 20000038,
+          "samples": 2
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVec<rphp::value::DetachedRetirementPayload>>::grow_one",
+          "sampled_periods": 10000019,
+          "samples": 1
+        },
+        {
+          "symbol": "<alloc::raw_vec::RawVecInner<_>>::reserve::do_reserve_and_handle::<alloc::alloc::Global>",
+          "sampled_periods": 20000038,
+          "samples": 2
+        }
+      ],
+      "callgraph_collected": false,
+      "instruction_annotation_limit": "imprecise sampling localizes a hot region, not an exact cost of a single movdqa; no inclusive caller attribution",
+      "structural_finding": "assembly copies 0x90-byte payload continuations; every child re-enters VM-level retirement dispatcher"
+    },
+    "failed_attempts": [
+      {
+        "revision": "v1",
+        "extraction_tests": "1 passed, 3 failed; marker-sensitive fixture preparation corrected",
+        "analysis_run": false
+      },
+      {
+        "revision": "v2",
+        "differential": "3 passed then existing UnsetGlobal semantic defect; baseline and candidate both fail",
+        "analysis_run": false
+      }
+    ],
+    "production_changed": false,
+    "pgo_run": false,
+    "full_matrix_run": false,
+    "architecture_acceptance": false,
+    "scorecard_changed": false,
+    "parity_complete": false
+  },
+  "rejected_compact_retirement_v3": {
+    "status": "rejected private compact actual-owner continuation prototype; no production adoption",
+    "source_sha256": "da3229a423daf2e7cb762c4ecb411f6ae6b1007672f038bcec0dd4af1855a02f",
+    "binary_sha256": "d4b1c734a389e343baf479bae3b134c783cc0665c89b41d9daa87dcae999cea5",
+    "binary_bytes": 24503352,
+    "baseline_source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "baseline_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "build": "ordinary default release, same flags/features/toolchain; no PGO",
+    "continuation_bytes": 24,
+    "protocol": "original Value owner and cursor; ownerless leaves handled inside primitive; ordinary shared edges drop without graph planning; first unfinished payload held inline; callback/pending exception/weak invalidation/actual children are explicit phases; opaque boundaries canonical",
+    "controls": {
+      "extraction_tests": 5,
+      "provenance": "unchanged value module, five tests passed on preserved v2; VM phase changed in v3 and checked by PHP differential controls",
+      "differential": 41,
+      "optimized_plans_disabled": 41,
+      "passed": true,
+      "exception_ignore_args": 0,
+      "exposed_existing_baseline_defects": [
+        "payload-order-and-identity.php",
+        "payload-resurrection-and-alias.php",
+        "payload-unset-global-boundary.php"
+      ]
+    },
+    "ordinary_selector": {
+      "scope": "same analysis FIFO, five files, twenty findings",
+      "event": "instructions:u",
+      "cpu": 2,
+      "rounds": 2,
+      "warmup": "none; fresh TMPDIR per run",
+      "samples": [
+        {
+          "runtime": "baseline",
+          "round": 0,
+          "instructions": 74905516283,
+          "analysis_seconds": 6.796154499,
+          "counter_running_percent": 100.0
+        },
+        {
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 75585496530,
+          "analysis_seconds": 6.907335281,
+          "counter_running_percent": 100.0
+        },
+        {
+          "runtime": "candidate",
+          "round": 1,
+          "instructions": 75586013411,
+          "analysis_seconds": 6.904304743,
+          "counter_running_percent": 100.0
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 74916285517,
+          "analysis_seconds": 6.686241627,
+          "counter_running_percent": 100.0
+        }
+      ],
+      "medians": {
+        "baseline": 74910900900.0,
+        "candidate": 75585754970.5
+      },
+      "instruction_delta_percent": 0.9008756568031018,
+      "analysis_time_medians": {
+        "baseline": 6.741198063000001,
+        "candidate": 6.9058200119999995
+      },
+      "reference": {
+        "instructions": 10338114608,
+        "analysis_seconds": 0.973642826,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        }
+      },
+      "outputs": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "threshold_passed": false,
+      "boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 37.07227546800277,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 603734016,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "failed_attempts": [
+      {
+        "revision": "v1",
+        "stage": "compile",
+        "reason": "one unguarded union-field access; replaced by existing safe identity API",
+        "analysis_launched": false
+      },
+      {
+        "revision": "v2",
+        "stage": "differential",
+        "reason": "root callback exception bypassed weak invalidation; child saw live parent where PHP and baseline saw null",
+        "analysis_launched": false,
+        "candidate_regression": true
+      },
+      {
+        "stage": "selector preflight",
+        "reason": "stale forty-control assertion; preserved before correction to forty-one",
+        "analysis_launched": false
+      }
+    ],
+    "verified_boundaries": {
+      "owned-continuations-build-v1": {
+        "complete": true,
+        "exit": 101,
+        "seconds": 15.7853630509926,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2016071680,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "owned-continuations-build-v2": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 147.2405464510084,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3239632896,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "owned-continuations-build-v3": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 73.78519205999328,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 2835890176,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "owned-continuations-semantic-v1": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 0.19190998500562273,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 72781824,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "owned-continuations-semantic-v2": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 2.222567247983534,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 73515008,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "production_changed": false,
+    "pgo_run": false,
+    "full_matrix_run": false,
+    "architecture_acceptance": false,
+    "scorecard_changed": false,
+    "parity_complete": false,
+    "decision": "do not layer another per-edge dispatcher on top of generic Value drop; next measured slice must remove redundant whole-operation publication/consumption protocol"
   }
 }
