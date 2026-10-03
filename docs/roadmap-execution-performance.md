@@ -752,3 +752,16 @@ transfer implementation or native speedup is accepted. Failed harness attempts
 remain visible, final limits are verified and production is unchanged. Quantify
 wider operand/result/assignment publication and ownership before another general
 representation; simultaneous PHPStan parity stays open.
+
+
+### Reconciled native main inline caller budget
+
+The [inline caller reader](performance-phpstan-main-inline-budget.md) reuses both
+retained zero-loss PGO profiles without another PHPStan run. All physical and
+main self periods reconcile; four reader checks pass, with the rejected unknown-
+line parser retained. Correct-repair main correlates most strongly with Return,
+assignment, statement release and object/dimension reads. Recognized main inline
+clone/drop code totals only 1.100G sampled periods, excluding outlined/unknown
+costs. These are source correlations, not removable budgets. Production and the
+scorecard stay unchanged; quantify whole publication/retirement protocols before
+a new representation, with simultaneous PHPStan parity still open.
