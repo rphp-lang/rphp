@@ -1,0 +1,1449 @@
+{
+  "status": "verified read-only diagnostic; no runtime optimization accepted",
+  "production_commit_at_intake": "336a2542db15c380d82ac8f0783adecc2c9a8bbe",
+  "production_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+  "correct_private_repair_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+  "correct_private_repair_binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+  "diagnostic_source_sha256": "add96e2dd95da4887c50847a87972661f3a3b8ed1e2893db29be2160e08e7b7b",
+  "diagnostic_binary_sha256": "e53891cff660b4edbf2b617b2653dcd45c739df8aecb7fa09745011d967c93cd",
+  "diagnostic_features": "default+vm-stats",
+  "pgo": false,
+  "implementation": "Feature-gated OpArray-owned lazy immutable syntax sidecar and canonical send counters; no global address-keyed registry, new unsafe blocks or execution/ownership changes. Private snapshot also contains incidental rustfmt-only compiler formatting.",
+  "scope": "canonical SendVal and by-value SendVarEx executed sites, whole request; other sends/fused/frame-free and by-ref excluded",
+  "clone_definition": "Value::clone events; heap cases generally copy handles and increment reference counts, not deep-copy payloads.",
+  "static_shape_is_transfer_proof": false,
+  "exclusions": [
+    "other send handlers",
+    "fused sends",
+    "frame-free plans",
+    "by-reference sends",
+    "dominance/CFG and alias/lifetime proof",
+    "analysis-only native instruction costs"
+  ],
+  "tests": {
+    "pure_classifier_passed": 5,
+    "focused_control_cases": 16,
+    "focused_runtime_observations": 48,
+    "focused_all_passed": true,
+    "unsafe_blocks": 1745,
+    "unsafe_functions": 319
+  },
+  "analysis": {
+    "files": 5,
+    "findings": 20,
+    "expected_exit": 1,
+    "observations": [
+      {
+        "runtime": "php",
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "diagnostic_only_wall_seconds": 1.3588309949846007
+      },
+      {
+        "runtime": "repair",
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "diagnostic_only_wall_seconds": 8.440802887984319
+      },
+      {
+        "runtime": "diagnostic",
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+        "diagnostic_only_wall_seconds": 9.307419294025749
+      }
+    ],
+    "exact_stdout_and_ordinary_stderr": true,
+    "stats_stripping": "one separately verified RPHP VM Stats block; exact preexisting phase/perf marker stripping"
+  },
+  "counts": {
+    "totals": {
+      "observed_sends": 16811533,
+      "observed_heap_sends": 13157715,
+      "observed_reference_sends": 4,
+      "tmp_heap_sends": 3584316,
+      "user_tmp_heap_single_mention": 1813548,
+      "user_tmp_heap_single_mention_no_flags": 703414
+    },
+    "by_site": {
+      "SendVal": 8448236,
+      "SendVarEx": 8363297
+    },
+    "by_operand": {
+      "const": 1034946,
+      "cv": 10071421,
+      "tmp": 5705166
+    },
+    "by_value_type": {
+      "array": 3641143,
+      "closure": 397795,
+      "double": 2693,
+      "false": 302590,
+      "long": 2061940,
+      "null": 457553,
+      "object": 5337836,
+      "reference": 4,
+      "resource": 410,
+      "string": 3780531,
+      "true": 829038
+    },
+    "by_callee": {
+      "internal": 6843448,
+      "user": 9968085
+    },
+    "by_shape": {
+      "other_mentions": 11433844,
+      "single_mention": 5377689
+    },
+    "by_flags": {
+      "flagged": 11418289,
+      "no_flags": 5393244
+    },
+    "all_value_clones": {
+      "undef": 3552368,
+      "null": 5262784,
+      "false": 7720578,
+      "true": 4423028,
+      "long": 21754862,
+      "double": 9339,
+      "string": 13528801,
+      "array": 23270895,
+      "object": 28744951,
+      "resource": 670,
+      "reference": 3286271,
+      "closure": 1431602
+    },
+    "all_value_drops": {
+      "undef": 14109331,
+      "null": 13519380,
+      "false": 1525688,
+      "true": 4076241,
+      "long": 11812374,
+      "double": 4674,
+      "string": 16695529,
+      "array": 28523449,
+      "object": 29806506,
+      "resource": 666,
+      "reference": 5184147,
+      "closure": 1661293
+    },
+    "canonical_opcode_counts": {
+      "SendVal": 8448236,
+      "SendVarEx": 8567505,
+      "SendUser": 0,
+      "SendUserChecked": 0,
+      "SendNamed": 1,
+      "SendRef": 159412,
+      "DoFcall": 12793763,
+      "Return": 8849538,
+      "ReleaseTemps": 38177072
+    }
+  },
+  "derived": {
+    "all_heap_clones": 66976919,
+    "all_heap_drops": 76687443,
+    "user_tmp_heap_single_mention_percent_of_heap_clones": 2.7077208493272136,
+    "all_observed_heap_sends_percent_of_heap_clones": 19.645148203965608
+  },
+  "counter_fields": [
+    "site",
+    "operand",
+    "callee",
+    "mention_shape",
+    "flags",
+    "value_type",
+    "count"
+  ],
+  "counter_rows": [
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "null",
+      6376
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "false",
+      3
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "long",
+      18472
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "double",
+      43
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "string",
+      5952
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "flagged",
+      "null",
+      19884
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "flagged",
+      "false",
+      1
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "flagged",
+      "true",
+      3
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "flagged",
+      "long",
+      46248
+    ],
+    [
+      "SendVal",
+      "const",
+      "user",
+      "other_mentions",
+      "flagged",
+      "string",
+      129253
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "long",
+      331
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "string",
+      462
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "null",
+      402
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "false",
+      4
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "true",
+      6
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "long",
+      85813
+    ],
+    [
+      "SendVal",
+      "const",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "string",
+      721693
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "null",
+      17682
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "false",
+      74
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "long",
+      5
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "string",
+      9243
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "array",
+      4944
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "object",
+      10719
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "closure",
+      4
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "null",
+      6710
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "false",
+      4504
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "true",
+      606
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "long",
+      3591
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "string",
+      1001
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "array",
+      2265
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "object",
+      31324
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "closure",
+      57282
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "null",
+      12285
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "false",
+      30029
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "true",
+      6501
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "long",
+      264578
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "string",
+      73813
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "array",
+      344726
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "object",
+      284150
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "resource",
+      1
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "no_flags",
+      "closure",
+      724
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "null",
+      982
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "false",
+      51064
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "true",
+      21498
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "long",
+      291962
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "double",
+      3
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "string",
+      195195
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "array",
+      86607
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "closure",
+      55808
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "null",
+      156
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "long",
+      27991
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "string",
+      77936
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "array",
+      2947
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "closure",
+      44178
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "null",
+      1267
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "false",
+      461
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "long",
+      400956
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "double",
+      34
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "string",
+      258692
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "array",
+      380312
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "object",
+      29049
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "no_flags",
+      "resource",
+      184
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "false",
+      1162
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "true",
+      678258
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "long",
+      97570
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "double",
+      1140
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "string",
+      52003
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "array",
+      379581
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "resource",
+      2
+    ],
+    [
+      "SendVal",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "closure",
+      37591
+    ],
+    [
+      "SendVal",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "null",
+      461
+    ],
+    [
+      "SendVal",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "long",
+      1221
+    ],
+    [
+      "SendVal",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "string",
+      2454
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "null",
+      46858
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "false",
+      58
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "true",
+      371
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "long",
+      108562
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "double",
+      57
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "string",
+      1424538
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "array",
+      1268967
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "object",
+      213360
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "resource",
+      109
+    ],
+    [
+      "SendVal",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "closure",
+      4924
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "other_mentions",
+      "flagged",
+      "object",
+      24113
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "null",
+      60066
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "false",
+      36896
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "true",
+      15654
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "long",
+      77972
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "double",
+      478
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "string",
+      102018
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "array",
+      243775
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "object",
+      414917
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "resource",
+      5
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "reference",
+      4
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "user",
+      "single_mention",
+      "flagged",
+      "closure",
+      11809
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "object",
+      202
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "false",
+      1338
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "long",
+      7373
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "string",
+      148095
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "array",
+      219077
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "object",
+      23
+    ],
+    [
+      "SendVarEx",
+      "tmp",
+      "internal",
+      "single_mention",
+      "flagged",
+      "resource",
+      1
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "null",
+      123
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "false",
+      168
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "true",
+      94
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "long",
+      28
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "double",
+      4
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "string",
+      9918
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "array",
+      2197
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "no_flags",
+      "object",
+      145990
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "null",
+      284063
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "false",
+      176691
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "true",
+      106016
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "long",
+      628079
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "double",
+      846
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "string",
+      522049
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "array",
+      636019
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "object",
+      4182268
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "resource",
+      99
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "user",
+      "other_mentions",
+      "flagged",
+      "closure",
+      185475
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "string",
+      708
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "no_flags",
+      "object",
+      2
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "null",
+      238
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "false",
+      137
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "true",
+      31
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "long",
+      1188
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "double",
+      88
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "string",
+      45508
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "array",
+      69726
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "object",
+      1719
+    ],
+    [
+      "SendVarEx",
+      "cv",
+      "internal",
+      "other_mentions",
+      "flagged",
+      "resource",
+      9
+    ]
+  ],
+  "resources": {
+    "owned-argument-census-build-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 102.52813790002256,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 4389941248,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-argument-census-run-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 0.9706627829873469,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 160010240,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-argument-census-fifo-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 0.9919329240219668,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 160448512,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-argument-census-fifo-v2-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 19.230121092987247,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 632393728,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-argument-census-fifo-v3-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 9.591511333012022,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 633802752,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "harness_failures": [
+    {
+      "stage": "direct reference command",
+      "reason": "phase PHAR requires perf-control FIFOs; no valid analysis",
+      "resource_exit": 1
+    },
+    {
+      "stage": "first repair attempt",
+      "reason": "relative archival parent failed before patching; one unchanged harness invocation also failed",
+      "resource_exit": 1
+    },
+    {
+      "stage": "first FIFO census",
+      "reason": "reader rejected existing typed_ops_loop=2,side_exits=0 compound line after diagnostic request; raw streams retained, exit metadata missing, so not counted as successful",
+      "resource_exit": 1
+    }
+  ],
+  "failure_resolution": "Add correct FIFO wrapper, support existing compound statistics format, save process exit metadata before parsing; reuse exact successful controls/reference/repair observations, repeat only incomplete diagnostic request.",
+  "decision": "Do not start another isolated single-consumer argument-transfer implementation from these counts. Only 2.708% of all observed heap clone events have the counted user/TMP syntax; syntax is not proof of safe removal. Quantify wider operand/result/assignment publication and ownership across the executor before a new general representation.",
+  "production_changed": false,
+  "native_instruction_or_time_acceptance": false,
+  "parity_complete": false
+}

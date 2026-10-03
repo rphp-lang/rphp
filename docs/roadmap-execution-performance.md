@@ -739,3 +739,16 @@ two thirds of instruction samples in main and other explicitly named VM code,
 without establishing a removable budget. Production and the accepted scorecard
 remain unchanged. Quantify actual redundant ownership/publication on the owned
 baseline before any new transfer design; simultaneous parity stays open.
+
+
+### Owned-frame argument publication census
+
+The [read-only argument census](performance-phpstan-owned-argument-census.md)
+passes five classifier tests, sixteen PHP controls and exact five-file/twenty-
+finding output. Canonical by-value send sites account for 13.158M of 66.977M
+whole-request heap clone events. User TMP heap sends with one syntax consumer
+cover only 1.814M (2.708%); syntax is not a CFG/lifetime transfer proof. No isolated
+transfer implementation or native speedup is accepted. Failed harness attempts
+remain visible, final limits are verified and production is unchanged. Quantify
+wider operand/result/assignment publication and ownership before another general
+representation; simultaneous PHPStan parity stays open.
