@@ -977,3 +977,23 @@ without PGO/full matrix, preserving semantic counterexamples, stopped/failed
 attempts and exact binaries. Flat self sampling shows the added input protocol
 but supplies no inclusive operation budget. Price complete read/cache/publication
 and call/frame work before another ownership rewrite; parity remains active.
+
+### Architecture checkpoint: recovered callers and a small root-boundary limit
+
+The [physical caller diagnostic](performance-phpstan-architecture.md#physical-caller-recovery-identifies-the-complete-return-protocol)
+reconciles 7,776 samples/77.760G periods with usable frame-pointer stacks. Nearest
+main source-site partitions put 11.720G at Return and 12.430G at DoFcall, including
+necessary delegated work. These are diagnostic-layout source sites, not exact
+production opcode costs or removable budgets; ambiguous and missing categories
+remain explicit. Failed debug-section/inline-export stages are preserved.
+
+The [root-boundary prototype](performance-phpstan-architecture.md#a-smaller-root-retirement-boundary-helps-but-is-insufficient)
+matches all forty-one canonical prerequisite controls, thirty-eight also matching
+PHP; three known semantic failures remain failures. Two ordinary alternating
+pairs remove 0.992775% instructions (74.933265G to 74.189346G), with analysis time
+6.7258/6.7611s. Same-window PHP is 10.338038G/0.9499s. This fails the declared 2%
+selector; preserve privately without PGO/matrix or runtime adoption. Design one
+storage-edge lifetime protocol that replaces VM preparation plus host-drop
+classification; preserve original allocation, callback commits, weak/resurrection,
+GC and suspendable/native ownership. All effective boundaries have zero OOM.
+PHPStan instruction/time parity remains active and unachieved.

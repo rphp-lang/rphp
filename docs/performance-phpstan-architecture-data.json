@@ -1861,5 +1861,908 @@
     "no_pgo_or_full_matrix": true,
     "runtime_adopted": false,
     "parity_complete": false
+  },
+  "physical_operation_callers_v2": {
+    "status": "validated physical caller/source-site diagnostic; no runtime adoption",
+    "source_sha256": "70ed55d9c2d2ab929dbc2619679a9f66cd182deb211d18191e7a4988cac75ab6",
+    "build": {
+      "seconds": 91.00971503398614,
+      "rustflags": "-C llvm-args=--align-all-functions=6 -C force-frame-pointers=yes",
+      "profile_overrides": {
+        "debug": "1",
+        "strip": "none"
+      },
+      "binary_sha256": "87fcd291de11f289602ce5352c4cfc647f52715bc3982bf8697a3303c8e34aea",
+      "binary_bytes": 116742536,
+      "main_symbol_address": 6363264,
+      "main_symbol_bytes": 341373,
+      "debug_line_present": true,
+      "frame_pointer_prologue_verified": true
+    },
+    "native_profile": {
+      "complete": true,
+      "timeout": false,
+      "exit": 1,
+      "diagnostic_wall_seconds": 8.990820765000535,
+      "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+      "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+      "raw_stderr_sha256": "0369aa2c0a725687fb0afd14601d4d53ce289bd4a96fb8850a47dcd3fe363a47",
+      "data_sha256": "a3a94697613fb4873c38b5fd6b885c44a4e60805fdcd4c1b968696555730c411",
+      "data_bytes": 2186272,
+      "performance_acceptance": false
+    },
+    "export": {
+      "complete": true,
+      "rows": [
+        {
+          "export": "self-physical",
+          "exit": 0,
+          "seconds": 0.06386637699324638
+        },
+        {
+          "export": "stacks-physical",
+          "exit": 0,
+          "seconds": 0.1639928930089809
+        }
+      ]
+    },
+    "quality": {
+      "complete": true,
+      "samples": 7776,
+      "periods": 77760147744,
+      "quality": {
+        "multi_known": 7773,
+        "at_limit": 21,
+        "unknown_tail": 3
+      },
+      "source": "physical frame-pointer diagnostic only; inline export rejected separately"
+    },
+    "loss_check": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.05103028300800361,
+      "lines": 7776,
+      "lost_lines": []
+    },
+    "event": "instructions:u",
+    "period": 10000019,
+    "call_graph": "fp",
+    "max_stack": 64,
+    "method": "same-source frame-pointer diagnostic; sampled self periods assigned once to nearest explicit main source call site; source arm labels are not dynamic opcode counters; optimizer-merged self code is ambiguous; incomplete/shared-library callers remain unassigned",
+    "categories": [
+      {
+        "category": "DoFcall",
+        "periods": 12430023617,
+        "percent": 15.985082304526749,
+        "main_self_periods": 1220002318,
+        "delegated_periods": 11210021299
+      },
+      {
+        "category": "Return",
+        "periods": 11720022268,
+        "percent": 15.072016460905349,
+        "main_self_periods": 1450002755,
+        "delegated_periods": 10270019513
+      },
+      {
+        "category": "ReleaseTemps",
+        "periods": 6120011628,
+        "percent": 7.87037037037037,
+        "main_self_periods": 1490002831,
+        "delegated_periods": 4630008797
+      },
+      {
+        "category": "CallUserFuncArray",
+        "periods": 3440006536,
+        "percent": 4.423868312757202,
+        "main_self_periods": 210000399,
+        "delegated_periods": 3230006137
+      },
+      {
+        "category": "AssignCv",
+        "periods": 3290006251,
+        "percent": 4.2309670781893,
+        "main_self_periods": 2030003857,
+        "delegated_periods": 1260002394
+      },
+      {
+        "category": "FetchObjR",
+        "periods": 2840005396,
+        "percent": 3.652263374485597,
+        "main_self_periods": 1840003496,
+        "delegated_periods": 1000001900
+      },
+      {
+        "category": "shared_library_caller_unattributed",
+        "periods": 2760005244,
+        "percent": 3.5493827160493825,
+        "main_self_periods": 0,
+        "delegated_periods": 0
+      },
+      {
+        "category": "executor_prelude",
+        "periods": 2540004826,
+        "percent": 3.2664609053497937,
+        "main_self_periods": 2480004712,
+        "delegated_periods": 60000114
+      },
+      {
+        "category": "AssignObjProp",
+        "periods": 2530004807,
+        "percent": 3.2536008230452675,
+        "main_self_periods": 1120002128,
+        "delegated_periods": 1410002679
+      },
+      {
+        "category": "AssignDim",
+        "periods": 2430004617,
+        "percent": 3.125,
+        "main_self_periods": 500000950,
+        "delegated_periods": 1930003667
+      },
+      {
+        "category": "main_source_unresolved",
+        "periods": 2370004503,
+        "percent": 3.0478395061728394,
+        "main_self_periods": 2060003914,
+        "delegated_periods": 310000589
+      },
+      {
+        "category": "dispatch",
+        "periods": 2180004142,
+        "percent": 2.8034979423868314,
+        "main_self_periods": 2180004142,
+        "delegated_periods": 0
+      },
+      {
+        "category": "FetchDimR",
+        "periods": 2160004104,
+        "percent": 2.7777777777777777,
+        "main_self_periods": 1790003401,
+        "delegated_periods": 370000703
+      },
+      {
+        "category": "InitMethodCall",
+        "periods": 2090003971,
+        "percent": 2.6877572016460904,
+        "main_self_periods": 1250002375,
+        "delegated_periods": 840001596
+      },
+      {
+        "category": "BitwiseAnd",
+        "periods": 2030003857,
+        "percent": 2.61059670781893,
+        "main_self_periods": 2030003857,
+        "delegated_periods": 0
+      },
+      {
+        "category": "NewObj",
+        "periods": 1600003040,
+        "percent": 2.05761316872428,
+        "main_self_periods": 10000019,
+        "delegated_periods": 1590003021
+      },
+      {
+        "category": "Include",
+        "periods": 1400002660,
+        "percent": 1.800411522633745,
+        "main_self_periods": 0,
+        "delegated_periods": 1400002660
+      },
+      {
+        "category": "ForeachNextPlain",
+        "periods": 1070002033,
+        "percent": 1.3760288065843622,
+        "main_self_periods": 30000057,
+        "delegated_periods": 1040001976
+      },
+      {
+        "category": "IsIdentical",
+        "periods": 1060002014,
+        "percent": 1.3631687242798354,
+        "main_self_periods": 560001064,
+        "delegated_periods": 500000950
+      },
+      {
+        "category": "AddArrayElement",
+        "periods": 1030001957,
+        "percent": 1.3245884773662553,
+        "main_self_periods": 230000437,
+        "delegated_periods": 800001520
+      },
+      {
+        "category": "Instanceof",
+        "periods": 1020001938,
+        "percent": 1.3117283950617282,
+        "main_self_periods": 40000076,
+        "delegated_periods": 980001862
+      },
+      {
+        "category": "BindObjPropRef",
+        "periods": 860001634,
+        "percent": 1.1059670781893005,
+        "main_self_periods": 0,
+        "delegated_periods": 860001634
+      },
+      {
+        "category": "InitDynamicCall",
+        "periods": 800001520,
+        "percent": 1.02880658436214,
+        "main_self_periods": 0,
+        "delegated_periods": 800001520
+      },
+      {
+        "category": "UnsetDim",
+        "periods": 740001406,
+        "percent": 0.9516460905349794,
+        "main_self_periods": 0,
+        "delegated_periods": 740001406
+      },
+      {
+        "category": "InitArray",
+        "periods": 610001159,
+        "percent": 0.7844650205761318,
+        "main_self_periods": 200000380,
+        "delegated_periods": 410000779
+      },
+      {
+        "category": "ForeachInit",
+        "periods": 590001121,
+        "percent": 0.7587448559670782,
+        "main_self_periods": 10000019,
+        "delegated_periods": 580001102
+      },
+      {
+        "category": "InitStaticCall",
+        "periods": 560001064,
+        "percent": 0.720164609053498,
+        "main_self_periods": 0,
+        "delegated_periods": 560001064
+      },
+      {
+        "category": "JmpZ",
+        "periods": 400000760,
+        "percent": 0.51440329218107,
+        "main_self_periods": 400000760,
+        "delegated_periods": 0
+      },
+      {
+        "category": "IsEqual",
+        "periods": 390000741,
+        "percent": 0.5015432098765432,
+        "main_self_periods": 310000589,
+        "delegated_periods": 80000152
+      },
+      {
+        "category": "FetchStaticProp",
+        "periods": 380000722,
+        "percent": 0.4886831275720165,
+        "main_self_periods": 30000057,
+        "delegated_periods": 350000665
+      },
+      {
+        "category": "SendVarEx",
+        "periods": 350000665,
+        "percent": 0.45010288065843623,
+        "main_self_periods": 320000608,
+        "delegated_periods": 30000057
+      },
+      {
+        "category": "SendVal",
+        "periods": 330000627,
+        "percent": 0.4243827160493827,
+        "main_self_periods": 330000627,
+        "delegated_periods": 0
+      },
+      {
+        "category": "FetchClassConst",
+        "periods": 330000627,
+        "percent": 0.4243827160493827,
+        "main_self_periods": 10000019,
+        "delegated_periods": 320000608
+      },
+      {
+        "category": "Throw",
+        "periods": 320000608,
+        "percent": 0.411522633744856,
+        "main_self_periods": 0,
+        "delegated_periods": 320000608
+      },
+      {
+        "category": "ArrayPushOp",
+        "periods": 290000551,
+        "percent": 0.37294238683127573,
+        "main_self_periods": 40000076,
+        "delegated_periods": 250000475
+      },
+      {
+        "category": "InitFcall",
+        "periods": 260000494,
+        "percent": 0.3343621399176955,
+        "main_self_periods": 260000494,
+        "delegated_periods": 0
+      },
+      {
+        "category": "AddCallUnpack",
+        "periods": 260000494,
+        "percent": 0.3343621399176955,
+        "main_self_periods": 10000019,
+        "delegated_periods": 250000475
+      },
+      {
+        "category": "truncated_stack",
+        "periods": 210000399,
+        "percent": 0.2700617283950617,
+        "main_self_periods": 0,
+        "delegated_periods": 0
+      },
+      {
+        "category": "JmpNZ",
+        "periods": 200000380,
+        "percent": 0.257201646090535,
+        "main_self_periods": 160000304,
+        "delegated_periods": 40000076
+      },
+      {
+        "category": "Cast",
+        "periods": 190000361,
+        "percent": 0.24434156378600824,
+        "main_self_periods": 60000114,
+        "delegated_periods": 130000247
+      },
+      {
+        "category": "CreateClosure",
+        "periods": 180000342,
+        "percent": 0.23148148148148145,
+        "main_self_periods": 0,
+        "delegated_periods": 180000342
+      },
+      {
+        "category": "ForeachNext",
+        "periods": 170000323,
+        "percent": 0.21862139917695472,
+        "main_self_periods": 0,
+        "delegated_periods": 170000323
+      },
+      {
+        "category": "FetchCvR",
+        "periods": 100000190,
+        "percent": 0.1286008230452675,
+        "main_self_periods": 100000190,
+        "delegated_periods": 0
+      },
+      {
+        "category": "AssignConcat",
+        "periods": 100000190,
+        "percent": 0.1286008230452675,
+        "main_self_periods": 60000114,
+        "delegated_periods": 40000076
+      },
+      {
+        "category": "Concat",
+        "periods": 100000190,
+        "percent": 0.1286008230452675,
+        "main_self_periods": 0,
+        "delegated_periods": 100000190
+      },
+      {
+        "category": "Add",
+        "periods": 100000190,
+        "percent": 0.1286008230452675,
+        "main_self_periods": 100000190,
+        "delegated_periods": 0
+      },
+      {
+        "category": "FetchConst",
+        "periods": 80000152,
+        "percent": 0.102880658436214,
+        "main_self_periods": 80000152,
+        "delegated_periods": 0
+      },
+      {
+        "category": "Sub",
+        "periods": 80000152,
+        "percent": 0.102880658436214,
+        "main_self_periods": 80000152,
+        "delegated_periods": 0
+      },
+      {
+        "category": "BoolNot",
+        "periods": 70000133,
+        "percent": 0.09002057613168725,
+        "main_self_periods": 70000133,
+        "delegated_periods": 0
+      },
+      {
+        "category": "Concat_StringString",
+        "periods": 60000114,
+        "percent": 0.07716049382716049,
+        "main_self_periods": 30000057,
+        "delegated_periods": 30000057
+      },
+      {
+        "category": "JmpFinally",
+        "periods": 60000114,
+        "percent": 0.07716049382716049,
+        "main_self_periods": 0,
+        "delegated_periods": 60000114
+      },
+      {
+        "category": "AddCallArgument",
+        "periods": 60000114,
+        "percent": 0.07716049382716049,
+        "main_self_periods": 0,
+        "delegated_periods": 60000114
+      },
+      {
+        "category": "Jmp",
+        "periods": 60000114,
+        "percent": 0.07716049382716049,
+        "main_self_periods": 60000114,
+        "delegated_periods": 0
+      },
+      {
+        "category": "Isset",
+        "periods": 60000114,
+        "percent": 0.07716049382716049,
+        "main_self_periods": 60000114,
+        "delegated_periods": 0
+      },
+      {
+        "category": "SendRef",
+        "periods": 40000076,
+        "percent": 0.051440329218107,
+        "main_self_periods": 40000076,
+        "delegated_periods": 0
+      },
+      {
+        "category": "UnsetObj",
+        "periods": 40000076,
+        "percent": 0.051440329218107,
+        "main_self_periods": 0,
+        "delegated_periods": 40000076
+      },
+      {
+        "category": "FetchLateClassConst",
+        "periods": 40000076,
+        "percent": 0.051440329218107,
+        "main_self_periods": 0,
+        "delegated_periods": 40000076
+      },
+      {
+        "category": "PreInc",
+        "periods": 30000057,
+        "percent": 0.038580246913580245,
+        "main_self_periods": 30000057,
+        "delegated_periods": 0
+      },
+      {
+        "category": "unknown_stack",
+        "periods": 30000057,
+        "percent": 0.038580246913580245,
+        "main_self_periods": 0,
+        "delegated_periods": 0
+      },
+      {
+        "category": "Add_TmpTmp",
+        "periods": 20000038,
+        "percent": 0.0257201646090535,
+        "main_self_periods": 20000038,
+        "delegated_periods": 0
+      },
+      {
+        "category": "AssertCheck",
+        "periods": 20000038,
+        "percent": 0.0257201646090535,
+        "main_self_periods": 20000038,
+        "delegated_periods": 0
+      },
+      {
+        "category": "CloneObj",
+        "periods": 20000038,
+        "percent": 0.0257201646090535,
+        "main_self_periods": 0,
+        "delegated_periods": 20000038
+      },
+      {
+        "category": "CheckDefaultType",
+        "periods": 20000038,
+        "percent": 0.0257201646090535,
+        "main_self_periods": 0,
+        "delegated_periods": 20000038
+      },
+      {
+        "category": "BindDefaultParam",
+        "periods": 10000019,
+        "percent": 0.01286008230452675,
+        "main_self_periods": 0,
+        "delegated_periods": 10000019
+      },
+      {
+        "category": "DeclareClass",
+        "periods": 10000019,
+        "percent": 0.01286008230452675,
+        "main_self_periods": 0,
+        "delegated_periods": 10000019
+      },
+      {
+        "category": "Add_LongLong",
+        "periods": 10000019,
+        "percent": 0.01286008230452675,
+        "main_self_periods": 10000019,
+        "delegated_periods": 0
+      },
+      {
+        "category": "Add_CvTmp",
+        "periods": 10000019,
+        "percent": 0.01286008230452675,
+        "main_self_periods": 10000019,
+        "delegated_periods": 0
+      }
+    ],
+    "nearest_main_addresses": 1078,
+    "mapping_seconds": 0.3528354739828501,
+    "source_call_sites": [
+      {
+        "category": "DoFcall",
+        "line": 6981,
+        "periods": 7590014421
+      },
+      {
+        "category": "Return",
+        "line": 11855,
+        "periods": 5890011191
+      },
+      {
+        "category": "Return",
+        "line": 11400,
+        "periods": 3280006232
+      }
+    ],
+    "limits": [
+      "Diagnostic frame pointers/debug/RA/layout differ from ordinary production; not exact production operation costs or speedup",
+      "Nearest main source arm is a source-site partition, not dynamic opcode counts; optimizer-merged self locations remain ambiguous",
+      "Shared-library leaf callers, unknown and truncated stacks remain explicit unassigned buckets",
+      "Hardware sampling skid means a hot return PC does not count executions of that single instruction",
+      "DoFcall includes necessary regex/stdlib work; no removable whole-call budget is claimed"
+    ],
+    "failed_attempts": [
+      {
+        "attempt": "debug-section-v1",
+        "result": "Build command completed; metadata gate failed; no runtime launched",
+        "alignment_preserved": false,
+        "debug_line_present": false
+      },
+      {
+        "reason": "perf stack exporter expands inline DWARF by default and timed out after 120 seconds; raw profile and exact application output already complete",
+        "native_profile_complete": true,
+        "stack_export_complete": false,
+        "restarted_native_profile": false
+      },
+      {
+        "attempt": "physical stack tuple parser v1",
+        "result": "Tuple symbol names truncated at first parenthesis; preserved v1 then split DSO at final parenthesis. Addresses and totals unchanged"
+      },
+      {
+        "attempt": "source mapper v1",
+        "result": "Elapsed-time variable overwritten by source line; corrected mapping clock, totals unchanged"
+      },
+      {
+        "attempt": "public-packet preparation v1",
+        "result": "Assertion expected a lost-samples header absent from custom export. No tracked write; separate existing-data lost-event export supplies the check"
+      }
+    ],
+    "boundaries": {
+      "operation-callers-build-v1-boundary": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 90.04375420298311,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3547226112,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "operation-callers-build-v2-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 91.40421207298641,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3648155648,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "operation-callers-export-v2-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 0.34935285299434327,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 131252224,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "operation-callers-loss-v1-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 0.07906971499323845,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 33345536,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "operation-callers-map-v1-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 0.6669461990240961,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 420732928,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "operation-callers-map-v2-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 0.6638317239994649,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 421425152,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "operation-callers-profile-v1-boundary": {
+        "complete": true,
+        "exit": 1,
+        "seconds": 129.29606241398142,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 1247068160,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "runtime_adopted": false,
+    "parity_complete": false
+  },
+  "root_retirement_boundary_v1": {
+    "status": "rejected nonmaterial selector; private diagnostic improvement retained",
+    "source_sha256": "5cedb03999dfabc336631b87e43f70e4d0451a0ff2297875253416cc97825de0",
+    "binary_sha256": "3124fc1d3a8829c36388968f26dd6b815731b352f50ae3ee4f9c110950cd80a1",
+    "binary_bytes": 24572608,
+    "baseline_binary_sha256": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+    "changed_source": [
+      "src/vm/execute/call_frames.rs"
+    ],
+    "change": "Existing prepare/drop decision inlined; already-prepared callbacks enter a separate cold owner/context/exception loop. No new type/count policy or runtime selector.",
+    "semantic": {
+      "baseline_equivalent": 41,
+      "reference_passes": 38,
+      "known_baseline_reference_failures": [
+        "payload-order-and-identity.php",
+        "payload-resurrection-and-alias.php",
+        "payload-unset-global-boundary.php"
+      ],
+      "global_semantic_acceptance": false,
+      "independent_canonical_baseline": "Unchanged exact prerequisite release protocol run on all 41 controls; no claim that ordinary environment switches disable every execution plan"
+    },
+    "native": {
+      "purpose": "exploratory instruction feedback, not an acceptance gate",
+      "event": "instructions:u",
+      "counter_scope": "analysis FIFO",
+      "cpu": 2,
+      "rounds": 2,
+      "warmup": "none; fresh TMPDIR per run",
+      "outlier_policy": "retain every valid output-checked sample",
+      "samples": [
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.610788138001226,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.709971428,
+          "instructions": 74929393166,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.590425567002967,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.70086503,
+          "instructions": 74180721045,
+          "counter_running_percent": 100.0,
+          "round": 0
+        },
+        {
+          "runtime": "candidate",
+          "wall_seconds": 8.728516907984158,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.821346045,
+          "instructions": 74197971630,
+          "counter_running_percent": 100.0,
+          "round": 1
+        },
+        {
+          "runtime": "baseline",
+          "wall_seconds": 8.65164439799264,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 6.741582394,
+          "instructions": 74937137172,
+          "counter_running_percent": 100.0,
+          "round": 1
+        }
+      ],
+      "binaries": {
+        "baseline": "635e22394478b487840f68a6281520814e4c6cc3f9d80a4b323c9fd3b16e7ae0",
+        "candidate": "3124fc1d3a8829c36388968f26dd6b815731b352f50ae3ee4f9c110950cd80a1",
+        "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      },
+      "inputs": [
+        "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+      ],
+      "reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.3781759760167915,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.94994092,
+        "instructions": 10338037854,
+        "counter_running_percent": 100.0
+      },
+      "medians": {
+        "baseline": 74933265169.0,
+        "candidate": 74189346337.5
+      },
+      "delta_percent": {
+        "baseline": 0.0,
+        "candidate": -0.9927751444197885
+      }
+    },
+    "selector_result": {
+      "status": "rejected nonmaterial selector; private diagnostic improvement retained",
+      "baseline_instructions": 74933265169.0,
+      "candidate_instructions": 74189346337.5,
+      "delta_instructions_percent": -0.9927751444197885,
+      "analysis_medians_seconds": {
+        "baseline": 6.7257769110000005,
+        "candidate": 6.761105537500001
+      },
+      "delta_time_percent": 0.525272053585657,
+      "gate_minimum_instruction_reduction_percent": 2,
+      "controls": 41,
+      "baseline_equivalence_passes": 41,
+      "reference_passes": 38,
+      "known_baseline_reference_failures": 3,
+      "runtime_adopted": false,
+      "parity_complete": false,
+      "no_pgo_or_matrix": true
+    },
+    "boundaries": {
+      "root-retirement-build-v1-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 82.89750905698747,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3093123072,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "root-retirement-controls-v1-boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 2.211629454017384,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 73994240,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      }
+    },
+    "selector_boundary": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 36.28298552602064,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 625393664,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "assembly_observation": "Ordinary candidate no longer has retire_owned_value symbol; retains outlined callback helper and preparation dispatcher at other sites. Static estimates do not replace hardware counters.",
+    "no_pgo_or_full_matrix": true,
+    "runtime_adopted": false,
+    "parity_complete": false
   }
 }

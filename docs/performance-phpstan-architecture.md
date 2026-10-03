@@ -786,12 +786,105 @@ billions of instructions. PHPStan instruction/time parity remains unachieved.
 The [packet](performance-phpstan-architecture-data.json) records every native
 observation, source identity, failure and effective 6 GiB/no-swap boundary.
 
-## First implementation checkpoint and rejection rules
+### Physical caller recovery identifies the complete return protocol
 
-Begin with **general read-result consumption and retirement**, covering ordinary
-FetchObjR and FetchDimR results used by assignment and their detached actual
-owners. Use the tested private entry-storage prerequisite for a new semantic
-comparison; keep the frozen owned-frame repair as historical evidence because
+The same prerequisite source now has a separate diagnostic build with frame
+pointers, limited debug information, no stripping and the original 64-byte
+function alignment. Layout and register allocation differ from ordinary release;
+its instruction periods are diagnostic evidence, not a production scorecard.
+The exact five-file/twenty-finding output is unchanged.
+
+All 7,776 samples and 77,760,147,744 self periods reconcile between physical stack
+and self exports. There are 7,773 multi-frame known stacks, three unknown tails
+and twenty-one stacks reaching the 64-frame limit. A separate existing-data
+export exposes no lost-event records. Shared-library leaves, unknown stacks and
+truncated stacks stay unassigned. Batch source mapping of 1,078 addresses takes
+0.353 seconds. Each usable sample belongs once to its nearest main source site:
+
+| Nearest main source arm | Sampled periods | Main self | Delegated |
+| --- | ---: | ---: | ---: |
+| DoFcall | 12.430G | 1.220G | 11.210G |
+| Return | 11.720G | 1.450G | 10.270G |
+| ReleaseTemps | 6.120G | 1.490G | 4.630G |
+| CallUserFuncArray | 3.440G | 0.210G | 3.230G |
+| AssignCv | 3.290G | 2.030G | 1.260G |
+| FetchObjR | 2.840G | 1.840G | 1.000G |
+
+These labels are **not dynamic opcode counts or removable costs**. LLVM can
+merge joins and assign one source location: a BitwiseAnd self label does not
+prove execution of that opcode. Sampling skid means a hot return PC does not
+count that single instruction. DoFcall includes necessary regex and stdlib work.
+The packet retains all categories without overlapping inclusive sums.
+
+The actual calls to `run_return_frame_destructors` in ordinary and fast returns
+account for 5.890G and 3.280G sampled periods through their complete descendants.
+That prioritizes the whole return protocol: detach owners, prepare release,
+run callbacks, host drop, publish exceptions and clean the frame.
+
+The pinned PHP
+[`zend_leave_helper`](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_vm_def.h#L2963)
+sets caller context and releases compiled variables.
+[`i_free_compiled_variables`](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_execute.c#L4271)
+uses
+[`i_zval_ptr_dtor`](https://github.com/php/php-src/blob/678778973bb4d4185c06ef1320de50f1a975d3c8/Zend/zend_variables.h#L40):
+decrement the reference, destroy at zero, otherwise check possible-root admission.
+RPHP detaches an actual Value, prepares VM release, possibly runs the callback/
+exception loop, then enters generic Rust drop with its count/type/GC decisions.
+Necessary lifetime work crosses two interacting protocols. This is an
+architectural difference, not evidence that Rust or Rc is inherently too slow.
+
+Failed stages remain visible. The first build succeeds but fails the debug-
+section gate before runtime; the corrected build preserves alignment and
+validates debug sections and the frame-pointer prologue. Native profiling
+succeeds, but default inline-symbol export times out. Reject that incomplete
+export. Physical `--no-inline` export recovers the same recording in 0.349 seconds
+without rerunning the interpreter. Tuple-name parsing and mapping-clock mistakes
+are corrected without changing addresses or totals. Every job has a verified
+6 GiB/no-swap boundary and zero OOM; failed services retain failure exits.
+
+### A smaller root-retirement boundary helps, but is insufficient
+
+The private prototype inlines the existing prepare/drop decision. Only already-
+prepared callback work enters an outlined owner/context/exception loop. It adds
+no new Value-kind/count policy, runtime selector or bytecode. The detached owner
+stays alive at the same committed boundary, including throwing callbacks,
+repeated preparation and early shutdown exits. Tree proofs and payload drop
+remain unchanged; only the retirement source file changes.
+
+All forty-one controls match the independently executed unchanged prerequisite
+protocol. Thirty-eight match PHP; three preserve known object ordering,
+resurrection/alias and global-unset differences. These remain semantic failures;
+baseline equivalence does not establish global PHP compatibility.
+
+| Ordinary build | Instructions, round 0 | Instructions, round 1 | Median analysis time |
+| --- | ---: | ---: | ---: |
+| Exact prerequisite | 74,929,393,166 | 74,937,137,172 | 6.7258 s |
+| Root boundary prototype | 74,180,721,045 | 74,197,971,630 | 6.7611 s |
+| Same-window PHP, one observation | 10,338,037,854 | — | 0.9499 s |
+
+Two alternating pairs remove **0.992775% instructions**, approximately 744
+million; the time median is **0.525272% higher**. All outputs match, counters run
+100%, and no outliers are discarded. The ordinary owner wrapper disappears from
+the symbol table while the callback helper remains. This supports a cheaper
+boundary but fails the declared two-percent selector and establishes no time
+improvement. Retain it privately, without runtime adoption, PGO or a full matrix.
+
+The architectural next step is **one storage-edge retirement protocol**. It
+must determine lifetime once, preserving GC admission, typed/reference semantics
+and the original allocation through PHP callbacks, weak invalidation and
+resurrection. Internal Rc handles, native visitors, resources and suspendable
+frames belong in the proof. Moving a final object out of its Rc allocation or
+deferring callbacks past operation commits fails that contract. Earlier payload
+dispatchers remain rejected: replace both protocols instead of adding another
+per-child layer. No native saving is claimed for this unimplemented replacement.
+
+## Next implementation checkpoint and rejection rules
+
+Prioritize **the complete storage-owner and return contract** using recovered
+caller evidence. Complete cache-hit read/publication/consumption remains the
+next operation comparison; its rejected input-only prototype does not justify
+another cleanup marker. Use the tested private entry-storage prerequisite for a
+new semantic comparison; keep the frozen owned-frame repair as historical evidence because
 it fails the stronger entry controls. Its repair is not globally adopted.
 Keep one semantic executor for every Value kind; use compiler facts to combine
 operations, without introducing another typed interpreter or requiring every
@@ -832,10 +925,10 @@ corpus/holdout, feature and memory gates, and both architecture checks. Global
 compatibility and regression limits remain unchanged. Every expensive job keeps
 the separate 6 GiB/no-swap/process-group memory boundary and cleanup lifecycle.
 
-This checkpoint owns compiler finalization, operand/result publication and the
-repaired retirement contract in the isolated performance worktree; no other
-agent currently edits them. Allocator changes, a whole VM rewrite and new native
-lowerings remain separate decisions. If this shared protocol is correct but
-fails the instruction selector, record its causal budget and reject it rather
+This checkpoint owns the owner/retirement design and its compiler/frame/value
+interfaces in the isolated performance worktree; no other agent edits them.
+Define representation and proof before selecting a complete replacement.
+Allocator changes and native lowerings remain separate decisions. If this shared
+protocol is correct but fails the instruction selector, record its causal budget and reject it rather
 than extending it with compensating guards. Instruction/time parity stays open
 until an accepted, reproducible application result actually reaches PHP.
