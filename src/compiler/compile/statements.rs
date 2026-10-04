@@ -34,6 +34,7 @@ pub(super) struct MutableArrayPath {
     writeback: ArrayRootWriteback,
     source_line: usize,
     mutable_fetches: Vec<usize>,
+    deferred_root_fetch: Option<(Instruction, usize)>,
     deferred_mutable_fetches: Vec<Instruction>,
     deferred_key_fetches: Vec<Option<(Instruction, usize)>>,
     /// `(result TMP, instruction index)` for a direct-root snapshot emitted
@@ -2517,6 +2518,7 @@ impl Compiler {
         self.validate_zend_special_builtin_write_result(root)?;
         let diagnostic_snapshot = self.emit_diagnostic_write_snapshot(root, indices);
         let mut deferred_object_fetches = Vec::new();
+        let mut deferred_root_fetch = None;
         let (root, writeback, path_indices) = match root {
             Expr::Variable { name: var, line } => {
                 let cv = self.resolve_cv(var);
@@ -2606,6 +2608,8 @@ impl Compiler {
                 let line = if *line == 0 { root_source_line } else { *line };
                 if defer_unset_fetches {
                     deferred_object_fetches.push((fetch, line));
+                } else if defer_mutable_fetches {
+                    deferred_root_fetch = Some((fetch, line));
                 } else {
                     self.push_instruction_at_line(fetch, line);
                 }
@@ -2650,6 +2654,8 @@ impl Compiler {
                 let line = if *line == 0 { root_source_line } else { *line };
                 if defer_unset_fetches {
                     deferred_object_fetches.push((fetch, line));
+                } else if defer_mutable_fetches {
+                    deferred_root_fetch = Some((fetch, line));
                 } else {
                     self.push_instruction_at_line(fetch, line);
                 }
@@ -2700,7 +2706,14 @@ impl Compiler {
                 if property_type != OpType::Const {
                     fetch._pad |= STATIC_PROP_DYNAMIC_NAME;
                 }
-                self.push_instruction_at_line(fetch, line);
+                if defer_mutable_fetches {
+                    // The owner/name expressions precede the RHS, but the
+                    // writable static array must come from current storage
+                    // after the RHS has finished mutating or replacing it.
+                    deferred_root_fetch = Some((fetch, line));
+                } else {
+                    self.push_instruction_at_line(fetch, line);
+                }
                 (
                     (container, OpType::Tmp),
                     ArrayRootWriteback::Static {
@@ -2803,6 +2816,7 @@ impl Compiler {
             writeback,
             source_line: root_source_line,
             mutable_fetches,
+            deferred_root_fetch,
             deferred_mutable_fetches,
             deferred_key_fetches,
             diagnostic_snapshot,
@@ -2810,6 +2824,9 @@ impl Compiler {
     }
 
     fn emit_deferred_mutable_fetches(&mut self, path: &mut MutableArrayPath) {
+        if let Some((fetch, line)) = path.deferred_root_fetch.take() {
+            self.push_instruction_at_line(fetch, line);
+        }
         let mut next_key = 0;
         for fetch in path.deferred_mutable_fetches.drain(..) {
             if let Some((materialize, line)) = path.deferred_key_fetches[next_key].take() {

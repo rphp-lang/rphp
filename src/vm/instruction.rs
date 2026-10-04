@@ -181,6 +181,9 @@ pub const STATIC_PROP_REFERENCE_BIND: u16 = 1 << 8;
 /// Static-property writeback is a read-modify-write operation (increment,
 /// compound assignment, dimension mutation or reference access).
 pub const STATIC_PROP_INDIRECT_MODIFY: u16 = 1 << 9;
+/// Resolve a dynamic static-property owner before its member/key/RHS
+/// expressions, returning only the class name without retaining the object.
+pub const STATIC_PROP_CAPTURE_OWNER: u16 = 1 << 10;
 
 /// CreateClosure flag: PHP's `static function`/`static fn` form cannot bind
 /// an object, even when created inside an instance method.

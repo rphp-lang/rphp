@@ -9937,10 +9937,33 @@ impl Compiler {
                 if Self::is_illegal_literal_class_owner(class) {
                     self.deferred_error = Some(self.goto_error("Illegal class name", *line));
                 }
+                let first_owner_tmp = self.next_tmp as u16;
                 let (class, class_type) = self.compile_expr(class);
+                // Resolve the owner's class before callbacks can replace the
+                // CV. Retaining its object Value would delay its destructor.
+                let retained = self.alloc_tmp();
+                let mut capture = Instruction::new(OpCode::FetchStaticProp);
+                capture.op1 = class;
+                capture.op1_type = class_type;
+                capture.op2 = self.add_literal(Value::string(""));
+                capture.op2_type = OpType::Const;
+                capture.result = retained;
+                capture.result_type = OpType::Tmp;
+                capture._pad |=
+                    STATIC_PROP_DYNAMIC_OWNER | crate::vm::instruction::STATIC_PROP_CAPTURE_OWNER;
+                self.push_instruction_at_line(capture, *line);
+                self.emit_consumed_operand_release(first_owner_tmp, retained, *line);
                 let (property, property_type) = self.compile_expr(property);
                 let property = self.emit_string_cast(property, property_type);
-                Some((class, class_type, property, OpType::Tmp, false, true, *line))
+                Some((
+                    retained,
+                    OpType::Tmp,
+                    property,
+                    OpType::Tmp,
+                    false,
+                    true,
+                    *line,
+                ))
             }
             _ => None,
         }

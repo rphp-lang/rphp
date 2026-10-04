@@ -3319,6 +3319,10 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         )
     };
 
+    if opline._pad & crate::vm::instruction::STATIC_PROP_CAPTURE_OWNER != 0 {
+        return capture_static_property_owner(eg, frame, result_ptr, class_name_val);
+    }
+
     // A non-late constant owner is monomorphic per instruction. Once its
     // ordinary read cache is published, the class/name operands no longer
     // need decoding. Direct trait caches use state 2 and deliberately miss
@@ -3419,6 +3423,54 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         prop,
         opline._pad,
     )
+}
+
+#[cold]
+fn capture_static_property_owner<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    result_ptr: *mut Value,
+    owner: &Value,
+) -> Result<ColdResult<'a>, VmError> {
+    let (name, class_id) = match dynamic_static_property_owner(eg, owner) {
+        Ok(owner) => owner,
+        Err(VmError::Fatal(message)) => {
+            return static_property_throw(eg, frame, "Error", message);
+        }
+        Err(error) => return Err(error),
+    };
+    // Only owned class-name text crosses autoload. The callback may replace
+    // the caller's owner CV or release its last object reference.
+    if class_id == 0 {
+        match crate::stdlib::autoload::ensure_symbol_loaded(eg, &name) {
+            Ok(_) => {}
+            Err(VmError::Fatal(message)) => {
+                return static_property_throw(eg, frame, "Error", message);
+            }
+            Err(error) => return Err(error),
+        }
+        if let Some(exception) = eg.exception.take() {
+            return Ok(match throw_in_frame(eg, frame, exception)? {
+                ThrowResult::Handled(new_frame, new_op_array) => {
+                    ColdResult::NewFrame(new_frame, new_op_array)
+                }
+                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
+            });
+        }
+        if eg.find_class(&name).is_none() {
+            return static_property_throw(
+                eg,
+                frame,
+                "Error",
+                format!("Class \"{name}\" not found"),
+            );
+        }
+    }
+    // SAFETY: the capture fetch supplies the compiler-owned TMP output of the
+    // live frame. The canonical writer retires its old owner and updates the
+    // cleanup bitmap; no frame/source borrow survived the autoload callback.
+    unsafe { frame_tmp_set(frame, result_ptr, Value::string(name)) };
+    Ok(ColdResult::Done)
 }
 
 #[cold]
