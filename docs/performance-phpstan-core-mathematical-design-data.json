@@ -1,0 +1,242 @@
+{
+  "status": "mathematical design; no runtime implementation or measured speedup",
+  "goal_complete": false,
+  "baseline_commit": "d7723d96",
+  "baseline_commit_full": "d7723d9617078d61cf13cf0bb2cb9d0bcf3eba2e",
+  "runtime_source_sha256": "2857a188a70de26a8b7db3a843dfb09836c751898171d6269615462168d0de7f",
+  "binaries_sha256": {
+    "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+    "baseline": "e32b2a9910bc613e32f541f1b48ff399e99bea2b1d41e4061b1fd63e8bc58d65",
+    "candidate": "efd92661ed8d78136599946e873c39313f03f9937d93b0fad18f2f5a06d354bc"
+  },
+  "goal_speedup": 100,
+  "baseline_profile": "ordinary release, default features, no PGO, identical disabled-GC PHP phase hooks",
+  "limits": "One final-source attribution round with empty-pulse subtraction. These are nested application regions. Entry averages are not marginal atomic operation prices.",
+  "regions": {
+    "native": {
+      "baseline_instructions": 14351797067,
+      "baseline_seconds": 1.140026569366455,
+      "reference_instructions": 1945125648,
+      "reference_seconds": 0.17507386207580566,
+      "entry_count": 96,
+      "window_source_sha256": "0519755a1fd1764529b6d6d09152b144f7990d84f34e2af38aa6ca90a62f9bde",
+      "target_instructions": 143517970.67,
+      "target_integer_instruction_cap": 143517970,
+      "target_seconds": 0.01140026569366455,
+      "budget_per_counted_entry": 1494978.8611458333,
+      "target_ratio_to_php_instructions": 0.07378339328236548,
+      "target_ratio_to_php_seconds": 0.0651168915707607,
+      "cost_sheet": {
+        "required_input_bytes": null,
+        "required_table_cells": null,
+        "required_scalar_ops_after_cse": null,
+        "required_observable_result_nodes": null,
+        "required_ownership_events": null,
+        "guard_dependencies": null,
+        "actual_reuse_fraction": null,
+        "compile_cost_instructions": null,
+        "proven_lower_bound_instructions": null,
+        "legal_plan_upper_cost_instructions": null,
+        "status": "not established by entry counts; null is unknown, never zero"
+      }
+    },
+    "intersection": {
+      "baseline_instructions": 13996737129,
+      "baseline_seconds": 1.3190124034881592,
+      "reference_instructions": 1633055752,
+      "reference_seconds": 0.12833905220031738,
+      "entry_count": 17233,
+      "window_source_sha256": "7209c50d5c5a997a414c66cf79d96030a66cd5d869bec900095e179615c0c94a",
+      "target_instructions": 139967371.29,
+      "target_integer_instruction_cap": 139967371,
+      "target_seconds": 0.013190124034881592,
+      "budget_per_counted_entry": 8122.05485347879,
+      "target_ratio_to_php_instructions": 0.08570887498395707,
+      "target_ratio_to_php_seconds": 0.10277560733652491,
+      "cost_sheet": {
+        "required_input_bytes": null,
+        "required_table_cells": null,
+        "required_scalar_ops_after_cse": null,
+        "required_observable_result_nodes": null,
+        "required_ownership_events": null,
+        "guard_dependencies": null,
+        "actual_reuse_fraction": null,
+        "compile_cost_instructions": null,
+        "proven_lower_bound_instructions": null,
+        "legal_plan_upper_cost_instructions": null,
+        "status": "not established by entry counts; null is unknown, never zero"
+      }
+    },
+    "stubs": {
+      "baseline_instructions": 13243893100,
+      "baseline_seconds": 0.9350736141204834,
+      "reference_instructions": 2061919590,
+      "reference_seconds": 0.16390752792358398,
+      "entry_count": 67,
+      "window_source_sha256": "70327764f378579f7dcd18d46371f3b3051e1a525202d3b6ed3b59edebe7a902",
+      "target_instructions": 132438931.0,
+      "target_integer_instruction_cap": 132438931,
+      "target_seconds": 0.009350736141204834,
+      "budget_per_counted_entry": 1976700.462686567,
+      "target_ratio_to_php_instructions": 0.06423089030353507,
+      "target_ratio_to_php_seconds": 0.05704885101777803,
+      "cost_sheet": {
+        "required_input_bytes": null,
+        "required_table_cells": null,
+        "required_scalar_ops_after_cse": null,
+        "required_observable_result_nodes": null,
+        "required_ownership_events": null,
+        "guard_dependencies": null,
+        "actual_reuse_fraction": null,
+        "compile_cost_instructions": null,
+        "proven_lower_bound_instructions": null,
+        "legal_plan_upper_cost_instructions": null,
+        "status": "not established by entry counts; null is unknown, never zero"
+      }
+    }
+  },
+  "feasibility": [
+    {
+      "region": "native",
+      "covered_cost_fraction": 0.9,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9906967768533317,
+      "required_kernel_speedup": null,
+      "possible_even_with_infinite_kernel_speed": false
+    },
+    {
+      "region": "native",
+      "covered_cost_fraction": 0.99,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9906967768533317,
+      "required_kernel_speedup": null,
+      "possible_even_with_infinite_kernel_speed": false
+    },
+    {
+      "region": "native",
+      "covered_cost_fraction": 0.995,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9906967768533317,
+      "required_kernel_speedup": 231.22203197163304,
+      "possible_even_with_infinite_kernel_speed": true
+    },
+    {
+      "region": "native",
+      "covered_cost_fraction": 0.999,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9906967768533317,
+      "required_kernel_speedup": 120.31472385526057,
+      "possible_even_with_infinite_kernel_speed": true
+    },
+    {
+      "region": "intersection",
+      "covered_cost_fraction": 0.9,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907144522261035,
+      "required_kernel_speedup": null,
+      "possible_even_with_infinite_kernel_speed": false
+    },
+    {
+      "region": "intersection",
+      "covered_cost_fraction": 0.99,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907144522261035,
+      "required_kernel_speedup": null,
+      "possible_even_with_infinite_kernel_speed": false
+    },
+    {
+      "region": "intersection",
+      "covered_cost_fraction": 0.995,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907144522261035,
+      "required_kernel_speedup": 232.1756873323416,
+      "possible_even_with_infinite_kernel_speed": true
+    },
+    {
+      "region": "intersection",
+      "covered_cost_fraction": 0.999,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907144522261035,
+      "required_kernel_speedup": 120.57138855047556,
+      "possible_even_with_infinite_kernel_speed": true
+    },
+    {
+      "region": "stubs",
+      "covered_cost_fraction": 0.9,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907550649891609,
+      "required_kernel_speedup": null,
+      "possible_even_with_infinite_kernel_speed": false
+    },
+    {
+      "region": "stubs",
+      "covered_cost_fraction": 0.99,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907550649891609,
+      "required_kernel_speedup": null,
+      "possible_even_with_infinite_kernel_speed": false
+    },
+    {
+      "region": "stubs",
+      "covered_cost_fraction": 0.995,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907550649891609,
+      "required_kernel_speedup": 234.39699252387925,
+      "possible_even_with_infinite_kernel_speed": true
+    },
+    {
+      "region": "stubs",
+      "covered_cost_fraction": 0.999,
+      "illustrative_cold_instructions": 10000000,
+      "minimum_covered_fraction_strict": 0.9907550649891609,
+      "required_kernel_speedup": 121.165297080775,
+      "possible_even_with_infinite_kernel_speed": true
+    }
+  ],
+  "amdahl_examples": [
+    {
+      "covered_cost_fraction": 0.9,
+      "kernel_speedup": 100,
+      "total_speedup_without_added_cost": 9.174311926605506
+    },
+    {
+      "covered_cost_fraction": 0.99,
+      "kernel_speedup": 100,
+      "total_speedup_without_added_cost": 50.25125628140702
+    },
+    {
+      "covered_cost_fraction": 0.99,
+      "kernel_speedup": 1000,
+      "total_speedup_without_added_cost": 90.9918107370336
+    },
+    {
+      "covered_cost_fraction": 0.995,
+      "kernel_speedup": 200,
+      "total_speedup_without_added_cost": 100.25062656641599
+    },
+    {
+      "covered_cost_fraction": 0.999,
+      "kernel_speedup": 1000,
+      "total_speedup_without_added_cost": 500.2501250625311
+    }
+  ],
+  "conditional_whole_analysis_bound": {
+    "assumption": "Region totals must be disjoint in one unchanged source/counter scope. This is not proved by the three separately instrumented sources. The following values are conditional arithmetic, not measured global attribution.",
+    "baseline": 74697080353.5,
+    "sum_regions": 41592427296,
+    "remaining_after_100x_regions": 33520577330.46,
+    "whole_speedup": 2.2283948040961423
+  },
+  "optimization_model": {
+    "instruction_account": "compile + useful + lookup + allocation + retirement + guards + side_exit_control + materialization; mutually exclusive executed-instruction categories",
+    "candidate_expected_cost": "C + n*((1-q)*h + q*(s+b)); b is remaining canonical work after the committed prefix",
+    "memoization_ratio_without_cheaper_miss": "U/N + h/c + (V+C)/(N*c) <= 0.01 required for 100x; key hashing, mutation versioning and invalidation included",
+    "first_strictly_profitable_visit_count": "floor(C/delta)+1 for delta > 0",
+    "straight_line_selection": "D[i] = min(base[i]+D[i+1], min_{r starts i}(cost[r]+D[end(r)])); O(n+K) for valid, already-grouped candidates without resource-budget state",
+    "lower_bound_relaxation": "min c^T*x for A*x >= q, x >= 0; cover every admissible lowering or include valid lower-bound prices for omitted classes",
+    "lower_bound_dual_certificate": "y >= 0, A^T*y <= c implies q^T*y <= actual cost; does not double count fused work",
+    "semantic_proof": "per-effect simulation with exact canonical reconstruction after the last committed effect; unknown effects are barriers",
+    "coverage_limit": "cost coverage, not opcode-count or method-count coverage",
+    "native_semantics": "one effect/ownership IR, checked executor, two lowerings; no source/class/function identity admission"
+  }
+}

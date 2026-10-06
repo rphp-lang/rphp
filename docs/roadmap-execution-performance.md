@@ -34,6 +34,12 @@ remain exact. The checkpoint restores a valid performance baseline; it does
 not complete simultaneous instruction/time parity or claim universal speedup.
 See [the report](performance-phpstan-recovered-foundation.md) and
 [all observations](performance-phpstan-recovered-foundation-data.json).
+The next core rewrite begins with a
+[mathematical instruction/semantic design](performance-phpstan-core-mathematical-design.md)
+on this exact recovered source. It specifies 100x per-region budgets, shared
+effect/ownership IR, cold and fallback costs, and a legal-plan/lower-bound
+selection model. The design changes no runtime code and proves no 100x result;
+mandatory-work counts and unit prices remain explicit unknowns before realization.
 The larger-project results below are historical results on a different input.
 
 ## Accepted heap and bounded runtime repair
