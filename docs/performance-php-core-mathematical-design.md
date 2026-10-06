@@ -169,9 +169,15 @@ i správně převedenou hodnotu/exception; není vždy jen bool. Typed reference
 a property constraints se kontrolují na všech povinných write hranicích.
 
 Pro pure DAG vyhodnocení nad jedním vstupem je účet
-`O(visited nodes + visited edges + nominal queries)`; první nominal query může
-projít ancestry graf, další doložený cache hit je O(1). Cena vytvoření ancestry
-closure, hash klíče, invalidace a její paměť není zdarma. Variance/subtyping
+`I_type = I_DAG(visited type nodes, visited type edges) + sum(I_nominal(query_i))`.
+Cena každého skutečného nominal query zahrnuje key/probe, případný ancestry
+průchod i vytvoření či obnovu closure po invalidaci nebo vyřazení z cache.
+Bez této práce nelze počet nominal queries použít jako instrukční cenu.
+Jediný atom a jeden cache miss nad ancestry řetězcem délky H mohou stát Omega(H),
+přestože typový DAG má jeden uzel a žádnou hranu. Jen doložený cache hit nad
+pevně velkým klíčem má O(1) lookup. Společná příprava closure se účtuje právě
+jednou, u query, který ji provedl; invalidace, eviction a spotřeba paměti mají
+vlastní účet a omezení. Variance/subtyping
 řeší a memoizuje páry uzlů s příslušným scope; bez dalšího důkazu neprohlašujeme
 každý relation problem za lineární nebo jednorázový.
 
@@ -201,8 +207,17 @@ zdroje vyžaduje porovnání bytes nebo jiný doložený ekvivalent. Shodné mti
 název souboru nejsou důkaz. Resolution, wrappers, permissions a nutné I/O/error
 události se provedou v předepsaném pořadí i při reuse překladu.
 
-Cena je `sum(required source loads) + sum(unique valid translations)
-          + sum(required link/execution/effects)`.
+Cena je `sum(I_load(actual load events)) + sum(I_artifact(actual cache events))
+          + sum(I_translate(actual translation events))
+          + sum(I_link_execute_effect(required events))`.
+Cache events zahrnují key/probe, validaci, invalidaci a eviction; translation
+events zahrnují i opakování po vyřazení, změně závislostí a neúspěšné pokusy.
+Počet unikátních zdrojů není počet provedených překladů. Například LRU cache pro
+dva artifacts při cyklickém načítání tří zdrojů překládá při každém načtení:
+3 000 loads znamená 3 000 translation events, nikoli tři. Účet podle unikátních
+překladů platí pouze pod samostatným důkazem jejich zachování v cache po celý
+sledovaný běh v rámci paměťového limitu. Každá skutečná práce patří právě do
+jedné položky; cena cache missu se nesčítá s inkluzivní cenou téhož překladu.
 Pro samotný přijatý lexer/table parser používáme účet nutně čtených bytes,
 tokenů, reductions a output uzlů. Jeho linearita je samostatná vlastnost
 algoritmu, nikoli všech PHP parserů. PHP tokenizer output a uživatelský AST

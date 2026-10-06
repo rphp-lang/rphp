@@ -1277,5 +1277,47 @@
     "https://www.php.net/manual/en/function.eval.php",
     "https://www.php.net/manual/en/language.oop5.autoload.php",
     "https://www.php.net/manual/en/language.oop5.property-hooks.php"
-  ]
+  ],
+  "type_cost_accounting": {
+    "formula": "I_DAG(visited type nodes, visited type edges) + sum(I_nominal(actual query_i))",
+    "nominal_query_cost_includes": [
+      "key and probe",
+      "actual ancestry traversal",
+      "closure construction or reconstruction after invalidation or eviction"
+    ],
+    "shared_preparation_counted": "exactly once at the query that performs it",
+    "constant_lookup_condition": "proved cache hit with fixed-size resolved-ID key",
+    "counterexample": {
+      "type_nodes": 1,
+      "type_edges": 0,
+      "nominal_queries": 1,
+      "ancestry_chain_length": "H",
+      "first_miss_lower_bound": "Omega(H)"
+    },
+    "prices": "unknown, never inferred from the query count"
+  },
+  "source_cost_accounting": {
+    "formula": "sum(I_load(actual load events)) + sum(I_artifact(actual cache events)) + sum(I_translate(actual translation events)) + sum(I_link_execute_effect(required events))",
+    "cache_cost_includes": [
+      "key and probe",
+      "validation",
+      "invalidation",
+      "eviction"
+    ],
+    "translation_events_include": [
+      "first translation",
+      "retranslation after eviction",
+      "retranslation after dependency invalidation",
+      "failed translation attempts"
+    ],
+    "unique_translation_count_condition": "proved retention of all reused artifacts throughout the measured run within the memory budget",
+    "counterexample": {
+      "policy": "LRU",
+      "capacity_artifacts": 2,
+      "distinct_sources": 3,
+      "cyclic_load_events": 3000,
+      "actual_translation_events": 3000
+    },
+    "double_count_rule": "each actual instruction belongs to one term; do not add an inclusive miss price to the same translation price"
+  }
 }
