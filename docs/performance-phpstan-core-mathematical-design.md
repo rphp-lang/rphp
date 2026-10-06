@@ -1,4 +1,11 @@
-# Matematický návrh nového jádra pro tři oblasti PHPStanu
+# PHPStan: číselný případ původního matematického návrhu
+
+Architektonický rozsah tohoto původního návrhu byl následně opraven podle
+uživatelského zadání. Hlavní dokument je nyní
+[matematický návrh obecného PHP jádra](performance-php-core-mathematical-design.md),
+který kvantifikuje přes všechny PHP programy, konfigurace a sémantické rodiny.
+Tento packet zachovává původní měření a jejich podmíněné rozpočty jako jeden
+ověřovací případ; tři intervaly ani jejich ceny nevymezují architekturu jádra.
 
 Stav: návrh před realizací. Výchozí verze je `d7723d96`, ordinary release,
 default features, bez PGO. Jádro ani PHPStan se tímto návrhem nemění.

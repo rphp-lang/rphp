@@ -1,0 +1,1281 @@
+{
+  "status": "whole-PHP mathematical architecture before realization; no new runtime behavior or speed claim",
+  "goal_complete": false,
+  "scope": "For every PHP program and configuration, not a benchmark-distribution or PHPStan-region model",
+  "baseline_document_commit": "54da5c4c10fcb40143aa606d306a1851f861c52c",
+  "baseline_runtime_commit": "d7723d9617078d61cf13cf0bb2cb9d0bcf3eba2e",
+  "runtime_source_sha256": "2857a188a70de26a8b7db3a843dfb09836c751898171d6269615462168d0de7f",
+  "semantic_claim": "proof obligation for full PHP, not a certification that the present baseline supports full PHP",
+  "observable_equivalence": "all finite execution prefixes, coupled admissible external responses, exact values/aliases/effects/logical frames/lifetime/resume; time/random/I/O remain real effects",
+  "instruction_objective": "minimize the whole executed cost function I_A(program,state,configuration,world), including source/startup/compile/link/plan/guards/allocations/ownership/callbacks/fallback/teardown",
+  "architecture_names": [
+    "immutable declaration/type/source descriptors with separate mutable state",
+    "dependency and scope guarded IDs",
+    "ordered type DAG and pure predicate pair reuse",
+    "separate source load, compile, link and execute",
+    "common effect/ownership SSA IR with checked executor and both native lowerings"
+  ],
+  "required_semantic_families": [
+    "source syntax and compile/link errors",
+    "scalar and string operations/conversions",
+    "variables, globals, statics, aliases and closures",
+    "arrays, destructuring and iteration",
+    "classes, objects, interfaces, traits, enums, hooks and lazy state",
+    "type validity, matching, coercion, variance and reflection",
+    "all positional/named/variadic/unpack/reference call boundaries",
+    "all control flow, diagnostics, handlers, exceptions and shutdown",
+    "generators, Fibers and resumption",
+    "ownership, memory accounting, GC, weak and resources",
+    "all standard-library and extension leaf contracts",
+    "request, configuration, world and SAPI"
+  ],
+  "opcode_inventory": {
+    "path": "src/vm/opcode.rs",
+    "sha256": "6216359e08330e20f5ffaacf5caed92c485646ea4b3c4609a087338d550b9c18",
+    "count": 161,
+    "explicitly_assigned": 161,
+    "unassigned": [],
+    "coverage_meaning": "contract-family classification only; no per-opcode correctness, new PHP support or native coverage claim",
+    "family_counts": {
+      "scalar_string_compute": 45,
+      "variables_aliases_symbols": 20,
+      "arrays_dimensions_references": 9,
+      "iteration": 5,
+      "call_arguments_scope": 24,
+      "object_properties_constants": 19,
+      "php_type_contracts": 2,
+      "control_continuations": 15,
+      "source_loading_compilation": 2,
+      "declaration_publication": 2,
+      "diagnostics_exception_tick": 6,
+      "suspend_resume": 3,
+      "observable_output": 3,
+      "owner_retirement": 1,
+      "optional_rphp_generic_contracts": 5
+    },
+    "entries": [
+      {
+        "name": "JmpFinally",
+        "encoding": 0,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Add",
+        "encoding": 1,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Sub",
+        "encoding": 2,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Mul",
+        "encoding": 3,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Div",
+        "encoding": 4,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Mod",
+        "encoding": 5,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Concat",
+        "encoding": 8,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignConcat",
+        "encoding": 9,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignCv",
+        "encoding": 10,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchCvR",
+        "encoding": 11,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Echo",
+        "encoding": 40,
+        "contract_family": "observable_output",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitFcall",
+        "encoding": 61,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "DoFcall",
+        "encoding": 60,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SendVal",
+        "encoding": 63,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SendRef",
+        "encoding": 64,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SendVarEx",
+        "encoding": 65,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SendNamed",
+        "encoding": 66,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CallUserFuncArray",
+        "encoding": 67,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitUserCall",
+        "encoding": 68,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SendUser",
+        "encoding": 69,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsEqual",
+        "encoding": 15,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsNotEqual",
+        "encoding": 16,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsSmaller",
+        "encoding": 17,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsSmallerOrEqual",
+        "encoding": 18,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsIdentical",
+        "encoding": 19,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsNotIdentical",
+        "encoding": 20,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Isset",
+        "encoding": 21,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Cast",
+        "encoding": 22,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "PreInc",
+        "encoding": 34,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "PreDec",
+        "encoding": 35,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "PostInc",
+        "encoding": 36,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "PostDec",
+        "encoding": 37,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BoolNot",
+        "encoding": 13,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Jmp",
+        "encoding": 42,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpZ",
+        "encoding": 43,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpNZ",
+        "encoding": 44,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Return",
+        "encoding": 62,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitArray",
+        "encoding": 70,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AddArrayElement",
+        "encoding": 71,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchDimR",
+        "encoding": 72,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignDim",
+        "encoding": 73,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ArrayPushOp",
+        "encoding": 74,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "UnsetDim",
+        "encoding": 75,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AddArrayUnpack",
+        "encoding": 76,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AddCallArgument",
+        "encoding": 77,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AddCallUnpack",
+        "encoding": 78,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ForeachInit",
+        "encoding": 80,
+        "contract_family": "iteration",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ForeachNext",
+        "encoding": 81,
+        "contract_family": "iteration",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ForeachNextRef",
+        "encoding": 82,
+        "contract_family": "iteration",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ForeachWriteback",
+        "encoding": 83,
+        "contract_family": "iteration",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindArrayAppendRef",
+        "encoding": 84,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ForeachNextPlain",
+        "encoding": 85,
+        "contract_family": "iteration",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Throw",
+        "encoding": 90,
+        "contract_family": "diagnostics_exception_tick",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "NewObj",
+        "encoding": 100,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchObjR",
+        "encoding": 101,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignObjProp",
+        "encoding": 102,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitMethodCall",
+        "encoding": 103,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchStaticProp",
+        "encoding": 104,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitStaticCall",
+        "encoding": 105,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitDynamicCall",
+        "encoding": 106,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Instanceof",
+        "encoding": 107,
+        "contract_family": "php_type_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchConst",
+        "encoding": 108,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindDefaultParam",
+        "encoding": 109,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Yield",
+        "encoding": 110,
+        "contract_family": "suspend_resume",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "YieldFrom",
+        "encoding": 111,
+        "contract_family": "suspend_resume",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "GeneratorReturn",
+        "encoding": 112,
+        "contract_family": "suspend_resume",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Spaceship",
+        "encoding": 113,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Pow",
+        "encoding": 114,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseAnd",
+        "encoding": 115,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseOr",
+        "encoding": 116,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseXor",
+        "encoding": 117,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ShiftLeft",
+        "encoding": 118,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ShiftRight",
+        "encoding": 119,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseNot",
+        "encoding": 120,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindGlobal",
+        "encoding": 121,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckStatic",
+        "encoding": 122,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindStatic",
+        "encoding": 123,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignObjDim",
+        "encoding": 124,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Include",
+        "encoding": 125,
+        "contract_family": "source_loading_compilation",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "NullSafeCheck",
+        "encoding": 126,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CloneObj",
+        "encoding": 127,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CreateClosure",
+        "encoding": 128,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ClosureUseVar",
+        "encoding": 129,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "DirectInternalCall1",
+        "encoding": 130,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Strlen",
+        "encoding": 131,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "DirectInternalCall2",
+        "encoding": 132,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckGenericArgs",
+        "encoding": 133,
+        "contract_family": "optional_rphp_generic_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckReifiedArgs",
+        "encoding": 134,
+        "contract_family": "optional_rphp_generic_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckReifiedReturn",
+        "encoding": 135,
+        "contract_family": "optional_rphp_generic_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckGenericDefault",
+        "encoding": 136,
+        "contract_family": "optional_rphp_generic_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitLateStaticCall",
+        "encoding": 137,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckLateStaticGenericArgs",
+        "encoding": 138,
+        "contract_family": "optional_rphp_generic_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchLateStaticProp",
+        "encoding": 139,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignStaticProp",
+        "encoding": 140,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignLateStaticProp",
+        "encoding": 141,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchClassConst",
+        "encoding": 142,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchLateClassConst",
+        "encoding": 143,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchDynamicClassConst",
+        "encoding": 144,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchLateDynamicClassConst",
+        "encoding": 145,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IssetObj",
+        "encoding": 146,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "UnsetObj",
+        "encoding": 147,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CreateFirstClassCallable",
+        "encoding": 148,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ReleaseTemps",
+        "encoding": 149,
+        "contract_family": "owner_retirement",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindObjPropRef",
+        "encoding": 150,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindArrayDimRef",
+        "encoding": 151,
+        "contract_family": "arrays_dimensions_references",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchGlobal",
+        "encoding": 152,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignGlobal",
+        "encoding": 153,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "UnsetGlobal",
+        "encoding": 154,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindGlobalRef",
+        "encoding": 155,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignGlobalRef",
+        "encoding": 156,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchGlobals",
+        "encoding": 157,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "FetchDynamicVar",
+        "encoding": 158,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignDynamicVar",
+        "encoding": 159,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "UnsetDynamicVar",
+        "encoding": 160,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindDynamicVarRef",
+        "encoding": 161,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssignDynamicVarRef",
+        "encoding": 162,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindDynamicGlobal",
+        "encoding": 163,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "UnsetStaticProp",
+        "encoding": 164,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BindCvRef",
+        "encoding": 165,
+        "contract_family": "variables_aliases_symbols",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Eval",
+        "encoding": 166,
+        "contract_family": "source_loading_compilation",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ValidateCloneWith",
+        "encoding": 167,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "AssertCheck",
+        "encoding": 168,
+        "contract_family": "diagnostics_exception_tick",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "EndCloneWith",
+        "encoding": 169,
+        "contract_family": "object_properties_constants",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "ReportDeprecatedTraitUses",
+        "encoding": 170,
+        "contract_family": "diagnostics_exception_tick",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "DeclareClass",
+        "encoding": 171,
+        "contract_family": "declaration_publication",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "DeclarationCompileFatal",
+        "encoding": 172,
+        "contract_family": "diagnostics_exception_tick",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "EnsureFccClassLoaded",
+        "encoding": 173,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "InitDynamicStaticCall",
+        "encoding": 174,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "CheckDefaultType",
+        "encoding": 175,
+        "contract_family": "php_type_contracts",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SnapshotDiagnosticWrite",
+        "encoding": 176,
+        "contract_family": "diagnostics_exception_tick",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Tick",
+        "encoding": 177,
+        "contract_family": "diagnostics_exception_tick",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "DeclareFunction",
+        "encoding": 178,
+        "contract_family": "declaration_publication",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Add_TmpTmp",
+        "encoding": 200,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Sub_CvConst",
+        "encoding": 201,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsSmaller_CvConst",
+        "encoding": 202,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsSmallerOrEqual_CvConst",
+        "encoding": 203,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Add_CvTmp",
+        "encoding": 204,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Sub_TmpTmp",
+        "encoding": 205,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "IsEqual_CvConst",
+        "encoding": 210,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpZ_Le_CvConst",
+        "encoding": 206,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpNZ_Le_CvConst",
+        "encoding": 207,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpZ_Lt_CvConst",
+        "encoding": 208,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpNZ_Lt_CvConst",
+        "encoding": 209,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpZ_Eq_CvConst",
+        "encoding": 211,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpNZ_Eq_CvConst",
+        "encoding": 212,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "QuickLongLoopJmp",
+        "encoding": 213,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Strlen_Cv",
+        "encoding": 214,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Add_LongLong",
+        "encoding": 215,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Sub_LongLong",
+        "encoding": 216,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Mul_LongLong",
+        "encoding": 217,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Mod_LongLong",
+        "encoding": 218,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Concat_StringString",
+        "encoding": 219,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Strlen_String",
+        "encoding": 220,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Echo_String",
+        "encoding": 221,
+        "contract_family": "observable_output",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "Echo_Long",
+        "encoding": 222,
+        "contract_family": "observable_output",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseXor_LongLong",
+        "encoding": 223,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseAnd_LongLong",
+        "encoding": 224,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "BitwiseOr_LongLong",
+        "encoding": 225,
+        "contract_family": "scalar_string_compute",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "SendUserChecked",
+        "encoding": 226,
+        "contract_family": "call_arguments_scope",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpZ_Identical",
+        "encoding": 227,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      },
+      {
+        "name": "JmpNZ_Identical",
+        "encoding": 228,
+        "contract_family": "control_continuations",
+        "proof_status": "general contract required; not newly proved by classification",
+        "price": null
+      }
+    ]
+  },
+  "baseline_param_type_hint_variants": {
+    "path": "src/vm/function.rs",
+    "variants": [
+      "None",
+      "Int",
+      "Float",
+      "String",
+      "Bool",
+      "Array",
+      "Callable",
+      "Void",
+      "Mixed",
+      "Never",
+      "ClassName",
+      "Nullable",
+      "Union",
+      "Intersection"
+    ],
+    "coverage_meaning": "existing representation inventory, not a complete PHP type-surface proof"
+  },
+  "semantic_gaps": {
+    "source_forms_without_opcode": "covered by required contracts, not automatically proved by enum inventory",
+    "missing_native_handler": "explicit implementation/proof obligation, never assumed canonical fallback",
+    "optional_generics": "separate RPHP feature contracts, not reference PHP"
+  },
+  "instruction_prices": {
+    "source_IO": null,
+    "compile_link": null,
+    "plan_cache": null,
+    "useful_compute": null,
+    "lookup": null,
+    "guards": null,
+    "observable_allocations": null,
+    "ownership_GC": null,
+    "materialization": null,
+    "side_exit_control": null,
+    "external_body": null,
+    "teardown": null,
+    "null_meaning": "unknown, never zero or free"
+  },
+  "online_selection": {
+    "assumptions": "stable known C>0, delta=b-h>0; guard/profiling costs included; no unaccounted mutation/recompilation/side exit",
+    "threshold": "ceil(C/delta), compile before threshold-th visit",
+    "excess_before_threshold": "N*delta",
+    "excess_from_threshold": "(threshold-1)*delta+C < 2*C",
+    "offline_minimum_excess": "min(N*delta,C)",
+    "claim": "at most 2x offline excess cost under these assumptions, not measured speedup or 100x",
+    "arithmetic_checks": [
+      {
+        "illustrative_C": 1,
+        "illustrative_delta": 3,
+        "threshold": 1,
+        "all_tested_visit_counts_obey_bound": true
+      },
+      {
+        "illustrative_C": 10,
+        "illustrative_delta": 2,
+        "threshold": 5,
+        "all_tested_visit_counts_obey_bound": true
+      },
+      {
+        "illustrative_C": 11,
+        "illustrative_delta": 3,
+        "threshold": 4,
+        "all_tested_visit_counts_obey_bound": true
+      },
+      {
+        "illustrative_C": 100,
+        "illustrative_delta": 7,
+        "threshold": 15,
+        "all_tested_visit_counts_obey_bound": true
+      },
+      {
+        "illustrative_C": 101,
+        "illustrative_delta": 10,
+        "threshold": 11,
+        "all_tested_visit_counts_obey_bound": true
+      }
+    ]
+  },
+  "phpstan_witness": {
+    "packet": "performance-phpstan-core-mathematical-design-data.json",
+    "role": "one retained same-input acceptance witness; numeric thresholds never engine admission conditions",
+    "100x_achieved": false,
+    "original_goal_complete": false
+  },
+  "primary_references": [
+    "https://www.php.net/manual/en/langref.php",
+    "https://www.php.net/manual/en/book.reflection.php",
+    "https://www.php.net/manual/en/language.types.declarations.php",
+    "https://www.php.net/manual/en/function.include.php",
+    "https://www.php.net/manual/en/function.eval.php",
+    "https://www.php.net/manual/en/language.oop5.autoload.php",
+    "https://www.php.net/manual/en/language.oop5.property-hooks.php"
+  ]
+}

@@ -31,6 +31,9 @@ The [recovered foundation](performance-phpstan-recovered-foundation.md) corrects
 mixed process/analysis count scopes and missing performance history, integrates
 ordinary call ownership/lifetime repairs and records fresh exact-source gates.
 It remains a branch checkpoint; no source has been pushed directly to main.
+The next design is the [general PHP core cost and semantic model](performance-php-core-mathematical-design.md),
+covering arbitrary PHP programs and all semantic families. PHPStan supplies one
+acceptance witness; its three regions do not define the engine's scope.
 Earlier large-input numbers below retain their different workload identity.
 
 Only an accepted checkpoint moves a frontier. A partial implementation,

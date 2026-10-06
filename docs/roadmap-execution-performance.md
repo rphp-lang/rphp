@@ -35,11 +35,14 @@ not complete simultaneous instruction/time parity or claim universal speedup.
 See [the report](performance-phpstan-recovered-foundation.md) and
 [all observations](performance-phpstan-recovered-foundation-data.json).
 The next core rewrite begins with a
-[mathematical instruction/semantic design](performance-phpstan-core-mathematical-design.md)
-on this exact recovered source. It specifies 100x per-region budgets, shared
-effect/ownership IR, cold and fallback costs, and a legal-plan/lower-bound
-selection model. The design changes no runtime code and proves no 100x result;
-mandatory-work counts and unit prices remain explicit unknowns before realization.
+[whole-PHP mathematical instruction/semantic design](performance-php-core-mathematical-design.md)
+on this exact recovered source. It covers arbitrary PHP programs and configurations,
+all semantic families and the complete current opcode inventory, shared
+metadata/type/source representations and effect/ownership IR. Cold, external,
+fallback, online planning and lifetime costs are included. PHPStan's 100x
+region budgets remain one acceptance witness. The design changes no runtime
+code, certifies no complete PHP support and proves no 100x result; unit prices
+and per-operation semantic/native proofs remain explicit obligations.
 The larger-project results below are historical results on a different input.
 
 ## Accepted heap and bounded runtime repair
