@@ -61,7 +61,7 @@ fn finish_request_shutdown(
         cleanup_frame_slots(frame);
         retired_values
     };
-    run_value_destructors(eg, &retired_values, frame)?;
+    run_shutdown_value_destructors(eg, &retired_values, frame)?;
     drop(retired_values);
     run_request_surviving_global_destructors(eg, frame)?;
     // Releasing the root symbol table may expose a Fiber/Generator cycle that
@@ -260,7 +260,7 @@ fn execute_request_inner(
     };
     if execution.is_ok()
         && !body_dispatches_handlers
-        && main_func.op_array.source_file.as_ref() != "Command line code"
+        && main_func.op_array.source_file.as_str() != "Command line code"
         && eg.exception.is_some()
         && eg.exception_handler.is_some()
     {
@@ -948,7 +948,7 @@ pub fn call_function_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -963,6 +963,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -979,11 +980,12 @@ fn call_function_iter_from_logical_caller<'a, I>(
     func_ptr: *const FunctionCommon,
     num_args: usize,
     args: I,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -998,6 +1000,7 @@ where
         true,
         logical_caller_at_current_site,
         internal_trace_origin.then(|| ("Unknown".to_string(), 0, None, false)),
+        callback_retirement,
     )?;
     Ok(return_value)
 }
@@ -1018,7 +1021,7 @@ fn call_function_iter_from_live_internal_caller<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1033,6 +1036,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1051,7 +1055,7 @@ where
     I: Iterator<Item = &'a Value>,
 {
     let logical_caller = eg.current_execute_data.get();
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1066,6 +1070,7 @@ where
         true,
         true,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1084,7 +1089,7 @@ where
     I: Iterator<Item = &'a Value>,
 {
     let logical_caller = eg.current_execute_data.get();
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1099,6 +1104,7 @@ where
         false,
         true,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1121,7 +1127,7 @@ where
     I: Iterator<Item = &'a Value>,
 {
     let capture_start = num_args.saturating_sub(capture_count);
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1142,6 +1148,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1159,7 +1166,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, _) =
-        call_function_value_iter::<_, false>(
+        call_function_value_iter::<_, false, false>(
             eg,
             func_ptr,
             num_args,
@@ -1174,6 +1181,7 @@ where
             false,
             false,
             None,
+            CallbackReturnPolicy::Function,
         )?;
     Ok(return_value)
 }
@@ -1193,7 +1201,7 @@ pub(crate) fn call_function_owned_iter_with_context<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1208,6 +1216,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1231,7 +1240,7 @@ pub(crate) fn call_function_owned_iter_with_context_from<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1246,6 +1255,7 @@ where
         true,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1269,7 +1279,7 @@ pub(crate) fn call_function_owned_iter_with_context_from_mode<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1284,6 +1294,7 @@ where
         publish_live_trace_caller,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1304,7 +1315,7 @@ pub(crate) fn call_function_owned_iter_with_context_and_named<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1319,6 +1330,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1339,11 +1351,12 @@ pub(crate) fn call_function_owned_iter_with_context_and_named_from<I>(
     trace_origin: (String, usize),
     pending_preentry_error: Option<&Value>,
     capture_generated_preentry_error: bool,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<Value, VmError>
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, _) = call_function_value_iter::<_, false>(
+    let (return_value, _) = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -1363,6 +1376,48 @@ where
             pending_preentry_error,
             capture_generated_preentry_error,
         )),
+        callback_retirement,
+    )?;
+    Ok(return_value)
+}
+
+/// Source unpacking has collected and bound its arguments before this entry.
+/// Validate its owned frame once with source strictness and diagnostic origin;
+/// ordinary engine callbacks keep their independent weak-call policy.
+pub(crate) fn call_function_source_unpack_iter_with_context<I>(
+    eg: &mut ExecutorGlobals,
+    logical_caller: *mut ExecuteData,
+    func_ptr: *const FunctionCommon,
+    num_args: usize,
+    args: I,
+    called_scope_class_id: u32,
+    closure_scope_class_id: Option<u32>,
+    bound_this: Option<Value>,
+    capture_count: usize,
+    closure_static_vars: Option<crate::value::ClosureStaticVars>,
+    named_variadic: Vec<(String, Value)>,
+    named_variadic_external_byte_keys: bool,
+    trace_origin: (String, usize),
+) -> Result<Value, VmError>
+where
+    I: Iterator<Item = Value>,
+{
+    let (return_value, _) = call_function_value_iter::<_, false, true>(
+        eg,
+        func_ptr,
+        num_args,
+        args,
+        called_scope_class_id,
+        closure_scope_class_id,
+        bound_this,
+        capture_count,
+        closure_static_vars,
+        Some((named_variadic, named_variadic_external_byte_keys)),
+        logical_caller,
+        true,
+        false,
+        Some((trace_origin.0, trace_origin.1, None, true)),
+        CallbackReturnPolicy::Function,
     )?;
     Ok(return_value)
 }
@@ -1381,7 +1436,7 @@ where
     I: Iterator<Item = Value>,
 {
     let (return_value, arg0) =
-        call_function_value_iter::<_, true>(
+        call_function_value_iter::<_, true, false>(
             eg,
             func_ptr,
             num_args,
@@ -1396,6 +1451,7 @@ where
             false,
             false,
             None,
+            CallbackReturnPolicy::Function,
         )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
@@ -1415,7 +1471,7 @@ pub(crate) fn call_function_owned_iter_readback_arg0_with_context<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let (return_value, arg0) = call_function_value_iter::<_, true>(
+    let (return_value, arg0) = call_function_value_iter::<_, true, false>(
         eg,
         func_ptr,
         num_args,
@@ -1430,13 +1486,19 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
 
+/// Completion policy is supplied by the engine entry point; a synthetic
+/// trace caller is not evidence that ordinary PHP execution is still active.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CallbackReturnPolicy { Function, Shutdown }
+
 /// Shared callback invocation path. `READBACK_ARG0` keeps the ordinary path
 /// free of the extra first-public-argument clone required by `array_walk`.
-fn call_function_value_iter<I, const READBACK_ARG0: bool>(
+fn call_function_value_iter<I, const READBACK_ARG0: bool, const SOURCE_UNPACK: bool>(
     eg: &mut ExecutorGlobals,
     func_ptr: *const FunctionCommon,
     num_args: usize,
@@ -1451,6 +1513,7 @@ fn call_function_value_iter<I, const READBACK_ARG0: bool>(
     publish_live_trace_caller: bool,
     trace_caller_at_current_site: bool,
     trace_origin: Option<(String, usize, Option<&Value>, bool)>,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<(Value, Option<Value>), VmError>
 where
     I: Iterator<Item = Value>,
@@ -1541,7 +1604,9 @@ where
         && !crate::stdlib::internal_variadic_forwards_named_arguments(
             &displayed_function_name(eg, func_ptr),
         );
-    let arity_num_args = if rejects_internal_named_variadic {
+    let arity_num_args = if rejects_internal_named_variadic
+        || (SOURCE_UNPACK && user_callee.is_some())
+    {
         positional_public_num_args
     } else {
         public_num_args
@@ -1572,6 +1637,7 @@ where
     }
     if supplied_preentry_error.is_none()
         && arity_num_args < signature.required_num_args as usize
+        && !(SOURCE_UNPACK && user_callee.is_some())
     {
         let common = unsafe { &*func_ptr };
         let required = signature.required_num_args;
@@ -1597,6 +1663,10 @@ where
             };
             format!(
                 "{name}() expects {relation} {required} {noun}, {arity_num_args} given"
+            )
+        } else if SOURCE_UNPACK && let Some((file, line, _, _)) = trace_origin.as_ref() {
+            format!(
+                "Too few arguments to function {name}(), {arity_num_args} passed in {file} on line {line} and {relation} {required} expected"
             )
         } else {
             format!(
@@ -1755,6 +1825,16 @@ where
                 .collect::<Vec<_>>()
         });
 
+        // Captures were snapshotted before relocation. Source calls with
+        // omitted optional parameters must leave those original parameter CVs
+        // Undef, so BindDefaultParam supplies the declaration's default.
+        if SOURCE_UNPACK && capture_count != 0 {
+            for index in capture_source_start..num_args.min(capture_destination) {
+                let destination = (*frame).cv_mut(index as u32) as *mut Value;
+                frame_slot_set(frame, destination, Value::undef());
+            }
+        }
+
         // Detached callback entry bypasses DoFcall, whose full path normally
         // materializes the variadic bucket. Internal handlers use the same ABI in
         // both entry modes, so pack their trailing public arguments here before
@@ -1817,6 +1897,7 @@ where
             && generated_preentry_error.is_none()
         {
             let callee_class = lexical_class_name_for_frame(eg, frame);
+            let argument_strictness = SOURCE_UNPACK && (*frame).is_detached_strict_call();
             let fixed_arity = if signature.is_variadic {
                 signature.public_arity() as usize
             } else {
@@ -1825,7 +1906,11 @@ where
             for (index, hint) in signature
                 .param_type_hints
                 .iter()
-                .take(fixed_arity)
+                .take(if SOURCE_UNPACK {
+                    fixed_arity.min(positional_public_num_args)
+                } else {
+                    fixed_arity
+                })
                 .enumerate()
             {
                 if matches!(hint, ParamTypeHint::None) {
@@ -1841,7 +1926,7 @@ where
                     &source,
                     hint,
                     eg,
-                    false,
+                    argument_strictness,
                     callee_class.as_deref(),
                 )? {
                     CallArgumentPreparation::Exact => {}
@@ -1859,9 +1944,7 @@ where
                                 .get(index)
                                 .map(|name| &**name)
                                 .unwrap_or("unknown");
-                            make_error_value(
-                                "TypeError",
-                                &format!(
+                            let mut message = format!(
                                     "{}(): Argument #{} (${parameter}) must be of type {}, {} given",
                                     displayed_function_name(eg, func_ptr),
                                     index + 1,
@@ -1872,8 +1955,11 @@ where
                                         callee_class.as_deref(),
                                     ),
                                     declared_type_error_value_name(&source),
-                                ),
-                            )
+                                );
+                            if SOURCE_UNPACK && let Some((file, line, _, _)) = trace_origin.as_ref() {
+                                message.push_str(&format!(", called in {file} on line {line}"));
+                            }
+                            make_error_value("TypeError", &message)
                         });
                         eg.exception = Some(error.clone());
                         generated_argument_type_error = Some(error);
@@ -1882,7 +1968,40 @@ where
                 }
             }
 
+            // Source RECV validates supplied values before a missing trailing
+            // parameter. Binding already rejected named holes; named variadics do
+            // not count as positional values in this diagnostic. Limit validation
+            // above to supplied slots so relocated captures cannot become arguments.
+            if SOURCE_UNPACK
+                && user_callee.is_some()
+                && supplied_preentry_error.is_none()
+                && generated_preentry_error.is_none()
+                && generated_argument_type_error.is_none()
+                && arity_num_args < signature.required_num_args as usize
+            {
+                let name = displayed_function_name(eg, func_ptr);
+                let required = signature.required_num_args;
+                let relation = if signature.public_arity() > required {
+                    "at least"
+                } else {
+                    "exactly"
+                };
+                let message = if let Some((file, line, _, _)) = trace_origin.as_ref() {
+                    format!(
+                        "Too few arguments to function {name}(), {arity_num_args} passed in {file} on line {line} and {relation} {required} expected"
+                    )
+                } else {
+                    format!(
+                        "Too few arguments to function {name}(), {arity_num_args} passed and {relation} {required} expected"
+                    )
+                };
+                let error = make_error_value("ArgumentCountError", &message);
+                eg.exception = Some(error.clone());
+                generated_preentry_error = Some(error);
+            }
+
             if generated_argument_type_error.is_none()
+                && generated_preentry_error.is_none()
                 && signature.is_variadic
                 && public_num_args > fixed_arity
                 && let Some(hint) = signature.param_type_hints.get(fixed_arity)
@@ -1908,7 +2027,7 @@ where
                         &source,
                         hint,
                         eg,
-                        false,
+                        argument_strictness,
                         callee_class.as_deref(),
                     )? {
                         CallArgumentPreparation::Exact => {}
@@ -1929,9 +2048,7 @@ where
                         CallArgumentPreparation::Invalid => {
                             let argument_index = fixed_arity + position;
                             let error = eg.exception.take().unwrap_or_else(|| {
-                                make_error_value(
-                                    "TypeError",
-                                    &format!(
+                                let mut message = format!(
                                         "{}(): Argument #{} must be of type {}, {} given",
                                         displayed_function_name(eg, func_ptr),
                                         argument_index + 1,
@@ -1942,8 +2059,11 @@ where
                                             callee_class.as_deref(),
                                         ),
                                         declared_type_error_value_name(&source),
-                                    ),
-                                )
+                                    );
+                                if SOURCE_UNPACK && let Some((file, line, _, _)) = trace_origin.as_ref() {
+                                    message.push_str(&format!(", called in {file} on line {line}"));
+                                }
+                                make_error_value("TypeError", &message)
                             });
                             eg.exception = Some(error.clone());
                             generated_argument_type_error = Some(error);
@@ -2072,9 +2192,15 @@ where
         }
     }
 
-    let execution_result = match unsafe { (*func_ptr).fn_type } {
+    let mut execution_result = match function_type {
         FunctionType::User => {
             let user = unsafe { &*(func_ptr as *const UserFunction) };
+            if user.common.plan.needs_trait_class_scope() {
+                let trait_scope = eg.class_by_id(called_scope_class_id).map_or(0, |class| {
+                    trait_class_scope_for_dispatch(eg, func_ptr, &class.name)
+                });
+                initialize_trait_class_scope(eg, frame, func_ptr, trait_scope);
+            }
             unsafe { (*frame).opline = user.op_array.instructions.as_ptr() };
             eg.current_execute_data.set(frame);
             execute_ex(eg, frame)
@@ -2135,6 +2261,26 @@ where
     } else {
         None
     };
+    // The detached Return stops at its null predecessor. Readback above must
+    // retain its output before the committed callback relinquishes its slots.
+    let returning = function_type == FunctionType::User
+        && execution_result.is_ok()
+        && eg.exception.is_none();
+    if returning {
+        // Shutdown independently dispatches each destructor failure through
+        // the request handler. Ordinary returns chain replacements to their
+        // caller. This is the existing request/function completion policy.
+        execution_result = if callback_retirement == CallbackReturnPolicy::Shutdown {
+            run_committed_frame_destructors(eg, frame, CallbackReturnPolicy::Shutdown)
+        } else {
+            run_return_frame_destructors(eg, frame)
+        };
+    } else if function_type == FunctionType::Internal {
+        let retirement = run_return_frame_destructors(eg, frame);
+        if execution_result.is_ok() {
+            execution_result = retirement;
+        }
+    }
     let callback_threw = eg.exception.is_some();
 
     // A detached user callback has no physical predecessor, so its ordinary
@@ -2142,6 +2288,7 @@ where
     // popping it just as a linked user frame would; a throwing destructor
     // replaces and chains the callback's pending exception.
     if callback_threw
+        && !returning
         && function_type == FunctionType::User
         && let Some(pending) = eg.exception.take()
     {
@@ -2257,7 +2404,7 @@ pub(crate) fn attach_detached_argument_type_error_origin<I>(
 where
     I: Iterator<Item = Value>,
 {
-    let _ = call_function_value_iter::<_, false>(
+    let _ = call_function_value_iter::<_, false, false>(
         eg,
         func_ptr,
         num_args,
@@ -2277,6 +2424,7 @@ where
             Some(throwable),
             false,
         )),
+        CallbackReturnPolicy::Function,
     )?;
     Ok(())
 }
@@ -2303,7 +2451,7 @@ pub fn call_function_readback_arg0_iter<'a, I>(
 where
     I: Iterator<Item = &'a Value>,
 {
-    let (return_value, arg0) = call_function_value_iter::<_, true>(
+    let (return_value, arg0) = call_function_value_iter::<_, true, false>(
         eg,
         func_ptr,
         num_args,
@@ -2318,6 +2466,7 @@ where
         false,
         false,
         None,
+        CallbackReturnPolicy::Function,
     )?;
     Ok((return_value, arg0.unwrap_or_else(Value::null)))
 }
@@ -2366,6 +2515,7 @@ fn release_yield_from_values(
         false,
         true,
         false,
+        CallbackReturnPolicy::Function,
     )
     .map(|_| ());
     let replacement = eg.exception.take();
@@ -2718,6 +2868,9 @@ fn force_close_generator_activation(
         )?;
         run_frame_destructors(eg, frame)?;
         eg.current_execute_data.set(saved_execute_data);
+        // Materialization publishes a logical caller even when no finally
+        // body runs. Retire that link before this stack address is reused.
+        eg.discard_detached_trace_caller(frame as usize);
         unsafe { cleanup_frame_slots(frame) };
         pop_vm_call_frame(eg, frame);
         return Ok(());
@@ -3748,7 +3901,7 @@ fn generator_resume_continuation_trace(
 fn extend_generator_delegation_trace(
     mut existing: Vec<Value>,
     continuation: &PhpArray,
-    origin: Option<&(std::rc::Rc<String>, usize)>,
+    origin: Option<&(std::rc::Rc<crate::value::PhpString>, usize)>,
 ) -> PhpArray {
     let boundary = existing
         .iter()
@@ -4124,7 +4277,9 @@ pub(crate) fn cleanup_detached_frame_chain(
         discard_generator_generic_context(eg, frame);
         eg.discard_detached_trace_caller(frame as usize);
         unsafe {
-            cleanup_pending_calls(eg, frame);
+            if let Err(error) = cleanup_pending_calls(eg, frame, None) {
+                cleanup_error = Some(error);
+            }
             cleanup_frame_slots(frame);
         }
         pop_vm_call_frame(eg, frame);
@@ -4291,8 +4446,12 @@ pub(crate) fn resume_suspended_generator_call(
         if let Some(exception) = internal_exception.as_ref() {
             attach_internal_call_trace_if_missing(exception, call, frame, eg);
         }
+        eg.exception = internal_exception;
+        let retirement = run_return_frame_destructors(eg, call);
+        let internal_exception = eg.exception.take();
         cleanup_frame_slots(call);
         pop_vm_call_frame(eg, call);
+        retirement?;
 
         if let Some(exception) = internal_exception {
             return Ok(match throw_in_frame(eg, frame, exception)? {
@@ -4502,3 +4661,7 @@ pub(crate) fn inject_suspended_exception(
         }
     })
 }
+
+#[cfg(test)]
+#[path = "../../../tests/support/generator_frame_retirement.rs"]
+mod generator_frame_retirement_tests;

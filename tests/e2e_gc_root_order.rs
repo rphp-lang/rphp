@@ -1,6 +1,45 @@
 mod common;
 
 #[test]
+fn nested_read_snapshots_preserve_gc_roots_across_compact_and_wide_ranges() {
+    for (padding, depth) in [
+        (0, 1),
+        (0, 31),
+        (0, 32),
+        (0, 64),
+        (0, 65),
+        (80, 1),
+        (80, 65),
+        (80, 96),
+    ] {
+        let locals = (0..padding)
+            .map(|index| format!("$pad{index}={index};"))
+            .collect::<String>();
+        let chain = "->next".repeat(depth);
+        let source = format!(
+            r#"<?php
+class SnapshotNode {{public $next;public $value=0;}}
+function exercise() {{
+    {locals}
+    $root=new SnapshotNode;$root->next=$root;
+    $weak=WeakReference::create($root);gc_collect_cycles();
+    echo gc_status()['roots'],'|';
+    $root{chain}->value=42;
+    echo $root->value,'|',gc_status()['roots'],'|';
+    unset($root);echo gc_collect_cycles(),'|',$weak->get()===null?'cleared':'live';
+}}
+exercise();
+"#,
+        );
+        assert_eq!(
+            common::run_php(&source),
+            "0|42|0|1|cleared",
+            "padding={padding}, depth={depth}"
+        );
+    }
+}
+
+#[test]
 fn immutable_empty_array_templates_do_not_admit_mutable_roots() {
     for (source, expected) in [
         (

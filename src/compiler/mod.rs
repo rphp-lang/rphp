@@ -29,9 +29,9 @@ use crate::vm::function::{
     CapturedTypedLongFunctionPlan, IndirectScalarLongCallable, IndirectScalarLongFunctionPlan,
 };
 use crate::vm::instruction::{
-    FETCH_DIM_FUNC_ARG, FETCH_DIM_MUTABLE, FETCH_DIM_REFERENCE_SOURCE, InlineCache, Instruction,
-    KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG, OpType,
-    SEND_FLAG_YIELD_SNAPSHOT,
+    ARRAY_ELEMENT_REFERENCE, FETCH_DIM_FUNC_ARG, FETCH_DIM_MUTABLE, FETCH_DIM_REFERENCE_SOURCE,
+    InlineCache, Instruction, KnownScalarType, LATE_STATIC_PROP_EMBEDDED_SCOPE, OBJ_PROP_FUNC_ARG,
+    OpType, SEND_FLAG_YIELD_SNAPSHOT,
 };
 use crate::vm::opcode::OpCode;
 use crate::vm::planner::{BlockInfo, BlockPlan};
@@ -70,7 +70,7 @@ pub struct OpArray {
     /// bytecode assembled without source context.
     /// Shared source-unit name. Throwable origins clone this owner instead of
     /// allocating the same filename for every created exception.
-    pub source_file: std::rc::Rc<String>,
+    pub source_file: std::rc::Rc<crate::value::PhpString>,
     /// Main script scope CVs — all top-level variables synced to eg.globals before function calls.
     /// Empty for non-main-script op_arrays.
     pub main_scope_vars: Vec<(u32, String)>,
@@ -323,6 +323,170 @@ impl OpArray {
                 instr.extended_value += offset;
             }
         }
+        // Release intervals are immutable once their physical offsets are
+        // resolved. Their opcode-local cache is never used for dispatch or
+        // property resolution, so preserve its existing 16-byte geometry.
+        for (instruction, cache) in self.instructions.iter().zip(&mut self.cache) {
+            if instruction.opcode == OpCode::ReleaseTemps {
+                *cache = InlineCache::for_release_range(instruction.op1, instruction.op2);
+            }
+        }
+    }
+
+    /// Prove argument consumption from bytecode mentions, without relying on
+    /// an expression shape or a source/callee name. Release interval endpoints
+    /// and array-builder destination writes are not consuming reads. Implicit
+    /// trait/foreach/diagnostic slots remain excluded.
+    fn mark_consumed_call_argument_owners(&mut self) {
+        use crate::vm::instruction::{ASSIGN_DIM_DIAGNOSTIC_GUARD, SEND_FLAG_CONSUME_TEMP};
+        let total = (self.num_cvs + self.num_temps) as usize;
+        let mut mentions = vec![0u8; total];
+        let mut definition = vec![usize::MAX; total];
+        let n = self.instructions.len();
+        let mut entries = vec![false; n];
+        for (ip, instruction) in self.instructions.iter().enumerate() {
+            let target = match instruction.opcode {
+                OpCode::Jmp | OpCode::QuickLongLoopJmp | OpCode::AssertCheck => {
+                    Some(instruction.op1 as usize)
+                }
+                OpCode::JmpFinally => {
+                    // Dynamic finally continuations need the full lifetime CFG.
+                    entries.fill(true);
+                    None
+                }
+                OpCode::JmpZ
+                | OpCode::JmpNZ
+                | OpCode::NullSafeCheck
+                | OpCode::BindDefaultParam
+                | OpCode::ForeachInit => Some(instruction.op2 as usize),
+                OpCode::CheckStatic
+                | OpCode::JmpZ_Le_CvConst
+                | OpCode::JmpNZ_Le_CvConst
+                | OpCode::JmpZ_Lt_CvConst
+                | OpCode::JmpNZ_Lt_CvConst
+                | OpCode::JmpZ_Eq_CvConst
+                | OpCode::JmpNZ_Eq_CvConst => Some(instruction.result as usize),
+                OpCode::ForeachNext | OpCode::ForeachNextRef | OpCode::ForeachNextPlain => {
+                    Some(instruction.extended_value as usize)
+                }
+                OpCode::FetchDimR | OpCode::SnapshotDiagnosticWrite
+                    if instruction.extended_value != 0 =>
+                {
+                    Some(instruction.extended_value as usize)
+                }
+                _ => None,
+            };
+            if let Some(target) = target.and_then(|target| entries.get_mut(target)) {
+                *target = true;
+            }
+            if matches!(
+                instruction.opcode,
+                OpCode::Jmp
+                    | OpCode::QuickLongLoopJmp
+                    | OpCode::AssertCheck
+                    | OpCode::JmpZ
+                    | OpCode::JmpNZ
+                    | OpCode::NullSafeCheck
+                    | OpCode::BindDefaultParam
+                    | OpCode::CheckStatic
+                    | OpCode::ForeachInit
+                    | OpCode::ForeachNext
+                    | OpCode::ForeachNextRef
+                    | OpCode::ForeachNextPlain
+                    | OpCode::Yield
+                    | OpCode::YieldFrom
+                    | OpCode::Return
+                    | OpCode::GeneratorReturn
+                    | OpCode::Throw
+                    | OpCode::JmpZ_Le_CvConst
+                    | OpCode::JmpNZ_Le_CvConst
+                    | OpCode::JmpZ_Lt_CvConst
+                    | OpCode::JmpNZ_Lt_CvConst
+                    | OpCode::JmpZ_Eq_CvConst
+                    | OpCode::JmpNZ_Eq_CvConst
+            ) && let Some(next) = entries.get_mut(ip + 1)
+            {
+                *next = true;
+            }
+        }
+        for entry in &self.try_entries {
+            for target in [
+                entry.try_start,
+                entry.try_end,
+                entry.finally_start,
+                entry.finally_end,
+            ]
+            .into_iter()
+            .chain(entry.catches.iter().map(|catch| catch.catch_start))
+            {
+                if let Some(entry) = entries.get_mut(target as usize) {
+                    *entry = true;
+                }
+            }
+        }
+        for (ip, instruction) in self.instructions.iter().enumerate() {
+            if instruction.opcode == OpCode::ReleaseTemps {
+                continue;
+            }
+            for (field, (operand, kind)) in [
+                (instruction.op1, instruction.op1_type),
+                (instruction.op2, instruction.op2_type),
+                (instruction.result, instruction.result_type),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if field == 0
+                    && matches!(
+                        instruction.opcode,
+                        OpCode::AddArrayElement | OpCode::AddArrayUnpack
+                    )
+                {
+                    continue;
+                }
+                if matches!(kind, OpType::Tmp | OpType::Var)
+                    && let Some(count) = mentions.get_mut(usize::from(operand))
+                {
+                    *count = count.saturating_add(1);
+                }
+            }
+            if instruction.result_type == OpType::Tmp
+                && let Some(first) = definition.get_mut(usize::from(instruction.result))
+            {
+                *first = (*first).min(ip);
+            }
+            let implicit = if instruction.opcode == OpCode::ForeachInit {
+                Some(instruction.extended_value as usize)
+            } else if instruction.opcode == OpCode::AssignDim
+                && instruction._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+            {
+                instruction
+                    .extended_value
+                    .checked_sub(1)
+                    .map(|slot| slot as usize)
+            } else {
+                None
+            };
+            if let Some(slot) = implicit.and_then(|slot| mentions.get_mut(slot)) {
+                *slot = u8::MAX;
+            }
+        }
+        for (ip, instruction) in self.instructions.iter_mut().enumerate() {
+            if !matches!(instruction.opcode, OpCode::SendVal | OpCode::SendVarEx) {
+                continue;
+            }
+            instruction._pad &= !SEND_FLAG_CONSUME_TEMP;
+            let source = usize::from(instruction.op1);
+            if instruction.op1_type == OpType::Tmp
+                && Some(instruction.op1) != self.trait_class_scope_tmp
+                && mentions.get(source) == Some(&2)
+                && definition.get(source).is_some_and(|definition| {
+                    *definition < ip && !entries[*definition + 1..=ip].iter().any(|entry| *entry)
+                })
+            {
+                instruction._pad |= SEND_FLAG_CONSUME_TEMP;
+            }
+        }
     }
 
     /// Specialize opcodes for common operand-type patterns.
@@ -337,6 +501,8 @@ impl OpArray {
     pub fn specialize_opcodes_with_hints(&mut self, _param_type_hints: &[ParamTypeHint]) {
         use crate::vm::instruction::{ARITHMETIC_NEXT_PRIMITIVE_ASSIGN, ASSIGN_CV_REBIND, OpType};
         use crate::vm::opcode::OpCode;
+
+        self.mark_consumed_call_argument_owners();
 
         // Pass 1: operand-type specialization (single-instruction patterns)
         for instr in &mut self.instructions {
@@ -476,6 +642,184 @@ impl OpArray {
 
             i += 1;
         }
+        self.combine_identity_branches();
+    }
+
+    /// Reconstruct the original predicate for typed planners. The adjacent
+    /// jump and all instruction positions are retained by combined bytecode.
+    pub(crate) fn canonical_instruction(&self, ip: usize) -> Option<Instruction> {
+        let mut instruction = *self.instructions.get(ip)?;
+        if matches!(
+            instruction.opcode,
+            OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical
+        ) {
+            let branch = self.instructions.get(ip + 1)?;
+            if !matches!(branch.opcode, OpCode::JmpZ | OpCode::JmpNZ) {
+                return None;
+            }
+            let same_sense =
+                (instruction.opcode == OpCode::JmpZ_Identical) == (branch.opcode == OpCode::JmpZ);
+            instruction.opcode = if same_sense {
+                OpCode::IsIdentical
+            } else {
+                OpCode::IsNotIdentical
+            };
+            instruction.result_type = OpType::Tmp;
+            instruction.result = u16::try_from(instruction.extended_value).ok()?;
+            instruction.extended_value = 0;
+        }
+        Some(instruction)
+    }
+
+    fn combine_identity_branches(&mut self) {
+        if !self
+            .instructions
+            .iter()
+            .any(|i| matches!(i.opcode, OpCode::IsIdentical | OpCode::IsNotIdentical))
+        {
+            return;
+        }
+        let total = (self.num_cvs + self.num_temps) as usize;
+        let mut definitions = vec![0u32; total];
+        let mut uses = vec![0u32; total];
+        let mut entries = vec![false; self.instructions.len()];
+        for instruction in &self.instructions {
+            if instruction.opcode != OpCode::ReleaseTemps {
+                if matches!(
+                    instruction.result_type,
+                    OpType::Cv | OpType::Tmp | OpType::Var
+                ) && let Some(count) = definitions.get_mut(usize::from(instruction.result))
+                {
+                    *count += 1;
+                }
+                for (operand, kind) in [
+                    (instruction.op1, instruction.op1_type),
+                    (instruction.op2, instruction.op2_type),
+                ] {
+                    if matches!(kind, OpType::Cv | OpType::Tmp | OpType::Var)
+                        && let Some(count) = uses.get_mut(usize::from(operand))
+                    {
+                        *count += 1;
+                    }
+                }
+                // Foreach's hidden position and diagnostic-write guard tokens
+                // are physical scratch definitions outside the result field.
+                let hidden = if instruction.opcode == OpCode::ForeachInit {
+                    Some(instruction.extended_value)
+                } else if instruction.opcode == OpCode::AssignDim
+                    && instruction._pad & crate::vm::instruction::ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
+                {
+                    instruction.extended_value.checked_sub(1)
+                } else {
+                    None
+                };
+                if let Some(hidden) = hidden.and_then(|slot| definitions.get_mut(slot as usize)) {
+                    *hidden += 1;
+                }
+            }
+            // Opcode geometry distinguishes real control targets from
+            // numeric metadata (for example Return.extended_value is not an
+            // IP). Preserve every independent entry into the original jump.
+            let target = match instruction.opcode {
+                OpCode::Jmp | OpCode::QuickLongLoopJmp | OpCode::AssertCheck => {
+                    Some(instruction.op1)
+                }
+                OpCode::JmpFinally
+                    if instruction._pad & crate::vm::instruction::JMP_FLAG_FINALLY_END == 0 =>
+                {
+                    Some(instruction.op1)
+                }
+                OpCode::JmpFinally => {
+                    // A dynamic finally continuation needs a stronger CFG
+                    // proof than this local lowering, so keep this function.
+                    entries.fill(true);
+                    None
+                }
+                OpCode::JmpZ | OpCode::JmpNZ | OpCode::NullSafeCheck | OpCode::BindDefaultParam => {
+                    Some(instruction.op2)
+                }
+                OpCode::SnapshotDiagnosticWrite | OpCode::FetchDimR
+                    if instruction.extended_value != 0 =>
+                {
+                    if let Some(entry) = entries.get_mut(instruction.extended_value as usize) {
+                        *entry = true;
+                    }
+                    None
+                }
+                OpCode::CheckStatic
+                | OpCode::JmpZ_Le_CvConst
+                | OpCode::JmpNZ_Le_CvConst
+                | OpCode::JmpZ_Lt_CvConst
+                | OpCode::JmpNZ_Lt_CvConst
+                | OpCode::JmpZ_Eq_CvConst
+                | OpCode::JmpNZ_Eq_CvConst
+                | OpCode::JmpZ_Identical
+                | OpCode::JmpNZ_Identical => Some(instruction.result),
+                _ => None,
+            };
+            if let Some(entry) = target.and_then(|target| entries.get_mut(usize::from(target))) {
+                *entry = true;
+            }
+        }
+        if let Some(slot) = self
+            .trait_class_scope_tmp
+            .and_then(|slot| definitions.get_mut(usize::from(slot)))
+        {
+            *slot += 1;
+        }
+        for entry in &self.try_entries {
+            for target in [
+                entry.try_start,
+                entry.try_end,
+                entry.finally_start,
+                entry.finally_end,
+            ]
+            .into_iter()
+            .chain(entry.catches.iter().map(|catch| catch.catch_start))
+            {
+                if let Some(entry) = entries.get_mut(target as usize) {
+                    *entry = true;
+                }
+            }
+        }
+        for ip in 0..self.instructions.len().saturating_sub(1) {
+            let predicate = self.instructions[ip];
+            let branch = self.instructions[ip + 1];
+            let slot = usize::from(predicate.result);
+            if !matches!(
+                predicate.opcode,
+                OpCode::IsIdentical | OpCode::IsNotIdentical
+            ) || predicate.result_type != OpType::Tmp
+                || predicate._pad != 0
+                || predicate.extended_value != 0
+                || u32::from(predicate.result) < self.num_cvs
+                || definitions.get(slot) != Some(&1)
+                || uses.get(slot) != Some(&1)
+                || !matches!(branch.opcode, OpCode::JmpZ | OpCode::JmpNZ)
+                || branch.op1_type != OpType::Tmp
+                || branch.op1 != predicate.result
+                || branch.op2_type != OpType::Unused
+                || branch.result_type != OpType::Unused
+                || branch._pad != 0
+                || branch.extended_value != 0
+                || ip + 2 >= self.instructions.len()
+                || usize::from(branch.op2) >= self.instructions.len()
+                || entries[ip + 1]
+            {
+                continue;
+            }
+            let jump_on_identity =
+                (branch.opcode == OpCode::JmpNZ) == (predicate.opcode == OpCode::IsIdentical);
+            let combined = &mut self.instructions[ip];
+            combined.opcode = if jump_on_identity {
+                OpCode::JmpNZ_Identical
+            } else {
+                OpCode::JmpZ_Identical
+            };
+            combined.result_type = OpType::Unused;
+            combined.result = branch.op2;
+            combined.extended_value = u32::from(predicate.result);
+        }
     }
 
     /// Initialize the inline cache side table to match instruction count.
@@ -483,8 +827,14 @@ impl OpArray {
     pub fn init_cache(&mut self) {
         let len = self.instructions.len();
         self.cache = Vec::with_capacity(len);
-        for _ in 0..len {
-            self.cache.push(InlineCache::empty());
+        for instruction in &self.instructions {
+            self.cache.push(
+                if instruction.opcode == crate::vm::opcode::OpCode::ReleaseTemps {
+                    InlineCache::for_release_range(instruction.op1, instruction.op2)
+                } else {
+                    InlineCache::empty()
+                },
+            );
         }
     }
 
@@ -533,6 +883,17 @@ impl OpArray {
                     // Instruction after the branch is also a leader (fall-through)
                     if i + 1 < n {
                         is_leader[i + 1] = true;
+                    }
+                }
+                OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical => {
+                    if let Some(leader) = is_leader.get_mut(usize::from(instr.result)) {
+                        *leader = true;
+                    }
+                    if let Some(leader) = is_leader.get_mut(i + 1) {
+                        *leader = true;
+                    }
+                    if let Some(leader) = is_leader.get_mut(i + 2) {
+                        *leader = true;
                     }
                 }
                 OpCode::Return => {
@@ -896,6 +1257,211 @@ impl Drop for OpArray {
     }
 }
 
+#[cfg(test)]
+mod identity_branch_tests {
+    use super::{OpArray, compile::Compiler};
+    use crate::vm::instruction::{Instruction, OpType};
+    use crate::vm::opcode::OpCode;
+
+    fn sequence(predicate_opcode: OpCode, branch_opcode: OpCode) -> OpArray {
+        let mut op = Compiler::new().compile(&[]).unwrap().main;
+        op.num_cvs = 2;
+        op.num_temps = 1;
+        let mut predicate = Instruction::new(predicate_opcode);
+        predicate.op1_type = OpType::Cv;
+        predicate.op2_type = OpType::Cv;
+        predicate.op2 = 1;
+        predicate.result_type = OpType::Tmp;
+        predicate.result = 2;
+        let mut branch = Instruction::new(branch_opcode);
+        branch.op1_type = OpType::Tmp;
+        branch.op1 = 2;
+        branch.op2 = 3;
+        op.instructions = vec![
+            predicate,
+            branch,
+            Instruction::new(OpCode::Return),
+            Instruction::new(OpCode::Return),
+        ];
+        op
+    }
+
+    #[test]
+    fn identity_branch_senses_keep_canonical_plans_slots_and_jump_positions() {
+        for predicate in [OpCode::IsIdentical, OpCode::IsNotIdentical] {
+            for branch in [OpCode::JmpZ, OpCode::JmpNZ] {
+                let mut op = sequence(predicate, branch);
+                let original = op.instructions.clone();
+                op.specialize_opcodes();
+                let on_identity = (predicate == OpCode::IsIdentical) == (branch == OpCode::JmpNZ);
+                assert_eq!(
+                    op.instructions[0].opcode,
+                    if on_identity {
+                        OpCode::JmpNZ_Identical
+                    } else {
+                        OpCode::JmpZ_Identical
+                    }
+                );
+                assert_eq!(op.instructions[0].result, 3);
+                assert_eq!(op.instructions[0].extended_value, 2);
+                for (ip, instruction) in original.iter().enumerate() {
+                    assert_eq!(
+                        format!("{:?}", op.canonical_instruction(ip).unwrap()),
+                        format!("{instruction:?}")
+                    );
+                }
+                let combined = format!("{:?}", op.instructions);
+                op.specialize_opcodes();
+                assert_eq!(format!("{:?}", op.instructions), combined);
+                op.compute_blocks();
+                assert_eq!(
+                    op.block_info
+                        .iter()
+                        .map(|block| block.start_ip)
+                        .collect::<Vec<_>>(),
+                    vec![0, 1, 2, 3]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn identity_branch_vetoes_extra_uses_definitions_entries_and_cleanup() {
+        for variant in 0..8 {
+            let mut op = sequence(OpCode::IsIdentical, OpCode::JmpNZ);
+            match variant {
+                0 => {
+                    let mut read = Instruction::new(OpCode::Echo);
+                    read.op1_type = OpType::Tmp;
+                    read.op1 = 2;
+                    op.instructions.push(read);
+                }
+                1 => {
+                    let mut write = op.instructions[0];
+                    write.opcode = OpCode::FetchCvR;
+                    op.instructions.push(write);
+                }
+                2 => {
+                    let mut jump = Instruction::new(OpCode::Jmp);
+                    jump.op1 = 1;
+                    op.instructions.push(jump);
+                }
+                3 => op.instructions[1]._pad = crate::vm::instruction::JMP_NZ_RELEASE_TEMPS,
+                4 => op.try_entries.push(super::compile::TryEntry {
+                    try_start: 0,
+                    try_end: 1,
+                    catches: Vec::new(),
+                    finally_start: u32::MAX,
+                    finally_end: 3,
+                }),
+                5 => op.trait_class_scope_tmp = Some(2),
+                6 => {
+                    let mut hidden = Instruction::new(OpCode::ForeachInit);
+                    hidden.extended_value = 2;
+                    op.instructions.push(hidden);
+                }
+                7 => op
+                    .instructions
+                    .insert(1, Instruction::new(OpCode::ReleaseTemps)),
+                _ => unreachable!(),
+            }
+            let original = format!("{:?}", op.instructions);
+            op.specialize_opcodes();
+            assert_eq!(format!("{:?}", op.instructions), original, "veto {variant}");
+        }
+    }
+
+    #[test]
+    fn identity_branch_preserves_diagnostic_array_continuation_entries() {
+        for opcode in [OpCode::SnapshotDiagnosticWrite, OpCode::FetchDimR] {
+            let mut op = sequence(OpCode::IsIdentical, OpCode::JmpZ);
+            let mut diagnostic = Instruction::new(opcode);
+            diagnostic.extended_value = 1;
+            op.instructions.push(diagnostic);
+            let original = format!("{:?}", op.instructions);
+            op.specialize_opcodes();
+            assert_eq!(format!("{:?}", op.instructions), original);
+        }
+    }
+
+    #[test]
+    fn identity_branch_actual_source_keeps_general_function_cleanup_contract() {
+        let source = "<?php function identityBranch($a, $b) { if ($a === $b) { return 1; } if ($a !== null) { return 2; } return 3; }";
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = Compiler::new().compile(&statements).unwrap();
+        let (_, function) = compiled
+            .functions
+            .iter()
+            .find(|(name, _)| name.eq_ignore_ascii_case("identityBranch"))
+            .unwrap();
+        assert!(
+            function
+                .op_array
+                .instructions
+                .iter()
+                .filter(|instruction| matches!(
+                    instruction.opcode,
+                    OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical
+                ))
+                .count()
+                >= 2,
+            "actual bytecode: {:?}",
+            function.op_array.instructions
+        );
+        assert!(super::op_array_supports_cleanup_fast(&function.op_array));
+    }
+}
+
+#[cfg(test)]
+mod release_cache_tests {
+    use super::{OpArray, compile::Compiler, make_user_function};
+    use crate::lexer::Lexer;
+    use crate::parser::Parser;
+    use crate::vm::opcode::OpCode;
+
+    fn verify_release_masks(op: &OpArray) {
+        assert_eq!(op.instructions.len(), op.cache.len());
+        let mut markers = 0;
+        for (instruction, cache) in op.instructions.iter().zip(&op.cache) {
+            if instruction.opcode == OpCode::ReleaseTemps {
+                markers += 1;
+                let expected = (instruction.op1..instruction.op2)
+                    .filter(|slot| *slot < 64)
+                    .fold(0u64, |mask, slot| mask | (1u64 << slot));
+                assert_eq!(cache.release_prefix_mask(), expected);
+                assert!(cache.func.is_null());
+            }
+        }
+        assert!(markers > 0);
+    }
+
+    #[test]
+    fn release_masks_follow_absolute_offsets_and_cache_reinitialization() {
+        for locals in [1, 31, 63, 65] {
+            for missing_cache in [false, true] {
+                let mut source = String::from("<?php ");
+                for index in 0..locals {
+                    source.push_str(&format!("$v{index}={index};"));
+                }
+                source.push_str("implode(',', [$v0, str_repeat('x', 3)]);");
+                let statements = Parser::new(Lexer::new(&source).tokenize().unwrap())
+                    .parse()
+                    .unwrap();
+                let mut op = Compiler::new().compile(&statements).unwrap().main;
+                assert_eq!(op.num_cvs, locals);
+                if missing_cache {
+                    op.cache.clear();
+                }
+                let mut function = make_user_function(op);
+                verify_release_masks(&function.op_array);
+                function.op_array.init_cache();
+                verify_release_masks(&function.op_array);
+            }
+        }
+    }
+}
+
 fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
     if !op_array.global_vars.is_empty()
         || !op_array.static_vars.is_empty()
@@ -942,6 +1508,8 @@ fn op_array_supports_cleanup_fast(op_array: &OpArray) -> bool {
                 | OpCode::IsSmallerOrEqual
                 | OpCode::IsIdentical
                 | OpCode::IsNotIdentical
+                | OpCode::JmpZ_Identical
+                | OpCode::JmpNZ_Identical
                 | OpCode::BoolNot
                 | OpCode::Spaceship
                 | OpCode::Echo
@@ -1169,7 +1737,6 @@ pub fn make_user_function_full(
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
-        borrowable_heap_args: 0,
         trait_class_scope_cache: needs_trait_class_scope
             .then(|| Box::new(crate::vm::function::TraitClassScopeCache::empty())),
     };
@@ -1204,7 +1771,6 @@ pub fn make_user_function_full(
         let indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
         function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
     }
-    function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
 }
 
@@ -1397,7 +1963,6 @@ pub(crate) fn make_user_function_typed_with_return_mode(
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
-        borrowable_heap_args: 0,
         trait_class_scope_cache: needs_trait_class_scope
             .then(|| Box::new(crate::vm::function::TraitClassScopeCache::empty())),
     };
@@ -1432,106 +1997,7 @@ pub(crate) fn make_user_function_typed_with_return_mode(
         let indirect_scalar_long_plan = build_indirect_scalar_long_function_plan(&function);
         function.set_indirect_scalar_long_plan(indirect_scalar_long_plan);
     }
-    function.borrowable_heap_args = build_borrowable_heap_args(&function);
     function
-}
-
-/// Prove which ordinary heap parameters can use the same synchronous borrowed
-/// ABI as `$this`. Rebinding and String/Array COW mutation stay canonical;
-/// object property mutation remains eligible because PHP shares object identity.
-fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
-    let common = &function.common;
-    let public_args = common.sig.public_arity().min(64);
-    if function.op_array.is_generator
-        || function.op_array.num_cvs + function.op_array.num_temps > 64
-        || !function.op_array.try_entries.is_empty()
-    {
-        return 0;
-    }
-
-    let mut mask = if public_args == 64 {
-        u64::MAX
-    } else {
-        (1u64 << public_args) - 1
-    };
-    mask &= !common.sig.ref_args;
-
-    let clear_cv = |mask: &mut u64, cv: u16| {
-        let cv = cv as u32;
-        if cv >= common.sig.this_offset && cv < common.sig.this_offset + public_args {
-            *mask &= !(1u64 << (cv - common.sig.this_offset));
-        }
-    };
-
-    for instruction in &function.op_array.instructions {
-        match instruction.opcode {
-            // These opcodes may overwrite/drop the parameter variable itself.
-            // Property mutation is intentionally absent: PHP objects have
-            // shared identity, so `$arg->field = ...` is safe and observable.
-            OpCode::AssignCv
-            | OpCode::AssignConcat
-            | OpCode::PreInc
-            | OpCode::PreDec
-            | OpCode::PostInc
-            | OpCode::PostDec
-            | OpCode::BindDefaultParam
-            | OpCode::BindGlobal
-            | OpCode::CheckStatic
-            | OpCode::BindStatic => clear_cv(&mut mask, instruction.op1),
-            // A local `=&` may expose either participating parameter through
-            // the other CV for the rest of this frame.
-            OpCode::BindCvRef => return 0,
-            // In-place array operations require an owned Rc so make_mut can
-            // observe the caller and detach according to PHP COW semantics.
-            OpCode::AddArrayElement
-            | OpCode::AddArrayUnpack
-            | OpCode::AddCallArgument
-            | OpCode::AddCallUnpack
-            | OpCode::AssignDim
-            | OpCode::ArrayPushOp
-            | OpCode::BindArrayAppendRef
-            | OpCode::BindArrayDimRef
-            | OpCode::UnsetDim
-                if instruction.op1_type == OpType::Cv =>
-            {
-                clear_cv(&mut mask, instruction.op1)
-            }
-            // Argument unpacking promotes members of its source array (op2)
-            // to reference cells in place and may detach it first.
-            OpCode::AddCallUnpack if instruction.op2_type == OpType::Cv => {
-                clear_cv(&mut mask, instruction.op2)
-            }
-            // Mutable/reference dimension traversal may detach the root or
-            // publish a cell that a nested call mutates. A borrowed parameter
-            // would then alias a caller-owned Rc without contributing an
-            // owner, violating the COW decrement performed by the canonical
-            // dimension opcode.
-            OpCode::FetchDimR
-                if instruction.op1_type == OpType::Cv
-                    && instruction._pad & (FETCH_DIM_MUTABLE | FETCH_DIM_REFERENCE_SOURCE) != 0 =>
-            {
-                clear_cv(&mut mask, instruction.op1)
-            }
-            // Foreach target placement is intentionally conservative until
-            // its destination CV is explicit in the ownership analysis.
-            OpCode::ForeachNext | OpCode::ForeachNextPlain => return 0,
-            // A runtime-selected symbol-table name may designate any
-            // parameter CV. Mutation or reference binding therefore defeats
-            // every per-parameter uniqueness proof in this frame.
-            OpCode::AssignDynamicVar
-            | OpCode::UnsetDynamicVar
-            | OpCode::BindDynamicVarRef
-            | OpCode::AssignDynamicVarRef
-            | OpCode::BindDynamicGlobal => return 0,
-            // A direct return transfers a Value out of the frame. Aliases made
-            // through another CV are owned clones and remain eligible.
-            OpCode::Return if instruction.op1_type == OpType::Cv => {
-                clear_cv(&mut mask, instruction.op1)
-            }
-            _ => {}
-        }
-    }
-    mask
 }
 
 const SCALAR_LONG_PLAN_MAX_ARGS: u32 = 8;
@@ -1910,7 +2376,7 @@ fn build_conditional_scalar_double_function_plan(
         break;
     }
 
-    let condition_instruction = *instructions.get(ip)?;
+    let condition_instruction = function.op_array.canonical_instruction(ip)?;
     let condition_sources = |instruction: Instruction| {
         let lhs = scalar_double_source(
             &function.op_array,
@@ -2660,7 +3126,7 @@ fn build_conditional_scalar_long_function_plan(
         break;
     }
 
-    let condition_instruction = *instructions.get(ip)?;
+    let condition_instruction = function.op_array.canonical_instruction(ip)?;
     let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
         OpCode::IsEqual | OpCode::IsIdentical | OpCode::IsEqual_CvConst => (
             ScalarLongConditionKind::Equal,
@@ -3510,7 +3976,9 @@ fn build_object_long_function_plan(function: &UserFunction) -> Option<Box<Object
     let argument_end = first_argument + public_args;
     let mut dead_fused_branch = None;
 
-    for (ip, instruction) in op_array.instructions.iter().enumerate() {
+    for ip in 0..op_array.instructions.len() {
+        let canonical = op_array.canonical_instruction(ip)?;
+        let instruction = &canonical;
         if dead_fused_branch == Some(ip) {
             if !matches!(instruction.opcode, OpCode::JmpZ | OpCode::JmpNZ) {
                 return None;
@@ -4444,7 +4912,7 @@ pub(crate) fn build_scalar_string_function_plan(
         return None;
     }
 
-    let condition_instruction = *instructions.get(ip)?;
+    let condition_instruction = function.op_array.canonical_instruction(ip)?;
     let (kind, lhs, rhs, branch_ip, fused_jump_target) = match condition_instruction.opcode {
         OpCode::IsEqual | OpCode::IsIdentical | OpCode::IsEqual_CvConst => (
             ScalarLongConditionKind::Equal,
@@ -5788,8 +6256,27 @@ fn property_name<'a>(op_array: &'a OpArray, instruction: &Instruction) -> Option
 fn build_property_getter_method_plan(function: &UserFunction) -> Option<PropertyGetterMethodPlan> {
     let common = &function.common;
     let op_array = &function.op_array;
-    if !common.supports_scalar_long_plan()
-        || common.plan.ret != ReturnStrategy::Fast
+    fn guardable_return(hint: &ParamTypeHint) -> bool {
+        match hint {
+            ParamTypeHint::Callable | ParamTypeHint::Void | ParamTypeHint::Never => false,
+            ParamTypeHint::Nullable(inner) => guardable_return(inner),
+            ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
+                parts.iter().all(guardable_return)
+            }
+            _ => true,
+        }
+    }
+    if !common.plan.call.is_compact_user_call()
+        || common.sig.returns_reference
+        || common.sig.ref_args != 0
+        || common.sig.is_variadic
+        || common.plan.has_call_diagnostic_attribute()
+        || !guardable_return(&common.sig.return_type_hint)
+        || !op_array.global_vars.is_empty()
+        || !op_array.static_vars.is_empty()
+        || !op_array.try_entries.is_empty()
+        || op_array.is_generator
+        || op_array.may_access_globals
         || common.sig.this_offset != 1
         || common.sig.public_arity() != 0
         || op_array.num_cvs != common.sig.num_args
@@ -5921,7 +6408,7 @@ fn register_long_plan_property(
 /// Locate a guarded scalar result's consumer past operand cleanup without
 /// erasing the canonical instruction indices used by caches and side exits.
 fn scalar_result_consumer(op_array: &OpArray, producer_ip: usize) -> Option<usize> {
-    let producer = op_array.instructions.get(producer_ip)?;
+    let producer = op_array.canonical_instruction(producer_ip)?;
     let consumer_ip = producer_ip.checked_add(1)?;
     let consumer = op_array.instructions.get(consumer_ip)?;
     if consumer.opcode != OpCode::ReleaseTemps {
@@ -6290,25 +6777,6 @@ pub fn finalize_user_method(
         }
     }
 
-    // `$this` ownership is independent of the public argument ABI. Every
-    // synchronous method executes while its caller still owns the receiver,
-    // so the callee can borrow CV 0 unless it directly transfers that slot as
-    // its return value. Generators are excluded because their frame outlives
-    // the initiating call.
-    let borrow_this = !is_static
-        && !function.op_array.is_generator
-        // Borrowed slots are represented by an intentionally-clear ownership
-        // bit. Frames wider than the bitmap use full-scan cleanup and must own
-        // `$this` conventionally.
-        && function.op_array.num_cvs + function.op_array.num_temps <= 64
-        && !function.op_array.instructions.iter().any(|instruction| {
-            instruction.opcode == OpCode::Return
-                && instruction.op1_type == OpType::Cv
-                && instruction.op1 == 0
-        });
-    function.common.plan.set_borrow_this(borrow_this);
-    function.borrowable_heap_args = build_borrowable_heap_args(&function);
-
     let common = &function.common;
     let scalar_strategy = common.sig.declared_scalar_call_strategy();
     let can_use_fast_scalar = !common.plan.has_call_diagnostic_attribute()
@@ -6442,7 +6910,6 @@ pub fn clone_trait_method_with_static_storage(
         source.common.plan.ret,
         source.common.plan.cleanup,
     );
-    plan.set_borrow_this(source.common.plan.borrow_this());
     plan.set_needs_late_static_scope(source.common.plan.needs_late_static_scope());
     plan.set_has_embedded_late_static_scope(source.common.plan.has_embedded_late_static_scope());
     plan.set_needs_trait_class_scope(source.common.plan.needs_trait_class_scope());
@@ -6494,7 +6961,6 @@ pub fn clone_trait_method_with_static_storage(
         composed_scalar_long_plan: None,
         composed_typed_long_plan: None,
         compact_class_guard: Cell::new(0),
-        borrowable_heap_args: 0,
         trait_class_scope_cache: source
             .common
             .plan
@@ -6837,5 +7303,74 @@ pub fn make_internal_function_variadic_prefer_ref(
         handler_validates_types: false,
         exact_arity_diagnostics: false,
         deprecation: None,
+    }
+}
+
+#[cfg(test)]
+mod consumed_call_argument_tests {
+    use super::{OpArray, compile::Compiler};
+    use crate::vm::instruction::{Instruction, OpType, SEND_FLAG_CONSUME_TEMP};
+    use crate::vm::opcode::OpCode;
+    fn program() -> OpArray {
+        let mut op = Compiler::new().compile(&[]).unwrap().main;
+        op.num_cvs = 2;
+        op.num_temps = 1;
+        let mut birth = Instruction::new(OpCode::NewObj);
+        birth.result_type = OpType::Tmp;
+        birth.result = 2;
+        let mut send = Instruction::new(OpCode::SendVal);
+        send.op1_type = OpType::Tmp;
+        send.op1 = 2;
+        op.instructions = vec![birth, send, Instruction::new(OpCode::Return)];
+        op
+    }
+    fn marked(op: &OpArray, ip: usize) -> bool {
+        op.instructions[ip]._pad & SEND_FLAG_CONSUME_TEMP != 0
+    }
+    #[test]
+    fn unique_temp_owner_can_transfer_without_a_value_kind_assumption() {
+        let mut op = program();
+        op.mark_consumed_call_argument_owners();
+        assert!(marked(&op, 1));
+        let mut release = Instruction::new(OpCode::ReleaseTemps);
+        release.op1_type = OpType::Tmp;
+        release.op1 = 2;
+        release.op2_type = OpType::Tmp;
+        release.op2 = 3;
+        op.instructions.insert(2, release);
+        op.mark_consumed_call_argument_owners();
+        assert!(marked(&op, 1));
+    }
+    #[test]
+    fn another_reader_preserves_the_caller_owner() {
+        let mut op = program();
+        let mut echo = Instruction::new(OpCode::Echo);
+        echo.op1_type = OpType::Tmp;
+        echo.op1 = 2;
+        op.instructions.insert(2, echo);
+        op.mark_consumed_call_argument_owners();
+        assert!(!marked(&op, 1));
+    }
+    #[test]
+    fn independent_entry_cannot_replay_a_consumed_argument() {
+        let mut op = program();
+        let mut jump = Instruction::new(OpCode::Jmp);
+        jump.op1 = 2;
+        op.instructions.insert(0, jump);
+        op.mark_consumed_call_argument_owners();
+        assert!(!marked(&op, 2));
+    }
+    #[test]
+    fn implicit_and_reserved_scratch_owners_are_not_transferred() {
+        let mut op = program();
+        op.trait_class_scope_tmp = Some(2);
+        op.mark_consumed_call_argument_owners();
+        assert!(!marked(&op, 1));
+        op.trait_class_scope_tmp = None;
+        let mut foreach = Instruction::new(OpCode::ForeachInit);
+        foreach.extended_value = 2;
+        op.instructions.insert(0, foreach);
+        op.mark_consumed_call_argument_owners();
+        assert!(!marked(&op, 2));
     }
 }

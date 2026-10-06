@@ -278,7 +278,7 @@ for ($i = 0; $i < 100; $i++) {
                 lhs: QuickLongOperand::Slot(lhs),
                 rhs: QuickLongOperand::Const(-1),
                 expected: false,
-                condition_tmp: Some(_),
+                condition_tmp: None,
                 resume_ip,
             }) if lhs == plan.induction_cv && resume_ip < plan.increment_ip
         ));

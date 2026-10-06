@@ -25,7 +25,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             fn_fgetc as InternalFunctionHandler,
             ParamTypeHint::Union(vec![
                 ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".to_string()),
+                ParamTypeHint::ClassName("false".into()),
             ]),
         ),
         ("fpassthru", fn_fpassthru, ParamTypeHint::Int),

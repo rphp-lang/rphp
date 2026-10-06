@@ -257,10 +257,10 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             .expect("cURL handle class name is unique");
     }
 
-    let easy = || ParamTypeHint::ClassName(EASY_CLASS.to_string());
-    let multi = || ParamTypeHint::ClassName(MULTI_CLASS.to_string());
-    let share = || ParamTypeHint::ClassName(SHARE_CLASS.to_string());
-    let false_type = || ParamTypeHint::ClassName("false".to_string());
+    let easy = || ParamTypeHint::ClassName(EASY_CLASS.into());
+    let multi = || ParamTypeHint::ClassName(MULTI_CLASS.into());
+    let share = || ParamTypeHint::ClassName(SHARE_CLASS.into());
+    let false_type = || ParamTypeHint::ClassName("false".into());
     let contracts = [
         Contract {
             name: "curl_init",

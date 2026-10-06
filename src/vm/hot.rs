@@ -104,7 +104,7 @@ use crate::value::{Value, ValueType};
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
 struct HotGenericLongContractProof {
     site: *const Instruction,
-    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    object: std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
 }
 
 #[cfg(any(feature = "php-generics-erased", feature = "php-generics-reified"))]
@@ -1441,7 +1441,7 @@ pub fn execute_hot_frame(
                             if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
                                 && unsafe {
                                     super::execute::try_execute_composed_long_property_call(
-                                        frame, op_array, opline_ptr, obj_val, user, plan,
+                                        eg, frame, op_array, opline_ptr, obj_val, user, plan,
                                     )
                                 }
                             {
@@ -1477,6 +1477,7 @@ pub fn execute_hot_frame(
                             let do_fcall_ptr = unsafe { opline_ptr.add(1) };
                             if unsafe {
                                 super::execute::try_execute_hot_property_getter(
+                                    eg,
                                     frame,
                                     obj_val,
                                     do_fcall_ptr,
@@ -1686,18 +1687,9 @@ pub fn execute_hot_frame(
                 unsafe {
                     (*frame).call = call;
                     let this_ptr = (call as *mut Value).add(CALL_FRAME_SLOTS);
-                    if func_common.plan.borrow_this() {
-                        // The caller owns the object for the complete nested
-                        // call; do not add this borrowed slot to cleanup.
-                        Value::raw_copy(obj_val as *const Value, this_ptr);
-                    } else {
-                        this_ptr.write(obj_val.clone());
-                        (*call).has_heap_slots = true;
-                        let total = (*call).num_cvs + (*call).num_temps;
-                        if total <= 64 {
-                            (*call).heap_bitmap |= 1u64;
-                        }
-                    }
+                    this_ptr.write(obj_val.clone());
+                    (*call).has_heap_slots = true;
+                    (*call).heap_bitmap |= 1u64;
                 }
 
                 // Bind the contiguous scalar argument prefix. A nested

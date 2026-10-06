@@ -569,10 +569,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 .with_static_parameter_names(&["object", "withProperties"]),
         );
         function.common.sig.param_type_hints = vec![
-            ParamTypeHint::ClassName("object".to_string()),
+            ParamTypeHint::ClassName("object".into()),
             ParamTypeHint::Array,
         ];
-        function.common.sig.return_type_hint = ParamTypeHint::ClassName("object".to_string());
+        function.common.sig.return_type_hint = ParamTypeHint::ClassName("object".into());
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function("clone", pointer).unwrap();
@@ -677,7 +677,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     {
@@ -714,7 +714,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::Int],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let nl_langinfo = eg
@@ -735,7 +735,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ];
         function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ]);
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function("unpack", pointer).unwrap();
@@ -760,7 +760,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::Bool],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -781,7 +781,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::Bool],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -847,7 +847,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::String,
             ParamTypeHint::Array,
         ],
-        ParamTypeHint::ClassName("HashContext".to_string())
+        ParamTypeHint::ClassName("HashContext".into())
     );
     let hash_init = eg
         .find_function("hash_init")
@@ -869,10 +869,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["context", "data"],
         [
-            ParamTypeHint::ClassName("HashContext".to_string()),
+            ParamTypeHint::ClassName("HashContext".into()),
             ParamTypeHint::String,
         ],
-        ParamTypeHint::ClassName("true".to_string())
+        ParamTypeHint::ClassName("true".into())
     );
     let hash_update = eg
         .find_function("hash_update")
@@ -885,7 +885,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         ["context", "binary"],
         [
-            ParamTypeHint::ClassName("HashContext".to_string()),
+            ParamTypeHint::ClassName("HashContext".into()),
             ParamTypeHint::Bool,
         ],
         ParamTypeHint::String
@@ -980,7 +980,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -996,7 +996,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg!(
@@ -1022,7 +1022,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     {
@@ -1181,7 +1181,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg!("str_contains", fn_str_contains, 2, 2, "haystack", "needle");
@@ -1536,7 +1536,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let preg_match = eg
@@ -1570,7 +1570,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("null".to_string()),
+            ParamTypeHint::ClassName("null".into()),
         ])
     );
     let preg_replace = eg
@@ -1921,7 +1921,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::Float]),
             ParamTypeHint::Int,
             ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("RoundingMode".to_string()),
+                ParamTypeHint::ClassName("RoundingMode".into()),
                 ParamTypeHint::Int,
             ]),
         ],
@@ -1948,7 +1948,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ["num", "exponent"],
         [ParamTypeHint::Mixed, ParamTypeHint::Mixed],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("object".to_string()),
+            ParamTypeHint::ClassName("object".into()),
             ParamTypeHint::Int,
             ParamTypeHint::Float,
         ])
@@ -2165,7 +2165,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::Mixed, ParamTypeHint::Int, ParamTypeHint::Int],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let json_encode = eg
@@ -2567,7 +2567,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::Array,
             ParamTypeHint::Int,
             ParamTypeHint::Float,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let hrtime = eg
@@ -2619,7 +2619,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2638,7 +2638,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2662,7 +2662,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2747,7 +2747,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2758,8 +2758,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ["timezone"],
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateTimeZone".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("DateTimeZone".into()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2768,7 +2768,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         1,
         ["object"],
-        [ParamTypeHint::ClassName("DateTimeZone".to_string())],
+        [ParamTypeHint::ClassName("DateTimeZone".into())],
         ParamTypeHint::String
     );
     reg_typed!(
@@ -2777,10 +2777,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         1,
         ["object"],
-        [ParamTypeHint::ClassName("DateTimeZone".to_string())],
+        [ParamTypeHint::ClassName("DateTimeZone".into())],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2790,13 +2790,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         ["object", "timestampBegin", "timestampEnd"],
         [
-            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::ClassName("DateTimeZone".into()),
             ParamTypeHint::Int,
             ParamTypeHint::Int,
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2807,13 +2807,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ["datetime", "timezone"],
         [
             ParamTypeHint::String,
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-                "DateTimeZone".to_string(),
-            ))),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("DateTimeZone".into(),))),
         ],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateTime".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2824,13 +2822,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ["datetime", "timezone"],
         [
             ParamTypeHint::String,
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-                "DateTimeZone".to_string(),
-            ))),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("DateTimeZone".into(),))),
         ],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateTimeImmutable".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("DateTimeImmutable".into()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2840,7 +2836,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["object", "format"],
         [
-            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::ClassName("DateTimeInterface".into()),
             ParamTypeHint::String,
         ],
         ParamTypeHint::String
@@ -2856,7 +2852,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             make_internal_function(handler, 1, 1, vec![]).with_static_parameter_names(&["object"]),
         );
         function.common.sig.param_type_hints =
-            vec![ParamTypeHint::ClassName("DateTimeInterface".to_string())];
+            vec![ParamTypeHint::ClassName("DateTimeInterface".into())];
         function.common.sig.return_type_hint = ParamTypeHint::Int;
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
@@ -2869,10 +2865,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         1,
         ["object"],
-        [ParamTypeHint::ClassName("DateTimeInterface".to_string())],
+        [ParamTypeHint::ClassName("DateTimeInterface".into())],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateTimeZone".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("DateTimeZone".into()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -2882,10 +2878,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["object", "timestamp"],
         [
-            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
             ParamTypeHint::Int,
         ],
-        ParamTypeHint::ClassName("DateTime".to_string())
+        ParamTypeHint::ClassName("DateTime".into())
     );
     reg_typed!(
         "date_timezone_set",
@@ -2894,10 +2890,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["object", "timezone"],
         [
-            ParamTypeHint::ClassName("DateTime".to_string()),
-            ParamTypeHint::ClassName("DateTimeZone".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
+            ParamTypeHint::ClassName("DateTimeZone".into()),
         ],
-        ParamTypeHint::ClassName("DateTime".to_string())
+        ParamTypeHint::ClassName("DateTime".into())
     );
     reg_typed!(
         "date_date_set",
@@ -2906,12 +2902,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         4,
         ["object", "year", "month", "day"],
         [
-            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
             ParamTypeHint::Int,
             ParamTypeHint::Int,
             ParamTypeHint::Int,
         ],
-        ParamTypeHint::ClassName("DateTime".to_string())
+        ParamTypeHint::ClassName("DateTime".into())
     );
     reg_typed!(
         "date_time_set",
@@ -2920,13 +2916,13 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         3,
         ["object", "hour", "minute", "second", "microsecond"],
         [
-            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
             ParamTypeHint::Int,
             ParamTypeHint::Int,
             ParamTypeHint::Int,
             ParamTypeHint::Int,
         ],
-        ParamTypeHint::ClassName("DateTime".to_string())
+        ParamTypeHint::ClassName("DateTime".into())
     );
     reg_typed!(
         "date_isodate_set",
@@ -2935,12 +2931,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         3,
         ["object", "year", "week", "dayOfWeek"],
         [
-            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
             ParamTypeHint::Int,
             ParamTypeHint::Int,
             ParamTypeHint::Int,
         ],
-        ParamTypeHint::ClassName("DateTime".to_string())
+        ParamTypeHint::ClassName("DateTime".into())
     );
     reg_typed!(
         "timezone_offset_get",
@@ -2949,8 +2945,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["object", "datetime"],
         [
-            ParamTypeHint::ClassName("DateTimeZone".to_string()),
-            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::ClassName("DateTimeZone".into()),
+            ParamTypeHint::ClassName("DateTimeInterface".into()),
         ],
         ParamTypeHint::Int
     );
@@ -2968,10 +2964,10 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 .with_static_parameter_names(&["object", "interval"]),
         );
         function.common.sig.param_type_hints = vec![
-            ParamTypeHint::ClassName(first_class.to_string()),
-            ParamTypeHint::ClassName("DateInterval".to_string()),
+            ParamTypeHint::ClassName(first_class.into()),
+            ParamTypeHint::ClassName("DateInterval".into()),
         ];
-        function.common.sig.return_type_hint = ParamTypeHint::ClassName(return_class.to_string());
+        function.common.sig.return_type_hint = ParamTypeHint::ClassName(return_class.into());
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
@@ -2996,13 +2992,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         function.common.sig.param_type_hints = vec![
             ParamTypeHint::String,
             ParamTypeHint::String,
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(
-                "DateTimeZone".to_string(),
-            ))),
+            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("DateTimeZone".into()))),
         ];
         function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName(class_name.to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName(class_name.into()),
+            ParamTypeHint::ClassName("false".into()),
         ]);
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
@@ -3016,11 +3010,11 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["baseObject", "targetObject", "absolute"],
         [
-            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
-            ParamTypeHint::ClassName("DateTimeInterface".to_string()),
+            ParamTypeHint::ClassName("DateTimeInterface".into()),
+            ParamTypeHint::ClassName("DateTimeInterface".into()),
             ParamTypeHint::Bool,
         ],
-        ParamTypeHint::ClassName("DateInterval".to_string())
+        ParamTypeHint::ClassName("DateInterval".into())
     );
     reg_typed!(
         "date_get_last_errors",
@@ -3031,7 +3025,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -3042,8 +3036,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ["datetime"],
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateInterval".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("DateInterval".into()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -3053,7 +3047,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["object", "format"],
         [
-            ParamTypeHint::ClassName("DateInterval".to_string()),
+            ParamTypeHint::ClassName("DateInterval".into()),
             ParamTypeHint::String,
         ],
         ParamTypeHint::String
@@ -3065,12 +3059,12 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         2,
         ["object", "modifier"],
         [
-            ParamTypeHint::ClassName("DateTime".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
             ParamTypeHint::String,
         ],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("DateTime".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("DateTime".into()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -3103,7 +3097,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     for (name, handler) in [
@@ -3135,7 +3129,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::String,
             ParamTypeHint::Int,
             ParamTypeHint::Float,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ]);
         function.handler_validates_types = true;
         function.set_deprecation(&DATE_SUN_DEPRECATION);
@@ -3173,7 +3167,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ];
         function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ]);
         function.handler_validates_types = true;
         function.set_deprecation(&STRFTIME_DEPRECATION);
@@ -3353,7 +3347,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string())
+            ParamTypeHint::ClassName("false".into())
         ])
     );
     #[cfg(feature = "include-path")]
@@ -3366,7 +3360,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string())
+            ParamTypeHint::ClassName("false".into())
         ])
     );
     #[cfg(feature = "include-path")]
@@ -3458,7 +3452,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         funcs.push(function);
     }
     let or_false =
-        |hint| ParamTypeHint::Union(vec![hint, ParamTypeHint::ClassName("false".to_string())]);
+        |hint| ParamTypeHint::Union(vec![hint, ParamTypeHint::ClassName("false".into())]);
     for (name, handler, return_type) in [
         (
             "disk_free_space",
@@ -3623,7 +3617,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::Bool],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let get_meta_tags = eg
@@ -3744,7 +3738,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let tempnam = eg
@@ -3773,7 +3767,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::Int],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let glob = eg.find_function("glob").expect("glob was just registered");
@@ -3807,7 +3801,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ["data", "numeric_prefix", "arg_separator", "encoding_type"],
         [
             ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("object".to_string()),
+                ParamTypeHint::ClassName("object".into()),
                 ParamTypeHint::Array,
             ]),
             ParamTypeHint::String,
@@ -3850,7 +3844,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let preg_match_all = eg
@@ -3881,7 +3875,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let preg_split = eg
@@ -3910,7 +3904,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("null".to_string()),
+            ParamTypeHint::ClassName("null".into()),
         ])
     );
     let preg_replace_callback = eg
@@ -4093,7 +4087,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::Union(vec![
                 ParamTypeHint::Array,
                 ParamTypeHint::String,
-                ParamTypeHint::ClassName("null".to_string()),
+                ParamTypeHint::ClassName("null".into()),
             ]),
         ],
         ParamTypeHint::String
@@ -4107,7 +4101,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::Bool],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("true".to_string()),
+            ParamTypeHint::ClassName("true".into()),
         ])
     );
     reg_typed!(
@@ -4182,7 +4176,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String, ParamTypeHint::Bool],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -4221,7 +4215,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     reg_typed!(
@@ -4246,7 +4240,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Int,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let filter_id = eg
@@ -4305,8 +4299,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
-            ParamTypeHint::ClassName("null".to_string()),
+            ParamTypeHint::ClassName("false".into()),
+            ParamTypeHint::ClassName("null".into()),
         ])
     );
     let filter_input_array = eg
@@ -4331,8 +4325,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
-            ParamTypeHint::ClassName("null".to_string()),
+            ParamTypeHint::ClassName("false".into()),
+            ParamTypeHint::ClassName("null".into()),
         ])
     );
     let filter_var_array = eg
@@ -4418,7 +4412,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::Union(vec![
                 ParamTypeHint::Array,
                 ParamTypeHint::Int,
-                ParamTypeHint::ClassName("null".to_string()),
+                ParamTypeHint::ClassName("null".into()),
             ]),
         ];
         function.common.sig.return_type_hint = array_or_string();
@@ -4684,7 +4678,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let getenv = eg
@@ -4725,7 +4719,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             vec![ParamTypeHint::Int, ParamTypeHint::None, ParamTypeHint::None];
         function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ]);
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
@@ -4771,7 +4765,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [ParamTypeHint::String],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let get_extension_funcs = eg
@@ -4860,8 +4854,8 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         [],
         [],
         ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("LibXMLError".to_string()),
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("LibXMLError".into()),
+            ParamTypeHint::ClassName("false".into()),
         ]),
         []
     );
@@ -4913,7 +4907,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         1,
         ["resolver_function"],
         [ParamTypeHint::Nullable(Box::new(ParamTypeHint::Callable))],
-        ParamTypeHint::ClassName("true".to_string()),
+        ParamTypeHint::ClassName("true".into()),
         [None]
     );
     reg_libxml!(
@@ -4938,7 +4932,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     let ini_result = || {
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     };
     let ini_value = || {
@@ -4947,7 +4941,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             ParamTypeHint::Int,
             ParamTypeHint::Float,
             ParamTypeHint::Bool,
-            ParamTypeHint::ClassName("null".to_string()),
+            ParamTypeHint::ClassName("null".into()),
         ])
     };
     reg_typed!(
@@ -4971,7 +4965,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     let ini_get_all = eg
@@ -5223,7 +5217,7 @@ pub fn register_stdlib(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         ],
         ParamTypeHint::Union(vec![
             ParamTypeHint::String,
-            ParamTypeHint::ClassName("false".to_string()),
+            ParamTypeHint::ClassName("false".into()),
         ])
     );
     for name in ["hash_algos", "hash_file"] {

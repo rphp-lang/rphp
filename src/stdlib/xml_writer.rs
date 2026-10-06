@@ -1691,7 +1691,7 @@ struct Method {
 }
 
 fn writer_hint() -> ParamTypeHint {
-    ParamTypeHint::ClassName(XML_WRITER.to_string())
+    ParamTypeHint::ClassName(XML_WRITER.into())
 }
 
 fn nullable_string() -> ParamTypeHint {

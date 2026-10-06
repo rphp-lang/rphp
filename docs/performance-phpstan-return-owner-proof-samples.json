@@ -1,0 +1,111 @@
+{
+  "status": "rejected",
+  "baseline_commit": "9419ab7ca89a72a31b80cdd1ec43d90675619832",
+  "baseline_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+  "candidate_source_sha256": "78a82b9b0e5226f222aefb1095ebe2e46a0a231c829ec3b8f89e5ba57fcb6de0",
+  "restored_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+  "gate": {
+    "tool": "Callgrind",
+    "scope": "Analysis entry FIFO through analysis-complete dump before completion acknowledgement; startup excluded",
+    "profile": "test-fast",
+    "optimization_level": 1,
+    "features": "default",
+    "outlier_policy": "Retain every valid measurement",
+    "required_improvement_percent": 1,
+    "instruction_delta_percent": -0.2629470194696837,
+    "instruction_saving": 311383991,
+    "samples": [
+      {
+        "runtime": "baseline",
+        "binary_sha256": "ae1ddcf968b1186f0ca965188d116b931a59311fd5c442ab552f9d17c4fd2c23",
+        "instructions": 118420810256,
+        "profile_seconds": 561.868459437,
+        "profile_sha256": "5fef8be150ae24bce7cc71ee44630bb0d1a8335cf609dfca84ce7256dfd82926",
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "binary_sha256": "0179699c0ecb620da0bec394a7cb042631c3eae280a4398f8dbfbcbc8e3ffe42",
+        "instructions": 118109426265,
+        "profile_seconds": 564.7301361740001,
+        "profile_sha256": "eb8c97091187106912bd98a086fc6216770dc32e5252f4e5320b382d1ee9a724",
+        "output_equal": true
+      }
+    ],
+    "profile_time_is_native_timing": false,
+    "fresh_pgo_performed": false,
+    "canonical_coverage_performed": false
+  },
+  "accepted_release_unchanged": {
+    "binary_sha256": "58d60aabc60fa4e8c8ec1accf3c1518a44b67484b8f20d84f7ec08ba11015b89",
+    "analysis_hardware_instructions": 74281433386,
+    "reference_php_hardware_instructions": 10337397273
+  },
+  "diagnostic": {
+    "scope": "Whole command; classification BEFORE the planner creates its retained plan reference",
+    "source_sha256": "0da3116f8fee0859e621b176fe176f925159939faecf1a1f6ea27a8e1b0f3653",
+    "binary_sha256": "2e40cd80ba601aa2049ca7378b4f86ed174fbae993bbf302c5ad322b01a17c69",
+    "reference_php_binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+    "archive_sha256": "0335fe28e70618e0e38e54d56f2ce361d2372e691474036a0a68318d36d990c2",
+    "output_equal": true,
+    "counts": {
+      "attempts": 13325685,
+      "prepared": 3729,
+      "aliased_reference": 748032,
+      "kind_string": 2165386,
+      "kind_array": 4537499,
+      "kind_object": 6077405,
+      "kind_closure": 415763,
+      "kind_resource": 28,
+      "kind_other": 129604,
+      "array_shared": 2380710,
+      "array_final": 2156789,
+      "array_final_nested_marker": 820233,
+      "array_vm_release_impossible": 519140,
+      "array_count_missing": 0,
+      "direct_shared_or_mirrored": 6133078,
+      "direct_final": 360118,
+      "direct_final_tree_marker": 282762,
+      "direct_identity_missing": 28,
+      "direct_count_missing": 0,
+      "direct_fiber_references": 0
+    },
+    "initial_after_plan_classification": {
+      "binary_sha256": "9febc37398d92640a974522381dc111cc397bfdf9a9249706d8f84a5654c8552",
+      "array_shared": 2381248,
+      "direct_shared_or_mirrored": 6136269,
+      "prepared": 3729,
+      "output_equal": true,
+      "corrected_array_classifications": 538,
+      "corrected_direct_classifications": 3191,
+      "initial_disposable_binary_retained": false
+    }
+  },
+  "verification": {
+    "formatting": "pass",
+    "unsafe_inventory": "unchanged, pass",
+    "all_targets_all_features": "pass",
+    "focused_actual_passes": 122,
+    "exploratory_default_actual_passes": 24,
+    "additional_default_actual_passes": 26,
+    "no_default_actual_passes": 36,
+    "all_features_actual_passes": 36,
+    "exact_cli_php_contracts": 8
+  },
+  "visible_failures": [
+    {"stage": "initial hardware counter gate", "reason": "perf_event_paranoid=4 after reboot; sudo requires a password", "valid_performance_sample": false},
+    {"stage": "first diagnostic counter refresh", "reason": "prior disposable diagnostic build absent", "later_bounded_rebuild_passed": true}
+  ],
+  "resource_boundary": {
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "oom_policy": "kill",
+    "kill_mode": "control-group",
+    "exclusive_benchmark_lock": true,
+    "callgrind_memory_peak_bytes": 871190528,
+    "focused_memory_peak_bytes": 4448608256,
+    "diagnostic_memory_peak_bytes": 3052687360,
+    "oom_kills": 0,
+    "timeouts": 0
+  }
+}

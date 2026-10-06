@@ -3,6 +3,35 @@ mod common;
 use common::run_php;
 
 #[test]
+fn shared_reference_and_native_edges_preserve_final_leaf_release() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+gc_disable();
+class ObservedReleaseLeaf {
+    public function __destruct() { echo 'leaf|'; }
+}
+function referencePair($value) { return [&$value, &$value]; }
+$node = new ObservedReleaseLeaf;
+$weak = WeakReference::create($node);
+for ($i = 0; $i < 600; $i++) {
+    if ($i % 4 === 0) { $node = referencePair($node); }
+    elseif ($i % 4 === 1) { $node = (object) ['next' => $node]; }
+    elseif ($i % 4 === 2) { $node = static fn () => $node; }
+    else { $node = [$node, $node]; }
+}
+$outside = new ArrayIterator([$node]);
+unset($node);
+echo $weak->get() === null ? 'lost|' : 'held|';
+unset($outside);
+echo $weak->get() === null ? 'cleared' : 'retained';
+"#
+        ),
+        "held|leaf|cleared"
+    );
+}
+
+#[test]
 fn deep_destructor_chain_runs_each_callback_in_parent_first_order() {
     assert_eq!(
         run_php(

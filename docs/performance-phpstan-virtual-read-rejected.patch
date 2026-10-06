@@ -1,0 +1,478 @@
+--- a/src/compiler/mod.rs
++++ b/src/compiler/mod.rs
+@@ -987,0 +988,29 @@
++        }
++
++        // A read owner may be virtual only when its complete use/lifetime proof
++        // is established once. Keep the indexed block prefix and loop plans.
++        #[cfg(feature = "quick-loops")]
++        {
++            let occurrences = crate::vm::planner::read_snapshot_occurrences(self);
++            for ip in 0..self.instructions.len() {
++                if closed_region_ip[ip] || self.instructions[ip].opcode != OpCode::FetchObjR {
++                    continue;
++                }
++                let Some(plan) = crate::vm::planner::build_read_snapshot(self, ip, &occurrences)
++                else {
++                    continue;
++                };
++                if closed_region_ip[ip..=ip + 2].iter().any(|covered| *covered) {
++                    continue;
++                }
++                let Some(token) = u32::try_from(self.block_plans.len())
++                    .ok()
++                    .and_then(|index| index.checked_add(1))
++                else {
++                    break;
++                };
++                self.block_plans
++                    .push(BlockPlan::ReadSnapshot(Box::new(plan)));
++                self.instructions[ip].extended_value = token;
++                crate::vm::stats::inc_virtual_read_admitted();
++            }
+--- a/src/value/mod.rs
++++ b/src/value/mod.rs
+@@ -8503,0 +8504,16 @@
++    /// Retire the virtual clone of a live Array, after an uninterrupted read
++    /// lifetime. A real clone clears the internal snapshot flag and a shared
++    /// drop admits this same root before its Rc decrement. The original owner
++    /// remains live; admission observes only zero/nonzero owner counts.
++    #[inline(always)]
++    pub(crate) fn retire_virtual_array_snapshot(&self) {
++        let owner = self
++            .array_owner()
++            .expect("virtual snapshot requires live Array");
++        if !cycle_root_is_admitted(&owner.admitted_generation)
++            && !(self.is_immutable_array_literal() && owner.inner.is_empty())
++        {
++            register_cycle_candidate(CycleCandidate::Array(Rc::downgrade(&owner)));
++        }
++    }
++
+@@ -11068,0 +11085,119 @@
++
++#[cfg(test)]
++mod virtual_array_snapshot_tests {
++    use super::*;
++
++    #[derive(Debug, PartialEq)]
++    struct Observation {
++        root_order: Vec<usize>,
++        strong_counts: Vec<usize>,
++        roots: usize,
++        unadmitted: usize,
++        pending_start: Option<usize>,
++        pending: bool,
++        callback_roots: usize,
++    }
++
++    fn model(virtualized: bool, scenario: usize) -> Vec<Observation> {
++        begin_object_handle_request();
++        if scenario == 1 {
++            initialize_cycle_collection(false);
++        }
++        if scenario == 2 {
++            set_automatic_cycle_collection_enabled(false);
++        }
++        CYCLE_ROOTS.with_borrow_mut(|state| state.admission.threshold = 3);
++        let mut values: Vec<Value> = (0..5)
++            .map(|index| {
++                let mut array = PhpArray::new();
++                array.push(Value::long(index));
++                Value::array(array)
++            })
++            .collect();
++        let mut empty = Value::array(PhpArray::new());
++        empty.mark_immutable_array_literal();
++        values.push(empty);
++        values[1].mark_internal_argument_snapshot();
++        let identities: Vec<usize> = values
++            .iter()
++            .map(|value| value.array_identity().unwrap())
++            .collect();
++        let mut observe = Vec::new();
++        let mut retire = |index: usize| {
++            let value = &values[index];
++            if virtualized {
++                value.retire_virtual_array_snapshot();
++            } else {
++                drop(value.clone());
++            }
++            let state = CYCLE_ROOTS.with_borrow(|state| Observation {
++                root_order: state
++                    .candidates
++                    .iter()
++                    .map(|candidate| {
++                        identities
++                            .iter()
++                            .position(|id| *id == candidate.identity())
++                            .unwrap()
++                    })
++                    .collect(),
++                strong_counts: values
++                    .iter()
++                    .map(|value| value.cycle_strong_count().unwrap())
++                    .collect(),
++                roots: state.candidates.len(),
++                unadmitted: state.unadmitted.as_ref().map_or(0, |u| u.len()),
++                pending_start: state.admission.pending_start,
++                pending: automatic_cycle_collection_pending(),
++                callback_roots: state.callback_roots.len(),
++            });
++            observe.push(state);
++        };
++        retire(0);
++        retire(0);
++        retire(1);
++        retire(5);
++        if scenario == 1 {
++            set_automatic_cycle_collection_enabled(true);
++        }
++        retire(1);
++        retire(2);
++        retire(3);
++        retire(4);
++        {
++            let _suppressed = suppress_cycle_snapshot_roots();
++            retire(0);
++        }
++        if scenario == 3 {
++            let mut collection = begin_cycle_collection().unwrap();
++            {
++                let _callback = record_cycle_callback_roots();
++                retire(0);
++                retire(1);
++            }
++            collection.complete(
++                0,
++                std::time::Duration::ZERO,
++                std::time::Duration::ZERO,
++                std::time::Duration::ZERO,
++            );
++            drop(collection);
++            retire(0);
++        }
++        end_object_handle_request();
++        observe
++    }
++
++    #[test]
++    fn virtual_retirement_preserves_roots_counts_thresholds_and_callback_admission() {
++        for scenario in 0..4 {
++            let expected = std::thread::spawn(move || model(false, scenario))
++                .join()
++                .unwrap();
++            let actual = std::thread::spawn(move || model(true, scenario))
++                .join()
++                .unwrap();
++            assert_eq!(actual, expected, "GC scenario {scenario}");
++        }
++    }
++}
+--- a/src/vm/execute/baseline_dispatch.rs
++++ b/src/vm/execute/baseline_dispatch.rs
+@@ -9815,0 +9816 @@
++                let allow_snapshot = tick <= 253 && !eg.memory_budget.is_limited() && eg.exception.is_none();
+@@ -9817 +9818 @@
+-                    try_cached_fetch_obj_r::<false, false>(eg, frame, op_array, opline)
++                    try_cached_fetch_obj_r::<false, false>(eg, frame, op_array, opline, allow_snapshot)
+@@ -9819 +9820 @@
+-                    try_cached_fetch_obj_r::<true, false>(eg, frame, op_array, opline)
++                    try_cached_fetch_obj_r::<true, false>(eg, frame, op_array, opline, allow_snapshot)
+@@ -9841,2 +9842,12 @@
+-                    CachedFetchObjResult::CompleteAndSkipNext => {
+-                        unsafe { (*frame).opline = opline_ptr.add(2) };
++                    CachedFetchObjResult::CompleteAndSkipNext | CachedFetchObjResult::CompleteReadSnapshot => {
++                        // SAFETY: both outcomes carry an adjacent compiler-proven
++                        // span in this live op-array. Virtual retirement restores
++                        // the exact release origin before next-boundary GC.
++                        unsafe {
++                            let snapshot = cached == CachedFetchObjResult::CompleteReadSnapshot;
++                            if snapshot {
++                                tick = tick.wrapping_add(2);
++                                previous_opline = Some(std::ptr::NonNull::new_unchecked(opline_ptr.add(2).cast_mut()));
++                            }
++                            (*frame).opline = opline_ptr.add(if snapshot { 3 } else { 2 });
++                        }
+--- a/src/vm/execute/baseline_object_calls.rs
++++ b/src/vm/execute/baseline_object_calls.rs
+@@ -1478,0 +1479 @@
++    CompleteReadSnapshot,
+@@ -1674 +1675 @@
+-        finish_cached_fetch_obj_r::<false>(frame, op_array, opline, property_ptr)
++        finish_cached_fetch_obj_r::<false>(frame, op_array, opline, property_ptr, false)
+@@ -1683,0 +1685 @@
++    allow_snapshot: bool,
+@@ -1732,0 +1735,46 @@
++        #[cfg(feature = "quick-loops")]
++        if !FUNC_ARG && allow_snapshot && opline.extended_value != 0
++            && property.value_type() == ValueType::Array
++        {
++            // SAFETY: the compiler proves a unique nonescaping source TMP,
++            // exact adjacent read/release identities, bounded slots and a live
++            // CV receiver. The original cache guards exclude hooks/magic and
++            // root mutation. Clear prefix bits avoid uninitialized TMP reads;
++            // wide storage retains its canonical initialized-slot invariant.
++            let completed = (|| {
++                let Some(super::planner::BlockPlan::ReadSnapshot(plan)) = op_array.block_plans.get(opline.extended_value as usize - 1) else { return false; };
++                if (*frame).num_cvs != op_array.num_cvs || (*frame).num_temps < op_array.num_temps { return false; }
++                let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
++                let mask = op_array.cache[plan.release_ip as usize].release_prefix_mask();
++                if (*frame).heap_bitmap & mask != 0 { return false; }
++                if (*frame).has_heap_slots {
++                    for index in [plan.owner_slot,plan.output_slot] {
++                        if index < 64 { if (*frame).heap_bitmap & (1u64<<index)!=0 { return false; } }
++                        else if (*base.add(index as usize)).needs_cleanup() { return false; }
++                    }
++                    if plan.end>64 && (plan.first.max(64)..plan.end).any(|index| (*base.add(index as usize)).needs_cleanup()) { return false; }
++                }
++                let array = property.as_array().unwrap();
++                let key = &*(*frame).get_op_ptr(plan.key.into(),plan.key_type,op_array);
++                let normalized = if key.value_type()==ValueType::String { array_string_key_for_lookup(array,key) } else { None };
++                if key.value_type()==ValueType::String && normalized.is_none() { return false; }
++                let Ok(key_ref)=value_to_array_key_ref(key) else { return false; };
++                let value = match key_ref {
++                    ArrayKeyRef::Int(key)=>array.get_int(key),
++                    ArrayKeyRef::String(key)=>cached_string_array_value(op_array,plan.dimension_ip as usize,array,normalized.as_deref().unwrap_or(key)),
++                };
++                let Some(value)=value else { return false; };
++                if value.value_type() as u8 > ValueType::Double as u8 { return false; }
++                // Publish the canonical primitive before the logical release.
++                // Restore monotone frame ownership state and exact undef bytes
++                // without ever constructing or retaining a temporary Array.
++                frame_tmp_set(frame,base.add(plan.output_slot as usize),value.clone());
++                (*frame).has_heap_slots = true;
++                base.add(plan.owner_slot as usize).write(Value::undef());
++                property.retire_virtual_array_snapshot();
++                stats::inc_virtual_read_completed();
++                true
++            })();
++            if completed { return CachedFetchObjResult::CompleteReadSnapshot; }
++            stats::inc_virtual_read_fallback();
++        }
+@@ -1909 +1957 @@
+-    try_cached_fetch_obj_r::<false, FUNC_ARG>(eg, frame, op_array, opline)
++    try_cached_fetch_obj_r::<false, FUNC_ARG>(eg, frame, op_array, opline, false)
+@@ -1917,0 +1966 @@
++    allow_snapshot: bool,
+@@ -1996 +2045 @@
+-        return finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr);
++        return finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr, allow_snapshot);
+@@ -2066 +2115 @@
+-    finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr)
++    finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr, allow_snapshot)
+@@ -2277 +2326 @@
+-        try_cached_fetch_obj_r::<false, true>(eg, frame, op_array, opline)
++        try_cached_fetch_obj_r::<false, true>(eg, frame, op_array, opline, false)
+@@ -2279 +2328 @@
+-        try_cached_fetch_obj_r::<true, true>(eg, frame, op_array, opline)
++        try_cached_fetch_obj_r::<true, true>(eg, frame, op_array, opline, false)
+@@ -2285 +2334 @@
+-        CachedFetchObjResult::Complete | CachedFetchObjResult::CompleteAndSkipNext => {
++        CachedFetchObjResult::Complete | CachedFetchObjResult::CompleteAndSkipNext | CachedFetchObjResult::CompleteReadSnapshot => {
+--- a/src/vm/planner.rs
++++ b/src/vm/planner.rs
+@@ -45,0 +46,2 @@
++    /// A validated nonescaping read owner, projected before ordinary cleanup.
++    ReadSnapshot(Box<ReadSnapshotPlan>),
+@@ -620,0 +623,2 @@
++
++include!("value_snapshot_plan.rs");
+--- a/src/vm/quick_tests/plan_selection.rs
++++ b/src/vm/quick_tests/plan_selection.rs
+@@ -64,0 +65 @@
++                    BlockPlan::ReadSnapshot(_) => "read-snapshot",
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -116,0 +117 @@
++    static VIRTUAL_READS: [AtomicU64; 3] = [const { AtomicU64::new(0) }; 3];
+@@ -209,0 +211,3 @@
++        for counter in &VIRTUAL_READS {
++            counter.store(0, Ordering::Relaxed);
++        }
+@@ -899,0 +904,7 @@
++    #[inline(always)]
++    pub fn inc_virtual_read(index: usize) {
++        if enabled() {
++            VIRTUAL_READS[index].fetch_add(1, Ordering::Relaxed);
++        }
++    }
++
+@@ -906,0 +918,9 @@
++        let _ = writeln!(err, "-- virtual read snapshot statistics --");
++        for (index, name) in ["admitted", "completed", "fallback"].iter().enumerate() {
++            let _ = writeln!(
++                err,
++                "virtual_read_{name}={}",
++                VIRTUAL_READS[index].load(Ordering::Relaxed)
++            );
++        }
++        let _ = writeln!(err, "-- ordinary VM statistics --");
+@@ -1796,0 +1817,18 @@
++
++#[inline(always)]
++pub(crate) fn inc_virtual_read_admitted() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_virtual_read(0);
++}
++
++#[inline(always)]
++pub(crate) fn inc_virtual_read_completed() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_virtual_read(1);
++}
++
++#[inline(always)]
++pub(crate) fn inc_virtual_read_fallback() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_virtual_read(2);
++}
+--- /dev/null
++++ b/src/vm/value_snapshot_plan.rs
+@@ -0,0 +1,146 @@
++/// Geometry of one nonescaping owner lifetime. Canonical cache/scope guards
++/// produce the original source; execution projects and retires it without a
++/// physical retain or intermediate frame publication. It never owns callbacks.
++pub struct ReadSnapshotPlan {
++    pub dimension_ip: u32,
++    pub release_ip: u32,
++    pub owner_slot: u16,
++    pub output_slot: u16,
++    pub key: u16,
++    pub key_type: OpType,
++    pub first: u16,
++    pub end: u16,
++}
++
++#[cfg(feature = "quick-loops")]
++pub(crate) fn read_snapshot_occurrences(op_array: &OpArray) -> Vec<u32> {
++    let total = (op_array.num_cvs + op_array.num_temps) as usize;
++    let mut occurrences = vec![0u32; total];
++    for instruction in &op_array.instructions {
++        if instruction.opcode == OpCode::ReleaseTemps {
++            continue;
++        }
++        for (slot, kind) in [
++            (instruction.op1, instruction.op1_type),
++            (instruction.op2, instruction.op2_type),
++            (instruction.result, instruction.result_type),
++        ] {
++            if matches!(kind, OpType::Tmp | OpType::Var)
++                && let Some(count) = occurrences.get_mut(slot as usize)
++            {
++                *count += 1;
++            }
++        }
++        // Conservatively reject every possible hidden scratch reference.
++        // Extended fields often contain unrelated counts/targets; false uses
++        // reduce admission, while no hidden alias may escape this proof.
++        for slot in [
++            Some(instruction.extended_value),
++            instruction.extended_value.checked_sub(1),
++        ]
++        .into_iter()
++        .flatten()
++        {
++            if slot >= op_array.num_cvs
++                && let Some(count) = occurrences.get_mut(slot as usize)
++            {
++                *count += 1;
++            }
++        }
++    }
++    if let Some(slot) = op_array.trait_class_scope_tmp
++        && let Some(count) = occurrences.get_mut(slot as usize)
++    {
++        *count += 1;
++    }
++    occurrences
++}
++
++#[cfg(feature = "quick-loops")]
++pub(crate) fn build_read_snapshot(
++    op_array: &OpArray,
++    ip: usize,
++    occurrences: &[u32],
++) -> Option<ReadSnapshotPlan> {
++    let source = op_array.instructions.get(ip)?;
++    let dimension = op_array.instructions.get(ip.checked_add(1)?)?;
++    let release = op_array.instructions.get(ip.checked_add(2)?)?;
++    op_array.instructions.get(ip.checked_add(3)?)?;
++    let total = op_array.num_cvs.checked_add(op_array.num_temps)?;
++    let temp = |slot: u16, kind: OpType| {
++        matches!(kind, OpType::Tmp | OpType::Var)
++            && u32::from(slot) >= op_array.num_cvs
++            && u32::from(slot) < total
++    };
++    let operand = |slot: u16, kind: OpType| match kind {
++        OpType::Const => usize::from(slot) < op_array.literals.len(),
++        OpType::Cv => u32::from(slot) < op_array.num_cvs,
++        OpType::Tmp | OpType::Var => temp(slot, kind),
++        OpType::Unused => false,
++    };
++    if source.opcode != OpCode::FetchObjR
++        || source._pad != 0
++        || source.extended_value != 0
++        || source.op1_type != OpType::Cv
++        || !operand(source.op1, source.op1_type)
++        || !operand(source.op2, source.op2_type)
++        || !temp(source.result, source.result_type)
++        || occurrences.get(source.result as usize) != Some(&2)
++        || dimension.opcode != OpCode::FetchDimR
++        || dimension._pad != 0
++        || dimension.op1_type != source.result_type
++        || dimension.op1 != source.result
++        || !operand(dimension.op2, dimension.op2_type)
++        || !temp(dimension.result, dimension.result_type)
++        || dimension.result == source.result
++        || release.opcode != OpCode::ReleaseTemps
++        || !(release._pad == 0 || release.is_plain_subexpression_release())
++        || u32::from(release.op1) < op_array.num_cvs
++        || release.op1 > source.result
++        || release.op2 <= source.result
++        || u32::from(release.op2) > total
++    {
++        return None;
++    }
++    Some(ReadSnapshotPlan {
++        dimension_ip: u32::try_from(ip + 1).ok()?,
++        release_ip: u32::try_from(ip + 2).ok()?,
++        owner_slot: source.result,
++        output_slot: dimension.result,
++        key: dimension.op2,
++        key_type: dimension.op2_type,
++        first: release.op1,
++        end: release.op2,
++    })
++}
++
++#[cfg(all(test, feature = "quick-loops"))]
++mod read_snapshot_plan_tests {
++    use super::*;
++    #[test]
++    fn completed_operand_read_lifetime_is_selected_before_statement_assignment() {
++        let mut lexer = crate::lexer::Lexer::new(
++            "<?php function read_snapshot_test($box,$key){$x=$box->data[$key];return $x;}",
++        );
++        let tokens = lexer.tokenize().unwrap();
++        let mut parser = crate::parser::Parser::new(tokens);
++        let ast = parser.parse().unwrap();
++        let result = crate::compiler::compile::Compiler::new()
++            .compile(&ast)
++            .unwrap();
++        let (_, function) = result
++            .functions
++            .into_iter()
++            .find(|(name, _)| name == "read_snapshot_test")
++            .unwrap();
++        assert!(
++            function
++                .op_array
++                .block_plans
++                .iter()
++                .any(|plan| matches!(plan, BlockPlan::ReadSnapshot(_))),
++            "instructions: {:#?}",
++            function.op_array.instructions
++        );
++    }
++}

@@ -232,7 +232,7 @@ fn op_send_user_checked<'a>(
                 public_index,
             )?;
             if let Some(exception) = eg.exception.take() {
-                cleanup_pending_calls(eg, frame);
+                cleanup_pending_calls(eg, frame, None)?;
                 return Ok(match throw_in_frame(eg, frame, exception)? {
                     ThrowResult::Handled(new_frame, new_op_array) => {
                         ColdResult::NewFrame(new_frame, new_op_array)
@@ -3374,7 +3374,7 @@ fn op_fetch_static_prop_impl<'a, const LATE_STATIC: bool>(
         return Ok(result);
     }
     let class_id = dynamic_owner_value.as_ref().map_or_else(
-        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        || static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class),
         |(_, class_id)| *class_id,
     );
     if opline._pad & STATIC_PROP_REFERENCE_FETCH != 0 {
@@ -3524,7 +3524,6 @@ fn resolve_static_property_read_or_trait_cache<'a>(
 fn static_property_class_id<const LATE_STATIC: bool>(
     eg: &ExecutorGlobals,
     frame: *mut ExecuteData,
-    opline: &Instruction,
     cache: &crate::vm::instruction::InlineCache,
     raw_class: &str,
 ) -> u32 {
@@ -3534,14 +3533,10 @@ fn static_property_class_id<const LATE_STATIC: bool>(
         // which differs from the called class once a subclass forwards the
         // call, so only `static` may read the compact slot directly.
         if raw_class.eq_ignore_ascii_case("static") {
-            if opline._pad & LATE_STATIC_PROP_EMBEDDED_SCOPE != 0 {
-                // SAFETY: dispatch supplies the live executing frame, and the
-                // compiler sets this flag only for compact frames whose upper
-                // heap-bitmap word holds the published late-static class ID.
-                unsafe { ((*frame).heap_bitmap >> 32) as u32 }
-            } else {
-                late_static_call_class_id(eg, frame)
-            }
+            // Extra arguments can widen the physical frame beyond its
+            // declared layout. The canonical resolver checks live geometry
+            // before interpreting the upper ownership bits as a class ID.
+            late_static_call_class_id(eg, frame)
         } else if raw_class.eq_ignore_ascii_case("parent") {
             eg.class_by_id(caller_class_id(frame, eg))
                 .and_then(|class| class.parent.as_deref())
@@ -3565,6 +3560,31 @@ fn op_fetch_class_const<'a>(
     op_array: &crate::compiler::OpArray,
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
+    // This opcode has an immutable literal owner/name. A positive ordinary
+    // constant entry already proved resolution, visibility and immediate value
+    // publication; replay that same entry before the full operand/autoload path.
+    // SAFETY: dispatch supplies the live frame and its own compiler-sized
+    // instruction/cache entry. A positive class ID and constant slot retain the
+    // canonical cache's registered immutable declaration proof. The result
+    // pointer is this opcode's writable slot; its normal writer retires owners.
+    unsafe {
+        let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+        let cache = &op_array.cache[ip];
+        if opline.op1_type == OpType::Const
+            && opline.op2_type == OpType::Const
+            && cache.class_id != 0
+            && cache.property_flags() == 1
+        {
+            let class = eg.class_by_id(cache.class_id)
+                .expect("cached class constant owner must stay registered");
+            let definition = class.constants.get(cache.property_slot())
+                .expect("cached class constant index must stay valid");
+            let value = definition.value.clone();
+            let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+            frame_result_set(frame, result, opline.result_type, value);
+            return Ok(ColdResult::Done);
+        }
+    }
     op_fetch_class_const_impl::<false>(eg, frame, op_array, opline)
 }
 
@@ -3598,7 +3618,7 @@ fn op_fetch_late_dynamic_class_const<'a>(
     op_fetch_class_const_impl::<true>(eg, frame, op_array, opline)
 }
 
-#[inline(always)]
+#[inline(never)]
 fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -3747,7 +3767,7 @@ fn op_fetch_class_const_impl<'a, const LATE_STATIC: bool>(
             })
             .unwrap_or_else(|| eg.class_id_of(raw_class))
     } else {
-        static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class)
+        static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class)
     };
     if class_id == 0 && scoped_owner {
         let keyword = raw_class.to_ascii_lowercase();
@@ -4197,9 +4217,9 @@ fn op_unset_static_prop<'a>(
     let class_id = dynamic_owner_value.as_ref().map_or_else(
         || {
             if late_static {
-                static_property_class_id::<true>(eg, frame, opline, cache, raw_class)
+                static_property_class_id::<true>(eg, frame, cache, raw_class)
             } else {
-                static_property_class_id::<false>(eg, frame, opline, cache, raw_class)
+                static_property_class_id::<false>(eg, frame, cache, raw_class)
             }
         },
         |(_, class_id)| *class_id,
@@ -4344,7 +4364,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
         let cache = unsafe {
             &*(op_array.cache.as_ptr().add(ip) as *const crate::vm::instruction::InlineCache)
         };
-        let class_id = unsafe { ((*frame).heap_bitmap >> 32) as u32 };
+        let class_id = frame_embedded_late_static_class_id(frame);
         let flags = cache.property_flags();
         let exact_int = flags == 1
             && cache.typed_static_property_tag()
@@ -4405,7 +4425,7 @@ fn op_assign_static_prop_impl<'a, const LATE_STATIC: bool>(
             as *mut crate::vm::instruction::InlineCache)
     };
     let class_id = dynamic_owner_value.as_ref().map_or_else(
-        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        || static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class),
         |(_, class_id)| *class_id,
     );
     if class_id == 0 {
@@ -4738,7 +4758,7 @@ fn assign_static_property_reference<'a, const LATE_STATIC: bool>(
     let cache = &mut *(op_array.cache.as_ptr().add(ip)
         as *mut crate::vm::instruction::InlineCache);
     let class_id = dynamic_owner_value.as_ref().map_or_else(
-        || static_property_class_id::<LATE_STATIC>(eg, frame, opline, cache, raw_class),
+        || static_property_class_id::<LATE_STATIC>(eg, frame, cache, raw_class),
         |(_, class_id)| *class_id,
     );
     if let Some(result) = report_direct_static_trait_member_access(
@@ -5489,12 +5509,26 @@ fn op_instanceof<'a>(
     opline: &Instruction,
 ) -> Result<ColdResult<'a>, VmError> {
     // SAFETY: both operands are compiler-owned slots in the same live frame
-    // and remain immutable for this non-reentrant instanceof check.
+    // and remain immutable for this non-reentrant instanceof check. A resolved
+    // non-relative literal and an Object tag prove the numeric query below;
+    // it invokes no PHP code and uses the same canonical ancestry membership.
     let (obj_val, class_name) = unsafe {
-        (
-            &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array),
-            &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array),
-        )
+        let object = &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array);
+        if opline.op2_type == OpType::Const
+            && opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE == 0
+            && object.value_type() == ValueType::Object
+        {
+            let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+            let target_id = (*op_array.cache.as_ptr().add(ip)).class_id;
+            let receiver_id = object.object_class_id_unchecked();
+            if target_id != 0 && receiver_id != 0 {
+                let is_instance = eg.class_is_a_ids(receiver_id, target_id);
+                let result = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                frame_result_set(frame, result, opline.result_type, Value::bool(is_instance));
+                return Ok(ColdResult::Done);
+            }
+        }
+        (object, &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array))
     };
     // PHP accepts an object on the right side and uses its canonical runtime
     // class. This matters for aliases: the object's layout retains the
@@ -5527,13 +5561,40 @@ fn op_instanceof<'a>(
         None
     };
     let target = dynamic_target.as_deref().unwrap_or(raw_target);
-    let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
+    // Constant class operands retain a successful declaration resolution in
+    // the opcode's existing cache word. A missing name remains unresolved so
+    // a later class declaration or class_alias() is immediately visible.
+    // Relative scopes and runtime operands resolve from their current value.
+    // SAFETY: this instruction, its same-index cache entry and result slot
+    // belong to the live activation. This non-reentrant lookup only updates
+    // the opcode-owned ID word; no cache reference survives a PHP callback.
+    let (target_id, result_ptr) = unsafe {
+        let target_id = if opline.op2_type == OpType::Const
+            && opline._pad & INSTANCEOF_DYNAMIC_STATIC_SCOPE == 0
+        {
+            let ip = (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
+            let cache = &mut *(op_array.cache.as_ptr().add(ip) as *mut crate::vm::instruction::InlineCache);
+            if cache.class_id == 0 {
+                cache.class_id = eg.find_class(target).map_or(0, |class| class.class_id);
+            }
+            cache.class_id
+        } else {
+            eg.find_class(target).map_or(0, |class| class.class_id)
+        };
+        (target_id, (*frame).get_op_mut(opline.result as u32, opline.result_type))
+    };
     let is_instance = if obj_val.value_type() == ValueType::Closure {
         eg.class_is_a("Closure", target)
     } else {
         obj_val
             .as_object()
-            .is_some_and(|object| eg.class_is_a(&object.class_name, target))
+            .is_some_and(|object| {
+                if target_id != 0 && object.class_id != 0 {
+                    eg.class_is_a_ids(object.class_id, target_id)
+                } else {
+                    eg.object_is_a(&object, target)
+                }
+            })
     };
     unsafe { frame_result_set(frame, result_ptr, opline.result_type, Value::bool(is_instance)) };
     Ok(ColdResult::Done)

@@ -9,11 +9,30 @@ use std::rc::Weak;
 
 use crate::value::{PhpObject, Value, WeakPhpObject};
 
-use super::ExecutorGlobals;
+use super::{ExecutorGlobals, FunctionIdentityBuildHasher};
+
+// These keys are engine-created allocation addresses, not PHP strings. Reuse
+// the request-seeded pointer hasher while retaining exact identity comparison.
+// Its two seed words preserve the storage layout of the previous RandomState.
+type WeakIdentityMap<T> = HashMap<usize, T, FunctionIdentityBuildHasher>;
+type WeakIdentitySet = HashSet<usize, FunctionIdentityBuildHasher>;
+
+const _: () = {
+    assert!(
+        std::mem::size_of::<WeakIdentityMap<usize>>()
+            == std::mem::size_of::<HashMap<usize, usize>>()
+    );
+    assert!(
+        std::mem::align_of::<WeakIdentityMap<usize>>()
+            == std::mem::align_of::<HashMap<usize, usize>>()
+    );
+    assert!(std::mem::size_of::<WeakIdentitySet>() == std::mem::size_of::<HashSet<usize>>());
+    assert!(std::mem::align_of::<WeakIdentitySet>() == std::mem::align_of::<HashSet<usize>>());
+};
 
 struct WeakReferenceState {
     owner_identity: usize,
-    owner: Weak<RefCell<PhpObject>>,
+    owner: Weak<crate::value::CycleOwner<RefCell<PhpObject>>>,
     target: WeakPhpObject,
     cleared: bool,
 }
@@ -26,12 +45,12 @@ struct WeakMapEntry {
 }
 
 struct WeakMapState {
-    owner: Weak<RefCell<PhpObject>>,
+    owner: Weak<crate::value::CycleOwner<RefCell<PhpObject>>>,
     entries: Vec<WeakMapEntry>,
 }
 
 struct WeakIteratorState {
-    owner: Weak<RefCell<PhpObject>>,
+    owner: Weak<crate::value::CycleOwner<RefCell<PhpObject>>>,
     map: Value,
     keys: Vec<usize>,
     position: usize,
@@ -65,15 +84,15 @@ pub(crate) struct WeakCycleSnapshot {
 
 #[derive(Default)]
 pub(super) struct WeakObjectRuntime {
-    references: HashMap<usize, WeakReferenceState>,
+    references: WeakIdentityMap<WeakReferenceState>,
     /// Identities of live WeakReference objects (the `owner` of a reference
     /// state), so a dying owner is recognized without scanning every state.
-    reference_owners: HashSet<usize>,
+    reference_owners: WeakIdentitySet,
     /// How many map entries key on each object identity, so a dying key is
     /// recognized without scanning every map's entries.
-    map_keys: HashMap<usize, usize>,
-    maps: HashMap<usize, WeakMapState>,
-    iterators: HashMap<usize, WeakIteratorState>,
+    map_keys: WeakIdentityMap<usize>,
+    maps: WeakIdentityMap<WeakMapState>,
+    iterators: WeakIdentityMap<WeakIteratorState>,
 }
 
 impl WeakObjectRuntime {

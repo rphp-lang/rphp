@@ -1,0 +1,456 @@
+{
+  "complete": true,
+  "status": "rejected feasibility directions; no runtime change admitted",
+  "baseline_commit": "ce5b261721de41fc97a4020b39dd545e62f75d26",
+  "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+  "diagnostic_baseline_source_sha256": "674868a032aaf8b6dff276d339ce60ac926efa274ffc28fe814d9709f6d86250",
+  "diagnostic_baseline_binary_sha256": "742be7ee91265060d9d60ac9b12ca8625dd6c75a1e1664d7b58746d6e5ba7d6a",
+  "input_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+  "scope": "Whole-request vm-stats and dispatch-context diagnostic execution; these counters are not native analysis instructions/time or a savings upper bound. Focused controls validate exercised cases only, not a complete safety/compatibility gate.",
+  "experiments": [
+    {
+      "name": "bounded first-64-slot prefix",
+      "status": "rejected",
+      "build": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 81.80203217698727,
+        "profile": "release",
+        "features": "default,vm-stats",
+        "pgo": false,
+        "performance_claim": false,
+        "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+        "diagnostic_source_sha256": "51f92b34a219928928cb886efcde9ac402a6026d29482c61d5c0f05cadbcb7f2",
+        "binary_sha256": "5ebfe24dc4e34e90c9294155498040f3ffd10033e5a779d8c61ae2eb5ced9ab6",
+        "binary_bytes": 25085808
+      },
+      "boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 103.61628753997502,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3135635456,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "contract": {
+        "outcome": "Feasibility prototype: decouple an existing typed region\u2019s bounded frame prefix from unrelated frame capacity before considering a larger mixed-value/block redesign.",
+        "baseline_commit": "ce5b2617",
+        "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+        "diagnostic_baseline_source_sha256": "674868a032aaf8b6dff276d339ce60ac926efa274ffc28fe814d9709f6d86250",
+        "hypothesis": "The current whole-frame 64-slot rejection unnecessarily prevents otherwise bounded existing typed regions in larger functions; current native coverage is only two entries/478 iterations.",
+        "scope": "Private source snapshot only. Existing operations, no new opcode, shape recognizer, unsafe operation or backend lowering. All referenced region slots stay in the first 64 physical slots. Unselected frame owners and wide-tail cleanup remain canonical.",
+        "proof": "Existing add_mask_slot enforces physical slot <64. Treat planner capacity as min(actual capacity,64), retain type/heap guards, and remove only the unrelated whole-frame capacity check at execution.",
+        "ownership": "Sole integrating task; production checkout is unchanged.",
+        "gates": [
+          "Compile pinned default+vm-stats in verified 6GiB no-swap service and exclusive lock",
+          "Exact PHP/baseline/prototype outputs for wide-frame numeric/array/type-change/overflow/reference controls",
+          "Exact actual five-file twenty-findings analysis",
+          "Compare actual typed entries/completions/iterations, not static admissions alone",
+          "Preserve original opcode/effect semantics and baseline source fingerprint"
+        ],
+        "stop_rule": "If the actual application gains no material optimized execution coverage, reject this prefix-only prototype and do not run PGO or a full feature matrix. Diagnostic instruction/time counts are not native performance evidence.",
+        "candidate_diagnostic_source_sha256": "51f92b34a219928928cb886efcde9ac402a6026d29482c61d5c0f05cadbcb7f2"
+      },
+      "application": [
+        {
+          "runtime": "application-php",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "canonical_dispatches": 0,
+          "planner": {},
+          "typed_execution": {},
+          "optimized_shapes": {},
+          "native_shapes": {}
+        },
+        {
+          "runtime": "application-baseline",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "canonical_dispatches": 269905727,
+          "planner": {
+            "jit_loop_candidates": 5995,
+            "jit_loop_admissions": 4,
+            "jit_loop_rejections": 5991,
+            "jit_straight_candidates": 9159,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 2,
+            "quick_loop_completions": 2,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 478
+          },
+          "optimized_shapes": {
+            "typed_ops_loop": 2
+          },
+          "native_shapes": {
+            "typed_ops_loop": "2,side_exits=0"
+          }
+        },
+        {
+          "runtime": "application-prototype",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "canonical_dispatches": 269905727,
+          "planner": {
+            "jit_loop_candidates": 5995,
+            "jit_loop_admissions": 4,
+            "jit_loop_rejections": 5991,
+            "jit_straight_candidates": 9157,
+            "jit_straight_admissions": 1
+          },
+          "typed_execution": {
+            "quick_loop_entries": 2,
+            "quick_loop_completions": 2,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 478
+          },
+          "optimized_shapes": {
+            "typed_ops_loop": 2
+          },
+          "native_shapes": {
+            "typed_ops_loop": "2,side_exits=0"
+          }
+        }
+      ],
+      "focused": [
+        {
+          "runtime": "wide-php",
+          "exit": 0,
+          "stdout_sha256": "1cc1123b693a1d0f09bc9981cdafa49e632e1aed0a521420db28485ffba9fe9a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 0,
+          "planner": {},
+          "typed_execution": {},
+          "optimized_shapes": {},
+          "native_shapes": {}
+        },
+        {
+          "runtime": "wide-baseline",
+          "exit": 0,
+          "stdout_sha256": "1cc1123b693a1d0f09bc9981cdafa49e632e1aed0a521420db28485ffba9fe9a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 63087,
+          "planner": {
+            "jit_loop_candidates": 2,
+            "jit_loop_admissions": 0,
+            "jit_loop_rejections": 2,
+            "jit_straight_candidates": 1,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 0,
+            "quick_loop_completions": 0,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 0
+          },
+          "optimized_shapes": {},
+          "native_shapes": {}
+        },
+        {
+          "runtime": "wide-prototype",
+          "exit": 0,
+          "stdout_sha256": "1cc1123b693a1d0f09bc9981cdafa49e632e1aed0a521420db28485ffba9fe9a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 20328,
+          "planner": {
+            "jit_loop_candidates": 2,
+            "jit_loop_admissions": 2,
+            "jit_loop_rejections": 0,
+            "jit_straight_candidates": 0,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 6,
+            "quick_loop_completions": 2,
+            "quick_loop_deoptimizations": 4,
+            "quick_loop_guard_failures": 2,
+            "quick_loop_iterations": 4749
+          },
+          "optimized_shapes": {
+            "typed_ops_loop": 8
+          },
+          "native_shapes": {
+            "typed_ops_loop": "2,side_exits=1"
+          }
+        },
+        {
+          "runtime": "wide-canonical",
+          "exit": 0,
+          "stdout_sha256": "1cc1123b693a1d0f09bc9981cdafa49e632e1aed0a521420db28485ffba9fe9a",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 63087,
+          "planner": {
+            "jit_loop_candidates": 0,
+            "jit_loop_admissions": 0,
+            "jit_loop_rejections": 0,
+            "jit_straight_candidates": 0,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 0,
+            "quick_loop_completions": 0,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 0
+          },
+          "optimized_shapes": {},
+          "native_shapes": {}
+        }
+      ],
+      "rejection_reason": "Wide-frame controls activate existing typed execution, but actual PHPStan optimized entries and iterations are unchanged (2 entries / 478 iterations).",
+      "probe_patch": "performance-phpstan-existing-ir-prefix-probe.patch",
+      "probe_patch_sha256": "71ff7965c429593d4d2ab4b5ca0e95fc2fe94ba937e0fc0d15fd525e81d0011e",
+      "reconstruction": {
+        "complete": true,
+        "source_sha256": "51f92b34a219928928cb886efcde9ac402a6026d29482c61d5c0f05cadbcb7f2",
+        "focused_control": "performance-phpstan-existing-ir-prefix-control.php",
+        "focused_control_sha256": "60273eb0f117b6b2d4f3ed2a81c9d25a5a0794871874dcd7bd1b021e930758c7"
+      }
+    },
+    {
+      "name": "generic straight-region admission",
+      "status": "rejected",
+      "build": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 80.54765125599806,
+        "profile": "release",
+        "features": "default,vm-stats",
+        "pgo": false,
+        "performance_claim": false,
+        "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+        "diagnostic_source_sha256": "f35b46bc9a54601065a7a50b47695a09f6a2bf34d38def8f1f0dbdb33b1919bd",
+        "binary_sha256": "d9e63850c712da703ff2add08ec65abc4833a0d9902e5c1edea0d1fe5ab2ee45",
+        "binary_bytes": 24727400
+      },
+      "boundary": {
+        "complete": true,
+        "exit": 0,
+        "seconds": 102.5937215720187,
+        "memory_max_bytes": 6442450944,
+        "memory_swap_max_bytes": 0,
+        "memory_peak_bytes": 3098820608,
+        "memory_events": {
+          "low": 0,
+          "high": 0,
+          "max": 0,
+          "oom": 0,
+          "oom_kill": 0,
+          "oom_group_kill": 0,
+          "sock_throttled": 0
+        }
+      },
+      "contract": {
+        "outcome": "Measure whether existing generic straight typed IR covers actual PHPStan execution before redesigning the executor.",
+        "baseline_commit": "ce5b2617",
+        "production_source_sha256": "76dd1a94701101cf8b425e4cd325ab6da07cb5bba313c71880562423bb2cbbe1",
+        "diagnostic_baseline_source_sha256": "674868a032aaf8b6dff276d339ce60ac926efa274ffc28fe814d9709f6d86250",
+        "candidate_diagnostic_source_sha256": "f35b46bc9a54601065a7a50b47695a09f6a2bf34d38def8f1f0dbdb33b1919bd",
+        "scope": "Private clean-baseline snapshot; remove only compiler dense-kernel admission filter. Keep original 64-slot whole-frame cap, existing operations, guards, side exits and canonical fallback.",
+        "hypothesis": "A substantial share of real application execution is rejected only because a general typed executor is expensive; actual activation will distinguish it from incompatible values/operations.",
+        "ownership": "Sole integrating task, production unchanged.",
+        "gates": [
+          "Verified 6GiB no-swap build boundary and lock",
+          "Focused scalar array fetch/branch/type/error/COW differential with PHP and forced canonical execution",
+          "Exact actual five-file twenty-findings output",
+          "Actual entries/completions/deoptimizations/guard failures/opcode displacement; static admission is insufficient"
+        ],
+        "stop_rule": "If actual optimized execution remains negligible, reject the existing-IR-only direction without PGO or full matrix. Instrumented instructions/time are not native performance evidence."
+      },
+      "application": [
+        {
+          "runtime": "application-php",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "canonical_dispatches": 0,
+          "planner": {},
+          "typed_execution": {},
+          "optimized_shapes": {},
+          "native_shapes": {}
+        },
+        {
+          "runtime": "application-baseline",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "canonical_dispatches": 269905727,
+          "planner": {
+            "jit_loop_candidates": 5995,
+            "jit_loop_admissions": 4,
+            "jit_loop_rejections": 5991,
+            "jit_straight_candidates": 9159,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 2,
+            "quick_loop_completions": 2,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 478
+          },
+          "optimized_shapes": {
+            "typed_ops_loop": 2
+          },
+          "native_shapes": {
+            "typed_ops_loop": "2,side_exits=0"
+          }
+        },
+        {
+          "runtime": "application-prototype",
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "ordinary_stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50",
+          "canonical_dispatches": 269881009,
+          "planner": {
+            "jit_loop_candidates": 5995,
+            "jit_loop_admissions": 4,
+            "jit_loop_rejections": 5991,
+            "jit_straight_candidates": 8961,
+            "jit_straight_admissions": 282
+          },
+          "typed_execution": {
+            "quick_loop_entries": 10171,
+            "quick_loop_completions": 10112,
+            "quick_loop_deoptimizations": 59,
+            "quick_loop_guard_failures": 59,
+            "quick_loop_iterations": 478
+          },
+          "optimized_shapes": {
+            "typed_ops_loop": 2,
+            "straight_array_region": 10228
+          },
+          "native_shapes": {
+            "typed_ops_loop": "2,side_exits=0"
+          }
+        }
+      ],
+      "focused": [
+        {
+          "runtime": "straight-php",
+          "exit": 0,
+          "stdout_sha256": "65da7fc1c7ae55887fe194caa7ce2619a0c12d585508b4c6c0b815153e7f37e7",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 0,
+          "planner": {},
+          "typed_execution": {},
+          "optimized_shapes": {},
+          "native_shapes": {}
+        },
+        {
+          "runtime": "straight-baseline",
+          "exit": 0,
+          "stdout_sha256": "65da7fc1c7ae55887fe194caa7ce2619a0c12d585508b4c6c0b815153e7f37e7",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 18597,
+          "planner": {
+            "jit_loop_candidates": 3,
+            "jit_loop_admissions": 0,
+            "jit_loop_rejections": 3,
+            "jit_straight_candidates": 7,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 0,
+            "quick_loop_completions": 0,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 0
+          },
+          "optimized_shapes": {},
+          "native_shapes": {}
+        },
+        {
+          "runtime": "straight-prototype",
+          "exit": 0,
+          "stdout_sha256": "65da7fc1c7ae55887fe194caa7ce2619a0c12d585508b4c6c0b815153e7f37e7",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 13512,
+          "planner": {
+            "jit_loop_candidates": 3,
+            "jit_loop_admissions": 0,
+            "jit_loop_rejections": 3,
+            "jit_straight_candidates": 4,
+            "jit_straight_admissions": 3
+          },
+          "typed_execution": {
+            "quick_loop_entries": 907,
+            "quick_loop_completions": 904,
+            "quick_loop_deoptimizations": 3,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 0
+          },
+          "optimized_shapes": {
+            "straight_array_region": 907
+          },
+          "native_shapes": {}
+        },
+        {
+          "runtime": "straight-canonical",
+          "exit": 0,
+          "stdout_sha256": "65da7fc1c7ae55887fe194caa7ce2619a0c12d585508b4c6c0b815153e7f37e7",
+          "ordinary_stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+          "canonical_dispatches": 18597,
+          "planner": {
+            "jit_loop_candidates": 0,
+            "jit_loop_admissions": 0,
+            "jit_loop_rejections": 0,
+            "jit_straight_candidates": 0,
+            "jit_straight_admissions": 0
+          },
+          "typed_execution": {
+            "quick_loop_entries": 0,
+            "quick_loop_completions": 0,
+            "quick_loop_deoptimizations": 0,
+            "quick_loop_guard_failures": 0,
+            "quick_loop_iterations": 0
+          },
+          "optimized_shapes": {},
+          "native_shapes": {}
+        }
+      ],
+      "rejection_reason": "Removing the dense-only admission filter permits 282 static plans but replaces only 24718 of 269905727 canonical dispatches in the actual application (0.009158%). Optimizing the old generic executor cannot support a material parity budget here.",
+      "probe_patch": "performance-phpstan-existing-ir-generic-probe.patch",
+      "probe_patch_sha256": "78f7bfc9444c028c3b09de1c3318381651a0b87cf14664ba9dcba575438a4c54",
+      "reconstruction": {
+        "complete": true,
+        "source_sha256": "f35b46bc9a54601065a7a50b47695a09f6a2bf34d38def8f1f0dbdb33b1919bd",
+        "focused_control": "performance-phpstan-existing-ir-generic-control.php",
+        "focused_control_sha256": "b9019deb4d2e733227b3d91e7384f95d5f4c58c97f7dc744719f9a44b7067e1e"
+      }
+    }
+  ],
+  "production_runtime_changed": false,
+  "pgo_or_full_matrix_run": false,
+  "private_benchmark_host_configured": false,
+  "limitations": [
+    "Counts from separate experiment windows are not pooled. The first experiment does not validate every wide-frame liveness/shift case.",
+    "Straight regions have no backedge, so their iteration counter remains zero; entry, completion and dispatch counts provide activation evidence.",
+    "The two probes isolate individual filters; they do not measure a combined relaxation or broader mixed-value IR.",
+    "No ARM64 native performance or parity gain is claimed."
+  ],
+  "cleanup": {
+    "complete": true,
+    "removed_superseded_private_build_targets": 2,
+    "exact_baseline_and_probe_binaries_preserved": true,
+    "source_snapshots_and_raw_evidence_preserved": true,
+    "production_and_worktree_cleanup_hooks_run": true,
+    "private_benchmark_host_configured": false
+  }
+}

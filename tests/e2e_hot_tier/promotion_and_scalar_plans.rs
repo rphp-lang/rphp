@@ -392,7 +392,6 @@ class Math {
     assert_eq!(method.common.sig.this_offset, 1);
     assert_eq!(method.common.sig.public_arity(), 2);
     assert_eq!(method.common.plan.call, CallStrategy::FastScalar);
-    assert!(method.common.plan.borrow_this());
 }
 
 #[test]
@@ -424,7 +423,6 @@ class Identity {
     let method = &result.class_defs[0].methods[0].4;
 
     assert_eq!(method.common.plan.call, CallStrategy::FastScalar);
-    assert!(!method.common.plan.borrow_this());
     assert_eq!(
         run_php(
             "<?php

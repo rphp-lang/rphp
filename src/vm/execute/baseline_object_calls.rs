@@ -1185,8 +1185,9 @@ fn op_new_obj_resolved<'a>(
         // The newly materialized Object necessarily owns a heap edge. Reuse
         // the canonical TMP retirement/bitmap boundaries with that proof,
         // without classifying it again as a possible scalar or reference.
-        if (*frame).num_cvs + (*frame).num_temps <= 64 {
-            let bit = 1u64 << slot_idx(frame, result_ptr);
+        let index = slot_idx(frame, result_ptr);
+        if index < 64 {
+            let bit = 1u64 << index;
             if (*frame).has_heap_slots && (*frame).heap_bitmap & bit != 0 {
                 bitmap_drop_and_update(frame, result_ptr, true);
             } else {
@@ -1198,7 +1199,7 @@ fn op_new_obj_resolved<'a>(
                 (*frame).has_heap_slots = true;
             }
         } else {
-            // Large frames keep initialized TMP storage but no per-slot map.
+            // Slots beyond the bitmap prefix retain initialized TMP storage.
             if (*frame).has_heap_slots {
                 bitmap_drop_and_update(frame, result_ptr, true);
             }
@@ -1587,6 +1588,93 @@ fn convert_object_property_name<'a>(
     ))
 }
 
+/// Retain writable array storage without making the read/modify temporary
+/// a second array owner. Visibility and write capability are checked by the
+/// caller; hooks and richer reified contracts keep their canonical writeback.
+/// The engine alias is excluded from PHP reference cardinality, so object
+/// clones and ordinary reads still separate according to PHP value semantics.
+fn fetch_object_array_container(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    slot: Option<usize>,
+    key: &str,
+) -> Option<Value> {
+    {
+        let object = receiver.as_object()?;
+        if slot
+            .and_then(|slot| eg.instance_property_definition(object.class_id, slot))
+            .is_some_and(|definition| {
+                definition.has_get_hook
+                    || definition.has_set_hook
+                    || definition.requires_reified_check
+            })
+        {
+            return None;
+        }
+        let property = match slot {
+            Some(slot) => object.get_property_slot(slot),
+            None => object.get_dynamic_property_with_position(key).map(|(value, _)| value),
+        }?;
+        if property.dereferenced().value_type() != ValueType::Array
+            || (property.is_reference() && !property.is_owned_reference())
+        {
+            return None;
+        }
+    }
+    // No PHP operation occurs between lookup and mutation. Dynamic storage
+    // enters its ordinary lazy-rollback write boundary before promotion.
+    let mut object = receiver.as_object_mut()?;
+    let property = match slot {
+        Some(slot) => object.get_property_slot_mut(slot),
+        None => object.get_dynamic_property_mut(key),
+    }
+    .expect("validated property remains live without re-entry");
+    if !property.is_owned_reference() {
+        let value = std::mem::replace(property, Value::undef());
+        *property = Value::owned_reference(value);
+    }
+    let mut alias = property.clone_owned_reference_alias();
+    alias.mark_internal_reference_alias();
+    alias.mark_indirect_property_modification_reference();
+    Some(alias)
+}
+
+#[inline(always)]
+fn object_property_fetch_result_slot(frame: *mut ExecuteData, opline: &Instruction) -> *mut Value {
+    // SAFETY: both result forms name live compiler-owned frame storage.
+    // TMP/VAR offsets are absolute; CV results follow canonical references.
+    unsafe {
+        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
+            (*frame).slot_ptr(opline.result as u32)
+        } else {
+            (*frame).get_op_mut(opline.result as u32, opline.result_type)
+        }
+    }
+}
+
+/// Mutable container acquisition has a distinct ownership protocol from a
+/// value read. Keep that protocol outside the inlined ordinary read body.
+#[inline(never)]
+fn finish_cached_object_array_container(
+    eg: &ExecutorGlobals,
+    receiver: &Value,
+    slot: Option<usize>,
+    key: &str,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    opline: &Instruction,
+    property_ptr: *const Value,
+) -> CachedFetchObjResult {
+    if let Some(value) = fetch_object_array_container(eg, receiver, slot, key) {
+        let result = object_property_fetch_result_slot(frame, opline);
+        write_fetch_dim_result(frame, result, value);
+        CachedFetchObjResult::Complete
+    } else {
+        // A declined acquisition leaves storage and its cached pointer intact.
+        finish_cached_fetch_obj_r::<false>(frame, op_array, opline, property_ptr)
+    }
+}
+
 #[inline(always)]
 fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
     frame: *mut ExecuteData,
@@ -1631,16 +1719,7 @@ fn finish_cached_fetch_obj_r<const FUNC_ARG: bool>(
         }
     }
 
-    let result_ptr = unsafe {
-        // SAFETY: TMP/VAR indices are absolute after resolve_tmp_offsets.
-        // CV results still require canonical reference following; neither
-        // route reads the old (possibly uninitialized) temporary contents.
-        if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
-            (*frame).slot_ptr(opline.result as u32)
-        } else {
-            (*frame).get_op_mut(opline.result as u32, opline.result_type)
-        }
-    };
+    let result_ptr = object_property_fetch_result_slot(frame, opline);
     // An exact Long copied into a compiler-owned temporary cannot carry an
     // alias or a heap edge. Reuse the scalar slot lifecycle primitive instead
     // of cloning/tag-classifying a generic Value and updating a heap bit that
@@ -1717,9 +1796,54 @@ fn memoize_property_cache(
 ) {
     let (cached_class_id, prop_info, func) = op_array.cache[ip].property_cache_state();
     debug_assert_eq!(cached_class_id, class_id);
-    eg.polymorphic_property_cache
+    eg.polymorphic_member_cache
         .borrow_mut()
         .insert((op_array.cache.as_ptr() as usize, ip, class_id), (prop_info, func));
+}
+
+// Bound only new method admission; existing property cache policy remains
+// unchanged. Missing entries always resume canonical method resolution.
+const METHOD_RESOLUTION_MEMO_LIMIT: usize = 65_536;
+
+#[cold]
+#[inline(never)]
+fn memoize_method_cache(
+    eg: &ExecutorGlobals,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) {
+    let (cached_class, flags, function) = op_array.cache[ip].property_cache_state();
+    if cached_class != class_id || function == 0 {
+        // Static methods called through objects use another cache format.
+        return;
+    }
+    let mut memo = eg.polymorphic_member_cache.borrow_mut();
+    if memo.len() < METHOD_RESOLUTION_MEMO_LIMIT {
+        memo.insert((op_array.cache.as_ptr() as usize, ip, class_id), (flags, function));
+    }
+}
+
+/// Reinstate a literal instance-method resolution only when the canonical
+/// scope probe proves this activation has the fixed scope used at publication.
+/// A refilled primary entry retains all generic/trait and return-dispatch guards.
+#[cold]
+#[inline(never)]
+fn try_memoized_method_cache(
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+    ip: usize,
+    class_id: u32,
+) -> bool {
+    let state = eg.polymorphic_member_cache.borrow()
+        .get(&(op_array.cache.as_ptr() as usize, ip, class_id)).copied();
+    let Some((flags, function)) = state else { return false; };
+    if caller_scope(frame, eg).1.is_null() {
+        return false;
+    }
+    op_array.inline_cache_mut(ip).restore_property_cache(class_id, flags, function);
+    true
 }
 
 /// Refill a property-write cache at `ip` for `class_id` from the memo.
@@ -1732,7 +1856,7 @@ pub(super) fn try_memoized_assign_obj_prop(
     class_id: u32,
 ) -> bool {
     let state = eg
-        .polymorphic_property_cache
+        .polymorphic_member_cache
         .borrow()
         .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
         .copied();
@@ -1772,7 +1896,7 @@ fn try_memoized_fetch_obj_r<const FUNC_ARG: bool>(
         return CachedFetchObjResult::Miss;
     }
     let state = eg
-        .polymorphic_property_cache
+        .polymorphic_member_cache
         .borrow()
         .get(&(op_array.cache.as_ptr() as usize, ip, class_id))
         .copied();
@@ -1861,12 +1985,21 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
         if property_ptr.is_null() {
             return CachedFetchObjResult::Miss;
         }
+        if !FUNC_ARG
+            && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND)
+                == (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE)
+        {
+            return finish_cached_object_array_container(
+                eg, obj_val, None, name, frame, op_array, opline, property_ptr,
+            );
+        }
         return finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr);
     }
 
     // SAFETY: the tag check above proves an Object value; the frame is the
     // live executing frame whose function pointer and call-kind flags stay
-    // valid for this read-only probe.
+    // valid for this read-only probe. A trait receiver entry was published
+    // only for an instance function whose hidden CV0 receiver exists.
     let (object_class_id, scope_matches) = unsafe {
         (
             obj_val.object_class_id_unchecked(),
@@ -1880,8 +2013,15 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
                                     == Some(i64::from(class_id))
                         }
                         None => {
-                            (*frame).func == cache.scope_function()
-                                && !(*frame).has_closure_scope()
+                            !(*frame).has_closure_scope()
+                                && match cache.trait_receiver_scope_class() {
+                                    Some(class_id) => {
+                                        let receiver = (*frame).cv(0);
+                                        receiver.value_type() == ValueType::Object
+                                            && receiver.object_class_id_unchecked() == class_id
+                                    }
+                                    None => (*frame).func == cache.scope_function(),
+                                }
                         }
                     }),
         )
@@ -1914,6 +2054,14 @@ fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
                 property_ptr,
             );
         }
+    }
+    if !FUNC_ARG
+        && opline._pad & (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE | FETCH_OBJ_INCDEC | FETCH_OBJ_COMPOUND)
+            == (FETCH_OBJ_MODIFY | FETCH_OBJ_REFERENCE_SOURCE)
+    {
+        return finish_cached_object_array_container(
+            eg, obj_val, Some(cache.property_slot()), "", frame, op_array, opline, property_ptr,
+        );
     }
     finish_cached_fetch_obj_r::<FUNC_ARG>(frame, op_array, opline, property_ptr)
 }
@@ -2339,7 +2487,7 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
     if let Some(obj) = obj_val.as_object() {
 
         // ── Full resolution (cache miss or private/protected) ──
-        let (caller_class, scope_function, closure_scope) = caller_scope(frame, eg);
+        let (caller_class, scope_function, closure_scope, trait_receiver_scope) = caller_scope(frame, eg);
 
         // Private property early binding is only valid when the receiver
         // is in the same inheritance hierarchy as the caller.  When
@@ -2562,13 +2710,12 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
             && !force_dynamic
             && obj.class_id != 0
             && opline.op2_type == OpType::Const
-            && (!scope_function.is_null() || closure_scope != 0)
+            && (!scope_function.is_null() || closure_scope != 0 || trait_receiver_scope != 0)
         {
             // A private/protected declared property read from a scope that is
-            // fixed by the executing function. The slot and the visibility
-            // verdict only depend on (function, object class), so the entry
-            // is keyed on both; it stays read-only and is not memoized for
-            // other object classes.
+            // fixed by the function, closure binding or hidden trait
+            // receiver. The hit path validates that scope proof separately
+            // from the class of the object whose slot it reads.
             if let Some(slot) = obj.property_slot(&key)
                 && !eg
                     .instance_property_definition(obj.class_id, slot)
@@ -2586,7 +2733,9 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 });
                 let ic_mut = op_array.inline_cache_mut(ip);
                 ic_mut.set_property(obj.class_id, slot, if writable { 3 } else { 1 });
-                if scope_function.is_null() {
+                if trait_receiver_scope != 0 {
+                    ic_mut.set_trait_receiver_scope_class(trait_receiver_scope);
+                } else if scope_function.is_null() {
                     // A closure site: the proof holds for this bound class
                     // scope only, which the hit path re-reads from the frame.
                     ic_mut.set_closure_scope_class(closure_scope);
@@ -2901,7 +3050,16 @@ fn op_fetch_obj_r_slow_inner<'a, const FUNC_ARG: bool>(
                 set_result(current_incdec_value());
                 return Ok(ColdResult::Done);
             }
-            set_result(val);
+            if !FUNC_ARG
+                && indirect_modify
+                && opline._pad & FETCH_OBJ_REFERENCE_SOURCE != 0
+                && !has_property_hook
+                && let Some(container) = fetch_object_array_container(eg, obj_val, declared_slot, &key)
+            {
+                set_result(container);
+            } else {
+                set_result(val);
+            }
         } else {
             // An intermediate property in `isset($object->a->b)` first asks
             // `__isset(a)` and invokes `__get(a)` only when it returns true.
@@ -5104,6 +5262,25 @@ fn finish_plain_object_static_notice_assignment<'a>(
     })
 }
 
+/// An error handler can unset a property while its writable container remains
+/// in a compiler TMP. Retire that detached final cell before consuming the
+/// synthetic writeback; other handles still own their own storage normally.
+#[cold]
+#[inline(never)]
+fn retire_detached_property_container<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    owner: Value,
+) -> Result<ColdResult<'a>, VmError> {
+    let mut pending = eg.exception.take();
+    let retired = retire_owned_frame_value(
+        eg, owner, frame, &mut pending, CallbackReturnPolicy::Function,
+    );
+    eg.exception = pending;
+    retired?;
+    Ok(take_magic_exception(eg, frame)?.unwrap_or(ColdResult::Done))
+}
+
 fn op_assign_obj_prop_inner<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -5142,6 +5319,12 @@ fn op_assign_obj_prop_inner<'a>(
         {
             if matches!(opline.result_type, OpType::Tmp | OpType::Var) {
                 let source = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                if (*source).is_internal_reference_alias()
+                    && (*source).owned_reference_handle_count() == 1
+                {
+                    let owner = frame_tmp_take!(frame, source);
+                    return retire_detached_property_container(eg, frame, owner);
+                }
                 frame_slot_set(frame, source, Value::undef());
             }
             return Ok(ColdResult::Done);
@@ -5235,7 +5418,7 @@ fn op_assign_obj_prop_inner<'a>(
         return Ok(ColdResult::Done);
     }
     if let Some(php_obj) = obj.as_object_mut() {
-        let (caller_class, scope_function, closure_scope) = caller_scope(frame, eg);
+        let (caller_class, scope_function, closure_scope, _) = caller_scope(frame, eg);
         let object_display_class_name = std::rc::Rc::<str>::from(displayed_class_name(
             eg,
             php_obj.class_name.as_ref(),
@@ -6148,7 +6331,7 @@ fn op_init_method_call<'a>(
                 return throw_located_call_error(eg, frame, op_array, ip,
                     "The parent constructor was not called: the object is in an invalid state");
             }
-            let caller_class = get_caller_class(frame, eg);
+            let (caller_class, fixed_scope_function, _, _) = caller_scope(frame, eg);
 
             let dispatch_class = eg.method_dispatch_class(&target_class_name, method, caller_class.as_deref());
 
@@ -6263,12 +6446,12 @@ fn op_init_method_call<'a>(
                     }
                 } else {
                     let (fusion_eligible, long_property_plan, property_getter_plan) = if common.fn_type == FunctionType::User
-                        && common.supports_scalar_long_plan()
                     {
                         let user = unsafe { &*(resolved as *const UserFunction) };
+                        let scalar = common.supports_scalar_long_plan();
                         (
-                            user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
-                            user.long_property_plan.is_some(),
+                            scalar && user.op_array.instructions.len() <= FAST_SCALAR_METHOD_FUSION_MAX_OPS,
+                            scalar && user.long_property_plan.is_some(),
                             user.property_getter_plan.is_some(),
                         )
                     } else {
@@ -6285,6 +6468,12 @@ fn op_init_method_call<'a>(
                     );
                     if trait_scope_class_id != 0 {
                         ic_mut.set_method_trait_scope_class_id(trait_scope_class_id);
+                    }
+                    if opline.op2_type == OpType::Const
+                        && !state_dependent_lookup
+                        && !fixed_scope_function.is_null()
+                    {
+                        memoize_method_cache(eg, op_array, ip, obj_class_id);
                     }
                 }
             }
@@ -6364,8 +6553,6 @@ fn op_init_method_call<'a>(
             }
             if common.plan.is_static_method() {
                 frame_slot_init(call, (*call).cv_mut(0) as *mut Value, Value::undef());
-            } else if common.plan.borrow_this() {
-                frame_set_borrowed_this(call, obj_val as *const Value);
             } else {
                 frame_set_this(call, obj_val.clone());
             }
@@ -7249,11 +7436,7 @@ fn op_init_static_call<'a>(
             (*call).set_magic_call(true);
         }
         if let Some(receiver) = live_receiver {
-            if direct_receiver.is_some() && common.plan.borrow_this() {
-                frame_set_borrowed_this(call, receiver as *const Value);
-            } else {
-                frame_set_this(call, receiver.clone());
-            }
+            frame_set_this(call, receiver.clone());
         } else {
             // Static method frames retain the class-method CV layout, whose
             // first slot is reserved for `$this`. No receiver is written for
@@ -7614,11 +7797,7 @@ fn op_init_late_static_call<'a>(
             (*call).set_magic_call(true);
         }
         if let Some(receiver) = live_receiver {
-            if common.plan.borrow_this() {
-                frame_set_borrowed_this(call, (*frame).cv(0) as *const Value);
-            } else {
-                frame_set_this(call, receiver);
-            }
+            frame_set_this(call, receiver);
         } else {
             // Late-static method calls use the same hidden class-method slot
             // as ordinary static calls. A genuine static target has no

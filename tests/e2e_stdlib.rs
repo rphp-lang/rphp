@@ -1222,7 +1222,7 @@ echo 'released';
             "/app/sensitive-lifetime.php",
             "/app",
         ),
-        "SensitiveParameterValue:RetainedSecret|alive|releaseddestroyed|"
+        "SensitiveParameterValue:RetainedSecret|alive|destroyed|released"
     );
 }
 

@@ -70,8 +70,8 @@ pub struct ExecuteData {
     pub call_kind_flags: u8,
     /// Per-slot heap bitmap: bit N = 1 means slot N currently holds an owned value
     /// (String, Array, Object, Resource, Closure) that needs cleanup or overwrite.
-    /// Only valid for frames with <= 64 total slots (CVs + TMPs).
-    /// For larger frames, falls back to has_heap_slots + full scan.
+    /// Tracks the first 64 slots of every frame (CVs + TMPs).
+    /// Slots beyond that prefix use has_heap_slots + initialized-value scans.
     /// Only maintained when has_heap_slots is true (scalar-only frames skip bitmap ops).
     pub heap_bitmap: u64,
 }

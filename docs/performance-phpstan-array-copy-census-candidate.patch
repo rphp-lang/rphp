@@ -1,0 +1,313 @@
+--- a/src/vm/array_copy_census.rs
++++ b/src/vm/array_copy_census.rs
+@@ -0,0 +1,261 @@
++//! Diagnostic-only physical storage copy census. No PHP values are retained.
++use std::cell::{Cell, RefCell};
++use std::collections::BTreeMap;
++use std::panic::Location;
++
++#[derive(Clone, Copy, Default, PartialEq, Eq)]
++struct Context {
++    kind: u8, // 0: trait/unknown, 1: direct, 2: shared COW, 3: literal COW
++    owners: usize,
++    site: Option<&'static Location<'static>>,
++}
++
++#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
++struct Key {
++    kind: u8,
++    owners: u8,
++    storage: u8,
++    bucket: u8,
++    file: &'static str,
++    line: u32,
++    column: u32,
++}
++
++#[derive(Default)]
++struct Measure {
++    copies: u64,
++    items: u64,
++    max_items: usize,
++    string_index_capacity: u64,
++    integer_index_capacity: u64,
++}
++
++impl Measure {
++    fn add(&mut self, items: usize, strings: usize, integers: usize) {
++        self.copies += 1;
++        self.items += items as u64;
++        self.max_items = self.max_items.max(items);
++        self.string_index_capacity += strings as u64;
++        self.integer_index_capacity += integers as u64;
++    }
++
++    fn json(&self) -> serde_json::Value {
++        serde_json::json!({"copies": self.copies, "items": self.items,
++            "max_items": self.max_items,
++            "string_index_capacity": self.string_index_capacity,
++            "integer_index_capacity": self.integer_index_capacity})
++    }
++}
++
++#[derive(Default)]
++struct Census {
++    total: Measure,
++    unique_mutations: u64,
++    shared_mutations: u64,
++    overflow_copies: u64,
++    rows: BTreeMap<Key, Measure>,
++}
++
++thread_local! {
++    static ENABLED: Cell<bool> = const { Cell::new(false) };
++    static CONTEXT: Cell<Context> = const { Cell::new(Context { kind: 0, owners: 0, site: None }) };
++    static CENSUS: RefCell<Census> = RefCell::new(Census::default());
++}
++
++pub struct ContextGuard(Option<Context>);
++
++impl Drop for ContextGuard {
++    fn drop(&mut self) {
++        if let Some(previous) = self.0 {
++            CONTEXT.set(previous);
++        }
++    }
++}
++
++fn enter(context: Context) -> ContextGuard {
++    if !ENABLED.get() {
++        return ContextGuard(None);
++    }
++    let previous = CONTEXT.get();
++    // The direct clone implementation must not hide the enclosing COW cause.
++    if context.kind != 1 || previous.kind < 2 {
++        CONTEXT.set(context);
++    }
++    ContextGuard(Some(previous))
++}
++
++#[track_caller]
++pub fn direct() -> ContextGuard {
++    enter(Context {
++        kind: 1,
++        owners: 0,
++        site: Some(Location::caller()),
++    })
++}
++
++#[track_caller]
++pub fn cow(literal: bool, owners: usize) -> ContextGuard {
++    enter(Context {
++        kind: if literal { 3 } else { 2 },
++        owners,
++        site: Some(Location::caller()),
++    })
++}
++
++pub fn mutation(shared: bool) {
++    if ENABLED.get() {
++        CENSUS.with_borrow_mut(|census| {
++            if shared {
++                census.shared_mutations += 1;
++            } else {
++                census.unique_mutations += 1;
++            }
++        });
++    }
++}
++
++pub fn record(storage: u8, items: usize, strings: usize, integers: usize) {
++    if !ENABLED.get() {
++        return;
++    }
++    let context = CONTEXT.get();
++    let bucket = match items {
++        0 => 0,
++        1..=8 => 1,
++        9..=64 => 2,
++        65..=512 => 3,
++        513..=4096 => 4,
++        _ => 5,
++    };
++    let mut key = Key {
++        kind: context.kind,
++        owners: context.owners.min(3) as u8,
++        storage,
++        bucket,
++        file: context.site.map_or("<trait-or-unknown>", |s| s.file()),
++        line: context.site.map_or(0, |s| s.line()),
++        column: context.site.map_or(0, |s| s.column()),
++    };
++    CENSUS.with_borrow_mut(|census| {
++        census.total.add(items, strings, integers);
++        if !census.rows.contains_key(&key) && census.rows.len() >= 4096 {
++            census.overflow_copies += 1;
++            key = Key {
++                kind: 0,
++                owners: 0,
++                storage: 255,
++                bucket: 255,
++                file: "<site-overflow>",
++                line: 0,
++                column: 0,
++            };
++        }
++        census
++            .rows
++            .entry(key)
++            .or_default()
++            .add(items, strings, integers);
++    });
++}
++
++pub fn configure_from_env() {
++    ENABLED.set(std::env::var_os("RPHP_ARRAY_COPY_CENSUS").is_some());
++}
++
++pub fn reset() {
++    CENSUS.with_borrow_mut(|census| *census = Census::default());
++    CONTEXT.set(Context::default());
++}
++
++fn snapshot() -> serde_json::Value {
++    CENSUS.with_borrow(|census| {
++        let rows: Vec<_> = census
++            .rows
++            .iter()
++            .map(|(key, measure)| {
++                serde_json::json!({"kind": key.kind, "owners": key.owners,
++                "storage": key.storage, "bucket": key.bucket, "file": key.file,
++                "line": key.line, "column": key.column, "measure": measure.json()})
++            })
++            .collect();
++        serde_json::json!({"scope": "whole-request-after-stats-reset",
++            "total": census.total.json(), "unique_mutations": census.unique_mutations,
++            "shared_mutations": census.shared_mutations,
++            "overflow_copies": census.overflow_copies, "rows": rows})
++    })
++}
++
++pub fn dump_to_stderr() {
++    if ENABLED.get() {
++        eprintln!("array_physical_copies={}", snapshot());
++    }
++}
++
++#[cfg(test)]
++mod tests {
++    use super::*;
++    use crate::value::{PhpArray, Value};
++
++    fn start() {
++        reset();
++        ENABLED.set(true);
++    }
++
++    #[test]
++    fn every_physical_clone_is_counted_but_value_clone_is_not() {
++        start();
++        let mut array = PhpArray::new();
++        for item in 0..11 {
++            array.push(Value::long(item));
++        }
++        let _direct = array.clone();
++        let _trait_clone = <PhpArray as Clone>::clone(&array);
++        let owner = Value::array(array);
++        let _shared_owner = owner.clone();
++        CENSUS.with_borrow(|c| {
++            assert_eq!(c.total.copies, 2);
++            assert_eq!(c.total.items, 22);
++            assert_eq!(c.rows.keys().filter(|k| k.kind == 1).count(), 1);
++            assert_eq!(c.rows.keys().filter(|k| k.kind == 0).count(), 1);
++        });
++        ENABLED.set(false);
++    }
++
++    #[test]
++    fn cow_keeps_its_cause_and_a_unique_mutation_does_not_copy() {
++        start();
++        let mut array = PhpArray::new();
++        array.push(Value::long(7));
++        let mut owner = Value::array(array);
++        owner.as_array_mut().unwrap().push(Value::long(8));
++        let other = owner.clone();
++        owner.as_array_mut().unwrap().push(Value::long(9));
++        assert_eq!(other.as_array().unwrap().len(), 2);
++        assert_eq!(owner.as_array().unwrap().len(), 3);
++        CENSUS.with_borrow(|c| {
++            assert_eq!((c.total.copies, c.total.items), (1, 2));
++            assert_eq!((c.unique_mutations, c.shared_mutations), (1, 1));
++            let key = c.rows.keys().next().unwrap();
++            assert_eq!((key.kind, key.owners), (2, 2));
++            assert!(!key.file.contains("value/mod.rs"));
++        });
++        ENABLED.set(false);
++    }
++
++    #[test]
++    fn nested_context_restores_on_unwind_and_disabled_events_are_absent() {
++        start();
++        let outer = direct();
++        let previous = CONTEXT.get();
++        let _ = std::panic::catch_unwind(|| {
++            let _cow = cow(false, 3);
++            panic!("control");
++        });
++        assert!(CONTEXT.get() == previous);
++        drop(outer);
++        assert!(CONTEXT.get() == Context::default());
++        ENABLED.set(false);
++        record(0, 10, 0, 0);
++        CENSUS.with_borrow(|c| assert_eq!(c.total.copies, 0));
++    }
++}
+--- a/src/vm/mod.rs
++++ b/src/vm/mod.rs
+@@ -0,0 +1,2 @@
++#[cfg(feature = "vm-stats")]
++pub mod array_copy_census;
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -1337,0 +1338 @@
++    super::array_copy_census::configure_from_env();
+@@ -1357,0 +1359 @@
++    super::array_copy_census::reset();
+@@ -1792,0 +1795 @@
++    super::array_copy_census::dump_to_stderr();
+--- a/src/value/mod.rs
++++ b/src/value/mod.rs
+@@ -6950,0 +6951,9 @@
++#[cfg(feature = "vm-stats")]
++impl PhpArray {
++    #[track_caller]
++    pub fn clone(&self) -> Self {
++        let _context = crate::vm::array_copy_census::direct();
++        <Self as Clone>::clone(self)
++    }
++}
++
+@@ -6952,0 +6962,14 @@
++        #[cfg(feature = "vm-stats")]
++        {
++            let (storage, strings, integers) = match &self.storage {
++                ArrayStorage::Packed(_) => (0, 0, 0),
++                ArrayStorage::SmallHash(_) => (1, 0, 0),
++                ArrayStorage::LinearHash(_) => (2, 0, 0),
++                ArrayStorage::Hash {
++                    str_index,
++                    int_index,
++                    ..
++                } => (3, str_index.capacity(), int_index.capacity()),
++            };
++            crate::vm::array_copy_census::record(storage, self.len(), strings, integers);
++        }
+@@ -9118,0 +9142 @@
++    #[cfg_attr(feature = "vm-stats", track_caller)]
+@@ -9127,0 +9152,2 @@
++            #[cfg(feature = "vm-stats")]
++            crate::vm::array_copy_census::mutation(Rc::strong_count(&rc) != 1);
+@@ -9132,0 +9159,3 @@
++                #[cfg(feature = "vm-stats")]
++                let _copy_context =
++                    crate::vm::array_copy_census::cow(immutable_literal, Rc::strong_count(&rc));

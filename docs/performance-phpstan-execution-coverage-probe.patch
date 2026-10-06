@@ -1,0 +1,58 @@
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -906,0 +907 @@
++        super::dump_dispatch_context(&mut err);
+@@ -1796,0 +1798,48 @@
++
++// Private read-only diagnostic: executed dispatches by static function and
++// basic-block length. These counters do not prove type/effect eligibility.
++#[cfg(feature = "vm-stats")]
++static DIAGNOSTIC_FUNCTION_DISPATCHES: [std::sync::atomic::AtomicU64; 10 * 256] =
++    [const { std::sync::atomic::AtomicU64::new(0) }; 10 * 256];
++#[cfg(feature = "vm-stats")]
++static DIAGNOSTIC_BLOCK_DISPATCHES: [std::sync::atomic::AtomicU64; 11 * 256] =
++    [const { std::sync::atomic::AtomicU64::new(0) }; 11 * 256];
++#[cfg(feature = "vm-stats")]
++fn diagnostic_length_bucket(length: usize) -> usize {
++    match length { 0..=4 => 0, 5..=8 => 1, 9..=16 => 2, 17..=32 => 3,
++        33..=64 => 4, 65..=128 => 5, 129..=256 => 6, 257..=512 => 7,
++        513..=1024 => 8, _ => 9 }
++}
++#[cfg(feature = "vm-stats")]
++pub(crate) fn record_dispatch_context(op_array: &crate::compiler::OpArray,
++    instruction: &crate::vm::instruction::Instruction) {
++    if !enabled() { return; }
++    let opcode = instruction.opcode as usize;
++    let function_bucket = diagnostic_length_bucket(op_array.instructions.len());
++    DIAGNOSTIC_FUNCTION_DISPATCHES[function_bucket * 256 + opcode]
++        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++    let index = (instruction as *const _ as usize)
++        .saturating_sub(op_array.instructions.as_ptr() as usize)
++        / std::mem::size_of::<crate::vm::instruction::Instruction>();
++    let block_bucket = op_array.ip_to_block.get(index)
++        .and_then(|block| op_array.block_info.get(usize::from(*block)))
++        .map(|block| diagnostic_length_bucket(
++            (block.end_ip.saturating_sub(block.start_ip) + 1) as usize))
++        .unwrap_or(10);
++    DIAGNOSTIC_BLOCK_DISPATCHES[block_bucket * 256 + opcode]
++        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
++}
++#[cfg(feature = "vm-stats")]
++fn dump_dispatch_context(output: &mut impl std::io::Write) {
++    let _ = writeln!(output, "-- diagnostic function length dispatches --");
++    for (index, counter) in DIAGNOSTIC_FUNCTION_DISPATCHES.iter().enumerate() {
++        let value = counter.load(std::sync::atomic::Ordering::Relaxed);
++        if value > 0 { let _ = writeln!(output, "bucket_{}_opcode_{}={}", index / 256, index % 256, value); }
++    }
++    let _ = writeln!(output, "-- diagnostic basic block length dispatches --");
++    for (index, counter) in DIAGNOSTIC_BLOCK_DISPATCHES.iter().enumerate() {
++        let value = counter.load(std::sync::atomic::Ordering::Relaxed);
++        if value > 0 { let _ = writeln!(output, "bucket_{}_opcode_{}={}", index / 256, index % 256, value); }
++    }
++    let _ = writeln!(output, "-- ordinary VM statistics --");
++}
+--- a/src/vm/execute/baseline_dispatch.rs
++++ b/src/vm/execute/baseline_dispatch.rs
+@@ -3114,0 +3115,2 @@
++        #[cfg(feature = "vm-stats")]
++        stats::record_dispatch_context(op_array, opline);

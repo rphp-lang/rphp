@@ -170,7 +170,9 @@ pub(super) fn loop_miss_reason(
             | OpCode::JmpZ_Lt_CvConst
             | OpCode::JmpNZ_Lt_CvConst
             | OpCode::JmpZ_Eq_CvConst
-            | OpCode::JmpNZ_Eq_CvConst => branch_count += 1,
+            | OpCode::JmpNZ_Eq_CvConst
+            | OpCode::JmpZ_Identical
+            | OpCode::JmpNZ_Identical => branch_count += 1,
             _ => {}
         }
     }

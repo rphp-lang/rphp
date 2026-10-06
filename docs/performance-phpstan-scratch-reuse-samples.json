@@ -1,0 +1,181 @@
+{
+  "status": "rejected",
+  "baseline_commit": "b0a67522",
+  "baseline_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+  "candidate_source_sha256": "a648cb68cbd3f95e5fcd4c750fcc574b94d26c6a35e9b77db412708ccda1818b",
+  "restored_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+  "gate": {
+    "tool": "Callgrind",
+    "scope": "Analysis-entry FIFO to completion dump before acknowledgement; startup excluded",
+    "profile": "test-fast",
+    "optimization_level": 1,
+    "features": "default",
+    "required_improvement_percent": 1,
+    "outlier_policy": "Retain every valid sample",
+    "baseline_policy": "Reuse retained exact-binary exact-input Callgrind count only for exploratory selection; not a fresh paired release gate",
+    "instruction_delta_percent": -0.3288022343017838,
+    "instruction_saving": 389370270,
+    "samples": [
+      {
+        "runtime": "baseline",
+        "binary_sha256": "ae1ddcf968b1186f0ca965188d116b931a59311fd5c442ab552f9d17c4fd2c23",
+        "instructions": 118420810256,
+        "seconds": 561.868459437,
+        "profile_sha256": "5fef8be150ae24bce7cc71ee44630bb0d1a8335cf609dfca84ce7256dfd82926",
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "binary_sha256": "e9f29ef87554da65ec7d941be5965d8ba172100d03d7b667190c6bcd10db3499",
+        "instructions": 118031439986,
+        "seconds": 559.7790601469987,
+        "profile_sha256": "0284fa7750d461606c7015bc9691389683d01bc10baf5a1dac8c9461b2429766",
+        "output_equal": true
+      }
+    ],
+    "fresh_pgo_performed": false,
+    "native_acceptance": false,
+    "feature_expansion_performed": false,
+    "canonical_coverage_performed": false
+  },
+  "diagnostics": {
+    "scope": "Whole-command counters only; capacities and visits overlap and are not instruction sums",
+    "baseline": {
+      "source_sha256": "940e0aa536b0ea99bc99591cc52950e7be417fcfb1201fe0e8aad2861f317f50",
+      "binary_sha256": "b069abb6780767958b97823ba866e2bbd1c5ab03639f5f931a8eb7bdd6d4d28d",
+      "counts": {
+        "cleanup_entries": 5033624,
+        "cleanup_tail_slots": 57223718,
+        "cv_slots": 47339800,
+        "frames": 13593078,
+        "frames_129_256": 158653,
+        "frames_65_128": 277331,
+        "frames_over_256": 88235,
+        "initialized_cv_slots": 19787219,
+        "initialized_tmp_slots": 78276887,
+        "release_markers": 38175996,
+        "release_predicate_slots": 25169792,
+        "retirement_entries": 7412420,
+        "retirement_tail_slots": 57188202,
+        "small_frames": 13068859,
+        "tmp_slots": 157615500,
+        "wide_cv_frames": 34936,
+        "wide_frames": 524219,
+        "wide_release_markers": 15364947,
+        "wide_tmp_slots": 78276887
+      },
+      "output_equal": true
+    },
+    "candidate": {
+      "source_sha256": "00a3c10e61b342e0787e281f8d62e7e165d28f88d5f6a7e3f4af701c1108595e",
+      "binary_sha256": "da1b1c2d78a377786bcd81f032a3a784d525f0bb7af27fd0eb14c94eb4204ff2",
+      "counts": {
+        "cleanup_entries": 5006366,
+        "cleanup_tail_slots": 49254965,
+        "cv_slots": 47339800,
+        "frames": 13593078,
+        "frames_129_256": 126542,
+        "frames_65_128": 283439,
+        "frames_over_256": 86612,
+        "initialized_cv_slots": 19787219,
+        "initialized_tmp_slots": 69000004,
+        "release_markers": 38175996,
+        "release_predicate_slots": 24878135,
+        "retirement_entries": 7412411,
+        "retirement_tail_slots": 49220233,
+        "small_frames": 13096485,
+        "tmp_slots": 142276097,
+        "wide_cv_frames": 34936,
+        "wide_frames": 496593,
+        "wide_release_markers": 15214451,
+        "wide_tmp_slots": 69000004
+      },
+      "output_equal": true
+    }
+  },
+  "verification": {
+    "formatting": "pass",
+    "unsafe_inventory": "unchanged, pass",
+    "actual_final_focused_passes": 45,
+    "exact_cli_php_contracts": 8,
+    "phpstan_output_equal": true,
+    "independent_control_checksums": 4,
+    "scope_carrier_supported_contract": "PHP and baseline equal using method __CLASS__ and closure self::class",
+    "known_trait_closure_gap": {
+      "scope": "Existing compatibility failure, not a PHP pass",
+      "reference_equal": false,
+      "baseline_equal": true,
+      "executions": [
+        {
+          "runtime": "php",
+          "exit": 0,
+          "stdout": "ScratchScopeA!ScratchScopeA|ScratchScopeB!ScratchScopeB",
+          "stderr": "",
+          "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+        },
+        {
+          "runtime": "baseline",
+          "exit": 0,
+          "stdout": "ScratchScopeA!|ScratchScopeB!",
+          "stderr": "",
+          "binary_sha256": "ae1ddcf968b1186f0ca965188d116b931a59311fd5c442ab552f9d17c4fd2c23"
+        },
+        {
+          "runtime": "candidate",
+          "exit": 0,
+          "stdout": "ScratchScopeA!|ScratchScopeB!",
+          "stderr": "",
+          "binary_sha256": "e9f29ef87554da65ec7d941be5965d8ba172100d03d7b667190c6bcd10db3499"
+        }
+      ]
+    },
+    "proof_source_sha256": "10f967d92e542decc757eab758bd1322dd94d53243ad6720b8245afd545c6e0a"
+  },
+  "visible_failures": [
+    {
+      "kind": "initial carrier collision plus existing trait closure gap",
+      "final_selected_candidate": false,
+      "passed": 44,
+      "failed": 1,
+      "exit": 1
+    },
+    {
+      "kind": "carrier repaired; preexisting trait closure __CLASS__ gap remains",
+      "final_selected_candidate": false,
+      "passed": 44,
+      "failed": 1,
+      "exit": 1
+    }
+  ],
+  "resource_boundary": {
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "oom_policy": "kill",
+    "kill_mode": "control-group",
+    "exclusive_benchmark_lock": true,
+    "maximum_observed_peak_bytes": 3005034496,
+    "callgrind_peak_bytes": 855425024,
+    "oom_kills": 0,
+    "timeouts": 0
+  },
+  "accepted_pgo_unchanged": {
+    "binary_sha256": "58d60aabc60fa4e8c8ec1accf3c1518a44b67484b8f20d84f7ec08ba11015b89",
+    "hardware_analysis_instructions": 74281433386,
+    "php_hardware_analysis_instructions": 10337397273
+  },
+  "cleanup": {
+    "local_main_hook": true,
+    "local_worktree_hook": true,
+    "private_host_configured": false,
+    "superseded_targets_removed": true,
+    "exact_sources_binaries_and_profiles_retained": true
+  },
+  "environment": {
+    "cpu": "AMD Ryzen 9 7950X",
+    "architecture": "x86_64",
+    "rust": "1.98.1",
+    "llvm": "22.1.8",
+    "callgrind": "3.22.0",
+    "affinity_cpu": 2
+  }
+}

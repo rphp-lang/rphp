@@ -1,0 +1,3753 @@
+{
+  "machine": {
+    "cpu": "AMD Ryzen 9 7950X",
+    "architecture": "x86_64",
+    "os": "Linux 7.0.0-34-generic",
+    "memory_bytes": 32699998208,
+    "governor": "performance",
+    "boost": "1"
+  },
+  "toolchain": "rustc 1.98.1 (48a229cea 2026-09-01)",
+  "php_configuration": {
+    "version": "8.5.11",
+    "zts": false,
+    "debug": false,
+    "opcache.enable_cli": "0",
+    "opcache.jit": "disable",
+    "extensions": [
+      "Core",
+      "date",
+      "lexbor",
+      "openssl",
+      "pcre",
+      "zlib",
+      "filter",
+      "hash",
+      "json",
+      "uri",
+      "Zend OPcache",
+      "pcntl",
+      "random",
+      "Reflection",
+      "SPL",
+      "session",
+      "standard",
+      "sodium",
+      "libxml",
+      "PDO",
+      "calendar",
+      "ctype",
+      "exif",
+      "FFI",
+      "fileinfo",
+      "ftp",
+      "gettext",
+      "iconv",
+      "Phar",
+      "posix",
+      "readline",
+      "shmop",
+      "sockets",
+      "sysvmsg",
+      "sysvsem",
+      "sysvshm",
+      "tokenizer"
+    ]
+  },
+  "build_flags": {
+    "profile": "max-perf",
+    "lto": "fat",
+    "codegen_units": 1,
+    "debug": "line-tables-only",
+    "function_alignment": "llvm-args=--align-all-functions=6",
+    "features": "default",
+    "tree_at_build": "baseline named commit; candidate dirty against that commit and identified by complete Rust source fingerprint; verified source is committed by this checkpoint"
+  },
+  "profile": "max-perf, default features, debug=line-tables-only on both sides",
+  "architecture": "x86_64; ARM64 native timing unavailable",
+  "status": "rejected; implementation removed",
+  "baseline_commit": "4ad0c998e7f3a4b9a706428048979404451a8201",
+  "variants": {
+    "ordinary_only": {
+      "build_and_checks": {
+        "complete": true,
+        "source_sha256": "ebfa369139f7b6921ebe56abd43cd448b7e06f8065e6a8fbe2d6c69c8934f40b",
+        "baseline_commit": "4ad0c998e7f3a4b9a706428048979404451a8201",
+        "checks": [
+          {
+            "command": [
+              "scripts/check-unsafe-policy.sh",
+              "--diff-base",
+              "HEAD"
+            ],
+            "exit": 0,
+            "seconds": 3.6699684310005978,
+            "test_results": []
+          },
+          {
+            "command": [
+              "cargo",
+              "test",
+              "--offline",
+              "--locked",
+              "--profile",
+              "test-fast",
+              "--lib",
+              "statement_range_bound"
+            ],
+            "exit": 0,
+            "seconds": 61.771165913000004,
+            "test_results": [
+              "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 897 filtered out; finished in 0.00s"
+            ]
+          },
+          {
+            "command": [
+              "cargo",
+              "test",
+              "--offline",
+              "--locked",
+              "--profile",
+              "test-fast",
+              "--test",
+              "e2e_gc_root_order",
+              "--test",
+              "e2e_assignment_temporary_ownership",
+              "--test",
+              "e2e_gc_finalization_remainder",
+              "--test",
+              "e2e_deep_release",
+              "--test",
+              "e2e_expression_completion",
+              "--test",
+              "e2e_release_plan",
+              "--test",
+              "e2e_shared_release"
+            ],
+            "exit": 0,
+            "seconds": 56.95829061099357,
+            "test_results": [
+              "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+              "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+              "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+              "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+              "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.03s",
+              "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+              "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+            ]
+          }
+        ],
+        "build_seconds": 192.8538314319958,
+        "binary_sha256": "67938ed01fd2bf60078be9b002da63d953b6241d277607a228a8a0e65a7cd829",
+        "binary_bytes": 84287200
+      },
+      "measurements": {
+        "complete": true,
+        "source_sha256": "ebfa369139f7b6921ebe56abd43cd448b7e06f8065e6a8fbe2d6c69c8934f40b",
+        "cpu": 2,
+        "event": "instructions:u",
+        "outlier_policy": "retain all valid measured samples",
+        "samples": [
+          {
+            "runtime": "php",
+            "round": 0,
+            "instructions": 15474135141,
+            "analysis_seconds": 0.970896006,
+            "wall_seconds": 1.4139998099999502,
+            "max_rss_kib": 177876,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "baseline",
+            "round": 1,
+            "instructions": 125900623002,
+            "analysis_seconds": 9.996399641,
+            "wall_seconds": 12.25491051300196,
+            "max_rss_kib": 598712,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "candidate",
+            "round": 2,
+            "instructions": 125732480252,
+            "analysis_seconds": 10.308188438,
+            "wall_seconds": 12.57883167899854,
+            "max_rss_kib": 598820,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "candidate",
+            "round": 3,
+            "instructions": 125706852506,
+            "analysis_seconds": 9.907286406,
+            "wall_seconds": 12.133807828999124,
+            "max_rss_kib": 598896,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "baseline",
+            "round": 4,
+            "instructions": 125875652702,
+            "analysis_seconds": 10.081623554,
+            "wall_seconds": 12.353313480001816,
+            "max_rss_kib": 599028,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "php",
+            "round": 5,
+            "instructions": 15474142295,
+            "analysis_seconds": 0.940412045,
+            "wall_seconds": 1.373859834005998,
+            "max_rss_kib": 177716,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          }
+        ],
+        "holdouts": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.060578107833862,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.060745716094971,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.061241626739502,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.060293436050415,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.060486555099487,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.06129002571106,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.033135414123535,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.031815528869629,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.033825159072876,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.032332420349121,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.032465934753418,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.033568859100342,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.22330570220947,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.22311782836914,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.22654628753662,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.22380661964417,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.22437334060669,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.22781872749329,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.02478289604187,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.024563074111938,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.024931907653809,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.02450156211853,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.02469277381897,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.024766445159912,
+            "output": "50000040000000"
+          }
+        ],
+        "binaries": {
+          "baseline": "2f6c7e23b6f39d9b4e26356fed2fd72a22537029d7beb96800e7b5d0f9cf8c4b",
+          "candidate": "67938ed01fd2bf60078be9b002da63d953b6241d277607a228a8a0e65a7cd829",
+          "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+        }
+      },
+      "confirmation": {
+        "complete": true,
+        "seed": 291032,
+        "outlier_rule": "retain every valid sample",
+        "samples": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.59739542007446,
+            "output": "45000000",
+            "cycles:u": 3185723781,
+            "instructions:u": 13823658987,
+            "branches:u": 2727979570,
+            "branch-misses:u": 579671
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.60938215255737,
+            "output": "45000000",
+            "cycles:u": 3252969227,
+            "instructions:u": 13821160102,
+            "branches:u": 2727979773,
+            "branch-misses:u": 567935
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.60659122467041,
+            "output": "45000000",
+            "cycles:u": 3238474462,
+            "instructions:u": 13823660833,
+            "branches:u": 2727980166,
+            "branch-misses:u": 561493
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.60866904258728,
+            "output": "45000000",
+            "cycles:u": 3251969357,
+            "instructions:u": 13821157166,
+            "branches:u": 2727978961,
+            "branch-misses:u": 554469
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.62297868728638,
+            "output": "45000000",
+            "cycles:u": 3330807534,
+            "instructions:u": 13821160183,
+            "branches:u": 2727980000,
+            "branch-misses:u": 554847
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.60305309295654,
+            "output": "45000000",
+            "cycles:u": 3219036139,
+            "instructions:u": 13823660017,
+            "branches:u": 2727979903,
+            "branch-misses:u": 569297
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 0.60815739631653,
+            "output": "45000000",
+            "cycles:u": 3245090227,
+            "instructions:u": 13823659329,
+            "branches:u": 2727979672,
+            "branch-misses:u": 564780
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 0.61859941482544,
+            "output": "45000000",
+            "cycles:u": 3300089860,
+            "instructions:u": 13821158770,
+            "branches:u": 2727979465,
+            "branch-misses:u": 568800
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 0.61827063560486,
+            "output": "45000000",
+            "cycles:u": 3302816165,
+            "instructions:u": 13821158426,
+            "branches:u": 2727979406,
+            "branch-misses:u": 570444
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 0.61271572113037,
+            "output": "45000000",
+            "cycles:u": 3271409052,
+            "instructions:u": 13823658547,
+            "branches:u": 2727979305,
+            "branch-misses:u": 571974
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.32525515556335,
+            "output": "45000000",
+            "cycles:u": 1741894397,
+            "instructions:u": 8285646492,
+            "branches:u": 1727877263,
+            "branch-misses:u": 454042
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.34026646614075,
+            "output": "45000000",
+            "cycles:u": 1823838378,
+            "instructions:u": 8285644976,
+            "branches:u": 1727876707,
+            "branch-misses:u": 449730
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.34228944778442,
+            "output": "45000000",
+            "cycles:u": 1832125799,
+            "instructions:u": 8285645676,
+            "branches:u": 1727876897,
+            "branch-misses:u": 451967
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.32412195205688,
+            "output": "45000000",
+            "cycles:u": 1734983708,
+            "instructions:u": 8285645397,
+            "branches:u": 1727876905,
+            "branch-misses:u": 453179
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.34381723403931,
+            "output": "45000000",
+            "cycles:u": 1840565187,
+            "instructions:u": 8285647561,
+            "branches:u": 1727877578,
+            "branch-misses:u": 448285
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.3297553062439,
+            "output": "45000000",
+            "cycles:u": 1766589192,
+            "instructions:u": 8285645818,
+            "branches:u": 1727877082,
+            "branch-misses:u": 453169
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 0.32538843154907,
+            "output": "45000000",
+            "cycles:u": 1739360162,
+            "instructions:u": 8285646584,
+            "branches:u": 1727877312,
+            "branch-misses:u": 450080
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 0.33821511268616,
+            "output": "45000000",
+            "cycles:u": 1811356291,
+            "instructions:u": 8285647422,
+            "branches:u": 1727877517,
+            "branch-misses:u": 449861
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 0.34154033660889,
+            "output": "45000000",
+            "cycles:u": 1828159691,
+            "instructions:u": 8285644364,
+            "branches:u": 1727876630,
+            "branch-misses:u": 448056
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 0.32728838920593,
+            "output": "45000000",
+            "cycles:u": 1748762644,
+            "instructions:u": 8285647889,
+            "branches:u": 1727877735,
+            "branch-misses:u": 448361
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.22611212730408,
+            "output": "48640000",
+            "cycles:u": 1213364628,
+            "instructions:u": 6047519178,
+            "branches:u": 1135497400,
+            "branch-misses:u": 306581
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.22830963134766,
+            "output": "48640000",
+            "cycles:u": 1218331320,
+            "instructions:u": 6047498817,
+            "branches:u": 1135497233,
+            "branch-misses:u": 307295
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.23440885543823,
+            "output": "48640000",
+            "cycles:u": 1258433603,
+            "instructions:u": 6047497642,
+            "branches:u": 1135496812,
+            "branch-misses:u": 307723
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.22602796554565,
+            "output": "48640000",
+            "cycles:u": 1205093473,
+            "instructions:u": 6047517157,
+            "branches:u": 1135496702,
+            "branch-misses:u": 308080
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.23106980323792,
+            "output": "48640000",
+            "cycles:u": 1236242598,
+            "instructions:u": 6047500200,
+            "branches:u": 1135497503,
+            "branch-misses:u": 306652
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.22252297401428,
+            "output": "48640000",
+            "cycles:u": 1192211407,
+            "instructions:u": 6047517961,
+            "branches:u": 1135496968,
+            "branch-misses:u": 306574
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 0.22479104995728,
+            "output": "48640000",
+            "cycles:u": 1205862175,
+            "instructions:u": 6047517242,
+            "branches:u": 1135496597,
+            "branch-misses:u": 306789
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 0.22932767868042,
+            "output": "48640000",
+            "cycles:u": 1230702093,
+            "instructions:u": 6047500685,
+            "branches:u": 1135497811,
+            "branch-misses:u": 308517
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 0.22379422187805,
+            "output": "48640000",
+            "cycles:u": 1198055856,
+            "instructions:u": 6047519334,
+            "branches:u": 1135497281,
+            "branch-misses:u": 307337
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 0.22500228881836,
+            "output": "48640000",
+            "cycles:u": 1204296902,
+            "instructions:u": 6047504541,
+            "branches:u": 1135498482,
+            "branch-misses:u": 306446
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 1.0517432689667,
+            "output": "5000000",
+            "cycles:u": 5652905034,
+            "instructions:u": 21205701679,
+            "branches:u": 3872893460,
+            "branch-misses:u": 482032
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 1.079026222229,
+            "output": "5000000",
+            "cycles:u": 5804954447,
+            "instructions:u": 21200701873,
+            "branches:u": 3872893518,
+            "branch-misses:u": 483450
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 1.0686962604523,
+            "output": "5000000",
+            "cycles:u": 5749567741,
+            "instructions:u": 21320705275,
+            "branches:u": 3882894550,
+            "branch-misses:u": 481708
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 1.0425915718079,
+            "output": "5000000",
+            "cycles:u": 5608472460,
+            "instructions:u": 21205704130,
+            "branches:u": 3872894150,
+            "branch-misses:u": 480699
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.95905828475952,
+            "output": "5000000",
+            "cycles:u": 5132721055,
+            "instructions:u": 21205704275,
+            "branches:u": 3872894096,
+            "branch-misses:u": 648866
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.99367189407349,
+            "output": "5000000",
+            "cycles:u": 5320227275,
+            "instructions:u": 21200702466,
+            "branches:u": 3872893591,
+            "branch-misses:u": 480549
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 1.1627249717712,
+            "output": "5000000",
+            "cycles:u": 6264982478,
+            "instructions:u": 21200701118,
+            "branches:u": 3872893280,
+            "branch-misses:u": 498516
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 1.0428550243378,
+            "output": "5000000",
+            "cycles:u": 5599566886,
+            "instructions:u": 21205702185,
+            "branches:u": 3872893551,
+            "branch-misses:u": 491634
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 1.1095397472382,
+            "output": "5000000",
+            "cycles:u": 5969050938,
+            "instructions:u": 21200701333,
+            "branches:u": 3872893332,
+            "branch-misses:u": 5486019
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 1.0364220142365,
+            "output": "5000000",
+            "cycles:u": 5551231764,
+            "instructions:u": 21205704347,
+            "branches:u": 3872894306,
+            "branch-misses:u": 485337
+          }
+        ]
+      },
+      "micro_counts": {
+        "complete": true,
+        "raw": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 0,
+            "runtime": "baseline",
+            "instructions": 13954039,
+            "seconds": 3.3378601074219e-06
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 0,
+            "runtime": "candidate",
+            "instructions": 13951856,
+            "seconds": 6.1988830566406e-06
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 0,
+            "runtime": "php",
+            "instructions": 28083378,
+            "seconds": 5.793571472168e-05
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 5000000,
+            "runtime": "baseline",
+            "instructions": 13821159705,
+            "seconds": 0.60888481140137
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 5000000,
+            "runtime": "candidate",
+            "instructions": 13823661109,
+            "seconds": 0.60805678367615
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 5000000,
+            "runtime": "php",
+            "instructions": 2608084427,
+            "seconds": 0.12140607833862
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 0,
+            "runtime": "baseline",
+            "instructions": 13933638,
+            "seconds": 3.3378601074219e-06
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 0,
+            "runtime": "candidate",
+            "instructions": 13938376,
+            "seconds": 4.7683715820312e-06
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 0,
+            "runtime": "php",
+            "instructions": 28077068,
+            "seconds": 6.103515625e-05
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 5000000,
+            "runtime": "baseline",
+            "instructions": 8285648072,
+            "seconds": 0.33956837654114
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 5000000,
+            "runtime": "candidate",
+            "instructions": 8285644783,
+            "seconds": 0.32369923591614
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 5000000,
+            "runtime": "php",
+            "instructions": 2005575183,
+            "seconds": 0.083575963973999
+          }
+        ],
+        "incremental": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "instructions_per_iteration": 2761.4411332
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "instructions_per_iteration": 2761.9418506
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "php",
+            "instructions_per_iteration": 516.0002098
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "instructions_per_iteration": 1654.3428868
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "instructions_per_iteration": 1654.3412814
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "php",
+            "instructions_per_iteration": 395.499623
+          }
+        ],
+        "protocol": "One native instructions:u count at zero and five million iterations; same source except loop bound; CPU 2 and identical environment; not a timing distribution"
+      },
+      "deep_controls": {
+        "complete": true,
+        "seed": 290998,
+        "deep": [
+          {
+            "runtime": "candidate",
+            "round": 0,
+            "nodes": 2048,
+            "build_seconds": 0.00081467628479004,
+            "release_seconds": 0.0030784606933594
+          },
+          {
+            "runtime": "baseline",
+            "round": 0,
+            "nodes": 2048,
+            "build_seconds": 0.00083780288696289,
+            "release_seconds": 0.0030004978179932
+          },
+          {
+            "runtime": "candidate",
+            "round": 1,
+            "nodes": 2048,
+            "build_seconds": 0.00077247619628906,
+            "release_seconds": 0.0030107498168945
+          },
+          {
+            "runtime": "baseline",
+            "round": 1,
+            "nodes": 2048,
+            "build_seconds": 0.00079202651977539,
+            "release_seconds": 0.0029873847961426
+          },
+          {
+            "runtime": "baseline",
+            "round": 2,
+            "nodes": 2048,
+            "build_seconds": 0.00083637237548828,
+            "release_seconds": 0.0030121803283691
+          },
+          {
+            "runtime": "candidate",
+            "round": 2,
+            "nodes": 2048,
+            "build_seconds": 0.00080132484436035,
+            "release_seconds": 0.0030643939971924
+          },
+          {
+            "runtime": "candidate",
+            "round": 3,
+            "nodes": 2048,
+            "build_seconds": 0.00080990791320801,
+            "release_seconds": 0.0030617713928223
+          },
+          {
+            "runtime": "baseline",
+            "round": 3,
+            "nodes": 2048,
+            "build_seconds": 0.00097966194152832,
+            "release_seconds": 0.0029757022857666
+          },
+          {
+            "runtime": "candidate",
+            "round": 4,
+            "nodes": 2048,
+            "build_seconds": 0.00082206726074219,
+            "release_seconds": 0.0029828548431396
+          },
+          {
+            "runtime": "baseline",
+            "round": 4,
+            "nodes": 2048,
+            "build_seconds": 0.00091886520385742,
+            "release_seconds": 0.0029771327972412
+          },
+          {
+            "runtime": "baseline",
+            "round": 0,
+            "nodes": 16384,
+            "build_seconds": 0.0081832408905029,
+            "release_seconds": 0.0269775390625
+          },
+          {
+            "runtime": "candidate",
+            "round": 0,
+            "nodes": 16384,
+            "build_seconds": 0.0055861473083496,
+            "release_seconds": 0.025476455688477
+          },
+          {
+            "runtime": "candidate",
+            "round": 1,
+            "nodes": 16384,
+            "build_seconds": 0.0052545070648193,
+            "release_seconds": 0.024432182312012
+          },
+          {
+            "runtime": "baseline",
+            "round": 1,
+            "nodes": 16384,
+            "build_seconds": 0.005518913269043,
+            "release_seconds": 0.024772882461548
+          },
+          {
+            "runtime": "candidate",
+            "round": 2,
+            "nodes": 16384,
+            "build_seconds": 0.0052285194396973,
+            "release_seconds": 0.025415420532227
+          },
+          {
+            "runtime": "baseline",
+            "round": 2,
+            "nodes": 16384,
+            "build_seconds": 0.0052025318145752,
+            "release_seconds": 0.024728059768677
+          },
+          {
+            "runtime": "baseline",
+            "round": 3,
+            "nodes": 16384,
+            "build_seconds": 0.0054855346679688,
+            "release_seconds": 0.024727344512939
+          },
+          {
+            "runtime": "candidate",
+            "round": 3,
+            "nodes": 16384,
+            "build_seconds": 0.0055313110351562,
+            "release_seconds": 0.02471923828125
+          },
+          {
+            "runtime": "baseline",
+            "round": 4,
+            "nodes": 16384,
+            "build_seconds": 0.0055100917816162,
+            "release_seconds": 0.025210618972778
+          },
+          {
+            "runtime": "candidate",
+            "round": 4,
+            "nodes": 16384,
+            "build_seconds": 0.0056440830230713,
+            "release_seconds": 0.024717330932617
+          }
+        ]
+      },
+      "differentials": {
+        "complete": true,
+        "php_ini": {
+          "zend.exception_ignore_args": "1"
+        },
+        "cases": [
+          {
+            "case": "range-0",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "range-0",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "range-80",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "range-80",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "shutdown_uses_object_store_order_after_child_first_root_admission",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5cc7dca6efa12229e063552318a4e6f44dba672c7f44481c0c9b55ee338adcb9"
+          },
+          {
+            "case": "shutdown_uses_object_store_order_after_child_first_root_admission",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5cc7dca6efa12229e063552318a4e6f44dba672c7f44481c0c9b55ee338adcb9"
+          },
+          {
+            "case": "property_reference_writes_retire_referents_but_unset_preserves_aliases",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3495b9ecdb0f275d257c6d8914415d7cfcd9f995fda06a48e3fa789f884c8b98"
+          },
+          {
+            "case": "property_reference_writes_retire_referents_but_unset_preserves_aliases",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3495b9ecdb0f275d257c6d8914415d7cfcd9f995fda06a48e3fa789f884c8b98"
+          },
+          {
+            "case": "transferred_append_sources_keep_cow_aliases_and_failed_write_retirement",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "06b09cb05aa27f6bc4a176f2e2e44c6a5014b7c40dd71ec2b50e2cdf880d5dc7"
+          },
+          {
+            "case": "transferred_append_sources_keep_cow_aliases_and_failed_write_retirement",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "06b09cb05aa27f6bc4a176f2e2e44c6a5014b7c40dd71ec2b50e2cdf880d5dc7"
+          },
+          {
+            "case": "append_reference_results_copy_the_target_and_errors_allow_reentrant_replacement",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0994d25c63b8fc8e6ee216d2a80fae012251ea97e41bec35b06b1646f0d94e8c"
+          },
+          {
+            "case": "append_reference_results_copy_the_target_and_errors_allow_reentrant_replacement",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0994d25c63b8fc8e6ee216d2a80fae012251ea97e41bec35b06b1646f0d94e8c"
+          },
+          {
+            "case": "moved_weak_reference_results_do_not_enter_the_possible_root_buffer",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "651953290c191f80c3a2d34dd477614f955be287476e024f15f66a6e0caa45a9"
+          },
+          {
+            "case": "moved_weak_reference_results_do_not_enter_the_possible_root_buffer",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "651953290c191f80c3a2d34dd477614f955be287476e024f15f66a6e0caa45a9"
+          },
+          {
+            "case": "releasing_a_real_weak_holder_alias_still_admits_a_root",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0bc63bab2ebd23c2819970f22eb07d6c8c941e845ea76b40051d96862bac399b"
+          },
+          {
+            "case": "releasing_a_real_weak_holder_alias_still_admits_a_root",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0bc63bab2ebd23c2819970f22eb07d6c8c941e845ea76b40051d96862bac399b"
+          },
+          {
+            "case": "empty_and_scalar_reference_captures_do_not_reorder_later_cycles",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "ff34c48fc9f9de369d06c0b42127db483ca42e5c0ea3a7e6a41c9510c10c2534"
+          },
+          {
+            "case": "empty_and_scalar_reference_captures_do_not_reorder_later_cycles",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "ff34c48fc9f9de369d06c0b42127db483ca42e5c0ea3a7e6a41c9510c10c2534"
+          },
+          {
+            "case": "retained_gc_destructor_fibers_finish_after_shutdown_callbacks",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e8f66fc774a5c8fa20dda8165a4b8d05fe8d5a94d47a07cd6c4c196c411714f2"
+          },
+          {
+            "case": "retained_gc_destructor_fibers_finish_after_shutdown_callbacks",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e8f66fc774a5c8fa20dda8165a4b8d05fe8d5a94d47a07cd6c4c196c411714f2"
+          },
+          {
+            "case": "live_roots_compact_from_the_tail_before_destructor_dispatch",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4e5f5d7b9ac56a98c2c3e11158f8b763ac4a3441f859972231761ca6fca0fbc5"
+          },
+          {
+            "case": "live_roots_compact_from_the_tail_before_destructor_dispatch",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4e5f5d7b9ac56a98c2c3e11158f8b763ac4a3441f859972231761ca6fca0fbc5"
+          },
+          {
+            "case": "fiber_collection_uses_the_same_live_root_compaction_as_main",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "418fce08d421fab38cb5188dbeb3b42868514e8b29651875483f87a05226cca0"
+          },
+          {
+            "case": "fiber_collection_uses_the_same_live_root_compaction_as_main",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "418fce08d421fab38cb5188dbeb3b42868514e8b29651875483f87a05226cca0"
+          },
+          {
+            "case": "temporary_assignments_preserve_scalars_reference_returns_and_cow",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2df539ef03e9b93691fa6c0c87f77dab4ad5efb7ce520166ede405414079f8a8"
+          },
+          {
+            "case": "temporary_assignments_preserve_scalars_reference_returns_and_cow",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2df539ef03e9b93691fa6c0c87f77dab4ad5efb7ce520166ede405414079f8a8"
+          },
+          {
+            "case": "temporary_assignment_keeps_typed_reference_checks_and_expression_values",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "35be9893902c989478d07909bbffb7149f974b99f571a0c12cafa415ffd229aa"
+          },
+          {
+            "case": "temporary_assignment_keeps_typed_reference_checks_and_expression_values",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "35be9893902c989478d07909bbffb7149f974b99f571a0c12cafa415ffd229aa"
+          },
+          {
+            "case": "temporary_assignment_releases_replaced_and_nested_objects_at_the_same_boundary",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a74faf29e4777b38e3c61aabffbbec4fa8751f944bd902344d8effcc5bbdff3c"
+          },
+          {
+            "case": "temporary_assignment_releases_replaced_and_nested_objects_at_the_same_boundary",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a74faf29e4777b38e3c61aabffbbec4fa8751f944bd902344d8effcc5bbdff3c"
+          },
+          {
+            "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "788406c8a8cbf5fb2667b51255128c37b80aeba8c44fa327e8109479d75619a1"
+          },
+          {
+            "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "788406c8a8cbf5fb2667b51255128c37b80aeba8c44fa327e8109479d75619a1"
+          },
+          {
+            "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c6051d2fb08be05b21ba5f4199c4bd89a2bab44f26e9d61c6530310542407fa4"
+          },
+          {
+            "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c6051d2fb08be05b21ba5f4199c4bd89a2bab44f26e9d61c6530310542407fa4"
+          },
+          {
+            "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "345f7c2686f76727a8d7d3dbb3572281e64827dd76d1fe4ca632498c0e607f55"
+          },
+          {
+            "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "345f7c2686f76727a8d7d3dbb3572281e64827dd76d1fe4ca632498c0e607f55"
+          },
+          {
+            "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c03124bc4ce4bdba54d6d755b4ce31aa0947f2809e8e7224c824bf15b4791002"
+          },
+          {
+            "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c03124bc4ce4bdba54d6d755b4ce31aa0947f2809e8e7224c824bf15b4791002"
+          },
+          {
+            "case": "recursive_collection_and_destructor_exceptions_preserve_following_roots",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "59a068480b5d392debf6fd1fc8ee307d46833b981ff323e94763b55dcb7d5e0b"
+          },
+          {
+            "case": "recursive_collection_and_destructor_exceptions_preserve_following_roots",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "59a068480b5d392debf6fd1fc8ee307d46833b981ff323e94763b55dcb7d5e0b"
+          },
+          {
+            "case": "an_array_cycle_created_in_a_destructor_is_not_lost",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6298582c91f5a05395ebdab76679d9785086cbb9ef364f7a09d4703b81ac9ab9"
+          },
+          {
+            "case": "an_array_cycle_created_in_a_destructor_is_not_lost",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6298582c91f5a05395ebdab76679d9785086cbb9ef364f7a09d4703b81ac9ab9"
+          },
+          {
+            "case": "a_new_cycle_with_an_external_root_is_not_prematurely_retired",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c33daef5dbd060779c697797145ad8208af325eaf4427cec080af33c6a432593"
+          },
+          {
+            "case": "a_new_cycle_with_an_external_root_is_not_prematurely_retired",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c33daef5dbd060779c697797145ad8208af325eaf4427cec080af33c6a432593"
+          },
+          {
+            "case": "a_destructor_created_closure_cycle_releases_its_bound_receiver",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a94b3827f34f657c32607f1e93a23247679f0ed65352e0e907af2f3766d4ec2a"
+          },
+          {
+            "case": "a_destructor_created_closure_cycle_releases_its_bound_receiver",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a94b3827f34f657c32607f1e93a23247679f0ed65352e0e907af2f3766d4ec2a"
+          },
+          {
+            "case": "shared_reference_and_native_edges_preserve_final_leaf_release",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "cc01a5fa8424bdc382a3b9ab3fddea31d554480fecf6760a70772dda7b859941"
+          },
+          {
+            "case": "shared_reference_and_native_edges_preserve_final_leaf_release",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "cc01a5fa8424bdc382a3b9ab3fddea31d554480fecf6760a70772dda7b859941"
+          },
+          {
+            "case": "deep_destructor_chain_runs_each_callback_in_parent_first_order",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4431510dd6cf207d8b4273bbdd37ce34c2a109a7746e12847dad018b77afb7e4"
+          },
+          {
+            "case": "deep_destructor_chain_runs_each_callback_in_parent_first_order",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4431510dd6cf207d8b4273bbdd37ce34c2a109a7746e12847dad018b77afb7e4"
+          },
+          {
+            "case": "destructor_created_graphs_survive_resurrection_aliases_and_exceptions",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3a7b798d664f71f1bfcb9dc77bf6218a36b5b82e87893cde8a503536fe0b3369"
+          },
+          {
+            "case": "destructor_created_graphs_survive_resurrection_aliases_and_exceptions",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3a7b798d664f71f1bfcb9dc77bf6218a36b5b82e87893cde8a503536fe0b3369"
+          },
+          {
+            "case": "suspended_destructor_releases_a_graph_added_while_parked",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a73bc891fbb12d33325a0a527b5646406cfa63d8c294c803442ee0dc59157c6a"
+          },
+          {
+            "case": "suspended_destructor_releases_a_graph_added_while_parked",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a73bc891fbb12d33325a0a527b5646406cfa63d8c294c803442ee0dc59157c6a"
+          },
+          {
+            "case": "casting_a_container_retires_only_its_unshared_children",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2eaf3490b53d22f14f30e51dbfa6746f8ef65f630d0a48b1c27b6366e4d7b17a"
+          },
+          {
+            "case": "casting_a_container_retires_only_its_unshared_children",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2eaf3490b53d22f14f30e51dbfa6746f8ef65f630d0a48b1c27b6366e4d7b17a"
+          },
+          {
+            "case": "replaced_dimension_values_retire_after_commit_before_result_consumption",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "1e35e69e8c5e10d9ac2cc285f688cc71672f38917e23b881556733724a69cc5d"
+          },
+          {
+            "case": "replaced_dimension_values_retire_after_commit_before_result_consumption",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "1e35e69e8c5e10d9ac2cc285f688cc71672f38917e23b881556733724a69cc5d"
+          },
+          {
+            "case": "reference_assignment_retains_its_source_when_the_old_destructor_clears_the_target",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "dabca96ac01acf0add807f8c725542d31377e6d75decbd7736d150e974cef052"
+          },
+          {
+            "case": "reference_assignment_retains_its_source_when_the_old_destructor_clears_the_target",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "dabca96ac01acf0add807f8c725542d31377e6d75decbd7736d150e974cef052"
+          },
+          {
+            "case": "native_dimension_binding_keeps_existing_source_aliases_but_method_writes_are_values",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4ee5c3a6554f068efd4563268e5141eb8f019311af7155c253869e7d454e3a94"
+          },
+          {
+            "case": "native_dimension_binding_keeps_existing_source_aliases_but_method_writes_are_values",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4ee5c3a6554f068efd4563268e5141eb8f019311af7155c253869e7d454e3a94"
+          },
+          {
+            "case": "replacing_a_native_dimension_reference_keeps_the_old_external_owner_alive",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e5ad93f17f3685790c1251e30f078cce0bbfac65dd4c3bf8554d67266a4817ae"
+          },
+          {
+            "case": "replacing_a_native_dimension_reference_keeps_the_old_external_owner_alive",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e5ad93f17f3685790c1251e30f078cce0bbfac65dd4c3bf8554d67266a4817ae"
+          },
+          {
+            "case": "magic_reference_reads_are_values_for_direct_read_modify_write",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6447e984116b02ca113810fdeff696f20a3d0d7db941831887a7db9284c07e3e"
+          },
+          {
+            "case": "magic_reference_reads_are_values_for_direct_read_modify_write",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6447e984116b02ca113810fdeff696f20a3d0d7db941831887a7db9284c07e3e"
+          },
+          {
+            "case": "captured_borrowed_arguments_become_owned_before_operand_retirement",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5dbad771372bdb4b3d5c636530d3e485bf50cf2b0cc7e4a4ddd8b468783814c4"
+          },
+          {
+            "case": "captured_borrowed_arguments_become_owned_before_operand_retirement",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5dbad771372bdb4b3d5c636530d3e485bf50cf2b0cc7e4a4ddd8b468783814c4"
+          },
+          {
+            "case": "temporary_receivers_retire_before_their_read_or_update_result_is_consumed",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b6e37a11d7aa9904e9f792732509d33741059a15d6783503b5cfafad987d9029"
+          },
+          {
+            "case": "temporary_receivers_retire_before_their_read_or_update_result_is_consumed",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b6e37a11d7aa9904e9f792732509d33741059a15d6783503b5cfafad987d9029"
+          },
+          {
+            "case": "failed_dimension_read_retires_pending_operand_trees_before_catching",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e1719e323a20b46a3dd2b6fd740056527a62771a1824a35e9431d4e218a14cfd"
+          },
+          {
+            "case": "failed_dimension_read_retires_pending_operand_trees_before_catching",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e1719e323a20b46a3dd2b6fd740056527a62771a1824a35e9431d4e218a14cfd"
+          },
+          {
+            "case": "destructor_rethrow_does_not_replace_an_empty_creation_trace",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "830b907a1c5ccd887e7d45af1db855c024f76919c3233b335423bdba59c14857"
+          },
+          {
+            "case": "destructor_rethrow_does_not_replace_an_empty_creation_trace",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "830b907a1c5ccd887e7d45af1db855c024f76919c3233b335423bdba59c14857"
+          },
+          {
+            "case": "reference_return_error_keeps_the_selected_return_origin",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "f45c8800d8ddc79752b5b15f428fa1b47333193357fe4660accfae8c719aea5d"
+          },
+          {
+            "case": "reference_return_error_keeps_the_selected_return_origin",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "f45c8800d8ddc79752b5b15f428fa1b47333193357fe4660accfae8c719aea5d"
+          },
+          {
+            "case": "delayed_return_origin_is_not_part_of_the_php_variable_scope",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "bc79a6ac626ee08f20fae79c1f3e7bfb9b92764cefc9341fe8ba0c31a2727be3"
+          },
+          {
+            "case": "delayed_return_origin_is_not_part_of_the_php_variable_scope",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "bc79a6ac626ee08f20fae79c1f3e7bfb9b92764cefc9341fe8ba0c31a2727be3"
+          },
+          {
+            "case": "compound_operand_cleanup_happens_after_writeback_before_consumption",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9132db4fdaed63a1c2d9642b798395717dcb55fc1f45566833626830ae10ade4"
+          },
+          {
+            "case": "compound_operand_cleanup_happens_after_writeback_before_consumption",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9132db4fdaed63a1c2d9642b798395717dcb55fc1f45566833626830ae10ade4"
+          },
+          {
+            "case": "virtual_property_projections_separate_readable_values_from_storage",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "712cf13f3cfdc537aac8324a8b77b15ccf33da286411e2220e8dc877e0202770"
+          },
+          {
+            "case": "virtual_property_projections_separate_readable_values_from_storage",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "712cf13f3cfdc537aac8324a8b77b15ccf33da286411e2220e8dc877e0202770"
+          },
+          {
+            "case": "unused_reference_returns_validate_the_live_cell_after_nested_finally",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0756c750a8892f8c4da5ef72df2a42923f9410f2748b20a0bc49d20cb68e7a07"
+          },
+          {
+            "case": "unused_reference_returns_validate_the_live_cell_after_nested_finally",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0756c750a8892f8c4da5ef72df2a42923f9410f2748b20a0bc49d20cb68e7a07"
+          },
+          {
+            "case": "unused_method_and_closure_returns_keep_their_finally_contract",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9219e97a1ec539d918e2886d80edfaa7f4b3f7134348869b11773ff9d868da4b"
+          },
+          {
+            "case": "unused_method_and_closure_returns_keep_their_finally_contract",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9219e97a1ec539d918e2886d80edfaa7f4b3f7134348869b11773ff9d868da4b"
+          },
+          {
+            "case": "unused_reference_return_coercion_updates_the_original_cell_only",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "17c62170de5a89f48a5d72218dfeec665ecbd95a031db14814f21b5e1c35ea12"
+          },
+          {
+            "case": "unused_reference_return_coercion_updates_the_original_cell_only",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "17c62170de5a89f48a5d72218dfeec665ecbd95a031db14814f21b5e1c35ea12"
+          },
+          {
+            "case": "concat_operand_destructor_throws_before_result_consumption",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4da5387d8e15cca93c72fb3f3391c6dc0b01a79fda09bca4fd5a6320c148ad66"
+          },
+          {
+            "case": "concat_operand_destructor_throws_before_result_consumption",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4da5387d8e15cca93c72fb3f3391c6dc0b01a79fda09bca4fd5a6320c148ad66"
+          },
+          {
+            "case": "nested_operand_cleanup_preserves_the_pending_call_and_shared_owners",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "d409a2ce88c000672d5e7ad303bc091329b9b75207bad33443855973b55e35eb"
+          },
+          {
+            "case": "nested_operand_cleanup_preserves_the_pending_call_and_shared_owners",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "d409a2ce88c000672d5e7ad303bc091329b9b75207bad33443855973b55e35eb"
+          },
+          {
+            "case": "shared_frame_roots_preserve_nested_owners_and_reference_aliases",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b1e930a647899c1b8cb07fbbef2d5928b033f49ecf47791d6b177e06d14ec7e4"
+          },
+          {
+            "case": "shared_frame_roots_preserve_nested_owners_and_reference_aliases",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b1e930a647899c1b8cb07fbbef2d5928b033f49ecf47791d6b177e06d14ec7e4"
+          },
+          {
+            "case": "final_local_container_keeps_destructor_order_with_shared_direct_roots",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "50d2e00875f9b57f19b8cdde79f6ebd7964291341cddb8bc7d9aad2bed2925f8"
+          },
+          {
+            "case": "final_local_container_keeps_destructor_order_with_shared_direct_roots",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "50d2e00875f9b57f19b8cdde79f6ebd7964291341cddb8bc7d9aad2bed2925f8"
+          },
+          {
+            "case": "final_plain_weak_map_key_still_releases_its_callback_value",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6d7e64cdb2bd7385f1c925e94f87feb59dc18104e572a8380c7521ca27a0c921"
+          },
+          {
+            "case": "final_plain_weak_map_key_still_releases_its_callback_value",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6d7e64cdb2bd7385f1c925e94f87feb59dc18104e572a8380c7521ca27a0c921"
+          },
+          {
+            "case": "release_plan_groups_aliases_across_distinct_local_containers",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b9ebf7481fd5c7f63ec1c85b71e26ce094b4ecf5793d13e489654f6d387921b0"
+          },
+          {
+            "case": "release_plan_groups_aliases_across_distinct_local_containers",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b9ebf7481fd5c7f63ec1c85b71e26ce094b4ecf5793d13e489654f6d387921b0"
+          },
+          {
+            "case": "throwing_release_preserves_deferred_and_unvisited_owners",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "04d672b4ba5a34bcfb9aa1f6f1d21e9bfe30d4be7f7306386cfe104c0f3fe626"
+          },
+          {
+            "case": "throwing_release_preserves_deferred_and_unvisited_owners",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "04d672b4ba5a34bcfb9aa1f6f1d21e9bfe30d4be7f7306386cfe104c0f3fe626"
+          },
+          {
+            "case": "later_return_destructor_exceptions_keep_the_replacement_chain",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "7bfeddbeb0f46c53d08b1dffdc44f0e68c65343d9f6b6e52de7035bd54e70241"
+          },
+          {
+            "case": "later_return_destructor_exceptions_keep_the_replacement_chain",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "7bfeddbeb0f46c53d08b1dffdc44f0e68c65343d9f6b6e52de7035bd54e70241"
+          },
+          {
+            "case": "detached_return_destructor_exit_reaches_the_embedding_boundary",
+            "runtime": "php",
+            "exit": 23,
+            "output_equal": true,
+            "stdout_sha256": "d0cc276c82e155e4724eb99d11c1de2899ddb40260fe36bd12860800f14010ff"
+          },
+          {
+            "case": "detached_return_destructor_exit_reaches_the_embedding_boundary",
+            "runtime": "candidate",
+            "exit": 23,
+            "output_equal": true,
+            "stdout_sha256": "d0cc276c82e155e4724eb99d11c1de2899ddb40260fe36bd12860800f14010ff"
+          }
+        ]
+      },
+      "summary": {
+        "baseline": {
+          "instructions": 125888137852.0,
+          "analysis_seconds": 10.0390115975,
+          "max_rss_kib": 598870.0
+        },
+        "candidate": {
+          "instructions": 125719666379.0,
+          "analysis_seconds": 10.107737422,
+          "max_rss_kib": 598858.0
+        },
+        "php": {
+          "instructions": 15474138718.0,
+          "analysis_seconds": 0.9556540255,
+          "max_rss_kib": 177796.0
+        }
+      },
+      "boundaries": [
+        {
+          "complete": true,
+          "exit": 0,
+          "seconds": 315.3852259530031,
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0,
+          "memory_peak_bytes": 3864891392,
+          "memory_events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          }
+        },
+        {
+          "complete": true,
+          "exit": 0,
+          "seconds": 82.56157860100211,
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0,
+          "memory_peak_bytes": 707014656,
+          "memory_events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          }
+        }
+      ]
+    },
+    "ordinary_and_nested": {
+      "build_and_checks": {
+        "complete": true,
+        "source_sha256": "4220ff2ec18ee5b17b6b05179fb5f1f1547d017e330d3683055ad8941a912172",
+        "baseline_commit": "4ad0c998e7f3a4b9a706428048979404451a8201",
+        "checks": [
+          {
+            "command": [
+              "scripts/check-unsafe-policy.sh",
+              "--diff-base",
+              "HEAD"
+            ],
+            "exit": 0,
+            "seconds": 3.5194723299937323,
+            "test_results": []
+          },
+          {
+            "command": [
+              "cargo",
+              "test",
+              "--offline",
+              "--locked",
+              "--profile",
+              "test-fast",
+              "--lib",
+              "statement_range_bound"
+            ],
+            "exit": 0,
+            "seconds": 57.76307258700399,
+            "test_results": [
+              "test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 897 filtered out; finished in 0.00s"
+            ]
+          },
+          {
+            "command": [
+              "cargo",
+              "test",
+              "--offline",
+              "--locked",
+              "--profile",
+              "test-fast",
+              "--test",
+              "e2e_gc_root_order",
+              "--test",
+              "e2e_assignment_temporary_ownership",
+              "--test",
+              "e2e_gc_finalization_remainder",
+              "--test",
+              "e2e_deep_release",
+              "--test",
+              "e2e_expression_completion",
+              "--test",
+              "e2e_release_plan",
+              "--test",
+              "e2e_shared_release"
+            ],
+            "exit": 0,
+            "seconds": 53.901233759002935,
+            "test_results": [
+              "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.00s",
+              "test result: ok. 4 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+              "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+              "test result: ok. 8 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+              "test result: ok. 14 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+              "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+              "test result: ok. 6 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+            ]
+          }
+        ],
+        "build_seconds": 188.2258751229965,
+        "binary_sha256": "a2548d76c0cec7ea71a0222e50614998d878ad769d4fab03ec5ea163d9ef53bf",
+        "binary_bytes": 84288256
+      },
+      "measurements": {
+        "complete": true,
+        "source_sha256": "4220ff2ec18ee5b17b6b05179fb5f1f1547d017e330d3683055ad8941a912172",
+        "cpu": 2,
+        "event": "instructions:u",
+        "outlier_policy": "retain all valid measured samples",
+        "samples": [
+          {
+            "runtime": "php",
+            "round": 0,
+            "instructions": 15474219123,
+            "analysis_seconds": 0.964179039,
+            "wall_seconds": 1.4154971190000651,
+            "max_rss_kib": 177600,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "baseline",
+            "round": 1,
+            "instructions": 125886332126,
+            "analysis_seconds": 10.210524559,
+            "wall_seconds": 12.4817610099999,
+            "max_rss_kib": 599024,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "candidate",
+            "round": 2,
+            "instructions": 125657912572,
+            "analysis_seconds": 9.886036158,
+            "wall_seconds": 12.143405038004857,
+            "max_rss_kib": 598956,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "candidate",
+            "round": 3,
+            "instructions": 125670822358,
+            "analysis_seconds": 9.888397455,
+            "wall_seconds": 12.167195103997074,
+            "max_rss_kib": 598828,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "baseline",
+            "round": 4,
+            "instructions": 125878977227,
+            "analysis_seconds": 10.029006004,
+            "wall_seconds": 12.287718132996815,
+            "max_rss_kib": 598804,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          },
+          {
+            "runtime": "php",
+            "round": 5,
+            "instructions": 15474220251,
+            "analysis_seconds": 0.926053047,
+            "wall_seconds": 1.3556194490010967,
+            "max_rss_kib": 177480,
+            "counter_running_percent": 100.0,
+            "output_equal": true
+          }
+        ],
+        "holdouts": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.060536623001099,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.063571691513062,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.061010599136353,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.062743902206421,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.063385963439941,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.060592412948608,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.033127546310425,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.03367018699646,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.033721923828125,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.032029151916504,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.032370805740356,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.039772987365723,
+            "output": "4500000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.22190713882446,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.22655558586121,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.23011898994446,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.21964406967163,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.25671339035034,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.21963596343994,
+            "output": "48640000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.024916410446167,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.025104284286499,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.024736642837524,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.024627923965454,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.024762392044067,
+            "output": "50000040000000"
+          },
+          {
+            "case": "bench_scalar_method_mixed_native_loop.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.024992942810059,
+            "output": "50000040000000"
+          }
+        ],
+        "binaries": {
+          "baseline": "2f6c7e23b6f39d9b4e26356fed2fd72a22537029d7beb96800e7b5d0f9cf8c4b",
+          "candidate": "a2548d76c0cec7ea71a0222e50614998d878ad769d4fab03ec5ea163d9ef53bf",
+          "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+        }
+      },
+      "confirmation": {
+        "complete": true,
+        "seed": 291032,
+        "outlier_rule": "retain every valid sample",
+        "samples": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.628741979599,
+            "output": "45000000",
+            "cycles:u": 3369848324,
+            "instructions:u": 13868658365,
+            "branches:u": 2725479490,
+            "branch-misses:u": 565548
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.60947918891907,
+            "output": "45000000",
+            "cycles:u": 3260076972,
+            "instructions:u": 13821160472,
+            "branches:u": 2727980072,
+            "branch-misses:u": 555104
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.62612104415894,
+            "output": "45000000",
+            "cycles:u": 3357349107,
+            "instructions:u": 13868660121,
+            "branches:u": 2725479950,
+            "branch-misses:u": 566397
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.60984969139099,
+            "output": "45000000",
+            "cycles:u": 3269399460,
+            "instructions:u": 13821158840,
+            "branches:u": 2727979615,
+            "branch-misses:u": 563325
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.60517120361328,
+            "output": "45000000",
+            "cycles:u": 3244407987,
+            "instructions:u": 13821165074,
+            "branches:u": 2727980984,
+            "branch-misses:u": 558839
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.62785935401917,
+            "output": "45000000",
+            "cycles:u": 3367608493,
+            "instructions:u": 13868662132,
+            "branches:u": 2725480647,
+            "branch-misses:u": 596370
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 0.62866520881653,
+            "output": "45000000",
+            "cycles:u": 3372208176,
+            "instructions:u": 13868658117,
+            "branches:u": 2725479339,
+            "branch-misses:u": 551401
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 0.63805556297302,
+            "output": "45000000",
+            "cycles:u": 3419529262,
+            "instructions:u": 13821159202,
+            "branches:u": 2727979728,
+            "branch-misses:u": 3064075
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 0.60957002639771,
+            "output": "45000000",
+            "cycles:u": 3267213994,
+            "instructions:u": 13821159357,
+            "branches:u": 2727979697,
+            "branch-misses:u": 548462
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 0.6291708946228,
+            "output": "45000000",
+            "cycles:u": 3373003038,
+            "instructions:u": 13868660717,
+            "branches:u": 2725480171,
+            "branch-misses:u": 563535
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.32703495025635,
+            "output": "45000000",
+            "cycles:u": 1752707619,
+            "instructions:u": 8285645001,
+            "branches:u": 1727876823,
+            "branch-misses:u": 446976
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.34098768234253,
+            "output": "45000000",
+            "cycles:u": 1827042378,
+            "instructions:u": 8285645663,
+            "branches:u": 1727877123,
+            "branch-misses:u": 446971
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.33528113365173,
+            "output": "45000000",
+            "cycles:u": 1794882191,
+            "instructions:u": 8285645033,
+            "branches:u": 1727876906,
+            "branch-misses:u": 448168
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.32692575454712,
+            "output": "45000000",
+            "cycles:u": 1751276129,
+            "instructions:u": 8285645688,
+            "branches:u": 1727876986,
+            "branch-misses:u": 447168
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.33654189109802,
+            "output": "45000000",
+            "cycles:u": 1803463259,
+            "instructions:u": 8285646361,
+            "branches:u": 1727877343,
+            "branch-misses:u": 448140
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.33229351043701,
+            "output": "45000000",
+            "cycles:u": 1774328294,
+            "instructions:u": 8285646716,
+            "branches:u": 1727877373,
+            "branch-misses:u": 455941
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 0.32588481903076,
+            "output": "45000000",
+            "cycles:u": 1743399681,
+            "instructions:u": 8285647802,
+            "branches:u": 1727877721,
+            "branch-misses:u": 447144
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 0.33787202835083,
+            "output": "45000000",
+            "cycles:u": 1810740399,
+            "instructions:u": 8285645818,
+            "branches:u": 1727877068,
+            "branch-misses:u": 446353
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 0.34280061721802,
+            "output": "45000000",
+            "cycles:u": 1834770698,
+            "instructions:u": 8285645758,
+            "branches:u": 1727877165,
+            "branch-misses:u": 447813
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 0.32384347915649,
+            "output": "45000000",
+            "cycles:u": 1735729748,
+            "instructions:u": 8285645376,
+            "branches:u": 1727876943,
+            "branch-misses:u": 446111
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 0.22255825996399,
+            "output": "48640000",
+            "cycles:u": 1193724981,
+            "instructions:u": 6047877854,
+            "branches:u": 1135476844,
+            "branch-misses:u": 305282
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 0.22434020042419,
+            "output": "48640000",
+            "cycles:u": 1203547964,
+            "instructions:u": 6047498440,
+            "branches:u": 1135497065,
+            "branch-misses:u": 306174
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 0.22755098342896,
+            "output": "48640000",
+            "cycles:u": 1219422336,
+            "instructions:u": 6047498631,
+            "branches:u": 1135497089,
+            "branch-misses:u": 306113
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 0.22394037246704,
+            "output": "48640000",
+            "cycles:u": 1198165132,
+            "instructions:u": 6047879599,
+            "branches:u": 1135477307,
+            "branch-misses:u": 306114
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 0.22646141052246,
+            "output": "48640000",
+            "cycles:u": 1215226191,
+            "instructions:u": 6047500587,
+            "branches:u": 1135497859,
+            "branch-misses:u": 305864
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 0.22238159179688,
+            "output": "48640000",
+            "cycles:u": 1192302001,
+            "instructions:u": 6047887647,
+            "branches:u": 1135479051,
+            "branch-misses:u": 305016
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 0.22461247444153,
+            "output": "48640000",
+            "cycles:u": 1202538219,
+            "instructions:u": 6047881002,
+            "branches:u": 1135477737,
+            "branch-misses:u": 305968
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 0.22344732284546,
+            "output": "48640000",
+            "cycles:u": 1197251259,
+            "instructions:u": 6047499789,
+            "branches:u": 1135497404,
+            "branch-misses:u": 306044
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 0.21908140182495,
+            "output": "48640000",
+            "cycles:u": 1175119671,
+            "instructions:u": 6047878754,
+            "branches:u": 1135477121,
+            "branch-misses:u": 305862
+          },
+          {
+            "case": "bench_foreach_declared_property_reads.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 0.22642850875854,
+            "output": "48640000",
+            "cycles:u": 1215501821,
+            "instructions:u": 6047499043,
+            "branches:u": 1135497114,
+            "branch-misses:u": 306483
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 0,
+            "seconds": 1.0738306045532,
+            "output": "5000000",
+            "cycles:u": 5778839139,
+            "instructions:u": 21290702063,
+            "branches:u": 3862893546,
+            "branch-misses:u": 479100
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 0,
+            "seconds": 1.0542085170746,
+            "output": "5000000",
+            "cycles:u": 5673185536,
+            "instructions:u": 21200703468,
+            "branches:u": 3872893986,
+            "branch-misses:u": 477227
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 1,
+            "seconds": 1.0993680953979,
+            "output": "5000000",
+            "cycles:u": 5942879909,
+            "instructions:u": 21200701497,
+            "branches:u": 3872893410,
+            "branch-misses:u": 477732
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 1,
+            "seconds": 1.1381075382233,
+            "output": "5000000",
+            "cycles:u": 6152646824,
+            "instructions:u": 21290704628,
+            "branches:u": 3862894480,
+            "branch-misses:u": 10432141
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 2,
+            "seconds": 1.1357448101044,
+            "output": "5000000",
+            "cycles:u": 6134256023,
+            "instructions:u": 21290705213,
+            "branches:u": 3862894646,
+            "branch-misses:u": 10432151
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 2,
+            "seconds": 1.048436164856,
+            "output": "5000000",
+            "cycles:u": 5642136566,
+            "instructions:u": 21200705248,
+            "branches:u": 3872894641,
+            "branch-misses:u": 477450
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 3,
+            "seconds": 1.0585339069366,
+            "output": "5000000",
+            "cycles:u": 5698223026,
+            "instructions:u": 21320704080,
+            "branches:u": 3882894192,
+            "branch-misses:u": 477372
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 3,
+            "seconds": 1.0761406421661,
+            "output": "5000000",
+            "cycles:u": 5793063918,
+            "instructions:u": 21290703639,
+            "branches:u": 3862894156,
+            "branch-misses:u": 477643
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "baseline",
+            "round": 4,
+            "seconds": 1.0033533573151,
+            "output": "5000000",
+            "cycles:u": 5388429404,
+            "instructions:u": 21200705830,
+            "branches:u": 3872894747,
+            "branch-misses:u": 477834
+          },
+          {
+            "case": "return-self.php",
+            "runtime": "candidate",
+            "round": 4,
+            "seconds": 1.1152443885803,
+            "output": "5000000",
+            "cycles:u": 6030338169,
+            "instructions:u": 21290702898,
+            "branches:u": 3862893859,
+            "branch-misses:u": 5478909
+          }
+        ]
+      },
+      "micro_counts": {
+        "complete": true,
+        "raw": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 0,
+            "runtime": "baseline",
+            "instructions": 13953849,
+            "seconds": 4.0531158447266e-06
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 0,
+            "runtime": "candidate",
+            "instructions": 13953646,
+            "seconds": 5.4836273193359e-06
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 0,
+            "runtime": "php",
+            "instructions": 28086261,
+            "seconds": 6.103515625e-05
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 5000000,
+            "runtime": "baseline",
+            "instructions": 13821158550,
+            "seconds": 0.60918116569519
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 5000000,
+            "runtime": "candidate",
+            "instructions": 13868661422,
+            "seconds": 0.64208102226257
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "iterations": 5000000,
+            "runtime": "php",
+            "instructions": 2608080838,
+            "seconds": 0.1203989982605
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 0,
+            "runtime": "baseline",
+            "instructions": 13933742,
+            "seconds": 3.3378601074219e-06
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 0,
+            "runtime": "candidate",
+            "instructions": 13938874,
+            "seconds": 4.7683715820312e-06
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 0,
+            "runtime": "php",
+            "instructions": 28081484,
+            "seconds": 5.9843063354492e-05
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 5000000,
+            "runtime": "baseline",
+            "instructions": 8285645685,
+            "seconds": 0.33675098419189
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 5000000,
+            "runtime": "candidate",
+            "instructions": 8285644978,
+            "seconds": 0.32829308509827
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "iterations": 5000000,
+            "runtime": "php",
+            "instructions": 2005575524,
+            "seconds": 0.084856986999512
+          }
+        ],
+        "incremental": [
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "baseline",
+            "instructions_per_iteration": 2761.4409402
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "candidate",
+            "instructions_per_iteration": 2770.9415552
+          },
+          {
+            "case": "bench_shared_frame_release.php",
+            "runtime": "php",
+            "instructions_per_iteration": 515.9989154
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "baseline",
+            "instructions_per_iteration": 1654.3423886
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "candidate",
+            "instructions_per_iteration": 1654.3412208
+          },
+          {
+            "case": "bench_scalar_frame_return.php",
+            "runtime": "php",
+            "instructions_per_iteration": 395.498808
+          }
+        ],
+        "protocol": "One native instructions:u count at zero and five million iterations; same source except loop bound; CPU 2 and identical environment; not a timing distribution"
+      },
+      "deep_controls": {
+        "complete": true,
+        "seed": 290998,
+        "deep": [
+          {
+            "runtime": "candidate",
+            "round": 0,
+            "nodes": 2048,
+            "build_seconds": 0.00083661079406738,
+            "release_seconds": 0.0029804706573486
+          },
+          {
+            "runtime": "baseline",
+            "round": 0,
+            "nodes": 2048,
+            "build_seconds": 0.00082683563232422,
+            "release_seconds": 0.0029685497283936
+          },
+          {
+            "runtime": "candidate",
+            "round": 1,
+            "nodes": 2048,
+            "build_seconds": 0.00081825256347656,
+            "release_seconds": 0.0030858516693115
+          },
+          {
+            "runtime": "baseline",
+            "round": 1,
+            "nodes": 2048,
+            "build_seconds": 0.00084352493286133,
+            "release_seconds": 0.0029737949371338
+          },
+          {
+            "runtime": "baseline",
+            "round": 2,
+            "nodes": 2048,
+            "build_seconds": 0.00082516670227051,
+            "release_seconds": 0.003021240234375
+          },
+          {
+            "runtime": "candidate",
+            "round": 2,
+            "nodes": 2048,
+            "build_seconds": 0.00084781646728516,
+            "release_seconds": 0.0030808448791504
+          },
+          {
+            "runtime": "candidate",
+            "round": 3,
+            "nodes": 2048,
+            "build_seconds": 0.00093531608581543,
+            "release_seconds": 0.0032322406768799
+          },
+          {
+            "runtime": "baseline",
+            "round": 3,
+            "nodes": 2048,
+            "build_seconds": 0.00084710121154785,
+            "release_seconds": 0.0031368732452393
+          },
+          {
+            "runtime": "candidate",
+            "round": 4,
+            "nodes": 2048,
+            "build_seconds": 0.00084018707275391,
+            "release_seconds": 0.0030841827392578
+          },
+          {
+            "runtime": "baseline",
+            "round": 4,
+            "nodes": 2048,
+            "build_seconds": 0.00085043907165527,
+            "release_seconds": 0.003093957901001
+          },
+          {
+            "runtime": "baseline",
+            "round": 0,
+            "nodes": 16384,
+            "build_seconds": 0.0055592060089111,
+            "release_seconds": 0.024989128112793
+          },
+          {
+            "runtime": "candidate",
+            "round": 0,
+            "nodes": 16384,
+            "build_seconds": 0.0056247711181641,
+            "release_seconds": 0.025410413742065
+          },
+          {
+            "runtime": "candidate",
+            "round": 1,
+            "nodes": 16384,
+            "build_seconds": 0.0055811405181885,
+            "release_seconds": 0.024796724319458
+          },
+          {
+            "runtime": "baseline",
+            "round": 1,
+            "nodes": 16384,
+            "build_seconds": 0.0056605339050293,
+            "release_seconds": 0.024502754211426
+          },
+          {
+            "runtime": "candidate",
+            "round": 2,
+            "nodes": 16384,
+            "build_seconds": 0.00553297996521,
+            "release_seconds": 0.025336980819702
+          },
+          {
+            "runtime": "baseline",
+            "round": 2,
+            "nodes": 16384,
+            "build_seconds": 0.0052595138549805,
+            "release_seconds": 0.025110006332397
+          },
+          {
+            "runtime": "baseline",
+            "round": 3,
+            "nodes": 16384,
+            "build_seconds": 0.0053603649139404,
+            "release_seconds": 0.024335861206055
+          },
+          {
+            "runtime": "candidate",
+            "round": 3,
+            "nodes": 16384,
+            "build_seconds": 0.0055313110351562,
+            "release_seconds": 0.024788856506348
+          },
+          {
+            "runtime": "baseline",
+            "round": 4,
+            "nodes": 16384,
+            "build_seconds": 0.0052835941314697,
+            "release_seconds": 0.024468898773193
+          },
+          {
+            "runtime": "candidate",
+            "round": 4,
+            "nodes": 16384,
+            "build_seconds": 0.0056350231170654,
+            "release_seconds": 0.024618148803711
+          }
+        ]
+      },
+      "differentials": {
+        "complete": true,
+        "php_ini": {
+          "zend.exception_ignore_args": "1"
+        },
+        "cases": [
+          {
+            "case": "range-0",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "range-0",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "range-80",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "range-80",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "00970c079583c0207f90be0dd77b5cd0fba7bbbf5327d32b28250b667967fd1c"
+          },
+          {
+            "case": "shutdown_uses_object_store_order_after_child_first_root_admission",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5cc7dca6efa12229e063552318a4e6f44dba672c7f44481c0c9b55ee338adcb9"
+          },
+          {
+            "case": "shutdown_uses_object_store_order_after_child_first_root_admission",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5cc7dca6efa12229e063552318a4e6f44dba672c7f44481c0c9b55ee338adcb9"
+          },
+          {
+            "case": "property_reference_writes_retire_referents_but_unset_preserves_aliases",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3495b9ecdb0f275d257c6d8914415d7cfcd9f995fda06a48e3fa789f884c8b98"
+          },
+          {
+            "case": "property_reference_writes_retire_referents_but_unset_preserves_aliases",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3495b9ecdb0f275d257c6d8914415d7cfcd9f995fda06a48e3fa789f884c8b98"
+          },
+          {
+            "case": "transferred_append_sources_keep_cow_aliases_and_failed_write_retirement",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "06b09cb05aa27f6bc4a176f2e2e44c6a5014b7c40dd71ec2b50e2cdf880d5dc7"
+          },
+          {
+            "case": "transferred_append_sources_keep_cow_aliases_and_failed_write_retirement",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "06b09cb05aa27f6bc4a176f2e2e44c6a5014b7c40dd71ec2b50e2cdf880d5dc7"
+          },
+          {
+            "case": "append_reference_results_copy_the_target_and_errors_allow_reentrant_replacement",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0994d25c63b8fc8e6ee216d2a80fae012251ea97e41bec35b06b1646f0d94e8c"
+          },
+          {
+            "case": "append_reference_results_copy_the_target_and_errors_allow_reentrant_replacement",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0994d25c63b8fc8e6ee216d2a80fae012251ea97e41bec35b06b1646f0d94e8c"
+          },
+          {
+            "case": "moved_weak_reference_results_do_not_enter_the_possible_root_buffer",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "651953290c191f80c3a2d34dd477614f955be287476e024f15f66a6e0caa45a9"
+          },
+          {
+            "case": "moved_weak_reference_results_do_not_enter_the_possible_root_buffer",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "651953290c191f80c3a2d34dd477614f955be287476e024f15f66a6e0caa45a9"
+          },
+          {
+            "case": "releasing_a_real_weak_holder_alias_still_admits_a_root",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0bc63bab2ebd23c2819970f22eb07d6c8c941e845ea76b40051d96862bac399b"
+          },
+          {
+            "case": "releasing_a_real_weak_holder_alias_still_admits_a_root",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0bc63bab2ebd23c2819970f22eb07d6c8c941e845ea76b40051d96862bac399b"
+          },
+          {
+            "case": "empty_and_scalar_reference_captures_do_not_reorder_later_cycles",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "ff34c48fc9f9de369d06c0b42127db483ca42e5c0ea3a7e6a41c9510c10c2534"
+          },
+          {
+            "case": "empty_and_scalar_reference_captures_do_not_reorder_later_cycles",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "ff34c48fc9f9de369d06c0b42127db483ca42e5c0ea3a7e6a41c9510c10c2534"
+          },
+          {
+            "case": "retained_gc_destructor_fibers_finish_after_shutdown_callbacks",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e8f66fc774a5c8fa20dda8165a4b8d05fe8d5a94d47a07cd6c4c196c411714f2"
+          },
+          {
+            "case": "retained_gc_destructor_fibers_finish_after_shutdown_callbacks",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e8f66fc774a5c8fa20dda8165a4b8d05fe8d5a94d47a07cd6c4c196c411714f2"
+          },
+          {
+            "case": "live_roots_compact_from_the_tail_before_destructor_dispatch",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4e5f5d7b9ac56a98c2c3e11158f8b763ac4a3441f859972231761ca6fca0fbc5"
+          },
+          {
+            "case": "live_roots_compact_from_the_tail_before_destructor_dispatch",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4e5f5d7b9ac56a98c2c3e11158f8b763ac4a3441f859972231761ca6fca0fbc5"
+          },
+          {
+            "case": "fiber_collection_uses_the_same_live_root_compaction_as_main",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "418fce08d421fab38cb5188dbeb3b42868514e8b29651875483f87a05226cca0"
+          },
+          {
+            "case": "fiber_collection_uses_the_same_live_root_compaction_as_main",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "418fce08d421fab38cb5188dbeb3b42868514e8b29651875483f87a05226cca0"
+          },
+          {
+            "case": "temporary_assignments_preserve_scalars_reference_returns_and_cow",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2df539ef03e9b93691fa6c0c87f77dab4ad5efb7ce520166ede405414079f8a8"
+          },
+          {
+            "case": "temporary_assignments_preserve_scalars_reference_returns_and_cow",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2df539ef03e9b93691fa6c0c87f77dab4ad5efb7ce520166ede405414079f8a8"
+          },
+          {
+            "case": "temporary_assignment_keeps_typed_reference_checks_and_expression_values",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "35be9893902c989478d07909bbffb7149f974b99f571a0c12cafa415ffd229aa"
+          },
+          {
+            "case": "temporary_assignment_keeps_typed_reference_checks_and_expression_values",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "35be9893902c989478d07909bbffb7149f974b99f571a0c12cafa415ffd229aa"
+          },
+          {
+            "case": "temporary_assignment_releases_replaced_and_nested_objects_at_the_same_boundary",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a74faf29e4777b38e3c61aabffbbec4fa8751f944bd902344d8effcc5bbdff3c"
+          },
+          {
+            "case": "temporary_assignment_releases_replaced_and_nested_objects_at_the_same_boundary",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a74faf29e4777b38e3c61aabffbbec4fa8751f944bd902344d8effcc5bbdff3c"
+          },
+          {
+            "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "788406c8a8cbf5fb2667b51255128c37b80aeba8c44fa327e8109479d75619a1"
+          },
+          {
+            "case": "destructor_created_generations_have_one_bounded_rerun_per_collection",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "788406c8a8cbf5fb2667b51255128c37b80aeba8c44fa327e8109479d75619a1"
+          },
+          {
+            "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c6051d2fb08be05b21ba5f4199c4bd89a2bab44f26e9d61c6530310542407fa4"
+          },
+          {
+            "case": "plain_cycles_created_by_destructors_are_reclaimed_during_the_rerun",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c6051d2fb08be05b21ba5f4199c4bd89a2bab44f26e9d61c6530310542407fa4"
+          },
+          {
+            "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "345f7c2686f76727a8d7d3dbb3572281e64827dd76d1fe4ca632498c0e607f55"
+          },
+          {
+            "case": "destructor_release_of_an_external_root_is_observed_in_the_same_collection",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "345f7c2686f76727a8d7d3dbb3572281e64827dd76d1fe4ca632498c0e607f55"
+          },
+          {
+            "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c03124bc4ce4bdba54d6d755b4ce31aa0947f2809e8e7224c824bf15b4791002"
+          },
+          {
+            "case": "resurrection_and_new_destructor_cycles_keep_independent_lifetimes",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c03124bc4ce4bdba54d6d755b4ce31aa0947f2809e8e7224c824bf15b4791002"
+          },
+          {
+            "case": "recursive_collection_and_destructor_exceptions_preserve_following_roots",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "59a068480b5d392debf6fd1fc8ee307d46833b981ff323e94763b55dcb7d5e0b"
+          },
+          {
+            "case": "recursive_collection_and_destructor_exceptions_preserve_following_roots",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "59a068480b5d392debf6fd1fc8ee307d46833b981ff323e94763b55dcb7d5e0b"
+          },
+          {
+            "case": "an_array_cycle_created_in_a_destructor_is_not_lost",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6298582c91f5a05395ebdab76679d9785086cbb9ef364f7a09d4703b81ac9ab9"
+          },
+          {
+            "case": "an_array_cycle_created_in_a_destructor_is_not_lost",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6298582c91f5a05395ebdab76679d9785086cbb9ef364f7a09d4703b81ac9ab9"
+          },
+          {
+            "case": "a_new_cycle_with_an_external_root_is_not_prematurely_retired",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c33daef5dbd060779c697797145ad8208af325eaf4427cec080af33c6a432593"
+          },
+          {
+            "case": "a_new_cycle_with_an_external_root_is_not_prematurely_retired",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "c33daef5dbd060779c697797145ad8208af325eaf4427cec080af33c6a432593"
+          },
+          {
+            "case": "a_destructor_created_closure_cycle_releases_its_bound_receiver",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a94b3827f34f657c32607f1e93a23247679f0ed65352e0e907af2f3766d4ec2a"
+          },
+          {
+            "case": "a_destructor_created_closure_cycle_releases_its_bound_receiver",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a94b3827f34f657c32607f1e93a23247679f0ed65352e0e907af2f3766d4ec2a"
+          },
+          {
+            "case": "shared_reference_and_native_edges_preserve_final_leaf_release",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "cc01a5fa8424bdc382a3b9ab3fddea31d554480fecf6760a70772dda7b859941"
+          },
+          {
+            "case": "shared_reference_and_native_edges_preserve_final_leaf_release",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "cc01a5fa8424bdc382a3b9ab3fddea31d554480fecf6760a70772dda7b859941"
+          },
+          {
+            "case": "deep_destructor_chain_runs_each_callback_in_parent_first_order",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4431510dd6cf207d8b4273bbdd37ce34c2a109a7746e12847dad018b77afb7e4"
+          },
+          {
+            "case": "deep_destructor_chain_runs_each_callback_in_parent_first_order",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4431510dd6cf207d8b4273bbdd37ce34c2a109a7746e12847dad018b77afb7e4"
+          },
+          {
+            "case": "destructor_created_graphs_survive_resurrection_aliases_and_exceptions",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3a7b798d664f71f1bfcb9dc77bf6218a36b5b82e87893cde8a503536fe0b3369"
+          },
+          {
+            "case": "destructor_created_graphs_survive_resurrection_aliases_and_exceptions",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "3a7b798d664f71f1bfcb9dc77bf6218a36b5b82e87893cde8a503536fe0b3369"
+          },
+          {
+            "case": "suspended_destructor_releases_a_graph_added_while_parked",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a73bc891fbb12d33325a0a527b5646406cfa63d8c294c803442ee0dc59157c6a"
+          },
+          {
+            "case": "suspended_destructor_releases_a_graph_added_while_parked",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "a73bc891fbb12d33325a0a527b5646406cfa63d8c294c803442ee0dc59157c6a"
+          },
+          {
+            "case": "casting_a_container_retires_only_its_unshared_children",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2eaf3490b53d22f14f30e51dbfa6746f8ef65f630d0a48b1c27b6366e4d7b17a"
+          },
+          {
+            "case": "casting_a_container_retires_only_its_unshared_children",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "2eaf3490b53d22f14f30e51dbfa6746f8ef65f630d0a48b1c27b6366e4d7b17a"
+          },
+          {
+            "case": "replaced_dimension_values_retire_after_commit_before_result_consumption",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "1e35e69e8c5e10d9ac2cc285f688cc71672f38917e23b881556733724a69cc5d"
+          },
+          {
+            "case": "replaced_dimension_values_retire_after_commit_before_result_consumption",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "1e35e69e8c5e10d9ac2cc285f688cc71672f38917e23b881556733724a69cc5d"
+          },
+          {
+            "case": "reference_assignment_retains_its_source_when_the_old_destructor_clears_the_target",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "dabca96ac01acf0add807f8c725542d31377e6d75decbd7736d150e974cef052"
+          },
+          {
+            "case": "reference_assignment_retains_its_source_when_the_old_destructor_clears_the_target",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "dabca96ac01acf0add807f8c725542d31377e6d75decbd7736d150e974cef052"
+          },
+          {
+            "case": "native_dimension_binding_keeps_existing_source_aliases_but_method_writes_are_values",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4ee5c3a6554f068efd4563268e5141eb8f019311af7155c253869e7d454e3a94"
+          },
+          {
+            "case": "native_dimension_binding_keeps_existing_source_aliases_but_method_writes_are_values",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4ee5c3a6554f068efd4563268e5141eb8f019311af7155c253869e7d454e3a94"
+          },
+          {
+            "case": "replacing_a_native_dimension_reference_keeps_the_old_external_owner_alive",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e5ad93f17f3685790c1251e30f078cce0bbfac65dd4c3bf8554d67266a4817ae"
+          },
+          {
+            "case": "replacing_a_native_dimension_reference_keeps_the_old_external_owner_alive",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e5ad93f17f3685790c1251e30f078cce0bbfac65dd4c3bf8554d67266a4817ae"
+          },
+          {
+            "case": "magic_reference_reads_are_values_for_direct_read_modify_write",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6447e984116b02ca113810fdeff696f20a3d0d7db941831887a7db9284c07e3e"
+          },
+          {
+            "case": "magic_reference_reads_are_values_for_direct_read_modify_write",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6447e984116b02ca113810fdeff696f20a3d0d7db941831887a7db9284c07e3e"
+          },
+          {
+            "case": "captured_borrowed_arguments_become_owned_before_operand_retirement",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5dbad771372bdb4b3d5c636530d3e485bf50cf2b0cc7e4a4ddd8b468783814c4"
+          },
+          {
+            "case": "captured_borrowed_arguments_become_owned_before_operand_retirement",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "5dbad771372bdb4b3d5c636530d3e485bf50cf2b0cc7e4a4ddd8b468783814c4"
+          },
+          {
+            "case": "temporary_receivers_retire_before_their_read_or_update_result_is_consumed",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b6e37a11d7aa9904e9f792732509d33741059a15d6783503b5cfafad987d9029"
+          },
+          {
+            "case": "temporary_receivers_retire_before_their_read_or_update_result_is_consumed",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b6e37a11d7aa9904e9f792732509d33741059a15d6783503b5cfafad987d9029"
+          },
+          {
+            "case": "failed_dimension_read_retires_pending_operand_trees_before_catching",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e1719e323a20b46a3dd2b6fd740056527a62771a1824a35e9431d4e218a14cfd"
+          },
+          {
+            "case": "failed_dimension_read_retires_pending_operand_trees_before_catching",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "e1719e323a20b46a3dd2b6fd740056527a62771a1824a35e9431d4e218a14cfd"
+          },
+          {
+            "case": "destructor_rethrow_does_not_replace_an_empty_creation_trace",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "830b907a1c5ccd887e7d45af1db855c024f76919c3233b335423bdba59c14857"
+          },
+          {
+            "case": "destructor_rethrow_does_not_replace_an_empty_creation_trace",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "830b907a1c5ccd887e7d45af1db855c024f76919c3233b335423bdba59c14857"
+          },
+          {
+            "case": "reference_return_error_keeps_the_selected_return_origin",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "f45c8800d8ddc79752b5b15f428fa1b47333193357fe4660accfae8c719aea5d"
+          },
+          {
+            "case": "reference_return_error_keeps_the_selected_return_origin",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "f45c8800d8ddc79752b5b15f428fa1b47333193357fe4660accfae8c719aea5d"
+          },
+          {
+            "case": "delayed_return_origin_is_not_part_of_the_php_variable_scope",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "bc79a6ac626ee08f20fae79c1f3e7bfb9b92764cefc9341fe8ba0c31a2727be3"
+          },
+          {
+            "case": "delayed_return_origin_is_not_part_of_the_php_variable_scope",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "bc79a6ac626ee08f20fae79c1f3e7bfb9b92764cefc9341fe8ba0c31a2727be3"
+          },
+          {
+            "case": "compound_operand_cleanup_happens_after_writeback_before_consumption",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9132db4fdaed63a1c2d9642b798395717dcb55fc1f45566833626830ae10ade4"
+          },
+          {
+            "case": "compound_operand_cleanup_happens_after_writeback_before_consumption",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9132db4fdaed63a1c2d9642b798395717dcb55fc1f45566833626830ae10ade4"
+          },
+          {
+            "case": "virtual_property_projections_separate_readable_values_from_storage",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "712cf13f3cfdc537aac8324a8b77b15ccf33da286411e2220e8dc877e0202770"
+          },
+          {
+            "case": "virtual_property_projections_separate_readable_values_from_storage",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "712cf13f3cfdc537aac8324a8b77b15ccf33da286411e2220e8dc877e0202770"
+          },
+          {
+            "case": "unused_reference_returns_validate_the_live_cell_after_nested_finally",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0756c750a8892f8c4da5ef72df2a42923f9410f2748b20a0bc49d20cb68e7a07"
+          },
+          {
+            "case": "unused_reference_returns_validate_the_live_cell_after_nested_finally",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "0756c750a8892f8c4da5ef72df2a42923f9410f2748b20a0bc49d20cb68e7a07"
+          },
+          {
+            "case": "unused_method_and_closure_returns_keep_their_finally_contract",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9219e97a1ec539d918e2886d80edfaa7f4b3f7134348869b11773ff9d868da4b"
+          },
+          {
+            "case": "unused_method_and_closure_returns_keep_their_finally_contract",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "9219e97a1ec539d918e2886d80edfaa7f4b3f7134348869b11773ff9d868da4b"
+          },
+          {
+            "case": "unused_reference_return_coercion_updates_the_original_cell_only",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "17c62170de5a89f48a5d72218dfeec665ecbd95a031db14814f21b5e1c35ea12"
+          },
+          {
+            "case": "unused_reference_return_coercion_updates_the_original_cell_only",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "17c62170de5a89f48a5d72218dfeec665ecbd95a031db14814f21b5e1c35ea12"
+          },
+          {
+            "case": "concat_operand_destructor_throws_before_result_consumption",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4da5387d8e15cca93c72fb3f3391c6dc0b01a79fda09bca4fd5a6320c148ad66"
+          },
+          {
+            "case": "concat_operand_destructor_throws_before_result_consumption",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "4da5387d8e15cca93c72fb3f3391c6dc0b01a79fda09bca4fd5a6320c148ad66"
+          },
+          {
+            "case": "nested_operand_cleanup_preserves_the_pending_call_and_shared_owners",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "d409a2ce88c000672d5e7ad303bc091329b9b75207bad33443855973b55e35eb"
+          },
+          {
+            "case": "nested_operand_cleanup_preserves_the_pending_call_and_shared_owners",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "d409a2ce88c000672d5e7ad303bc091329b9b75207bad33443855973b55e35eb"
+          },
+          {
+            "case": "shared_frame_roots_preserve_nested_owners_and_reference_aliases",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b1e930a647899c1b8cb07fbbef2d5928b033f49ecf47791d6b177e06d14ec7e4"
+          },
+          {
+            "case": "shared_frame_roots_preserve_nested_owners_and_reference_aliases",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b1e930a647899c1b8cb07fbbef2d5928b033f49ecf47791d6b177e06d14ec7e4"
+          },
+          {
+            "case": "final_local_container_keeps_destructor_order_with_shared_direct_roots",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "50d2e00875f9b57f19b8cdde79f6ebd7964291341cddb8bc7d9aad2bed2925f8"
+          },
+          {
+            "case": "final_local_container_keeps_destructor_order_with_shared_direct_roots",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "50d2e00875f9b57f19b8cdde79f6ebd7964291341cddb8bc7d9aad2bed2925f8"
+          },
+          {
+            "case": "final_plain_weak_map_key_still_releases_its_callback_value",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6d7e64cdb2bd7385f1c925e94f87feb59dc18104e572a8380c7521ca27a0c921"
+          },
+          {
+            "case": "final_plain_weak_map_key_still_releases_its_callback_value",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "6d7e64cdb2bd7385f1c925e94f87feb59dc18104e572a8380c7521ca27a0c921"
+          },
+          {
+            "case": "release_plan_groups_aliases_across_distinct_local_containers",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b9ebf7481fd5c7f63ec1c85b71e26ce094b4ecf5793d13e489654f6d387921b0"
+          },
+          {
+            "case": "release_plan_groups_aliases_across_distinct_local_containers",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "b9ebf7481fd5c7f63ec1c85b71e26ce094b4ecf5793d13e489654f6d387921b0"
+          },
+          {
+            "case": "throwing_release_preserves_deferred_and_unvisited_owners",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "04d672b4ba5a34bcfb9aa1f6f1d21e9bfe30d4be7f7306386cfe104c0f3fe626"
+          },
+          {
+            "case": "throwing_release_preserves_deferred_and_unvisited_owners",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "04d672b4ba5a34bcfb9aa1f6f1d21e9bfe30d4be7f7306386cfe104c0f3fe626"
+          },
+          {
+            "case": "later_return_destructor_exceptions_keep_the_replacement_chain",
+            "runtime": "php",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "7bfeddbeb0f46c53d08b1dffdc44f0e68c65343d9f6b6e52de7035bd54e70241"
+          },
+          {
+            "case": "later_return_destructor_exceptions_keep_the_replacement_chain",
+            "runtime": "candidate",
+            "exit": 0,
+            "output_equal": true,
+            "stdout_sha256": "7bfeddbeb0f46c53d08b1dffdc44f0e68c65343d9f6b6e52de7035bd54e70241"
+          },
+          {
+            "case": "detached_return_destructor_exit_reaches_the_embedding_boundary",
+            "runtime": "php",
+            "exit": 23,
+            "output_equal": true,
+            "stdout_sha256": "d0cc276c82e155e4724eb99d11c1de2899ddb40260fe36bd12860800f14010ff"
+          },
+          {
+            "case": "detached_return_destructor_exit_reaches_the_embedding_boundary",
+            "runtime": "candidate",
+            "exit": 23,
+            "output_equal": true,
+            "stdout_sha256": "d0cc276c82e155e4724eb99d11c1de2899ddb40260fe36bd12860800f14010ff"
+          }
+        ]
+      },
+      "summary": {
+        "baseline": {
+          "instructions": 125882654676.5,
+          "analysis_seconds": 10.1197652815,
+          "max_rss_kib": 598914.0
+        },
+        "candidate": {
+          "instructions": 125664367465.0,
+          "analysis_seconds": 9.8872168065,
+          "max_rss_kib": 598892.0
+        },
+        "php": {
+          "instructions": 15474219687.0,
+          "analysis_seconds": 0.9451160430000001,
+          "max_rss_kib": 177540.0
+        }
+      },
+      "boundaries": [
+        {
+          "complete": true,
+          "exit": 0,
+          "seconds": 303.5401628499967,
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0,
+          "memory_peak_bytes": 3855052800,
+          "memory_events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          }
+        },
+        {
+          "complete": true,
+          "exit": 0,
+          "seconds": 82.60170041899983,
+          "memory_max_bytes": 6442450944,
+          "memory_swap_max_bytes": 0,
+          "memory_peak_bytes": 630738944,
+          "memory_events": {
+            "low": 0,
+            "high": 0,
+            "max": 0,
+            "oom": 0,
+            "oom_kill": 0,
+            "oom_group_kill": 0,
+            "sock_throttled": 0
+          }
+        }
+      ]
+    }
+  },
+  "acceptance": {
+    "accepted": false,
+    "reason": "Ordinary proof removed 0.134% instructions without a time win. Extending to operand/nested ranges removes only 0.173% instructions, while shared control regresses in both short/long windows and relative self return also regresses; extra executed instructions confirm failed-proof overhead.",
+    "focused_checks_per_variant": 62,
+    "direct_php_programs_per_variant": 53,
+    "remaining_feature_gates": "not run after hypothesis rejected",
+    "source_restored": true,
+    "parity_achieved": false
+  }
+}

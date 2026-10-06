@@ -271,7 +271,7 @@ fn two_contexts_restore_isolated_frame_bound_state() {
             std::ptr::null_mut(),
         );
         eg.active_generator = Some(first_generator.clone());
-        eg.pending_invoke_this = Some(Value::string("first-this"));
+        eg.pending_invoke_this = Some(Value::string("first-this").into());
         (frame, pending_frame)
     };
 
@@ -306,7 +306,7 @@ fn two_contexts_restore_isolated_frame_bound_state() {
             std::ptr::null_mut(),
         );
         eg.active_generator = Some(second_generator.clone());
-        eg.pending_invoke_this = Some(Value::string("second-this"));
+        eg.pending_invoke_this = Some(Value::string("second-this").into());
         (frame, pending_frame)
     };
     assert_ne!(first_frame, second_frame);
@@ -334,7 +334,10 @@ fn two_contexts_restore_isolated_frame_bound_state() {
             &first_generator
         ));
         assert_eq!(
-            eg.pending_invoke_this.as_ref().and_then(Value::as_str),
+            eg.pending_invoke_this
+                .as_ref()
+                .and_then(rphp::runtime::PendingCallState::opaque_value)
+                .and_then(Value::as_str),
             Some("first-this")
         );
 
@@ -388,7 +391,10 @@ fn two_contexts_restore_isolated_frame_bound_state() {
             &second_generator
         ));
         assert_eq!(
-            eg.pending_invoke_this.as_ref().and_then(Value::as_str),
+            eg.pending_invoke_this
+                .as_ref()
+                .and_then(rphp::runtime::PendingCallState::opaque_value)
+                .and_then(Value::as_str),
             Some("second-this")
         );
 

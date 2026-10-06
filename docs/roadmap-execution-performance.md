@@ -7,6 +7,35 @@ See the [project coordination map](roadmap.md), the
 and the shared [goal contract](agent-goal-contract.md) for assignment and
 integration rules.
 
+## Accepted recovered PHPStan foundation
+
+The isolated `codex/perf-phpstan-runtime-costs` integration recovers reviewed
+performance history through `c2b7c134` on main `41216484`, preserves its property
+array RHS re-entry fixes and replaces unsound ordinary argument/receiver
+borrowing with real owners. Unique consumed temporary arguments move only
+under a general compiler proof. Pending, internal and surplus-argument owners
+retire at PHP-visible call/exception boundaries.
+
+The exact-source five-configuration matrix passes 36,280 executions; focused
+checks pass 1,179, AddressSanitizer 556 and default/forced canonical PHP
+comparisons 70. Unsafe ceilings stay unchanged at 1,747 blocks / 321 functions.
+Native measurements are x86-64 only; no new backend lowering is introduced.
+
+On the original five-file, twenty-finding analysis, six disabled-GC rounds
+measure 74.697G / 6.770s against main 134.807G / 12.918s and PHP 10.401G /
+0.950s. The earlier 70G PGO score uses a different profile; the later 160G row
+mixed whole-process instructions with analysis-only time. A separate enabled-GC
+control measures candidate 76.918G / 6.967s and PHP 10.502G / 1.026s.
+
+The integrating task explicitly accepts two confirmed micro timing losses
+(lifecycle +3.724%, regex callbacks +9.975%) and recorded 1.1–3.64% instruction
+losses for this correctness foundation only. All output and semantic gates
+remain exact. The checkpoint restores a valid performance baseline; it does
+not complete simultaneous instruction/time parity or claim universal speedup.
+See [the report](performance-phpstan-recovered-foundation.md) and
+[all observations](performance-phpstan-recovered-foundation-data.json).
+The larger-project results below are historical results on a different input.
+
 ## Accepted heap and bounded runtime repair
 
 The Rust-only allocator checkpoint is integrated at `0a0099fe` after the joint

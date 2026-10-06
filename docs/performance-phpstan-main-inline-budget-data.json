@@ -1,0 +1,3374 @@
+{
+  "status": "verified read-only existing-profile caller attribution",
+  "production_commit_at_intake": "460ab3772432fd13506f0a817580df65fa7ccdc7",
+  "production_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+  "scope": "retained native analysis-only main self samples; sampled correlation, not exact or removable instruction budget",
+  "reader_checks_passed": 4,
+  "production_changed": false,
+  "new_phpstan_execution": false,
+  "native_scorecard_updated": false,
+  "parity_complete": false,
+  "resources": {
+    "owned-main-inline-export-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.3500984860002063,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 111407104,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-main-inline-attribute-20261003": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 2.3004356330202427,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 751611904,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-main-inline-attribute-v2-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 3.5493048630014528,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 726302720,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "reader_failure": {
+    "status": "preserved rejected v1 reader",
+    "reason": "GNU addr2line represents unknown lines as compiler-generated unit:?; v1 expected digits",
+    "resolution": "retain unknown source line as zero/unresolved and accept unqualified DWARF execute_ex_inner name; intact accepted decoder output reused and all keys revalidated"
+  },
+  "runtimes": {
+    "accepted": {
+      "binary_sha256": "ad561a656aa3b79b5e4b7b2a1cec88ea99190d3087c00cb64a71601f6c3716e5",
+      "source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+      "profile_sha256": "249ae15a37f1f90c9e0d573f861adb098ae96360d147684f456b9807cacbabc9",
+      "all_samples": 66789,
+      "all_period": 66789200367,
+      "main_samples": 27429,
+      "main_period": 27429082287,
+      "unique_main_pcs": 3425,
+      "native_main_bytes": 390676,
+      "address_slide_consistent": true,
+      "physical_and_main_periods_reconciled": true,
+      "opcode_source_ranges": [
+        {
+          "start_line": 3118,
+          "names": [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          "end_line": 3460,
+          "label": "AssignCv|BindCvRef"
+        },
+        {
+          "start_line": 3461,
+          "names": [
+            "FetchCvR"
+          ],
+          "end_line": 3547,
+          "label": "FetchCvR"
+        },
+        {
+          "start_line": 3548,
+          "names": [
+            "AssignConcat"
+          ],
+          "end_line": 3754,
+          "label": "AssignConcat"
+        },
+        {
+          "start_line": 3755,
+          "names": [
+            "Echo"
+          ],
+          "end_line": 3831,
+          "label": "Echo"
+        },
+        {
+          "start_line": 3832,
+          "names": [
+            "Echo_String"
+          ],
+          "end_line": 3841,
+          "label": "Echo_String"
+        },
+        {
+          "start_line": 3842,
+          "names": [
+            "Echo_Long"
+          ],
+          "end_line": 3861,
+          "label": "Echo_Long"
+        },
+        {
+          "start_line": 3862,
+          "names": [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          "end_line": 3932,
+          "label": "Add_LongLong|Sub_LongLong|Mul_LongLong|Mod_LongLong|BitwiseXor_LongLong|BitwiseAnd_LongLong|BitwiseOr_LongLong"
+        },
+        {
+          "start_line": 3933,
+          "names": [
+            "Add_TmpTmp"
+          ],
+          "end_line": 4026,
+          "label": "Add_TmpTmp"
+        },
+        {
+          "start_line": 4027,
+          "names": [
+            "Add_CvTmp"
+          ],
+          "end_line": 4082,
+          "label": "Add_CvTmp"
+        },
+        {
+          "start_line": 4083,
+          "names": [
+            "Sub_CvConst"
+          ],
+          "end_line": 4145,
+          "label": "Sub_CvConst"
+        },
+        {
+          "start_line": 4146,
+          "names": [
+            "Sub_TmpTmp"
+          ],
+          "end_line": 4185,
+          "label": "Sub_TmpTmp"
+        },
+        {
+          "start_line": 4186,
+          "names": [
+            "IsSmaller_CvConst",
+            "JmpZ_Lt_CvConst",
+            "JmpNZ_Lt_CvConst"
+          ],
+          "end_line": 4250,
+          "label": "IsSmaller_CvConst|JmpZ_Lt_CvConst|JmpNZ_Lt_CvConst"
+        },
+        {
+          "start_line": 4251,
+          "names": [
+            "IsSmallerOrEqual_CvConst",
+            "JmpZ_Le_CvConst",
+            "JmpNZ_Le_CvConst"
+          ],
+          "end_line": 4312,
+          "label": "IsSmallerOrEqual_CvConst|JmpZ_Le_CvConst|JmpNZ_Le_CvConst"
+        },
+        {
+          "start_line": 4313,
+          "names": [
+            "IsEqual_CvConst",
+            "JmpZ_Eq_CvConst",
+            "JmpNZ_Eq_CvConst"
+          ],
+          "end_line": 4372,
+          "label": "IsEqual_CvConst|JmpZ_Eq_CvConst|JmpNZ_Eq_CvConst"
+        },
+        {
+          "start_line": 4373,
+          "names": [
+            "Add"
+          ],
+          "end_line": 4427,
+          "label": "Add"
+        },
+        {
+          "start_line": 4428,
+          "names": [
+            "Sub"
+          ],
+          "end_line": 4468,
+          "label": "Sub"
+        },
+        {
+          "start_line": 4469,
+          "names": [
+            "Mul"
+          ],
+          "end_line": 4522,
+          "label": "Mul"
+        },
+        {
+          "start_line": 4523,
+          "names": [
+            "Div"
+          ],
+          "end_line": 4575,
+          "label": "Div"
+        },
+        {
+          "start_line": 4576,
+          "names": [
+            "Mod"
+          ],
+          "end_line": 4624,
+          "label": "Mod"
+        },
+        {
+          "start_line": 4625,
+          "names": [
+            "Concat_StringString"
+          ],
+          "end_line": 4645,
+          "label": "Concat_StringString"
+        },
+        {
+          "start_line": 4646,
+          "names": [
+            "Concat"
+          ],
+          "end_line": 4651,
+          "label": "Concat"
+        },
+        {
+          "start_line": 4652,
+          "names": [
+            "Spaceship"
+          ],
+          "end_line": 4693,
+          "label": "Spaceship"
+        },
+        {
+          "start_line": 4694,
+          "names": [
+            "Pow"
+          ],
+          "end_line": 4752,
+          "label": "Pow"
+        },
+        {
+          "start_line": 4753,
+          "names": [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          "end_line": 4854,
+          "label": "BitwiseAnd|BitwiseOr|BitwiseXor"
+        },
+        {
+          "start_line": 4855,
+          "names": [
+            "ShiftLeft"
+          ],
+          "end_line": 4896,
+          "label": "ShiftLeft"
+        },
+        {
+          "start_line": 4897,
+          "names": [
+            "ShiftRight"
+          ],
+          "end_line": 4938,
+          "label": "ShiftRight"
+        },
+        {
+          "start_line": 4939,
+          "names": [
+            "BitwiseNot"
+          ],
+          "end_line": 4965,
+          "label": "BitwiseNot"
+        },
+        {
+          "start_line": 4966,
+          "names": [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          "end_line": 5015,
+          "label": "IsEqual|IsNotEqual|IsSmaller|IsSmallerOrEqual"
+        },
+        {
+          "start_line": 5016,
+          "names": [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          "end_line": 5052,
+          "label": "IsIdentical|IsNotIdentical|JmpZ_Identical|JmpNZ_Identical"
+        },
+        {
+          "start_line": 5053,
+          "names": [
+            "Isset"
+          ],
+          "end_line": 5059,
+          "label": "Isset"
+        },
+        {
+          "start_line": 5060,
+          "names": [
+            "Cast"
+          ],
+          "end_line": 5229,
+          "label": "Cast"
+        },
+        {
+          "start_line": 5230,
+          "names": [
+            "BoolNot"
+          ],
+          "end_line": 5244,
+          "label": "BoolNot"
+        },
+        {
+          "start_line": 5245,
+          "names": [
+            "AssertCheck"
+          ],
+          "end_line": 5262,
+          "label": "AssertCheck"
+        },
+        {
+          "start_line": 5263,
+          "names": [
+            "Jmp"
+          ],
+          "end_line": 5276,
+          "label": "Jmp"
+        },
+        {
+          "start_line": 5277,
+          "names": [
+            "JmpFinally"
+          ],
+          "end_line": 5314,
+          "label": "JmpFinally"
+        },
+        {
+          "start_line": 5315,
+          "names": [
+            "QuickLongLoopJmp"
+          ],
+          "end_line": 5320,
+          "label": "QuickLongLoopJmp"
+        },
+        {
+          "start_line": 5321,
+          "names": [
+            "QuickLongLoopJmp"
+          ],
+          "end_line": 5328,
+          "label": "QuickLongLoopJmp"
+        },
+        {
+          "start_line": 5329,
+          "names": [
+            "JmpZ"
+          ],
+          "end_line": 5343,
+          "label": "JmpZ"
+        },
+        {
+          "start_line": 5344,
+          "names": [
+            "JmpNZ"
+          ],
+          "end_line": 5418,
+          "label": "JmpNZ"
+        },
+        {
+          "start_line": 5419,
+          "names": [
+            "DirectInternalCall1"
+          ],
+          "end_line": 5546,
+          "label": "DirectInternalCall1"
+        },
+        {
+          "start_line": 5547,
+          "names": [
+            "DirectInternalCall2"
+          ],
+          "end_line": 5575,
+          "label": "DirectInternalCall2"
+        },
+        {
+          "start_line": 5576,
+          "names": [
+            "Strlen"
+          ],
+          "end_line": 5603,
+          "label": "Strlen"
+        },
+        {
+          "start_line": 5604,
+          "names": [
+            "Strlen_Cv"
+          ],
+          "end_line": 5626,
+          "label": "Strlen_Cv"
+        },
+        {
+          "start_line": 5627,
+          "names": [
+            "Strlen_String"
+          ],
+          "end_line": 5648,
+          "label": "Strlen_String"
+        },
+        {
+          "start_line": 5649,
+          "names": [
+            "CallUserFuncArray"
+          ],
+          "end_line": 5661,
+          "label": "CallUserFuncArray"
+        },
+        {
+          "start_line": 5662,
+          "names": [
+            "InitUserCall"
+          ],
+          "end_line": 5757,
+          "label": "InitUserCall"
+        },
+        {
+          "start_line": 5758,
+          "names": [
+            "InitFcall"
+          ],
+          "end_line": 6050,
+          "label": "InitFcall"
+        },
+        {
+          "start_line": 6051,
+          "names": [
+            "SendVal"
+          ],
+          "end_line": 6184,
+          "label": "SendVal"
+        },
+        {
+          "start_line": 6185,
+          "names": [
+            "SendRef"
+          ],
+          "end_line": 6259,
+          "label": "SendRef"
+        },
+        {
+          "start_line": 6260,
+          "names": [
+            "SendVarEx"
+          ],
+          "end_line": 6382,
+          "label": "SendVarEx"
+        },
+        {
+          "start_line": 6383,
+          "names": [
+            "SendUser"
+          ],
+          "end_line": 6413,
+          "label": "SendUser"
+        },
+        {
+          "start_line": 6414,
+          "names": [
+            "SendUserChecked"
+          ],
+          "end_line": 6426,
+          "label": "SendUserChecked"
+        },
+        {
+          "start_line": 6427,
+          "names": [
+            "SendNamed"
+          ],
+          "end_line": 6434,
+          "label": "SendNamed"
+        },
+        {
+          "start_line": 6435,
+          "names": [
+            "DoFcall"
+          ],
+          "end_line": 7009,
+          "label": "DoFcall"
+        },
+        {
+          "start_line": 7010,
+          "names": [
+            "PreInc"
+          ],
+          "end_line": 7136,
+          "label": "PreInc"
+        },
+        {
+          "start_line": 7137,
+          "names": [
+            "PreDec"
+          ],
+          "end_line": 7258,
+          "label": "PreDec"
+        },
+        {
+          "start_line": 7259,
+          "names": [
+            "PostInc"
+          ],
+          "end_line": 7311,
+          "label": "PostInc"
+        },
+        {
+          "start_line": 7312,
+          "names": [
+            "PostDec"
+          ],
+          "end_line": 7363,
+          "label": "PostDec"
+        },
+        {
+          "start_line": 7364,
+          "names": [
+            "InitArray"
+          ],
+          "end_line": 7422,
+          "label": "InitArray"
+        },
+        {
+          "start_line": 7423,
+          "names": [
+            "AddArrayElement"
+          ],
+          "end_line": 7518,
+          "label": "AddArrayElement"
+        },
+        {
+          "start_line": 7519,
+          "names": [
+            "AddArrayUnpack"
+          ],
+          "end_line": 7531,
+          "label": "AddArrayUnpack"
+        },
+        {
+          "start_line": 7532,
+          "names": [
+            "AddCallArgument"
+          ],
+          "end_line": 7544,
+          "label": "AddCallArgument"
+        },
+        {
+          "start_line": 7545,
+          "names": [
+            "AddCallUnpack"
+          ],
+          "end_line": 7557,
+          "label": "AddCallUnpack"
+        },
+        {
+          "start_line": 7558,
+          "names": [
+            "FetchDimR"
+          ],
+          "end_line": 8437,
+          "label": "FetchDimR"
+        },
+        {
+          "start_line": 8438,
+          "names": [
+            "FetchGlobals",
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef"
+          ],
+          "end_line": 8455,
+          "label": "FetchGlobals|FetchGlobal|AssignGlobal|UnsetGlobal|BindGlobalRef|AssignGlobalRef"
+        },
+        {
+          "start_line": 8456,
+          "names": [
+            "FetchDynamicVar",
+            "AssignDynamicVar",
+            "UnsetDynamicVar",
+            "BindDynamicVarRef",
+            "AssignDynamicVarRef",
+            "BindDynamicGlobal"
+          ],
+          "end_line": 8473,
+          "label": "FetchDynamicVar|AssignDynamicVar|UnsetDynamicVar|BindDynamicVarRef|AssignDynamicVarRef|BindDynamicGlobal"
+        },
+        {
+          "start_line": 8474,
+          "names": [
+            "SnapshotDiagnosticWrite"
+          ],
+          "end_line": 8490,
+          "label": "SnapshotDiagnosticWrite"
+        },
+        {
+          "start_line": 8491,
+          "names": [
+            "AssignDim"
+          ],
+          "end_line": 9008,
+          "label": "AssignDim"
+        },
+        {
+          "start_line": 9009,
+          "names": [
+            "ArrayPushOp"
+          ],
+          "end_line": 9295,
+          "label": "ArrayPushOp"
+        },
+        {
+          "start_line": 9296,
+          "names": [
+            "BindArrayAppendRef"
+          ],
+          "end_line": 9530,
+          "label": "BindArrayAppendRef"
+        },
+        {
+          "start_line": 9531,
+          "names": [
+            "UnsetDim"
+          ],
+          "end_line": 9744,
+          "label": "UnsetDim"
+        },
+        {
+          "start_line": 9745,
+          "names": [
+            "ForeachInit"
+          ],
+          "end_line": 9753,
+          "label": "ForeachInit"
+        },
+        {
+          "start_line": 9754,
+          "names": [
+            "ForeachNext"
+          ],
+          "end_line": 9762,
+          "label": "ForeachNext"
+        },
+        {
+          "start_line": 9763,
+          "names": [
+            "ForeachNextPlain"
+          ],
+          "end_line": 9771,
+          "label": "ForeachNextPlain"
+        },
+        {
+          "start_line": 9772,
+          "names": [
+            "ForeachNextRef"
+          ],
+          "end_line": 9780,
+          "label": "ForeachNextRef"
+        },
+        {
+          "start_line": 9781,
+          "names": [
+            "ForeachWriteback"
+          ],
+          "end_line": 9784,
+          "label": "ForeachWriteback"
+        },
+        {
+          "start_line": 9785,
+          "names": [
+            "Throw"
+          ],
+          "end_line": 9792,
+          "label": "Throw"
+        },
+        {
+          "start_line": 9793,
+          "names": [
+            "NewObj"
+          ],
+          "end_line": 9814,
+          "label": "NewObj"
+        },
+        {
+          "start_line": 9815,
+          "names": [
+            "FetchObjR"
+          ],
+          "end_line": 9847,
+          "label": "FetchObjR"
+        },
+        {
+          "start_line": 9848,
+          "names": [
+            "IssetObj"
+          ],
+          "end_line": 9858,
+          "label": "IssetObj"
+        },
+        {
+          "start_line": 9859,
+          "names": [
+            "UnsetObj"
+          ],
+          "end_line": 9869,
+          "label": "UnsetObj"
+        },
+        {
+          "start_line": 9870,
+          "names": [
+            "BindObjPropRef"
+          ],
+          "end_line": 9887,
+          "label": "BindObjPropRef"
+        },
+        {
+          "start_line": 9888,
+          "names": [
+            "BindArrayDimRef"
+          ],
+          "end_line": 9900,
+          "label": "BindArrayDimRef"
+        },
+        {
+          "start_line": 9901,
+          "names": [
+            "AssignObjProp"
+          ],
+          "end_line": 10195,
+          "label": "AssignObjProp"
+        },
+        {
+          "start_line": 10196,
+          "names": [
+            "AssignObjDim"
+          ],
+          "end_line": 10380,
+          "label": "AssignObjDim"
+        },
+        {
+          "start_line": 10381,
+          "names": [
+            "InitMethodCall"
+          ],
+          "end_line": 10907,
+          "label": "InitMethodCall"
+        },
+        {
+          "start_line": 10908,
+          "names": [
+            "InitStaticCall"
+          ],
+          "end_line": 10916,
+          "label": "InitStaticCall"
+        },
+        {
+          "start_line": 10917,
+          "names": [
+            "InitLateStaticCall"
+          ],
+          "end_line": 10925,
+          "label": "InitLateStaticCall"
+        },
+        {
+          "start_line": 10926,
+          "names": [
+            "InitDynamicCall"
+          ],
+          "end_line": 10938,
+          "label": "InitDynamicCall"
+        },
+        {
+          "start_line": 10939,
+          "names": [
+            "InitDynamicStaticCall"
+          ],
+          "end_line": 10951,
+          "label": "InitDynamicStaticCall"
+        },
+        {
+          "start_line": 10952,
+          "names": [
+            "CheckGenericArgs"
+          ],
+          "end_line": 10955,
+          "label": "CheckGenericArgs"
+        },
+        {
+          "start_line": 10956,
+          "names": [
+            "CheckLateStaticGenericArgs"
+          ],
+          "end_line": 10959,
+          "label": "CheckLateStaticGenericArgs"
+        },
+        {
+          "start_line": 10960,
+          "names": [
+            "CheckReifiedArgs"
+          ],
+          "end_line": 10963,
+          "label": "CheckReifiedArgs"
+        },
+        {
+          "start_line": 10964,
+          "names": [
+            "CheckReifiedReturn"
+          ],
+          "end_line": 10967,
+          "label": "CheckReifiedReturn"
+        },
+        {
+          "start_line": 10968,
+          "names": [
+            "CheckGenericDefault"
+          ],
+          "end_line": 10971,
+          "label": "CheckGenericDefault"
+        },
+        {
+          "start_line": 10972,
+          "names": [
+            "CheckDefaultType"
+          ],
+          "end_line": 10984,
+          "label": "CheckDefaultType"
+        },
+        {
+          "start_line": 10985,
+          "names": [
+            "FetchStaticProp"
+          ],
+          "end_line": 10997,
+          "label": "FetchStaticProp"
+        },
+        {
+          "start_line": 10998,
+          "names": [
+            "FetchLateStaticProp"
+          ],
+          "end_line": 11010,
+          "label": "FetchLateStaticProp"
+        },
+        {
+          "start_line": 11011,
+          "names": [
+            "FetchClassConst"
+          ],
+          "end_line": 11023,
+          "label": "FetchClassConst"
+        },
+        {
+          "start_line": 11024,
+          "names": [
+            "FetchLateClassConst"
+          ],
+          "end_line": 11036,
+          "label": "FetchLateClassConst"
+        },
+        {
+          "start_line": 11037,
+          "names": [
+            "FetchDynamicClassConst"
+          ],
+          "end_line": 11049,
+          "label": "FetchDynamicClassConst"
+        },
+        {
+          "start_line": 11050,
+          "names": [
+            "FetchLateDynamicClassConst"
+          ],
+          "end_line": 11062,
+          "label": "FetchLateDynamicClassConst"
+        },
+        {
+          "start_line": 11063,
+          "names": [
+            "AssignStaticProp"
+          ],
+          "end_line": 11075,
+          "label": "AssignStaticProp"
+        },
+        {
+          "start_line": 11076,
+          "names": [
+            "AssignLateStaticProp"
+          ],
+          "end_line": 11088,
+          "label": "AssignLateStaticProp"
+        },
+        {
+          "start_line": 11089,
+          "names": [
+            "UnsetStaticProp"
+          ],
+          "end_line": 11101,
+          "label": "UnsetStaticProp"
+        },
+        {
+          "start_line": 11102,
+          "names": [
+            "Instanceof"
+          ],
+          "end_line": 11114,
+          "label": "Instanceof"
+        },
+        {
+          "start_line": 11115,
+          "names": [
+            "FetchConst"
+          ],
+          "end_line": 11143,
+          "label": "FetchConst"
+        },
+        {
+          "start_line": 11144,
+          "names": [
+            "BindDefaultParam"
+          ],
+          "end_line": 11149,
+          "label": "BindDefaultParam"
+        },
+        {
+          "start_line": 11150,
+          "names": [
+            "BindGlobal"
+          ],
+          "end_line": 11153,
+          "label": "BindGlobal"
+        },
+        {
+          "start_line": 11154,
+          "names": [
+            "CheckStatic"
+          ],
+          "end_line": 11159,
+          "label": "CheckStatic"
+        },
+        {
+          "start_line": 11160,
+          "names": [
+            "BindStatic"
+          ],
+          "end_line": 11164,
+          "label": "BindStatic"
+        },
+        {
+          "start_line": 11165,
+          "names": [
+            "Return"
+          ],
+          "end_line": 11906,
+          "label": "Return"
+        },
+        {
+          "start_line": 11907,
+          "names": [
+            "Yield"
+          ],
+          "end_line": 11915,
+          "label": "Yield"
+        },
+        {
+          "start_line": 11916,
+          "names": [
+            "YieldFrom"
+          ],
+          "end_line": 11925,
+          "label": "YieldFrom"
+        },
+        {
+          "start_line": 11926,
+          "names": [
+            "GeneratorReturn"
+          ],
+          "end_line": 11929,
+          "label": "GeneratorReturn"
+        },
+        {
+          "start_line": 11930,
+          "names": [
+            "Include"
+          ],
+          "end_line": 11947,
+          "label": "Include"
+        },
+        {
+          "start_line": 11948,
+          "names": [
+            "Eval"
+          ],
+          "end_line": 11963,
+          "label": "Eval"
+        },
+        {
+          "start_line": 11964,
+          "names": [
+            "CloneObj"
+          ],
+          "end_line": 11971,
+          "label": "CloneObj"
+        },
+        {
+          "start_line": 11972,
+          "names": [
+            "ValidateCloneWith"
+          ],
+          "end_line": 11979,
+          "label": "ValidateCloneWith"
+        },
+        {
+          "start_line": 11980,
+          "names": [
+            "EndCloneWith"
+          ],
+          "end_line": 11981,
+          "label": "EndCloneWith"
+        },
+        {
+          "start_line": 11982,
+          "names": [
+            "ReportDeprecatedTraitUses"
+          ],
+          "end_line": 11986,
+          "label": "ReportDeprecatedTraitUses"
+        },
+        {
+          "start_line": 11987,
+          "names": [
+            "Tick"
+          ],
+          "end_line": 11991,
+          "label": "Tick"
+        },
+        {
+          "start_line": 11992,
+          "names": [
+            "DeclareClass"
+          ],
+          "end_line": 12007,
+          "label": "DeclareClass"
+        },
+        {
+          "start_line": 12008,
+          "names": [
+            "DeclareFunction"
+          ],
+          "end_line": 12011,
+          "label": "DeclareFunction"
+        },
+        {
+          "start_line": 12012,
+          "names": [
+            "DeclarationCompileFatal"
+          ],
+          "end_line": 12019,
+          "label": "DeclarationCompileFatal"
+        },
+        {
+          "start_line": 12020,
+          "names": [
+            "CreateClosure"
+          ],
+          "end_line": 12037,
+          "label": "CreateClosure"
+        },
+        {
+          "start_line": 12038,
+          "names": [
+            "CreateFirstClassCallable"
+          ],
+          "end_line": 12050,
+          "label": "CreateFirstClassCallable"
+        },
+        {
+          "start_line": 12051,
+          "names": [
+            "EnsureFccClassLoaded"
+          ],
+          "end_line": 12063,
+          "label": "EnsureFccClassLoaded"
+        },
+        {
+          "start_line": 12064,
+          "names": [
+            "ClosureUseVar"
+          ],
+          "end_line": 12067,
+          "label": "ClosureUseVar"
+        },
+        {
+          "start_line": 12068,
+          "names": [
+            "NullSafeCheck"
+          ],
+          "end_line": 12082,
+          "label": "NullSafeCheck"
+        },
+        {
+          "start_line": 12083,
+          "names": [
+            "ReleaseTemps"
+          ],
+          "end_line": 12138,
+          "label": "ReleaseTemps"
+        }
+      ],
+      "by_opcode_source_arm": {
+        "AssignCv|BindCvRef": 3107009321,
+        "ReleaseTemps": 2853008559,
+        "FetchObjR": 2632007896,
+        "Return": 2495007485,
+        "FetchDimR": 2444007332,
+        "main_before_opcode_match": 1949005847,
+        "unresolved_main_location": 1651004953,
+        "main_after_opcode_match": 1355004065,
+        "DoFcall": 1327003981,
+        "BitwiseAnd|BitwiseOr|BitwiseXor": 945002835,
+        "InitMethodCall": 920002760,
+        "AssignObjProp": 792002376,
+        "JmpZ": 617001851,
+        "AssignDim": 590001770,
+        "SendVarEx": 516001548,
+        "IsIdentical|IsNotIdentical|JmpZ_Identical|JmpNZ_Identical": 502001506,
+        "FetchConst": 396001188,
+        "SendVal": 270000810,
+        "InitFcall": 220000660,
+        "CallUserFuncArray": 212000636,
+        "IsEqual|IsNotEqual|IsSmaller|IsSmallerOrEqual": 183000549,
+        "JmpNZ": 131000393,
+        "Instanceof": 129000387,
+        "Isset": 127000381,
+        "Sub": 95000285,
+        "BoolNot": 92000276,
+        "FetchCvR": 83000249,
+        "InitArray": 74000222,
+        "ArrayPushOp": 71000213,
+        "Add_LongLong|Sub_LongLong|Mul_LongLong|Mod_LongLong|BitwiseXor_LongLong|BitwiseAnd_LongLong|BitwiseOr_LongLong": 68000204,
+        "Add_TmpTmp": 61000183,
+        "FetchClassConst": 52000156,
+        "InitStaticCall": 47000141,
+        "Cast": 47000141,
+        "AddArrayElement": 45000135,
+        "Jmp": 40000120,
+        "ForeachNextPlain": 33000099,
+        "BindObjPropRef": 32000096,
+        "FetchStaticProp": 32000096,
+        "SendRef": 25000075,
+        "BindDefaultParam": 22000066,
+        "Concat_StringString": 21000063,
+        "NewObj": 20000060,
+        "UnsetDim": 19000057,
+        "ForeachInit": 18000054,
+        "InitDynamicCall": 9000027,
+        "AssignConcat": 9000027,
+        "Add": 9000027,
+        "ForeachNext": 6000018,
+        "CreateClosure": 5000015,
+        "AddCallUnpack": 5000015,
+        "AssertCheck": 5000015,
+        "PreInc": 5000015,
+        "Sub_TmpTmp": 4000012,
+        "Concat": 3000009,
+        "Mul": 2000006,
+        "Add_CvTmp": 1000003,
+        "AddCallArgument": 1000003,
+        "CloneObj": 1000003,
+        "FetchLateClassConst": 1000003,
+        "CheckDefaultType": 1000003,
+        "JmpFinally": 1000003,
+        "Sub_CvConst": 1000003
+      },
+      "by_inline_value_family": {
+        "other_main_inline": 26461079383,
+        "value_clone": 490001470,
+        "value_drop": 478001434
+      },
+      "table": [
+        {
+          "opcode_source_arm": "AssignCv|BindCvRef",
+          "inline_value_family": "other_main_inline",
+          "samples": 3013,
+          "period": 3013009039
+        },
+        {
+          "opcode_source_arm": "ReleaseTemps",
+          "inline_value_family": "other_main_inline",
+          "samples": 2508,
+          "period": 2508007524
+        },
+        {
+          "opcode_source_arm": "FetchObjR",
+          "inline_value_family": "other_main_inline",
+          "samples": 2447,
+          "period": 2447007341
+        },
+        {
+          "opcode_source_arm": "Return",
+          "inline_value_family": "other_main_inline",
+          "samples": 2433,
+          "period": 2433007299
+        },
+        {
+          "opcode_source_arm": "FetchDimR",
+          "inline_value_family": "other_main_inline",
+          "samples": 2413,
+          "period": 2413007239
+        },
+        {
+          "opcode_source_arm": "main_before_opcode_match",
+          "inline_value_family": "other_main_inline",
+          "samples": 1949,
+          "period": 1949005847
+        },
+        {
+          "opcode_source_arm": "unresolved_main_location",
+          "inline_value_family": "other_main_inline",
+          "samples": 1649,
+          "period": 1649004947
+        },
+        {
+          "opcode_source_arm": "main_after_opcode_match",
+          "inline_value_family": "other_main_inline",
+          "samples": 1355,
+          "period": 1355004065
+        },
+        {
+          "opcode_source_arm": "DoFcall",
+          "inline_value_family": "other_main_inline",
+          "samples": 1264,
+          "period": 1264003792
+        },
+        {
+          "opcode_source_arm": "BitwiseAnd|BitwiseOr|BitwiseXor",
+          "inline_value_family": "other_main_inline",
+          "samples": 945,
+          "period": 945002835
+        },
+        {
+          "opcode_source_arm": "InitMethodCall",
+          "inline_value_family": "other_main_inline",
+          "samples": 909,
+          "period": 909002727
+        },
+        {
+          "opcode_source_arm": "AssignObjProp",
+          "inline_value_family": "other_main_inline",
+          "samples": 774,
+          "period": 774002322
+        },
+        {
+          "opcode_source_arm": "JmpZ",
+          "inline_value_family": "other_main_inline",
+          "samples": 617,
+          "period": 617001851
+        },
+        {
+          "opcode_source_arm": "AssignDim",
+          "inline_value_family": "other_main_inline",
+          "samples": 559,
+          "period": 559001677
+        },
+        {
+          "opcode_source_arm": "IsIdentical|IsNotIdentical|JmpZ_Identical|JmpNZ_Identical",
+          "inline_value_family": "other_main_inline",
+          "samples": 502,
+          "period": 502001506
+        },
+        {
+          "opcode_source_arm": "SendVarEx",
+          "inline_value_family": "other_main_inline",
+          "samples": 468,
+          "period": 468001404
+        },
+        {
+          "opcode_source_arm": "FetchConst",
+          "inline_value_family": "other_main_inline",
+          "samples": 396,
+          "period": 396001188
+        },
+        {
+          "opcode_source_arm": "ReleaseTemps",
+          "inline_value_family": "value_drop",
+          "samples": 345,
+          "period": 345001035
+        },
+        {
+          "opcode_source_arm": "InitFcall",
+          "inline_value_family": "other_main_inline",
+          "samples": 220,
+          "period": 220000660
+        },
+        {
+          "opcode_source_arm": "CallUserFuncArray",
+          "inline_value_family": "other_main_inline",
+          "samples": 212,
+          "period": 212000636
+        },
+        {
+          "opcode_source_arm": "SendVal",
+          "inline_value_family": "other_main_inline",
+          "samples": 206,
+          "period": 206000618
+        },
+        {
+          "opcode_source_arm": "FetchObjR",
+          "inline_value_family": "value_clone",
+          "samples": 185,
+          "period": 185000555
+        },
+        {
+          "opcode_source_arm": "IsEqual|IsNotEqual|IsSmaller|IsSmallerOrEqual",
+          "inline_value_family": "other_main_inline",
+          "samples": 183,
+          "period": 183000549
+        },
+        {
+          "opcode_source_arm": "JmpNZ",
+          "inline_value_family": "other_main_inline",
+          "samples": 131,
+          "period": 131000393
+        },
+        {
+          "opcode_source_arm": "Instanceof",
+          "inline_value_family": "other_main_inline",
+          "samples": 129,
+          "period": 129000387
+        },
+        {
+          "opcode_source_arm": "Isset",
+          "inline_value_family": "other_main_inline",
+          "samples": 127,
+          "period": 127000381
+        },
+        {
+          "opcode_source_arm": "Sub",
+          "inline_value_family": "other_main_inline",
+          "samples": 95,
+          "period": 95000285
+        },
+        {
+          "opcode_source_arm": "AssignCv|BindCvRef",
+          "inline_value_family": "value_clone",
+          "samples": 94,
+          "period": 94000282
+        },
+        {
+          "opcode_source_arm": "BoolNot",
+          "inline_value_family": "other_main_inline",
+          "samples": 92,
+          "period": 92000276
+        },
+        {
+          "opcode_source_arm": "FetchCvR",
+          "inline_value_family": "other_main_inline",
+          "samples": 78,
+          "period": 78000234
+        },
+        {
+          "opcode_source_arm": "InitArray",
+          "inline_value_family": "other_main_inline",
+          "samples": 74,
+          "period": 74000222
+        },
+        {
+          "opcode_source_arm": "ArrayPushOp",
+          "inline_value_family": "other_main_inline",
+          "samples": 71,
+          "period": 71000213
+        },
+        {
+          "opcode_source_arm": "Add_LongLong|Sub_LongLong|Mul_LongLong|Mod_LongLong|BitwiseXor_LongLong|BitwiseAnd_LongLong|BitwiseOr_LongLong",
+          "inline_value_family": "other_main_inline",
+          "samples": 68,
+          "period": 68000204
+        },
+        {
+          "opcode_source_arm": "SendVal",
+          "inline_value_family": "value_clone",
+          "samples": 64,
+          "period": 64000192
+        },
+        {
+          "opcode_source_arm": "DoFcall",
+          "inline_value_family": "value_drop",
+          "samples": 63,
+          "period": 63000189
+        },
+        {
+          "opcode_source_arm": "Add_TmpTmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 61,
+          "period": 61000183
+        },
+        {
+          "opcode_source_arm": "FetchClassConst",
+          "inline_value_family": "other_main_inline",
+          "samples": 52,
+          "period": 52000156
+        },
+        {
+          "opcode_source_arm": "SendVarEx",
+          "inline_value_family": "value_clone",
+          "samples": 48,
+          "period": 48000144
+        },
+        {
+          "opcode_source_arm": "InitStaticCall",
+          "inline_value_family": "other_main_inline",
+          "samples": 47,
+          "period": 47000141
+        },
+        {
+          "opcode_source_arm": "Cast",
+          "inline_value_family": "other_main_inline",
+          "samples": 47,
+          "period": 47000141
+        },
+        {
+          "opcode_source_arm": "Return",
+          "inline_value_family": "value_drop",
+          "samples": 44,
+          "period": 44000132
+        },
+        {
+          "opcode_source_arm": "Jmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 40,
+          "period": 40000120
+        },
+        {
+          "opcode_source_arm": "AddArrayElement",
+          "inline_value_family": "other_main_inline",
+          "samples": 36,
+          "period": 36000108
+        },
+        {
+          "opcode_source_arm": "ForeachNextPlain",
+          "inline_value_family": "other_main_inline",
+          "samples": 33,
+          "period": 33000099
+        },
+        {
+          "opcode_source_arm": "BindObjPropRef",
+          "inline_value_family": "other_main_inline",
+          "samples": 32,
+          "period": 32000096
+        },
+        {
+          "opcode_source_arm": "FetchStaticProp",
+          "inline_value_family": "other_main_inline",
+          "samples": 32,
+          "period": 32000096
+        },
+        {
+          "opcode_source_arm": "FetchDimR",
+          "inline_value_family": "value_clone",
+          "samples": 31,
+          "period": 31000093
+        },
+        {
+          "opcode_source_arm": "SendRef",
+          "inline_value_family": "other_main_inline",
+          "samples": 25,
+          "period": 25000075
+        },
+        {
+          "opcode_source_arm": "BindDefaultParam",
+          "inline_value_family": "other_main_inline",
+          "samples": 22,
+          "period": 22000066
+        },
+        {
+          "opcode_source_arm": "Concat_StringString",
+          "inline_value_family": "other_main_inline",
+          "samples": 21,
+          "period": 21000063
+        },
+        {
+          "opcode_source_arm": "NewObj",
+          "inline_value_family": "other_main_inline",
+          "samples": 20,
+          "period": 20000060
+        },
+        {
+          "opcode_source_arm": "UnsetDim",
+          "inline_value_family": "other_main_inline",
+          "samples": 19,
+          "period": 19000057
+        },
+        {
+          "opcode_source_arm": "Return",
+          "inline_value_family": "value_clone",
+          "samples": 18,
+          "period": 18000054
+        },
+        {
+          "opcode_source_arm": "ForeachInit",
+          "inline_value_family": "other_main_inline",
+          "samples": 18,
+          "period": 18000054
+        },
+        {
+          "opcode_source_arm": "AssignDim",
+          "inline_value_family": "value_drop",
+          "samples": 18,
+          "period": 18000054
+        },
+        {
+          "opcode_source_arm": "AssignDim",
+          "inline_value_family": "value_clone",
+          "samples": 13,
+          "period": 13000039
+        },
+        {
+          "opcode_source_arm": "InitMethodCall",
+          "inline_value_family": "value_clone",
+          "samples": 11,
+          "period": 11000033
+        },
+        {
+          "opcode_source_arm": "AssignObjProp",
+          "inline_value_family": "value_clone",
+          "samples": 10,
+          "period": 10000030
+        },
+        {
+          "opcode_source_arm": "InitDynamicCall",
+          "inline_value_family": "other_main_inline",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "AssignConcat",
+          "inline_value_family": "other_main_inline",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "Add",
+          "inline_value_family": "other_main_inline",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "AddArrayElement",
+          "inline_value_family": "value_clone",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "AssignObjProp",
+          "inline_value_family": "value_drop",
+          "samples": 8,
+          "period": 8000024
+        },
+        {
+          "opcode_source_arm": "ForeachNext",
+          "inline_value_family": "other_main_inline",
+          "samples": 6,
+          "period": 6000018
+        },
+        {
+          "opcode_source_arm": "FetchCvR",
+          "inline_value_family": "value_clone",
+          "samples": 5,
+          "period": 5000015
+        },
+        {
+          "opcode_source_arm": "CreateClosure",
+          "inline_value_family": "other_main_inline",
+          "samples": 5,
+          "period": 5000015
+        },
+        {
+          "opcode_source_arm": "AddCallUnpack",
+          "inline_value_family": "other_main_inline",
+          "samples": 5,
+          "period": 5000015
+        },
+        {
+          "opcode_source_arm": "AssertCheck",
+          "inline_value_family": "other_main_inline",
+          "samples": 5,
+          "period": 5000015
+        },
+        {
+          "opcode_source_arm": "PreInc",
+          "inline_value_family": "other_main_inline",
+          "samples": 5,
+          "period": 5000015
+        },
+        {
+          "opcode_source_arm": "Sub_TmpTmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 4,
+          "period": 4000012
+        },
+        {
+          "opcode_source_arm": "Concat",
+          "inline_value_family": "other_main_inline",
+          "samples": 3,
+          "period": 3000009
+        },
+        {
+          "opcode_source_arm": "Mul",
+          "inline_value_family": "other_main_inline",
+          "samples": 2,
+          "period": 2000006
+        },
+        {
+          "opcode_source_arm": "unresolved_main_location",
+          "inline_value_family": "value_clone",
+          "samples": 2,
+          "period": 2000006
+        },
+        {
+          "opcode_source_arm": "Add_CvTmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "AddCallArgument",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "CloneObj",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "FetchLateClassConst",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "CheckDefaultType",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "JmpFinally",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "Sub_CvConst",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        }
+      ],
+      "unresolved_main_samples": 1651,
+      "unresolved_main_period": 1651004953,
+      "helper_ancestry": {
+        "slot_writer_ancestry": {
+          "samples": 4635,
+          "period": 4635013905
+        },
+        "operand_getter_ancestry": {
+          "samples": 1177,
+          "period": 1177003531
+        },
+        "union": {
+          "samples": 5812,
+          "period": 5812017436
+        }
+      },
+      "ancestry_invariant": "Presence in a DWARF inline chain, deduplicated within each PC; groups can overlap and must not be added. Union counts each PC once.",
+      "raw_inline_sha256": "3888863f71e2268e9b9e40293b47d912593d7629a5bbfa70a0b83bc81de7372b",
+      "physical_export_sha256": "f086dce1c20481613ebe31e42f32f594c67270c8e0c3fad6db117395dd74da13"
+    },
+    "repair": {
+      "binary_sha256": "2a11d6083672cc69125c53d962b3c238295bbc3b645fb8352f9a912847cb578c",
+      "source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+      "profile_sha256": "8904542d1dd09b3c817ff12e20aaed194df026987a35642bab6c4f8362b92b50",
+      "all_samples": 68458,
+      "all_period": 68458205374,
+      "main_samples": 27761,
+      "main_period": 27761083283,
+      "unique_main_pcs": 3306,
+      "native_main_bytes": 391735,
+      "address_slide_consistent": true,
+      "physical_and_main_periods_reconciled": true,
+      "opcode_source_ranges": [
+        {
+          "start_line": 3118,
+          "names": [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          "end_line": 3460,
+          "label": "AssignCv|BindCvRef"
+        },
+        {
+          "start_line": 3461,
+          "names": [
+            "FetchCvR"
+          ],
+          "end_line": 3546,
+          "label": "FetchCvR"
+        },
+        {
+          "start_line": 3547,
+          "names": [
+            "AssignConcat"
+          ],
+          "end_line": 3753,
+          "label": "AssignConcat"
+        },
+        {
+          "start_line": 3754,
+          "names": [
+            "Echo"
+          ],
+          "end_line": 3830,
+          "label": "Echo"
+        },
+        {
+          "start_line": 3831,
+          "names": [
+            "Echo_String"
+          ],
+          "end_line": 3840,
+          "label": "Echo_String"
+        },
+        {
+          "start_line": 3841,
+          "names": [
+            "Echo_Long"
+          ],
+          "end_line": 3860,
+          "label": "Echo_Long"
+        },
+        {
+          "start_line": 3861,
+          "names": [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          "end_line": 3931,
+          "label": "Add_LongLong|Sub_LongLong|Mul_LongLong|Mod_LongLong|BitwiseXor_LongLong|BitwiseAnd_LongLong|BitwiseOr_LongLong"
+        },
+        {
+          "start_line": 3932,
+          "names": [
+            "Add_TmpTmp"
+          ],
+          "end_line": 4025,
+          "label": "Add_TmpTmp"
+        },
+        {
+          "start_line": 4026,
+          "names": [
+            "Add_CvTmp"
+          ],
+          "end_line": 4081,
+          "label": "Add_CvTmp"
+        },
+        {
+          "start_line": 4082,
+          "names": [
+            "Sub_CvConst"
+          ],
+          "end_line": 4144,
+          "label": "Sub_CvConst"
+        },
+        {
+          "start_line": 4145,
+          "names": [
+            "Sub_TmpTmp"
+          ],
+          "end_line": 4184,
+          "label": "Sub_TmpTmp"
+        },
+        {
+          "start_line": 4185,
+          "names": [
+            "IsSmaller_CvConst",
+            "JmpZ_Lt_CvConst",
+            "JmpNZ_Lt_CvConst"
+          ],
+          "end_line": 4249,
+          "label": "IsSmaller_CvConst|JmpZ_Lt_CvConst|JmpNZ_Lt_CvConst"
+        },
+        {
+          "start_line": 4250,
+          "names": [
+            "IsSmallerOrEqual_CvConst",
+            "JmpZ_Le_CvConst",
+            "JmpNZ_Le_CvConst"
+          ],
+          "end_line": 4311,
+          "label": "IsSmallerOrEqual_CvConst|JmpZ_Le_CvConst|JmpNZ_Le_CvConst"
+        },
+        {
+          "start_line": 4312,
+          "names": [
+            "IsEqual_CvConst",
+            "JmpZ_Eq_CvConst",
+            "JmpNZ_Eq_CvConst"
+          ],
+          "end_line": 4371,
+          "label": "IsEqual_CvConst|JmpZ_Eq_CvConst|JmpNZ_Eq_CvConst"
+        },
+        {
+          "start_line": 4372,
+          "names": [
+            "Add"
+          ],
+          "end_line": 4426,
+          "label": "Add"
+        },
+        {
+          "start_line": 4427,
+          "names": [
+            "Sub"
+          ],
+          "end_line": 4467,
+          "label": "Sub"
+        },
+        {
+          "start_line": 4468,
+          "names": [
+            "Mul"
+          ],
+          "end_line": 4521,
+          "label": "Mul"
+        },
+        {
+          "start_line": 4522,
+          "names": [
+            "Div"
+          ],
+          "end_line": 4574,
+          "label": "Div"
+        },
+        {
+          "start_line": 4575,
+          "names": [
+            "Mod"
+          ],
+          "end_line": 4623,
+          "label": "Mod"
+        },
+        {
+          "start_line": 4624,
+          "names": [
+            "Concat_StringString"
+          ],
+          "end_line": 4644,
+          "label": "Concat_StringString"
+        },
+        {
+          "start_line": 4645,
+          "names": [
+            "Concat"
+          ],
+          "end_line": 4650,
+          "label": "Concat"
+        },
+        {
+          "start_line": 4651,
+          "names": [
+            "Spaceship"
+          ],
+          "end_line": 4692,
+          "label": "Spaceship"
+        },
+        {
+          "start_line": 4693,
+          "names": [
+            "Pow"
+          ],
+          "end_line": 4751,
+          "label": "Pow"
+        },
+        {
+          "start_line": 4752,
+          "names": [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          "end_line": 4853,
+          "label": "BitwiseAnd|BitwiseOr|BitwiseXor"
+        },
+        {
+          "start_line": 4854,
+          "names": [
+            "ShiftLeft"
+          ],
+          "end_line": 4895,
+          "label": "ShiftLeft"
+        },
+        {
+          "start_line": 4896,
+          "names": [
+            "ShiftRight"
+          ],
+          "end_line": 4937,
+          "label": "ShiftRight"
+        },
+        {
+          "start_line": 4938,
+          "names": [
+            "BitwiseNot"
+          ],
+          "end_line": 4964,
+          "label": "BitwiseNot"
+        },
+        {
+          "start_line": 4965,
+          "names": [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          "end_line": 5014,
+          "label": "IsEqual|IsNotEqual|IsSmaller|IsSmallerOrEqual"
+        },
+        {
+          "start_line": 5015,
+          "names": [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          "end_line": 5051,
+          "label": "IsIdentical|IsNotIdentical|JmpZ_Identical|JmpNZ_Identical"
+        },
+        {
+          "start_line": 5052,
+          "names": [
+            "Isset"
+          ],
+          "end_line": 5058,
+          "label": "Isset"
+        },
+        {
+          "start_line": 5059,
+          "names": [
+            "Cast"
+          ],
+          "end_line": 5228,
+          "label": "Cast"
+        },
+        {
+          "start_line": 5229,
+          "names": [
+            "BoolNot"
+          ],
+          "end_line": 5243,
+          "label": "BoolNot"
+        },
+        {
+          "start_line": 5244,
+          "names": [
+            "AssertCheck"
+          ],
+          "end_line": 5261,
+          "label": "AssertCheck"
+        },
+        {
+          "start_line": 5262,
+          "names": [
+            "Jmp"
+          ],
+          "end_line": 5275,
+          "label": "Jmp"
+        },
+        {
+          "start_line": 5276,
+          "names": [
+            "JmpFinally"
+          ],
+          "end_line": 5313,
+          "label": "JmpFinally"
+        },
+        {
+          "start_line": 5314,
+          "names": [
+            "QuickLongLoopJmp"
+          ],
+          "end_line": 5319,
+          "label": "QuickLongLoopJmp"
+        },
+        {
+          "start_line": 5320,
+          "names": [
+            "QuickLongLoopJmp"
+          ],
+          "end_line": 5327,
+          "label": "QuickLongLoopJmp"
+        },
+        {
+          "start_line": 5328,
+          "names": [
+            "JmpZ"
+          ],
+          "end_line": 5342,
+          "label": "JmpZ"
+        },
+        {
+          "start_line": 5343,
+          "names": [
+            "JmpNZ"
+          ],
+          "end_line": 5417,
+          "label": "JmpNZ"
+        },
+        {
+          "start_line": 5418,
+          "names": [
+            "DirectInternalCall1"
+          ],
+          "end_line": 5545,
+          "label": "DirectInternalCall1"
+        },
+        {
+          "start_line": 5546,
+          "names": [
+            "DirectInternalCall2"
+          ],
+          "end_line": 5574,
+          "label": "DirectInternalCall2"
+        },
+        {
+          "start_line": 5575,
+          "names": [
+            "Strlen"
+          ],
+          "end_line": 5602,
+          "label": "Strlen"
+        },
+        {
+          "start_line": 5603,
+          "names": [
+            "Strlen_Cv"
+          ],
+          "end_line": 5625,
+          "label": "Strlen_Cv"
+        },
+        {
+          "start_line": 5626,
+          "names": [
+            "Strlen_String"
+          ],
+          "end_line": 5647,
+          "label": "Strlen_String"
+        },
+        {
+          "start_line": 5648,
+          "names": [
+            "CallUserFuncArray"
+          ],
+          "end_line": 5660,
+          "label": "CallUserFuncArray"
+        },
+        {
+          "start_line": 5661,
+          "names": [
+            "InitUserCall"
+          ],
+          "end_line": 5756,
+          "label": "InitUserCall"
+        },
+        {
+          "start_line": 5757,
+          "names": [
+            "InitFcall"
+          ],
+          "end_line": 6049,
+          "label": "InitFcall"
+        },
+        {
+          "start_line": 6050,
+          "names": [
+            "SendVal"
+          ],
+          "end_line": 6168,
+          "label": "SendVal"
+        },
+        {
+          "start_line": 6169,
+          "names": [
+            "SendRef"
+          ],
+          "end_line": 6243,
+          "label": "SendRef"
+        },
+        {
+          "start_line": 6244,
+          "names": [
+            "SendVarEx"
+          ],
+          "end_line": 6358,
+          "label": "SendVarEx"
+        },
+        {
+          "start_line": 6359,
+          "names": [
+            "SendUser"
+          ],
+          "end_line": 6389,
+          "label": "SendUser"
+        },
+        {
+          "start_line": 6390,
+          "names": [
+            "SendUserChecked"
+          ],
+          "end_line": 6402,
+          "label": "SendUserChecked"
+        },
+        {
+          "start_line": 6403,
+          "names": [
+            "SendNamed"
+          ],
+          "end_line": 6410,
+          "label": "SendNamed"
+        },
+        {
+          "start_line": 6411,
+          "names": [
+            "DoFcall"
+          ],
+          "end_line": 7000,
+          "label": "DoFcall"
+        },
+        {
+          "start_line": 7001,
+          "names": [
+            "PreInc"
+          ],
+          "end_line": 7127,
+          "label": "PreInc"
+        },
+        {
+          "start_line": 7128,
+          "names": [
+            "PreDec"
+          ],
+          "end_line": 7249,
+          "label": "PreDec"
+        },
+        {
+          "start_line": 7250,
+          "names": [
+            "PostInc"
+          ],
+          "end_line": 7302,
+          "label": "PostInc"
+        },
+        {
+          "start_line": 7303,
+          "names": [
+            "PostDec"
+          ],
+          "end_line": 7354,
+          "label": "PostDec"
+        },
+        {
+          "start_line": 7355,
+          "names": [
+            "InitArray"
+          ],
+          "end_line": 7413,
+          "label": "InitArray"
+        },
+        {
+          "start_line": 7414,
+          "names": [
+            "AddArrayElement"
+          ],
+          "end_line": 7509,
+          "label": "AddArrayElement"
+        },
+        {
+          "start_line": 7510,
+          "names": [
+            "AddArrayUnpack"
+          ],
+          "end_line": 7522,
+          "label": "AddArrayUnpack"
+        },
+        {
+          "start_line": 7523,
+          "names": [
+            "AddCallArgument"
+          ],
+          "end_line": 7535,
+          "label": "AddCallArgument"
+        },
+        {
+          "start_line": 7536,
+          "names": [
+            "AddCallUnpack"
+          ],
+          "end_line": 7548,
+          "label": "AddCallUnpack"
+        },
+        {
+          "start_line": 7549,
+          "names": [
+            "FetchDimR"
+          ],
+          "end_line": 8428,
+          "label": "FetchDimR"
+        },
+        {
+          "start_line": 8429,
+          "names": [
+            "FetchGlobals",
+            "FetchGlobal",
+            "AssignGlobal",
+            "UnsetGlobal",
+            "BindGlobalRef",
+            "AssignGlobalRef"
+          ],
+          "end_line": 8446,
+          "label": "FetchGlobals|FetchGlobal|AssignGlobal|UnsetGlobal|BindGlobalRef|AssignGlobalRef"
+        },
+        {
+          "start_line": 8447,
+          "names": [
+            "FetchDynamicVar",
+            "AssignDynamicVar",
+            "UnsetDynamicVar",
+            "BindDynamicVarRef",
+            "AssignDynamicVarRef",
+            "BindDynamicGlobal"
+          ],
+          "end_line": 8464,
+          "label": "FetchDynamicVar|AssignDynamicVar|UnsetDynamicVar|BindDynamicVarRef|AssignDynamicVarRef|BindDynamicGlobal"
+        },
+        {
+          "start_line": 8465,
+          "names": [
+            "SnapshotDiagnosticWrite"
+          ],
+          "end_line": 8481,
+          "label": "SnapshotDiagnosticWrite"
+        },
+        {
+          "start_line": 8482,
+          "names": [
+            "AssignDim"
+          ],
+          "end_line": 8999,
+          "label": "AssignDim"
+        },
+        {
+          "start_line": 9000,
+          "names": [
+            "ArrayPushOp"
+          ],
+          "end_line": 9286,
+          "label": "ArrayPushOp"
+        },
+        {
+          "start_line": 9287,
+          "names": [
+            "BindArrayAppendRef"
+          ],
+          "end_line": 9518,
+          "label": "BindArrayAppendRef"
+        },
+        {
+          "start_line": 9519,
+          "names": [
+            "UnsetDim"
+          ],
+          "end_line": 9732,
+          "label": "UnsetDim"
+        },
+        {
+          "start_line": 9733,
+          "names": [
+            "ForeachInit"
+          ],
+          "end_line": 9741,
+          "label": "ForeachInit"
+        },
+        {
+          "start_line": 9742,
+          "names": [
+            "ForeachNext"
+          ],
+          "end_line": 9750,
+          "label": "ForeachNext"
+        },
+        {
+          "start_line": 9751,
+          "names": [
+            "ForeachNextPlain"
+          ],
+          "end_line": 9759,
+          "label": "ForeachNextPlain"
+        },
+        {
+          "start_line": 9760,
+          "names": [
+            "ForeachNextRef"
+          ],
+          "end_line": 9768,
+          "label": "ForeachNextRef"
+        },
+        {
+          "start_line": 9769,
+          "names": [
+            "ForeachWriteback"
+          ],
+          "end_line": 9772,
+          "label": "ForeachWriteback"
+        },
+        {
+          "start_line": 9773,
+          "names": [
+            "Throw"
+          ],
+          "end_line": 9780,
+          "label": "Throw"
+        },
+        {
+          "start_line": 9781,
+          "names": [
+            "NewObj"
+          ],
+          "end_line": 9802,
+          "label": "NewObj"
+        },
+        {
+          "start_line": 9803,
+          "names": [
+            "FetchObjR"
+          ],
+          "end_line": 9835,
+          "label": "FetchObjR"
+        },
+        {
+          "start_line": 9836,
+          "names": [
+            "IssetObj"
+          ],
+          "end_line": 9846,
+          "label": "IssetObj"
+        },
+        {
+          "start_line": 9847,
+          "names": [
+            "UnsetObj"
+          ],
+          "end_line": 9857,
+          "label": "UnsetObj"
+        },
+        {
+          "start_line": 9858,
+          "names": [
+            "BindObjPropRef"
+          ],
+          "end_line": 9875,
+          "label": "BindObjPropRef"
+        },
+        {
+          "start_line": 9876,
+          "names": [
+            "BindArrayDimRef"
+          ],
+          "end_line": 9888,
+          "label": "BindArrayDimRef"
+        },
+        {
+          "start_line": 9889,
+          "names": [
+            "AssignObjProp"
+          ],
+          "end_line": 10183,
+          "label": "AssignObjProp"
+        },
+        {
+          "start_line": 10184,
+          "names": [
+            "AssignObjDim"
+          ],
+          "end_line": 10368,
+          "label": "AssignObjDim"
+        },
+        {
+          "start_line": 10369,
+          "names": [
+            "InitMethodCall"
+          ],
+          "end_line": 10891,
+          "label": "InitMethodCall"
+        },
+        {
+          "start_line": 10892,
+          "names": [
+            "InitStaticCall"
+          ],
+          "end_line": 10900,
+          "label": "InitStaticCall"
+        },
+        {
+          "start_line": 10901,
+          "names": [
+            "InitLateStaticCall"
+          ],
+          "end_line": 10909,
+          "label": "InitLateStaticCall"
+        },
+        {
+          "start_line": 10910,
+          "names": [
+            "InitDynamicCall"
+          ],
+          "end_line": 10922,
+          "label": "InitDynamicCall"
+        },
+        {
+          "start_line": 10923,
+          "names": [
+            "InitDynamicStaticCall"
+          ],
+          "end_line": 10935,
+          "label": "InitDynamicStaticCall"
+        },
+        {
+          "start_line": 10936,
+          "names": [
+            "CheckGenericArgs"
+          ],
+          "end_line": 10939,
+          "label": "CheckGenericArgs"
+        },
+        {
+          "start_line": 10940,
+          "names": [
+            "CheckLateStaticGenericArgs"
+          ],
+          "end_line": 10943,
+          "label": "CheckLateStaticGenericArgs"
+        },
+        {
+          "start_line": 10944,
+          "names": [
+            "CheckReifiedArgs"
+          ],
+          "end_line": 10947,
+          "label": "CheckReifiedArgs"
+        },
+        {
+          "start_line": 10948,
+          "names": [
+            "CheckReifiedReturn"
+          ],
+          "end_line": 10951,
+          "label": "CheckReifiedReturn"
+        },
+        {
+          "start_line": 10952,
+          "names": [
+            "CheckGenericDefault"
+          ],
+          "end_line": 10955,
+          "label": "CheckGenericDefault"
+        },
+        {
+          "start_line": 10956,
+          "names": [
+            "CheckDefaultType"
+          ],
+          "end_line": 10968,
+          "label": "CheckDefaultType"
+        },
+        {
+          "start_line": 10969,
+          "names": [
+            "FetchStaticProp"
+          ],
+          "end_line": 10981,
+          "label": "FetchStaticProp"
+        },
+        {
+          "start_line": 10982,
+          "names": [
+            "FetchLateStaticProp"
+          ],
+          "end_line": 10994,
+          "label": "FetchLateStaticProp"
+        },
+        {
+          "start_line": 10995,
+          "names": [
+            "FetchClassConst"
+          ],
+          "end_line": 11007,
+          "label": "FetchClassConst"
+        },
+        {
+          "start_line": 11008,
+          "names": [
+            "FetchLateClassConst"
+          ],
+          "end_line": 11020,
+          "label": "FetchLateClassConst"
+        },
+        {
+          "start_line": 11021,
+          "names": [
+            "FetchDynamicClassConst"
+          ],
+          "end_line": 11033,
+          "label": "FetchDynamicClassConst"
+        },
+        {
+          "start_line": 11034,
+          "names": [
+            "FetchLateDynamicClassConst"
+          ],
+          "end_line": 11046,
+          "label": "FetchLateDynamicClassConst"
+        },
+        {
+          "start_line": 11047,
+          "names": [
+            "AssignStaticProp"
+          ],
+          "end_line": 11059,
+          "label": "AssignStaticProp"
+        },
+        {
+          "start_line": 11060,
+          "names": [
+            "AssignLateStaticProp"
+          ],
+          "end_line": 11072,
+          "label": "AssignLateStaticProp"
+        },
+        {
+          "start_line": 11073,
+          "names": [
+            "UnsetStaticProp"
+          ],
+          "end_line": 11085,
+          "label": "UnsetStaticProp"
+        },
+        {
+          "start_line": 11086,
+          "names": [
+            "Instanceof"
+          ],
+          "end_line": 11098,
+          "label": "Instanceof"
+        },
+        {
+          "start_line": 11099,
+          "names": [
+            "FetchConst"
+          ],
+          "end_line": 11127,
+          "label": "FetchConst"
+        },
+        {
+          "start_line": 11128,
+          "names": [
+            "BindDefaultParam"
+          ],
+          "end_line": 11133,
+          "label": "BindDefaultParam"
+        },
+        {
+          "start_line": 11134,
+          "names": [
+            "BindGlobal"
+          ],
+          "end_line": 11137,
+          "label": "BindGlobal"
+        },
+        {
+          "start_line": 11138,
+          "names": [
+            "CheckStatic"
+          ],
+          "end_line": 11143,
+          "label": "CheckStatic"
+        },
+        {
+          "start_line": 11144,
+          "names": [
+            "BindStatic"
+          ],
+          "end_line": 11148,
+          "label": "BindStatic"
+        },
+        {
+          "start_line": 11149,
+          "names": [
+            "Return"
+          ],
+          "end_line": 11890,
+          "label": "Return"
+        },
+        {
+          "start_line": 11891,
+          "names": [
+            "Yield"
+          ],
+          "end_line": 11899,
+          "label": "Yield"
+        },
+        {
+          "start_line": 11900,
+          "names": [
+            "YieldFrom"
+          ],
+          "end_line": 11909,
+          "label": "YieldFrom"
+        },
+        {
+          "start_line": 11910,
+          "names": [
+            "GeneratorReturn"
+          ],
+          "end_line": 11913,
+          "label": "GeneratorReturn"
+        },
+        {
+          "start_line": 11914,
+          "names": [
+            "Include"
+          ],
+          "end_line": 11931,
+          "label": "Include"
+        },
+        {
+          "start_line": 11932,
+          "names": [
+            "Eval"
+          ],
+          "end_line": 11947,
+          "label": "Eval"
+        },
+        {
+          "start_line": 11948,
+          "names": [
+            "CloneObj"
+          ],
+          "end_line": 11955,
+          "label": "CloneObj"
+        },
+        {
+          "start_line": 11956,
+          "names": [
+            "ValidateCloneWith"
+          ],
+          "end_line": 11963,
+          "label": "ValidateCloneWith"
+        },
+        {
+          "start_line": 11964,
+          "names": [
+            "EndCloneWith"
+          ],
+          "end_line": 11965,
+          "label": "EndCloneWith"
+        },
+        {
+          "start_line": 11966,
+          "names": [
+            "ReportDeprecatedTraitUses"
+          ],
+          "end_line": 11970,
+          "label": "ReportDeprecatedTraitUses"
+        },
+        {
+          "start_line": 11971,
+          "names": [
+            "Tick"
+          ],
+          "end_line": 11975,
+          "label": "Tick"
+        },
+        {
+          "start_line": 11976,
+          "names": [
+            "DeclareClass"
+          ],
+          "end_line": 11991,
+          "label": "DeclareClass"
+        },
+        {
+          "start_line": 11992,
+          "names": [
+            "DeclareFunction"
+          ],
+          "end_line": 11995,
+          "label": "DeclareFunction"
+        },
+        {
+          "start_line": 11996,
+          "names": [
+            "DeclarationCompileFatal"
+          ],
+          "end_line": 12003,
+          "label": "DeclarationCompileFatal"
+        },
+        {
+          "start_line": 12004,
+          "names": [
+            "CreateClosure"
+          ],
+          "end_line": 12021,
+          "label": "CreateClosure"
+        },
+        {
+          "start_line": 12022,
+          "names": [
+            "CreateFirstClassCallable"
+          ],
+          "end_line": 12034,
+          "label": "CreateFirstClassCallable"
+        },
+        {
+          "start_line": 12035,
+          "names": [
+            "EnsureFccClassLoaded"
+          ],
+          "end_line": 12047,
+          "label": "EnsureFccClassLoaded"
+        },
+        {
+          "start_line": 12048,
+          "names": [
+            "ClosureUseVar"
+          ],
+          "end_line": 12051,
+          "label": "ClosureUseVar"
+        },
+        {
+          "start_line": 12052,
+          "names": [
+            "NullSafeCheck"
+          ],
+          "end_line": 12066,
+          "label": "NullSafeCheck"
+        },
+        {
+          "start_line": 12067,
+          "names": [
+            "ReleaseTemps"
+          ],
+          "end_line": 12122,
+          "label": "ReleaseTemps"
+        }
+      ],
+      "by_opcode_source_arm": {
+        "Return": 3194009582,
+        "AssignCv|BindCvRef": 2947008841,
+        "ReleaseTemps": 2770008310,
+        "FetchObjR": 2396007188,
+        "FetchDimR": 2364007092,
+        "unresolved_main_location": 2084006252,
+        "main_before_opcode_match": 1891005673,
+        "main_after_opcode_match": 1481004443,
+        "DoFcall": 1204003612,
+        "BitwiseAnd|BitwiseOr|BitwiseXor": 929002787,
+        "InitMethodCall": 898002694,
+        "AssignObjProp": 795002385,
+        "AssignDim": 597001791,
+        "JmpZ": 555001665,
+        "IsIdentical|IsNotIdentical|JmpZ_Identical|JmpNZ_Identical": 534001602,
+        "FetchConst": 433001299,
+        "SendVarEx": 386001158,
+        "SendVal": 321000963,
+        "CallUserFuncArray": 262000786,
+        "InitFcall": 165000495,
+        "JmpNZ": 161000483,
+        "Instanceof": 146000438,
+        "Isset": 144000432,
+        "IsEqual|IsNotEqual|IsSmaller|IsSmallerOrEqual": 133000399,
+        "InitArray": 103000309,
+        "Sub": 94000282,
+        "FetchCvR": 79000237,
+        "BoolNot": 77000231,
+        "Add_TmpTmp": 62000186,
+        "Cast": 59000177,
+        "ArrayPushOp": 58000174,
+        "AddArrayElement": 54000162,
+        "Add_LongLong|Sub_LongLong|Mul_LongLong|Mod_LongLong|BitwiseXor_LongLong|BitwiseAnd_LongLong|BitwiseOr_LongLong": 44000132,
+        "FetchClassConst": 41000123,
+        "InitStaticCall": 35000105,
+        "SendRef": 33000099,
+        "Jmp": 29000087,
+        "Concat_StringString": 26000078,
+        "ForeachNextPlain": 25000075,
+        "ForeachInit": 21000063,
+        "FetchStaticProp": 19000057,
+        "BindDefaultParam": 15000045,
+        "Add": 14000042,
+        "UnsetDim": 14000042,
+        "AssignConcat": 11000033,
+        "NewObj": 10000030,
+        "BindObjPropRef": 9000027,
+        "PreInc": 9000027,
+        "InitDynamicCall": 6000018,
+        "ForeachNext": 5000015,
+        "CreateClosure": 4000012,
+        "AddCallArgument": 3000009,
+        "AssertCheck": 3000009,
+        "Mul": 2000006,
+        "AddCallUnpack": 2000006,
+        "JmpFinally": 2000006,
+        "Add_CvTmp": 1000003,
+        "Concat": 1000003,
+        "Sub_TmpTmp": 1000003
+      },
+      "by_inline_value_family": {
+        "other_main_inline": 26661079983,
+        "value_clone": 590001770,
+        "value_drop": 510001530
+      },
+      "table": [
+        {
+          "opcode_source_arm": "Return",
+          "inline_value_family": "other_main_inline",
+          "samples": 3083,
+          "period": 3083009249
+        },
+        {
+          "opcode_source_arm": "AssignCv|BindCvRef",
+          "inline_value_family": "other_main_inline",
+          "samples": 2837,
+          "period": 2837008511
+        },
+        {
+          "opcode_source_arm": "ReleaseTemps",
+          "inline_value_family": "other_main_inline",
+          "samples": 2378,
+          "period": 2378007134
+        },
+        {
+          "opcode_source_arm": "FetchDimR",
+          "inline_value_family": "other_main_inline",
+          "samples": 2325,
+          "period": 2325006975
+        },
+        {
+          "opcode_source_arm": "FetchObjR",
+          "inline_value_family": "other_main_inline",
+          "samples": 2219,
+          "period": 2219006657
+        },
+        {
+          "opcode_source_arm": "unresolved_main_location",
+          "inline_value_family": "other_main_inline",
+          "samples": 2082,
+          "period": 2082006246
+        },
+        {
+          "opcode_source_arm": "main_before_opcode_match",
+          "inline_value_family": "other_main_inline",
+          "samples": 1891,
+          "period": 1891005673
+        },
+        {
+          "opcode_source_arm": "main_after_opcode_match",
+          "inline_value_family": "other_main_inline",
+          "samples": 1481,
+          "period": 1481004443
+        },
+        {
+          "opcode_source_arm": "DoFcall",
+          "inline_value_family": "other_main_inline",
+          "samples": 1204,
+          "period": 1204003612
+        },
+        {
+          "opcode_source_arm": "BitwiseAnd|BitwiseOr|BitwiseXor",
+          "inline_value_family": "other_main_inline",
+          "samples": 929,
+          "period": 929002787
+        },
+        {
+          "opcode_source_arm": "InitMethodCall",
+          "inline_value_family": "other_main_inline",
+          "samples": 868,
+          "period": 868002604
+        },
+        {
+          "opcode_source_arm": "AssignObjProp",
+          "inline_value_family": "other_main_inline",
+          "samples": 772,
+          "period": 772002316
+        },
+        {
+          "opcode_source_arm": "AssignDim",
+          "inline_value_family": "other_main_inline",
+          "samples": 558,
+          "period": 558001674
+        },
+        {
+          "opcode_source_arm": "JmpZ",
+          "inline_value_family": "other_main_inline",
+          "samples": 555,
+          "period": 555001665
+        },
+        {
+          "opcode_source_arm": "IsIdentical|IsNotIdentical|JmpZ_Identical|JmpNZ_Identical",
+          "inline_value_family": "other_main_inline",
+          "samples": 534,
+          "period": 534001602
+        },
+        {
+          "opcode_source_arm": "FetchConst",
+          "inline_value_family": "other_main_inline",
+          "samples": 433,
+          "period": 433001299
+        },
+        {
+          "opcode_source_arm": "ReleaseTemps",
+          "inline_value_family": "value_drop",
+          "samples": 391,
+          "period": 391001173
+        },
+        {
+          "opcode_source_arm": "SendVarEx",
+          "inline_value_family": "other_main_inline",
+          "samples": 300,
+          "period": 300000900
+        },
+        {
+          "opcode_source_arm": "CallUserFuncArray",
+          "inline_value_family": "other_main_inline",
+          "samples": 262,
+          "period": 262000786
+        },
+        {
+          "opcode_source_arm": "SendVal",
+          "inline_value_family": "other_main_inline",
+          "samples": 238,
+          "period": 238000714
+        },
+        {
+          "opcode_source_arm": "FetchObjR",
+          "inline_value_family": "value_clone",
+          "samples": 177,
+          "period": 177000531
+        },
+        {
+          "opcode_source_arm": "InitFcall",
+          "inline_value_family": "other_main_inline",
+          "samples": 165,
+          "period": 165000495
+        },
+        {
+          "opcode_source_arm": "JmpNZ",
+          "inline_value_family": "other_main_inline",
+          "samples": 161,
+          "period": 161000483
+        },
+        {
+          "opcode_source_arm": "Instanceof",
+          "inline_value_family": "other_main_inline",
+          "samples": 146,
+          "period": 146000438
+        },
+        {
+          "opcode_source_arm": "Isset",
+          "inline_value_family": "other_main_inline",
+          "samples": 144,
+          "period": 144000432
+        },
+        {
+          "opcode_source_arm": "IsEqual|IsNotEqual|IsSmaller|IsSmallerOrEqual",
+          "inline_value_family": "other_main_inline",
+          "samples": 133,
+          "period": 133000399
+        },
+        {
+          "opcode_source_arm": "AssignCv|BindCvRef",
+          "inline_value_family": "value_clone",
+          "samples": 110,
+          "period": 110000330
+        },
+        {
+          "opcode_source_arm": "InitArray",
+          "inline_value_family": "other_main_inline",
+          "samples": 103,
+          "period": 103000309
+        },
+        {
+          "opcode_source_arm": "Sub",
+          "inline_value_family": "other_main_inline",
+          "samples": 94,
+          "period": 94000282
+        },
+        {
+          "opcode_source_arm": "Return",
+          "inline_value_family": "value_drop",
+          "samples": 88,
+          "period": 88000264
+        },
+        {
+          "opcode_source_arm": "SendVarEx",
+          "inline_value_family": "value_clone",
+          "samples": 86,
+          "period": 86000258
+        },
+        {
+          "opcode_source_arm": "SendVal",
+          "inline_value_family": "value_clone",
+          "samples": 83,
+          "period": 83000249
+        },
+        {
+          "opcode_source_arm": "BoolNot",
+          "inline_value_family": "other_main_inline",
+          "samples": 77,
+          "period": 77000231
+        },
+        {
+          "opcode_source_arm": "FetchCvR",
+          "inline_value_family": "other_main_inline",
+          "samples": 75,
+          "period": 75000225
+        },
+        {
+          "opcode_source_arm": "Add_TmpTmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 62,
+          "period": 62000186
+        },
+        {
+          "opcode_source_arm": "Cast",
+          "inline_value_family": "other_main_inline",
+          "samples": 59,
+          "period": 59000177
+        },
+        {
+          "opcode_source_arm": "ArrayPushOp",
+          "inline_value_family": "other_main_inline",
+          "samples": 58,
+          "period": 58000174
+        },
+        {
+          "opcode_source_arm": "AddArrayElement",
+          "inline_value_family": "other_main_inline",
+          "samples": 50,
+          "period": 50000150
+        },
+        {
+          "opcode_source_arm": "Add_LongLong|Sub_LongLong|Mul_LongLong|Mod_LongLong|BitwiseXor_LongLong|BitwiseAnd_LongLong|BitwiseOr_LongLong",
+          "inline_value_family": "other_main_inline",
+          "samples": 44,
+          "period": 44000132
+        },
+        {
+          "opcode_source_arm": "FetchClassConst",
+          "inline_value_family": "other_main_inline",
+          "samples": 41,
+          "period": 41000123
+        },
+        {
+          "opcode_source_arm": "FetchDimR",
+          "inline_value_family": "value_clone",
+          "samples": 39,
+          "period": 39000117
+        },
+        {
+          "opcode_source_arm": "InitStaticCall",
+          "inline_value_family": "other_main_inline",
+          "samples": 35,
+          "period": 35000105
+        },
+        {
+          "opcode_source_arm": "SendRef",
+          "inline_value_family": "other_main_inline",
+          "samples": 33,
+          "period": 33000099
+        },
+        {
+          "opcode_source_arm": "InitMethodCall",
+          "inline_value_family": "value_clone",
+          "samples": 30,
+          "period": 30000090
+        },
+        {
+          "opcode_source_arm": "Jmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 29,
+          "period": 29000087
+        },
+        {
+          "opcode_source_arm": "Concat_StringString",
+          "inline_value_family": "other_main_inline",
+          "samples": 26,
+          "period": 26000078
+        },
+        {
+          "opcode_source_arm": "ForeachNextPlain",
+          "inline_value_family": "other_main_inline",
+          "samples": 25,
+          "period": 25000075
+        },
+        {
+          "opcode_source_arm": "Return",
+          "inline_value_family": "value_clone",
+          "samples": 23,
+          "period": 23000069
+        },
+        {
+          "opcode_source_arm": "AssignDim",
+          "inline_value_family": "value_clone",
+          "samples": 22,
+          "period": 22000066
+        },
+        {
+          "opcode_source_arm": "ForeachInit",
+          "inline_value_family": "other_main_inline",
+          "samples": 21,
+          "period": 21000063
+        },
+        {
+          "opcode_source_arm": "FetchStaticProp",
+          "inline_value_family": "other_main_inline",
+          "samples": 19,
+          "period": 19000057
+        },
+        {
+          "opcode_source_arm": "AssignDim",
+          "inline_value_family": "value_drop",
+          "samples": 17,
+          "period": 17000051
+        },
+        {
+          "opcode_source_arm": "BindDefaultParam",
+          "inline_value_family": "other_main_inline",
+          "samples": 15,
+          "period": 15000045
+        },
+        {
+          "opcode_source_arm": "Add",
+          "inline_value_family": "other_main_inline",
+          "samples": 14,
+          "period": 14000042
+        },
+        {
+          "opcode_source_arm": "UnsetDim",
+          "inline_value_family": "other_main_inline",
+          "samples": 14,
+          "period": 14000042
+        },
+        {
+          "opcode_source_arm": "AssignObjProp",
+          "inline_value_family": "value_drop",
+          "samples": 14,
+          "period": 14000042
+        },
+        {
+          "opcode_source_arm": "AssignConcat",
+          "inline_value_family": "other_main_inline",
+          "samples": 11,
+          "period": 11000033
+        },
+        {
+          "opcode_source_arm": "NewObj",
+          "inline_value_family": "other_main_inline",
+          "samples": 10,
+          "period": 10000030
+        },
+        {
+          "opcode_source_arm": "BindObjPropRef",
+          "inline_value_family": "other_main_inline",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "PreInc",
+          "inline_value_family": "other_main_inline",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "AssignObjProp",
+          "inline_value_family": "value_clone",
+          "samples": 9,
+          "period": 9000027
+        },
+        {
+          "opcode_source_arm": "InitDynamicCall",
+          "inline_value_family": "other_main_inline",
+          "samples": 6,
+          "period": 6000018
+        },
+        {
+          "opcode_source_arm": "ForeachNext",
+          "inline_value_family": "other_main_inline",
+          "samples": 5,
+          "period": 5000015
+        },
+        {
+          "opcode_source_arm": "FetchCvR",
+          "inline_value_family": "value_clone",
+          "samples": 4,
+          "period": 4000012
+        },
+        {
+          "opcode_source_arm": "AddArrayElement",
+          "inline_value_family": "value_clone",
+          "samples": 4,
+          "period": 4000012
+        },
+        {
+          "opcode_source_arm": "CreateClosure",
+          "inline_value_family": "other_main_inline",
+          "samples": 4,
+          "period": 4000012
+        },
+        {
+          "opcode_source_arm": "AddCallArgument",
+          "inline_value_family": "other_main_inline",
+          "samples": 3,
+          "period": 3000009
+        },
+        {
+          "opcode_source_arm": "AssertCheck",
+          "inline_value_family": "other_main_inline",
+          "samples": 3,
+          "period": 3000009
+        },
+        {
+          "opcode_source_arm": "Mul",
+          "inline_value_family": "other_main_inline",
+          "samples": 2,
+          "period": 2000006
+        },
+        {
+          "opcode_source_arm": "AddCallUnpack",
+          "inline_value_family": "other_main_inline",
+          "samples": 2,
+          "period": 2000006
+        },
+        {
+          "opcode_source_arm": "JmpFinally",
+          "inline_value_family": "other_main_inline",
+          "samples": 2,
+          "period": 2000006
+        },
+        {
+          "opcode_source_arm": "unresolved_main_location",
+          "inline_value_family": "value_clone",
+          "samples": 2,
+          "period": 2000006
+        },
+        {
+          "opcode_source_arm": "Add_CvTmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "Concat",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "Sub_TmpTmp",
+          "inline_value_family": "other_main_inline",
+          "samples": 1,
+          "period": 1000003
+        },
+        {
+          "opcode_source_arm": "ReleaseTemps",
+          "inline_value_family": "value_clone",
+          "samples": 1,
+          "period": 1000003
+        }
+      ],
+      "unresolved_main_samples": 2084,
+      "unresolved_main_period": 2084006252,
+      "helper_ancestry": {
+        "slot_writer_ancestry": {
+          "samples": 4574,
+          "period": 4574013722
+        },
+        "operand_getter_ancestry": {
+          "samples": 982,
+          "period": 982002946
+        },
+        "union": {
+          "samples": 5556,
+          "period": 5556016668
+        }
+      },
+      "ancestry_invariant": "Presence in a DWARF inline chain, deduplicated within each PC; groups can overlap and must not be added. Union counts each PC once.",
+      "raw_inline_sha256": "ff6529aa54c672469e5531cde7026dac25c5ab4538399d0805a2986e213833ec",
+      "physical_export_sha256": "ea2d53781db3c319edc8ef238de0a2a3a622e10096a1bf0e2627cc45931bb204"
+    }
+  },
+  "decision": "Reject copying-event frequency alone as the next optimization budget. The largest main source-arm correlations span Return, AssignCv/BindCvRef, ReleaseTemps, FetchObjR and FetchDimR. Quantify full operand/result publication and retirement protocols, using this native decomposition and existing ownership semantics; no new transfer guard or isolated helper layout variant is admitted by source correlation alone."
+}

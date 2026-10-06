@@ -339,4 +339,9 @@ pub enum OpCode {
     /// requires runtime by-reference diagnostics. The ordinary SendUser stays
     /// branch-free when an immutable literal declaration proves by-value use.
     SendUserChecked = 226,
+    /// Strict identity predicate consumed only by its adjacent conditional
+    /// jump. result is the target; extended_value retains the original TMP
+    /// for canonical planner projection. Fall-through skips the original jump.
+    JmpZ_Identical = 227,
+    JmpNZ_Identical = 228,
 }

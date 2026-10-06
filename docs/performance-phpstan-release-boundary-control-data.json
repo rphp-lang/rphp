@@ -1,0 +1,842 @@
+{
+  "status": "rejected code-generation control; production unchanged; parity open",
+  "contract": {
+    "status": "single private ordinary release-boundary candidate; not production migration",
+    "production_commit": "424d62aa8e183efb89a6eea1a918b9d699f50bff",
+    "production_runtime_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+    "baseline_repair_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+    "baseline_repair_binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+    "outcome": "Reduce ordinary owned-value retirement and replacement classification overhead by separating existing final-tree scratch/callback work from the common Rust lifetime protocol.",
+    "evidence": "Fresh correct-repair PGO flat profile: committed frame retirement 2918/68458 self samples (4.262%); accepted frame retirement 1333/66789 (1.996%). Both zero loss, all periods reconcile, exact native repaired analysis 68.4792G versus accepted 66.8054G in separate diagnostic windows. These are descriptive sampled self budgets, not predicted savings.",
+    "hypothesis": "Common retirement and pure release classification are incorrectly marked cold. Permit ordinary compiler optimization/inlining there, while outlining only the existing final-root tree inspection and its four scratch sets; avoid reserving that scratch state in common classification. Existing Value drop and callback machinery remain canonical.",
+    "semantic_envelope": [
+      "Keep owned arguments/receivers, aliases, COW, pending exception publication/replacement/previous, dynamic symbols, constructor completion, resource/Fiber/generator behavior and owner retirement order exactly unchanged.",
+      "No new eligibility guard, root category, reflection/workload recognizer, borrowing, instruction flag, unsafe invariant or ASM. Only Rust code-generation boundaries and an exact existing inspection-call extraction change.",
+      "No Value/frame/instruction/metadata layout or typed/JIT coverage change."
+    ],
+    "ownership": [
+      "sole integrating task",
+      "private snapshot src/vm/execute/call_frames.rs only; frozen correctness repair and production source untouched"
+    ],
+    "gates": [
+      "locked ordinary release/check, unchanged unsafe ceilings, bounded native text/prologue preflight",
+      "sixteen existing ownership/diagnostic PHP controls before performance selection",
+      "two output-checked alternating native ordinary pairs against the exact correct repair; analysis FIFO/fresh caches/CPU2/all valid samples",
+      "at least 2% instruction reduction against repair admits broader PGO/feature/control verification; native main text <=10% growth and stack <=512-byte growth for this selector",
+      "production migration additionally needs preserved ownership correctness and global independent performance gates; no production acceptance or parity claim from this selector"
+    ],
+    "stop_rule": "Reject on a semantic discrepancy, layout/unsafe expansion, excessive native growth, or less than 2% saving against the exact correct repair. Do not tune further cold/inline variants or add compensating runtime guards after rejection; preserve source and evidence and continue the larger protocol investigation."
+  },
+  "build": {
+    "complete": true,
+    "source_sha256": "d1ba9e462337055d64afdf57699498a08cbd51f635191932461588a163173541",
+    "commands": [
+      {
+        "label": "check",
+        "exit": 0,
+        "seconds": 18.195477747009136
+      },
+      {
+        "label": "release",
+        "exit": 0,
+        "seconds": 68.83970480898279
+      }
+    ],
+    "binary_sha256": "4ae0f740d97da5fccd7eb7032ef70cdf746acf6f17fedfcc0f14cb00511be4e7",
+    "binary_bytes": 24523696,
+    "unsafe_counts": [
+      1745,
+      319
+    ],
+    "changed_files": [
+      "src/vm/execute/call_frames.rs"
+    ],
+    "ordinary_release": true,
+    "pgo": false
+  },
+  "decision": {
+    "complete": true,
+    "status": "rejected by predeclared ordinary selector",
+    "selector_passed": false,
+    "source_sha256": "d1ba9e462337055d64afdf57699498a08cbd51f635191932461588a163173541",
+    "binary_sha256": "4ae0f740d97da5fccd7eb7032ef70cdf746acf6f17fedfcc0f14cb00511be4e7",
+    "baseline_source_sha256": "42414620c2fa1475945534d69b06f94c4b7d515f8d6d43c4d5c5cf0806d89ab3",
+    "baseline_binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+    "instructions": {
+      "baseline": 75513335335.0,
+      "candidate": 75464544436.5
+    },
+    "instruction_delta_percent": -0.06461229434979732,
+    "analysis_seconds": {
+      "baseline": 6.7599915265,
+      "candidate": 6.715912341999999
+    },
+    "time_delta_percent": -0.6520597596491817,
+    "all_samples_retained": true,
+    "production_changed": false,
+    "pgo_acceptance": false,
+    "parity_complete": false
+  },
+  "native": {
+    "complete": true,
+    "rows": {
+      "baseline": {
+        "main_text_bytes": 336537,
+        "stack_prologue_bytes": 3096,
+        "stack_local_bytes": 3048,
+        "saved_register_bytes": 48,
+        "stack_probe_pages": 0,
+        "binary_sha256": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b"
+      },
+      "candidate": {
+        "main_text_bytes": 336582,
+        "stack_prologue_bytes": 3096,
+        "stack_local_bytes": 3048,
+        "saved_register_bytes": 48,
+        "stack_probe_pages": 0,
+        "binary_sha256": "4ae0f740d97da5fccd7eb7032ef70cdf746acf6f17fedfcc0f14cb00511be4e7"
+      }
+    },
+    "text_growth_percent": 0.013371486641888808,
+    "stack_growth_bytes": 0,
+    "passed": true
+  },
+  "focused": {
+    "complete": true,
+    "passed": true,
+    "rows": [
+      {
+        "control": "array-cow.php",
+        "control_sha256": "72947b99a539af12ece146b5624af6777f2545f5d7b2a9736f7c627c1e298cb0",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "192abd2004d7e315227c983fe84729134c26526b860d314018f310c12effba6f",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "192abd2004d7e315227c983fe84729134c26526b860d314018f310c12effba6f",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "192abd2004d7e315227c983fe84729134c26526b860d314018f310c12effba6f",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "array-reference.php",
+        "control_sha256": "52c8746fbd60e23fdb41149f6765c086b1f6872d8f8df7dbf0b314d70840b74f",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "9fa1bdb3caa705513c3c1379fc98482a58d72051a83845ede2a7fed67307fbce",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "9fa1bdb3caa705513c3c1379fc98482a58d72051a83845ede2a7fed67307fbce",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "9fa1bdb3caa705513c3c1379fc98482a58d72051a83845ede2a7fed67307fbce",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "closure-reference.php",
+        "control_sha256": "7865a797693a5badac1521e2a3fc8316429b11ac52e15664991c138802dd1752",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "a768465ff63cf8996987affd095bdaf422442e55ecf2ae31e20143653f0b73d2",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "a768465ff63cf8996987affd095bdaf422442e55ecf2ae31e20143653f0b73d2",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "a768465ff63cf8996987affd095bdaf422442e55ecf2ae31e20143653f0b73d2",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "fiber-argument.php",
+        "control_sha256": "071642c60961dd5a8bf13e3efddbd81240295cd2d5ca07dd2153c0bbab19b81f",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "a63526572f3d0a60782085268f0995736d1db8ce4c499e453ace718e1cc494d7",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "a63526572f3d0a60782085268f0995736d1db8ce4c499e453ace718e1cc494d7",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "a63526572f3d0a60782085268f0995736d1db8ce4c499e453ace718e1cc494d7",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "later-argument-receiver.php",
+        "control_sha256": "7709189dd552d55b9746b9f6817eaf508096b3a5ceff5984723ceaa84aa40c90",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "later-argument-reference.php",
+        "control_sha256": "3b6ad52f4eb17a6273c0f005544cff9baffd5ea986dd9172970bc625cf665d55",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "method-reference.php",
+        "control_sha256": "b04065443e42289a180d6ab8d2ce9f0df8c6a7f4e6e00221d14b436769837318",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "named-reference-cow.php",
+        "control_sha256": "c1d5a0651d2595f91e63868129ca5da0dbadc8ef2805da69b1068bfa0262a131",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "98b3d09379023500ccc76afa4ddb2728fb83d20af73fbf0a16bf333a39345fa2",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "98b3d09379023500ccc76afa4ddb2728fb83d20af73fbf0a16bf333a39345fa2",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "98b3d09379023500ccc76afa4ddb2728fb83d20af73fbf0a16bf333a39345fa2",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "object-reference.php",
+        "control_sha256": "57b5e8051f27e860386bbe9d12385c693e90124a273ddeb314fe5918e2262902",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "pending-destructor-exception.php",
+        "control_sha256": "389d967e7be0004cfa0cd94a6fb0f83491c74fb0c4d7aaa7d75a5632b3720b91",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "ff8708e19c2735c5177849b522e12252aafbc2c4ebfe0b549fae951fce87d555",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "ff8708e19c2735c5177849b522e12252aafbc2c4ebfe0b549fae951fce87d555",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "ff8708e19c2735c5177849b522e12252aafbc2c4ebfe0b549fae951fce87d555",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "pending-failure.php",
+        "control_sha256": "f06d5ffd915768b15ee91ad3becfa528bbaa241d1421a1665f539dc2f1cc1585",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "6abf87459bbae489c43dbb17b1110e459164bd10e34fdfdf80f220d6f76989bc",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "6abf87459bbae489c43dbb17b1110e459164bd10e34fdfdf80f220d6f76989bc",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "6abf87459bbae489c43dbb17b1110e459164bd10e34fdfdf80f220d6f76989bc",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "resource-reference.php",
+        "control_sha256": "cdbdffab791956632da59b085a771b9d815a3ee48ed7ee97cd916f2c2b893e24",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "acaec0e709619aa0d09549d9212a079c0de2f0a1e6d8cb03860a12596b34cca8",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "acaec0e709619aa0d09549d9212a079c0de2f0a1e6d8cb03860a12596b34cca8",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "acaec0e709619aa0d09549d9212a079c0de2f0a1e6d8cb03860a12596b34cca8",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "scope-call-forms.php",
+        "control_sha256": "0f8a807549c33e944109f1b24f888c21f1efd97c7af6d78c9e5cd4d0b826eae8",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "594204ddc6c5e514cd4647d223004cdf9c456707f9119004641aefabd1612e24",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "594204ddc6c5e514cd4647d223004cdf9c456707f9119004641aefabd1612e24",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "594204ddc6c5e514cd4647d223004cdf9c456707f9119004641aefabd1612e24",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "wide-object-reference.php",
+        "control_sha256": "3e671ab0ec3653d7af153a53d7021b73236e51aba43b62b7bd26f4add0dbd2b4",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "daa19d28c2b36ca2935833e9ba9ec1b441cbb81e6eaf715835f14862db157a71",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "deprecated-discard.php",
+        "control_sha256": "930792b22e2273128ca36831cc46d507e492cef4495fdfd3f687e766a70e4f1b",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "44bddaef2ae56f442a0a46058fd90a06adcab28225ce32afc6b1b3e0fbedf137",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "44bddaef2ae56f442a0a46058fd90a06adcab28225ce32afc6b1b3e0fbedf137",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "44bddaef2ae56f442a0a46058fd90a06adcab28225ce32afc6b1b3e0fbedf137",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      },
+      {
+        "control": "no-discard-discard.php",
+        "control_sha256": "4c7091ab1287b4789c980abb1529e0f34c65c193c29dc0bf056f43f9d4ac82dd",
+        "passed": true,
+        "observations": [
+          {
+            "runtime": "php",
+            "exit": 0,
+            "stdout_sha256": "44bddaef2ae56f442a0a46058fd90a06adcab28225ce32afc6b1b3e0fbedf137",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "baseline",
+            "exit": 0,
+            "stdout_sha256": "44bddaef2ae56f442a0a46058fd90a06adcab28225ce32afc6b1b3e0fbedf137",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          },
+          {
+            "runtime": "candidate",
+            "exit": 0,
+            "stdout_sha256": "44bddaef2ae56f442a0a46058fd90a06adcab28225ce32afc6b1b3e0fbedf137",
+            "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+          }
+        ]
+      }
+    ],
+    "binaries": {
+      "baseline": "68f60ac8fdb1f3764c4a21b06021ae8d62dc6244f7970bc1d20726c7ae4eba8b",
+      "candidate": "4ae0f740d97da5fccd7eb7032ef70cdf746acf6f17fedfcc0f14cb00511be4e7"
+    },
+    "source_sha256": "d1ba9e462337055d64afdf57699498a08cbd51f635191932461588a163173541",
+    "observations": 48
+  },
+  "ordinary": {
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.616496884002117,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.739042282,
+        "instructions": 75511115131,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.598290505004115,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.737453699,
+        "instructions": 75468027791,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 8.548031821002951,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.694370985,
+        "instructions": 75461061082,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 8.661123591999058,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.780940771,
+        "instructions": 75515555539,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.3618772389891092,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.937751055,
+      "instructions": 10338012675,
+      "counter_running_percent": 100.0
+    },
+    "medians": {
+      "baseline": 75513335335.0,
+      "candidate": 75464544436.5
+    },
+    "cpu": 2,
+    "warmup": "none; fresh TMPDIR per run",
+    "counter_scope": "analysis FIFO",
+    "outlier_policy": "retain every valid output-checked sample",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "memory_peak_bytes": 630824960,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "profiles": {
+    "accepted": {
+      "samples": 66789,
+      "period": 66789200367,
+      "lost_samples": 0,
+      "families": {
+        "main executor, including inlined work": {
+          "period": 27429082287,
+          "self_fraction": 0.4106813996316759
+        },
+        "other explicitly named VM functions": {
+          "period": 16943050829,
+          "self_fraction": 0.25367949812094803
+        },
+        "generic drop/hash/allocation and other residual symbols": {
+          "period": 7999023997,
+          "self_fraction": 0.11976523080147929
+        },
+        "explicitly named Value/container functions": {
+          "period": 4563013689,
+          "self_fraction": 0.06831963347257781
+        },
+        "explicitly named regex functions": {
+          "period": 2904008712,
+          "self_fraction": 0.04348021380766294
+        },
+        "other DSOs and unresolved external work": {
+          "period": 2791008373,
+          "self_fraction": 0.041788318435670546
+        },
+        "explicitly named runtime functions": {
+          "period": 2195006585,
+          "self_fraction": 0.032864693287816854
+        },
+        "explicitly named standard library functions": {
+          "period": 1965005895,
+          "self_fraction": 0.02942101244216862
+        }
+      },
+      "diagnostic_native_samples": [
+        {
+          "runtime": "accepted",
+          "wall_seconds": 7.54490840897779,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 5.884752512,
+          "instructions": 66805383256,
+          "counter_running_percent": 100.0,
+          "round": 0
+        }
+      ],
+      "diagnostic_reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.358856202015886,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.934951067,
+        "instructions": 10338033941,
+        "counter_running_percent": 100.0
+      },
+      "profile_observation": {
+        "runtime": "accepted",
+        "wall_seconds": 7.65652002801653,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 5.901572466,
+        "period": 1000003,
+        "scope": "analysis FIFO",
+        "attribution": "sampled instruction share; not exact per-function counts"
+      },
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "memory_peak_bytes": 1121484800,
+      "main_source_period_reconciled": true,
+      "source_positions": 930
+    },
+    "repair": {
+      "samples": 68458,
+      "period": 68458205374,
+      "lost_samples": 0,
+      "families": {
+        "main executor, including inlined work": {
+          "period": 27761083283,
+          "self_fraction": 0.40551871220310265
+        },
+        "other explicitly named VM functions": {
+          "period": 18123054369,
+          "self_fraction": 0.26473166028805983
+        },
+        "generic drop/hash/allocation and other residual symbols": {
+          "period": 8245024735,
+          "self_fraction": 0.12043880919687984
+        },
+        "explicitly named Value/container functions": {
+          "period": 4583013749,
+          "self_fraction": 0.06694615676765316
+        },
+        "explicitly named regex functions": {
+          "period": 2818008454,
+          "self_fraction": 0.04116392532647755
+        },
+        "other DSOs and unresolved external work": {
+          "period": 2676008028,
+          "self_fraction": 0.03908966081392971
+        },
+        "explicitly named runtime functions": {
+          "period": 2200006600,
+          "self_fraction": 0.03213649244792428
+        },
+        "explicitly named standard library functions": {
+          "period": 2052006156,
+          "self_fraction": 0.029974582955973005
+        }
+      },
+      "diagnostic_native_samples": [
+        {
+          "runtime": "repair",
+          "wall_seconds": 7.60107673399034,
+          "output": {
+            "exit": 1,
+            "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+            "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+          },
+          "analysis_seconds": 5.918298483,
+          "instructions": 68479242161,
+          "counter_running_percent": 100.0,
+          "round": 0
+        }
+      ],
+      "diagnostic_reference": {
+        "runtime": "reference",
+        "wall_seconds": 1.3533872550178785,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 0.931225061,
+        "instructions": 10337905375,
+        "counter_running_percent": 100.0
+      },
+      "profile_observation": {
+        "runtime": "repair",
+        "wall_seconds": 7.966960916004609,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 6.105300188,
+        "period": 1000003,
+        "scope": "analysis FIFO",
+        "attribution": "sampled instruction share; not exact per-function counts"
+      },
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      },
+      "memory_peak_bytes": 632975360,
+      "main_source_period_reconciled": true,
+      "source_positions": 911
+    }
+  },
+  "profile_limits": "Disjoint self sampling periods by explicitly named modules, with generic descendants residual and inlined work in main. Not exact function instruction counts or removable budgets. Source paths must be fully qualified; optimized/inlined/skidded/line-zero positions remain uncertain. Retained older callgraph has 43 lost samples/7 chunks and is excluded; initial short-file source maps are preserved but not used to distinguish modules.",
+  "boundaries": {
+    "owned-release-boundary-build-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 89.77194610799779,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3801038848,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-release-boundary-controls-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.7315505300066434,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 81403904,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "owned-protocol-source-qualified-20261003": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.573667849006597,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 176115712,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  }
+}

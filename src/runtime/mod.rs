@@ -1,9 +1,12 @@
+mod pending_call_state;
+pub use pending_call_state::PendingCallState;
+
 use std::cell::Cell;
 use std::collections::HashMap;
 use std::io::Write;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
 use std::time::{Duration, Instant};
 
@@ -25,6 +28,9 @@ use crate::vm::stats;
 use crate::vm::virtual_aggregate_cache::{
     RESOLVED_VIRTUAL_AGGREGATE_CACHE_SLOTS, ResolvedVirtualAggregateCacheEntry,
 };
+
+#[cfg(test)]
+mod method_index_tests;
 
 mod cycle;
 pub(crate) mod fiber;
@@ -52,14 +58,14 @@ use generic_scopes::{ActiveReifiedBindingScope, PendingReifiedBindingScope};
 #[derive(Clone)]
 struct ReifiedObjectBinding {
     identity: usize,
-    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    object: std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     binding: ReifiedBinding,
 }
 
 #[cfg(feature = "php-generics-reified")]
 struct ReifiedNestedArgumentsBinding {
     identity: usize,
-    object: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    object: std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     owner_name_identity: usize,
     owner_name_len: usize,
     arguments: Box<[GenericType]>,
@@ -86,6 +92,17 @@ struct GenericPropertyContractBinding {
     property: Box<str>,
     scope: Box<str>,
     expected: GenericType,
+}
+
+/// Immutable declarations bound the size of both indexes. Native registration
+/// invalidates the owner cache when it changes method metadata.
+#[derive(Default)]
+struct MethodIndex {
+    own: HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>,
+    resolved: std::cell::OnceCell<
+        HashMap<String, (Visibility, bool, String), std::hash::BuildHasherDefault<SymbolHasher>>,
+    >,
+    incomplete_at: Cell<Option<usize>>,
 }
 
 #[derive(Clone, Copy)]
@@ -253,6 +270,12 @@ impl std::hash::Hasher for FunctionIdentityHasher {
 
 type FunctionIdentityMap<T> = HashMap<*const FunctionCommon, T, FunctionIdentityBuildHasher>;
 
+/// Frame keys are engine-owned identities, never user-supplied symbol names.
+type FrameIdentityMap<T> = HashMap<usize, T, FunctionIdentityBuildHasher>;
+
+const _: [(); std::mem::size_of::<HashMap<usize, usize>>()] =
+    [(); std::mem::size_of::<FrameIdentityMap<usize>>()];
+
 const _: () = {
     assert!(
         std::mem::size_of::<FunctionIdentityMap<usize>>()
@@ -340,7 +363,9 @@ struct TraitCompositionMethod {
 struct StaticGenericPropertyContract {
     definition: *const PropertyDefinition,
     identity: std::cell::Cell<usize>,
-    object: std::cell::RefCell<std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>>,
+    object: std::cell::RefCell<
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
+    >,
 }
 
 #[cfg(feature = "php-generics-reified")]
@@ -666,7 +691,8 @@ pub(crate) enum LazyObjectStrategy {
 /// retain their existing compact layout; a weak owner also prevents a stale
 /// allocation identity from being reused while this entry exists.
 pub(crate) struct LazyObjectState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) strategy: LazyObjectStrategy,
     pub(crate) initializer_value: crate::value::Value,
     pub(crate) initializer: crate::stdlib::ResolvedCallback,
@@ -696,7 +722,8 @@ pub(crate) struct ReflectionAttributeDeclaration {
 }
 
 pub(crate) struct ReflectionAttributeState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) definition: crate::vm::function::AttributeDefinition,
     pub(crate) repeated: bool,
     /// Shared reflected property handles used to build Zend's AST-style
@@ -708,7 +735,8 @@ pub(crate) struct ReflectionAttributeState {
 /// ReflectionReference. The reference target itself remains owned by the
 /// inspected array; ReflectionReference exposes only an opaque stable ID.
 pub(crate) struct ReflectionReferenceState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) reference_identity: usize,
 }
 
@@ -728,7 +756,8 @@ pub(crate) struct ReflectionPropertyMetadata {
 }
 
 pub(crate) struct ReflectionPropertyState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) metadata: ReflectionPropertyMetadata,
 }
 
@@ -736,7 +765,8 @@ pub(crate) struct ReflectionPropertyState {
 /// Dynamic properties remain compatible with Zend while attributes on trait
 /// methods and bound closures still evaluate in their effective class scope.
 pub(crate) struct ReflectionParameterState {
-    pub(crate) owner: std::rc::Weak<std::cell::RefCell<crate::value::PhpObject>>,
+    pub(crate) owner:
+        std::rc::Weak<crate::value::CycleOwner<std::cell::RefCell<crate::value::PhpObject>>>,
     pub(crate) attribute_scope_class: String,
 }
 
@@ -833,6 +863,26 @@ struct ClassNameIndex {
     names: SymbolTable<String>,
 }
 
+struct ClassAncestry {
+    names: Box<[String]>,
+    /// One bit per published declaration, including the declaration itself.
+    identities: Box<[u64]>,
+    /// Deferred declaration links can become resolvable after publication.
+    /// Such entries are rebuilt when the class table grows; complete entries
+    /// remain valid for the entire request.
+    unresolved: bool,
+    table_len: usize,
+}
+
+impl ClassAncestry {
+    #[inline]
+    fn contains(&self, class_id: u32) -> bool {
+        self.identities
+            .get(class_id as usize / 64)
+            .is_some_and(|word| word & (1u64 << (class_id % 64)) != 0)
+    }
+}
+
 /// Run `lookup` with the ASCII-lowercased form of `name`, using a stack
 /// buffer for the ordinary short identifiers so case-folded table probes do
 /// not allocate.
@@ -904,9 +954,22 @@ impl std::hash::Hasher for SymbolHasher {
         }
         let rest = chunks.remainder();
         if !rest.is_empty() {
-            let mut word = [0u8; 8];
-            word[..rest.len()].copy_from_slice(rest);
-            self.mix(u64::from_le_bytes(word));
+            // Assemble the same zero-padded little-endian tail in registers.
+            // Overlapping prefix/suffix loads repeat identical bits, so OR
+            // preserves them without a variable-sized copy through the stack.
+            // Both loads remain entirely inside the one-to-seven-byte slice.
+            let len = rest.len();
+            let word = if len >= 4 {
+                let first = u32::from_le_bytes(rest[..4].try_into().expect("4-byte prefix"));
+                let last = u32::from_le_bytes(rest[len - 4..].try_into().expect("4-byte suffix"));
+                u64::from(first) | (u64::from(last) << ((len - 4) * 8))
+            } else if len >= 2 {
+                let first = u16::from_le_bytes(rest[..2].try_into().expect("2-byte prefix"));
+                u64::from(first) | (u64::from(rest[len - 1]) << ((len - 1) * 8))
+            } else {
+                u64::from(rest[0])
+            };
+            self.mix(word);
         }
     }
 
@@ -929,7 +992,16 @@ impl std::hash::Hasher for SymbolHasher {
 /// String-keyed table hashed with [`SymbolHasher`].
 pub type SymbolTable<V> = HashMap<String, V, std::hash::BuildHasherDefault<SymbolHasher>>;
 
+fn next_type_resolution_id() -> u64 {
+    static NEXT: AtomicU64 = AtomicU64::new(1);
+    NEXT.fetch_update(Ordering::Relaxed, Ordering::Relaxed, |id| id.checked_add(1))
+        .expect("executor identity space exhausted")
+}
+
 pub struct ExecutorGlobals {
+    /// Never reused, even when an executor is moved or its address is recycled.
+    /// Shared named type metadata guards request-local class IDs with this ID.
+    pub(crate) type_resolution_id: u64,
     pub(crate) memory_budget: crate::request_memory::Budget,
     pub vm_stack: VmStack,
     /// Compact argument-only activations for deferred pure-scalar calls.
@@ -1120,15 +1192,11 @@ pub struct ExecutorGlobals {
     /// Populated by SendNamed when target function is variadic and name isn't a declared param.
     /// Consumed by DoFcall during variadic packing.
     pub pending_named_variadic: PendingNamedVariadic,
-    /// Own-method lookup index per registered class (`class_id` ->
-    /// lowercase method name -> position in `ClassDef::methods`), built on
-    /// first use; method sets are fixed once a class is registered.
+    /// Declaration-bounded method indexes per registered class. The resolved
+    /// index includes traits and inheritance; unregistered/Unicode queries
+    /// retain canonical traversal.
     method_index_cache: std::cell::RefCell<
-        HashMap<
-            u32,
-            Rc<HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>>,
-            std::hash::BuildHasherDefault<SymbolHasher>,
-        >,
+        HashMap<u32, Rc<MethodIndex>, std::hash::BuildHasherDefault<SymbolHasher>>,
     >,
     /// Fingerprints of sources the front end parsed without a syntax error.
     /// `token_get_all(..., TOKEN_PARSE)` on such a source cannot fail either,
@@ -1174,7 +1242,7 @@ pub struct ExecutorGlobals {
     /// Names created only through `$$name`/`${expr}` have no compiler-owned CV
     /// slot. Keep those rare entries in a frame-keyed cold symbol table while
     /// statically known names continue to live directly in their CVs.
-    pub(crate) dynamic_variables: HashMap<usize, crate::value::DynamicPropertyMap>,
+    pub(crate) dynamic_variables: FrameIdentityMap<crate::value::DynamicPropertyMap>,
     /// Included code executes in its caller's variable scope. This sparse map
     /// aliases an include frame to the owning caller frame without changing
     /// the ordinary ExecuteData layout.
@@ -1219,9 +1287,9 @@ pub struct ExecutorGlobals {
     /// Closure-owned function-static cells for active or pending frames. The
     /// sidecar is absent unless a static-bearing anonymous Closure is called.
     closure_static_frames: Option<HashMap<usize, ClosureStaticVars>>,
-    /// Packed internal `(call frame, $this)` pairs for dynamically resolved
-    /// `__invoke` calls. The existing Option remains the cheap hot-path marker.
-    pub pending_invoke_this: Option<crate::value::Value>,
+    /// Typed engine-owned receiver, magic-call and late-static records.
+    /// The optional state retains the established field geometry.
+    pub pending_invoke_this: Option<PendingCallState>,
     /// Object identities whose user destructor has already started. Lazily
     /// allocated because ordinary requests never declare `__destruct`.
     /// Set of absolute file paths already included via include_once/require_once
@@ -1251,18 +1319,21 @@ pub struct ExecutorGlobals {
     /// Per-class memo of `__get`/`__isset` availability: bit 0 resolved,
     /// bit 1 has `__get`, bit 2 has `__isset`.
     class_magic_accessor_flags: std::cell::RefCell<Vec<u8>>,
-    /// Transitive ancestor names per class id for `class_is_a`.
-    class_ancestor_cache: std::cell::RefCell<Vec<Option<std::rc::Rc<[String]>>>>,
+    /// Transitive ancestry per stable class ID. Numeric relations avoid name
+    /// hashing and case folding after declarations have been resolved.
+    class_ancestor_cache: std::cell::RefCell<Vec<Option<std::rc::Rc<ClassAncestry>>>>,
     /// Declared public property resolutions per (op array cache, ip, class
     /// id): a site that sees many receiver classes keeps its monomorphic
     /// inline cache thrashing but skips the full lookup.
-    /// Property inline-cache states per (op array cache, ip, object class):
+    /// Property and literal-method inline-cache states per (op array cache,
+    /// instruction index, receiver class). Opcode identity separates the uses.
+    /// Property states per (op array cache, ip, object class):
     /// a monomorphic site that sees several classes refills its cache from
     /// here instead of re-resolving the property on the slow path. Read and
     /// write sites share the map (their ips differ); the value is the full
     /// cache state (prop_info, func) so typed and scope-proved entries round
     /// trip.
-    pub(crate) polymorphic_property_cache: std::cell::RefCell<
+    pub(crate) polymorphic_member_cache: std::cell::RefCell<
         HashMap<(usize, usize, u32), (u32, usize), std::hash::BuildHasherDefault<SymbolHasher>>,
     >,
     /// Results of the slow constant lookup (qualified-name scan and built-in
@@ -2333,6 +2404,7 @@ impl ExecutorGlobals {
 
     pub fn new() -> Self {
         Self {
+            type_resolution_id: next_type_resolution_id(),
             memory_budget: crate::request_memory::Budget::default(),
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
@@ -2434,7 +2506,7 @@ impl ExecutorGlobals {
             globals: HashMap::new(),
             jit_auto_globals: HashMap::new(),
             phar_runtime: Default::default(),
-            dynamic_variables: HashMap::new(),
+            dynamic_variables: Default::default(),
             dynamic_scope_owners: Default::default(),
             detached_trace_callers: None,
             debug_only_trace_frames: None,
@@ -2458,7 +2530,7 @@ impl ExecutorGlobals {
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
             class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
-            polymorphic_property_cache: std::cell::RefCell::new(HashMap::default()),
+            polymorphic_member_cache: std::cell::RefCell::new(HashMap::default()),
             constant_lookup_memo: std::cell::RefCell::new(SymbolTable::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
@@ -2483,6 +2555,7 @@ impl ExecutorGlobals {
     /// Create EG with captured output (for testing)
     pub fn with_output(output: Box<dyn Write>) -> Self {
         Self {
+            type_resolution_id: next_type_resolution_id(),
             memory_budget: crate::request_memory::Budget::default(),
             vm_stack: VmStack::new(),
             pending_call_stack: VmStack::new_pending(),
@@ -2584,7 +2657,7 @@ impl ExecutorGlobals {
             globals: HashMap::new(),
             jit_auto_globals: HashMap::new(),
             phar_runtime: Default::default(),
-            dynamic_variables: HashMap::new(),
+            dynamic_variables: Default::default(),
             dynamic_scope_owners: Default::default(),
             detached_trace_callers: None,
             debug_only_trace_frames: None,
@@ -2608,7 +2681,7 @@ impl ExecutorGlobals {
             class_destructor_flags: std::cell::RefCell::new(Vec::new()),
             class_magic_accessor_flags: std::cell::RefCell::new(Vec::new()),
             class_ancestor_cache: std::cell::RefCell::new(Vec::new()),
-            polymorphic_property_cache: std::cell::RefCell::new(HashMap::default()),
+            polymorphic_member_cache: std::cell::RefCell::new(HashMap::default()),
             constant_lookup_memo: std::cell::RefCell::new(SymbolTable::default()),
             compilation_constants_cache: std::cell::RefCell::new(None),
             static_property_values: Vec::new(),
@@ -3209,6 +3282,7 @@ impl ExecutorGlobals {
             .entry(owner)
             .or_default()
             .push(contract);
+        self.method_index_cache.get_mut().clear();
     }
 
     /// Bind the body immediately after its native declaration is registered.
@@ -3291,6 +3365,7 @@ impl ExecutorGlobals {
                 .position(|name| name.eq_ignore_ascii_case(method.name))
                 .unwrap_or(usize::MAX)
         });
+        self.method_index_cache.get_mut().clear();
     }
 
     #[cold]
@@ -3327,6 +3402,7 @@ impl ExecutorGlobals {
             .expect("registered internal method");
         contract.visibility = visibility;
         contract.is_abstract = is_abstract;
+        self.method_index_cache.get_mut().clear();
     }
 
     #[cold]
@@ -3625,67 +3701,27 @@ impl ExecutorGlobals {
         if class_id == 0 {
             return;
         }
-        const TAG: usize = 1usize << (usize::BITS - 1);
-        debug_assert_eq!(call & TAG, 0);
-        let pending = self
-            .pending_invoke_this
-            .get_or_insert_with(|| Value::array(PhpArray::with_packed_capacity(4)));
-        let stack = pending
-            .as_array_mut()
-            .expect("pending call side state must remain a packed array");
-        stack.push(Value::long((call | TAG) as i64));
-        stack.push(Value::long(class_id as i64));
+        self.pending_invoke_this
+            .get_or_insert_with(Default::default)
+            .push_late_static(call, class_id);
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn late_static_scope_class_id(&self, call: usize) -> u32 {
-        const TAG: usize = 1usize << (usize::BITS - 1);
-        let Some(stack) = self.pending_invoke_this.as_ref().and_then(Value::as_array) else {
-            return 0;
-        };
-        let Some(key_index) = stack.len().checked_sub(2) else {
-            return 0;
-        };
-        if stack
-            .get_value_at(key_index)
-            .and_then(Value::as_long)
-            .map(|key| key as usize)
-            != Some(call | TAG)
-        {
-            return 0;
-        }
-        stack
-            .get_value_at(key_index + 1)
-            .and_then(Value::as_long)
-            .map_or(0, |class_id| class_id as u32)
+        self.pending_invoke_this
+            .as_ref()
+            .map_or(0, |state| state.late_static(call))
     }
 
     #[cold]
     #[inline(never)]
     pub(crate) fn discard_late_static_scope(&mut self, call: usize) {
-        const TAG: usize = 1usize << (usize::BITS - 1);
-        let Some(pending) = self.pending_invoke_this.as_mut() else {
+        let Some(state) = self.pending_invoke_this.as_mut() else {
             return;
         };
-        let stack = pending
-            .as_array_mut()
-            .expect("pending call side state must remain a packed array");
-        let Some(key_index) = stack.len().checked_sub(2) else {
-            return;
-        };
-        if stack
-            .get_value_at(key_index)
-            .and_then(Value::as_long)
-            .map(|key| key as usize)
-            != Some(call | TAG)
-        {
-            return;
-        }
-        let _class_id = stack.pop();
-        let _call = stack.pop();
-        if stack.is_empty() {
-            self.pending_invoke_this = None;
+        if state.discard_late_static(call) && state.is_empty() {
+            self.pending_invoke_this = None
         }
     }
 
@@ -5226,7 +5262,7 @@ impl ExecutorGlobals {
 
         match hint {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
-                ParamTypeHint::ClassName(scope_owner.to_string())
+                ParamTypeHint::ClassName(scope_owner.into())
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
                 ParamTypeHint::ClassName(
@@ -5237,7 +5273,8 @@ impl ExecutorGlobals {
                             self.find_class(scope_owner)
                                 .and_then(|class| class.parent.clone())
                         })
-                        .unwrap_or_else(|| name.clone()),
+                        .unwrap_or_else(|| name.to_string())
+                        .into(),
                 )
             }
             ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
@@ -9682,9 +9719,8 @@ impl ExecutorGlobals {
 
     /// Check if a class is an instance of another (walks parent chain AND implements)
     pub fn class_is_a(&self, class_name: &str, target: &str) -> bool {
-        let canonical_target = self
-            .find_class(target)
-            .map_or(target, |class| class.name.as_str());
+        let target_class = self.find_class(target);
+        let canonical_target = target_class.map_or(target, |class| class.name.as_str());
         let Some(class_def) = self.find_class(class_name) else {
             return class_name
                 .strip_prefix('\\')
@@ -9695,6 +9731,11 @@ impl ExecutorGlobals {
                         .unwrap_or(canonical_target),
                 );
         };
+        if class_def.class_id != 0
+            && let Some(target_class) = target_class.filter(|class| class.class_id != 0)
+        {
+            return self.class_is_a_ids(class_def.class_id, target_class.class_id);
+        }
         if class_def.name.eq_ignore_ascii_case(canonical_target) {
             return true;
         }
@@ -9707,17 +9748,46 @@ impl ExecutorGlobals {
                 .strip_prefix('\\')
                 .unwrap_or(canonical_target);
             return ancestors
+                .names
                 .iter()
                 .any(|ancestor| ancestor.eq_ignore_ascii_case(target));
         }
         self.class_is_a_uncached(class_def, canonical_target)
     }
 
+    /// Resolve only the requested name: object storage already records the
+    /// declaration that gives the receiver its identity. Dynamic internal
+    /// objects without a registered ID retain ordinary name resolution.
+    #[inline]
+    pub(crate) fn object_is_a(&self, object: &crate::value::PhpObject, target: &str) -> bool {
+        if object.class_id != 0
+            && let Some(target) = self.find_class(target).filter(|class| class.class_id != 0)
+        {
+            return self.class_is_a_ids(object.class_id, target.class_id);
+        }
+        self.class_is_a(&object.class_name, target)
+    }
+
+    /// Both IDs denote published declarations in this executor. Class aliases
+    /// share the original ID and cannot change an existing ancestry relation.
+    #[inline]
+    pub(crate) fn class_is_a_ids(&self, class_id: u32, target_id: u32) -> bool {
+        if class_id == target_id {
+            return class_id != 0;
+        }
+        let Some(class) = self.class_by_id(class_id) else {
+            return false;
+        };
+        self.class_ancestors(class).contains(target_id)
+    }
+
     /// Canonical names of every ancestor of `class_def` (excluding itself),
     /// memoized by class id.
-    fn class_ancestors(&self, class_def: &ClassDef) -> std::rc::Rc<[String]> {
+    fn class_ancestors(&self, class_def: &ClassDef) -> std::rc::Rc<ClassAncestry> {
         let index = class_def.class_id as usize;
-        if let Some(Some(cached)) = self.class_ancestor_cache.borrow().get(index) {
+        if let Some(Some(cached)) = self.class_ancestor_cache.borrow().get(index)
+            && (!cached.unresolved || cached.table_len == self.class_table.len())
+        {
             return std::rc::Rc::clone(cached);
         }
         let mut names: Vec<String> = Vec::new();
@@ -9754,7 +9824,26 @@ impl ExecutorGlobals {
             pending.extend(ancestor.parent.iter().cloned());
             pending.extend(ancestor.implements.iter().cloned());
         }
-        let ancestors: std::rc::Rc<[String]> = names.into();
+        let mut identities = vec![0u64; index / 64 + 1];
+        identities[index / 64] |= 1u64 << (index % 64);
+        let mut unresolved = false;
+        for name in &names {
+            if let Some(ancestor) = self.find_class(name).filter(|class| class.class_id != 0) {
+                let id = ancestor.class_id as usize;
+                if identities.len() <= id / 64 {
+                    identities.resize(id / 64 + 1, 0);
+                }
+                identities[id / 64] |= 1u64 << (id % 64);
+            } else {
+                unresolved = true;
+            }
+        }
+        let ancestors = std::rc::Rc::new(ClassAncestry {
+            names: names.into_boxed_slice(),
+            identities: identities.into_boxed_slice(),
+            unresolved,
+            table_len: self.class_table.len(),
+        });
         let mut cache = self.class_ancestor_cache.borrow_mut();
         if cache.len() <= index {
             cache.resize(index + 1, None);
@@ -10507,30 +10596,117 @@ impl ExecutorGlobals {
             .map(|(vis, _, decl)| (vis, decl))
     }
 
-    /// Look up method visibility AND staticness in a class hierarchy.
-    /// Returns (visibility, is_static, declaring_class_name).
-    /// The own-method index of a registered class (see `method_index_cache`).
-    fn method_index(
-        &self,
-        class_def: &ClassDef,
-    ) -> Rc<HashMap<String, usize, std::hash::BuildHasherDefault<SymbolHasher>>> {
+    /// Own declarations retain the canonical first-declaration lookup rule.
+    fn method_index(&self, class_def: &ClassDef) -> Rc<MethodIndex> {
         if let Some(index) = self.method_index_cache.borrow().get(&class_def.class_id) {
             return Rc::clone(index);
         }
-        let mut index =
+        let mut own =
             HashMap::with_capacity_and_hasher(class_def.methods.len(), Default::default());
         for (position, (name, _, _, _, _)) in class_def.methods.iter().enumerate() {
-            // The scan returned the first declaration; keep that verdict.
-            index.entry(name.to_ascii_lowercase()).or_insert(position);
+            own.entry(name.to_ascii_lowercase()).or_insert(position);
         }
-        let index = Rc::new(index);
+        let index = Rc::new(MethodIndex {
+            own,
+            ..MethodIndex::default()
+        });
         self.method_index_cache
             .borrow_mut()
             .insert(class_def.class_id, Rc::clone(&index));
         index
     }
 
+    /// Collect a finite set of possible ASCII queries from declarations, not
+    /// from callers. A partial or cyclic native graph must stay canonical.
+    fn collect_method_index_names(
+        &self,
+        class: &ClassDef,
+        names: &mut std::collections::HashSet<String, std::hash::BuildHasherDefault<SymbolHasher>>,
+        visited: &mut HashMap<u32, bool, std::hash::BuildHasherDefault<SymbolHasher>>,
+    ) -> bool {
+        if class.class_id == 0 {
+            return false;
+        }
+        if let Some(complete) = visited.get(&class.class_id) {
+            return *complete;
+        }
+        visited.insert(class.class_id, false);
+        for name in class.methods.iter().map(|method| method.0.as_str()) {
+            // Trait scans use Unicode lowercase even for an ASCII query
+            // (for example Kelvin sign -> k); own indexes still use their
+            // original ASCII rule when the canonical resolver selects a value.
+            let key = name.to_lowercase();
+            if key.is_ascii() {
+                names.insert(key);
+            }
+        }
+        for name in class
+            .trait_aliases
+            .iter()
+            .map(|alias| alias.alias.as_deref().unwrap_or(&alias.method))
+            .chain(
+                self.internal_method_contracts(&class.name)
+                    .iter()
+                    .map(|method| method.name),
+            )
+        {
+            if name.is_ascii() {
+                names.insert(name.to_ascii_lowercase());
+            }
+        }
+        for related in class.uses.iter().chain(class.parent.iter()) {
+            let Some(definition) = self.find_class(related) else {
+                return false;
+            };
+            if !self.collect_method_index_names(definition, names, visited) {
+                return false;
+            }
+        }
+        visited.insert(class.class_id, true);
+        true
+    }
+
+    #[cold]
+    fn resolve_method_index(&self, class: &ClassDef, index: &MethodIndex) {
+        let mut names = std::collections::HashSet::default();
+        if !self.collect_method_index_names(class, &mut names, &mut HashMap::default()) {
+            index.incomplete_at.set(Some(self.class_table.len()));
+            return;
+        }
+        let mut resolved = HashMap::with_capacity_and_hasher(names.len(), Default::default());
+        for name in names {
+            if let Some(info) = self.find_method_info_uncached(&class.name, &name) {
+                resolved.insert(name, info);
+            }
+        }
+        // Population performs no PHP callback or nested resolved-index lookup.
+        let _ = index.resolved.set(resolved);
+    }
+
+    /// Look up visibility, staticness and declaring owner. Only immutable,
+    /// complete registered hierarchies can answer from resolved metadata.
     pub fn find_method_info(
+        &self,
+        class_name: &str,
+        method_name: &str,
+    ) -> Option<(Visibility, bool, String)> {
+        let class = self.find_class(class_name)?;
+        if class.class_id == 0 || !method_name.is_ascii() {
+            return self.find_method_info_uncached(class_name, method_name);
+        }
+        let index = self.method_index(class);
+        if index.resolved.get().is_none()
+            && index.incomplete_at.get() != Some(self.class_table.len())
+        {
+            self.resolve_method_index(class, &index);
+        }
+        match index.resolved.get() {
+            Some(resolved) => with_ascii_lowercase(method_name, |key| resolved.get(key).cloned()),
+            None => self.find_method_info_uncached(class_name, method_name),
+        }
+    }
+
+    fn find_method_info_uncached(
         &self,
         class_name: &str,
         method_name: &str,
@@ -10548,7 +10724,7 @@ impl ExecutorGlobals {
             // Unicode folding the index does not model).
             if class_def.class_id != 0 && method_name.is_ascii() {
                 let index = self.method_index(class_def);
-                let found = with_ascii_lowercase(method_name, |key| index.get(key).copied());
+                let found = with_ascii_lowercase(method_name, |key| index.own.get(key).copied());
                 if let Some(position) = found
                     && let Some((name, vis, is_static, _is_final, _func)) =
                         class_def.methods.get(position)
@@ -10623,7 +10799,7 @@ impl ExecutorGlobals {
             // falling through to the consumer's parent hierarchy.
             for trait_name in &class_def.uses {
                 if let Some((visibility, is_static, _)) =
-                    self.find_method_info(trait_name, method_name)
+                    self.find_method_info_uncached(trait_name, method_name)
                 {
                     return Some((visibility, is_static, class_name.to_string()));
                 }
@@ -10644,7 +10820,7 @@ impl ExecutorGlobals {
             }
             // Check parent
             if let Some(parent) = &class_def.parent {
-                return self.find_method_info(parent, method_name);
+                return self.find_method_info_uncached(parent, method_name);
             }
         }
         None
@@ -11771,7 +11947,7 @@ impl ExecutorGlobals {
         // X&Traversable <: iterable.
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_return_type_compatible_mode(
                 &ParamTypeHint::Array,
                 iface_hint,
@@ -11792,7 +11968,7 @@ impl ExecutorGlobals {
         }
         if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_return_type_compatible_mode(
                 impl_hint,
                 &ParamTypeHint::Array,
@@ -12061,7 +12237,7 @@ impl ExecutorGlobals {
 
         if matches!(impl_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_param_type_compatible_mode(
                 &ParamTypeHint::Array,
                 iface_hint,
@@ -12082,7 +12258,7 @@ impl ExecutorGlobals {
         }
         if matches!(iface_hint, ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("iterable"))
         {
-            let traversable = ParamTypeHint::ClassName("Traversable".to_string());
+            let traversable = ParamTypeHint::ClassName("Traversable".into());
             return self.is_param_type_compatible_mode(
                 impl_hint,
                 &ParamTypeHint::Array,

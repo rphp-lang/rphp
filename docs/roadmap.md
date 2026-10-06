@@ -25,7 +25,13 @@ microbenchmark improves.
 | Workstream | Detailed roadmap | Agent strategy | Current frontier |
 | --- | --- | --- | --- |
 | PHP compatibility | [Compatibility roadmap](roadmap-compatibility.md) | [Compatibility Agent](agent-strategy-compatibility.md) | The Rector 2.5.9 bootstrap now runs an unmodified real parallel transformation and an idempotent second pass. Its vendor audit finds 339/351 observed globals present with zero call-shape mismatches; twelve conditional observations remain explicit nonclaims. Five Cargo configurations, all-targets, Composer/Symfony S0-S3 and unsafe gates pass; performance is deferred by user direction ahead of the Rust upgrade. |
-| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | The Rust heap and bounded release/PHPStan repair are accepted with 35,405 successful test executions and exact-source ASan. Deep release improves 68.5x and disabled-GC RSS falls 31.6%; five confirmed microbenchmark regressions of 2.85–6.46% have an explicit correctness tradeoff. Large-input PHPStan still takes 16.33 s versus PHP's 1.45 s. The next M1 candidates are repeated VM bookkeeping costs; typed admission and the dual-host scorecard remain pending. |
+| Execution and performance | [Execution and performance roadmap](roadmap-execution-performance.md) | [Execution & Performance Agent](agent-strategy-execution-performance.md) | The isolated recovered PHPStan foundation passes 36,280 matrix executions, 556 ASan and 70 default/canonical PHP comparisons. Same-input five-file analysis is 74.697G / 6.770s with GC disabled and 76.918G / 6.967s with GC enabled; PHP remains about 1s. Two confirmed micro timing losses have an explicit bounded integration tradeoff. Simultaneous parity and dual-host coverage remain open; main is unchanged. |
+
+The [recovered foundation](performance-phpstan-recovered-foundation.md) corrects
+mixed process/analysis count scopes and missing performance history, integrates
+ordinary call ownership/lifetime repairs and records fresh exact-source gates.
+It remains a branch checkpoint; no source has been pushed directly to main.
+Earlier large-input numbers below retain their different workload identity.
 
 Only an accepted checkpoint moves a frontier. A partial implementation,
 diagnostic observation or favorable but unverified benchmark remains work in

@@ -1,0 +1,334 @@
+{
+  "status": "rejected native architecture feasibility; runtime unchanged; no candidate speed claim",
+  "baseline_commit": "e9f82e200348d8525686ad7f6373370fa129a63c",
+  "baseline_runtime_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+  "candidate_source_sha256": "7735ac69641a90e2f62a6f3a5bcb623a83cb5956f524fd373a1ad11010e8c606",
+  "candidate_profile": {
+    "profile": "release",
+    "features": "default",
+    "pgo": false,
+    "toolchain": "[toolchain]\nchannel = \"1.98.1\"\ncomponents = [\"rustfmt\"]\nprofile = \"minimal\"\n"
+  },
+  "macro_generation": {
+    "complete": true,
+    "baseline_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+    "candidate_source_sha256": "fcd63a81b636a848f7bca5fed8d189f3010b910c4ff98c5cbcfa8b18e3008a3f",
+    "opcode_groups": 24,
+    "estimated_expanded_body_bytes": 1745129,
+    "default_body_roundtrip_exact": true,
+    "send_families_excluded": true,
+    "bytecode_and_frame_layouts_unchanged": true,
+    "extra_unsafe_blocks": 0,
+    "extra_unsafe_functions": 0
+  },
+  "native_architecture_audit": {
+    "complete": true,
+    "architecture": "x86_64",
+    "scope": "ordinary release main native prologue and symbol only; all metadata layouts remain source-identical",
+    "rows": {
+      "baseline": {
+        "main_text_bytes": 336601,
+        "stack_local_bytes": 3048,
+        "stack_probe_pages": 0,
+        "saved_register_bytes": 48,
+        "stack_prologue_bytes": 3096,
+        "binary_bytes": 24550992,
+        "binary_sha256": "d402242e7db6cebff1a0c3e04d672b650f22be1fe817ca9667d876046a334369"
+      },
+      "candidate": {
+        "main_text_bytes": 1226540,
+        "stack_local_bytes": 8440,
+        "stack_probe_pages": 2,
+        "saved_register_bytes": 48,
+        "stack_prologue_bytes": 8488,
+        "binary_bytes": 25579896,
+        "binary_sha256": "169766fb39dd93cc2571b46c1417162f906c9dde5d5b2d2e9b3f202f1935c48d"
+      }
+    },
+    "stack_growth_bytes": 5392,
+    "text_growth_percent": 264.38988594805124,
+    "passed": false
+  },
+  "build": {
+    "complete": true,
+    "exit": 0,
+    "seconds": 302.5587778270128,
+    "source_sha256": "7735ac69641a90e2f62a6f3a5bcb623a83cb5956f524fd373a1ad11010e8c606",
+    "profile": "release",
+    "features": "default",
+    "pgo": false,
+    "binary_sha256": "169766fb39dd93cc2571b46c1417162f906c9dde5d5b2d2e9b3f202f1935c48d",
+    "binary_bytes": 25579896
+  },
+  "preflight": {
+    "complete": true,
+    "exit": 0,
+    "seconds": 18.946221798978513,
+    "source_sha256": "7735ac69641a90e2f62a6f3a5bcb623a83cb5956f524fd373a1ad11010e8c606",
+    "production_source_sha256": "49305541ed9639c786d7d7852095b52da3db8de4e02a6916daf78206ec0d40ac",
+    "unsafe_blocks": 1749,
+    "unsafe_functions": 321,
+    "generation_roundtrip_exact": true
+  },
+  "build_boundary": {
+    "complete": true,
+    "exit": 0,
+    "seconds": 324.7324497389782,
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "memory_peak_bytes": 4675596288,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "candidate_focus_and_instruction_selector_executed": false,
+  "accepted_runtime_single_native_observation": {
+    "complete": true,
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 1,
+    "warmup": "none; fresh TMPDIR per run",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "outlier_policy": "retain every valid output-checked sample",
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 7.532714084984036,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 5.866304398,
+        "instructions": 66802123615,
+        "counter_running_percent": 100.0,
+        "round": 0
+      }
+    ],
+    "binaries": {
+      "baseline": "ad561a656aa3b79b5e4b7b2a1cec88ea99190d3087c00cb64a71601f6c3716e5",
+      "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "inputs": [
+      "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.3556782320083585,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.931718111,
+      "instructions": 10337951268,
+      "counter_running_percent": 100.0
+    },
+    "profile": {
+      "runtime": "baseline",
+      "wall_seconds": 9.689684084005421,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 6.645768404,
+      "period": 1000003,
+      "scope": "analysis FIFO",
+      "attribution": "sampled instruction share; not exact per-function counts"
+    },
+    "memory_peak_bytes": 1748262912,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "accepted_profile": {
+    "callgraph": "dwarf,16384",
+    "instruction_period": 1000003,
+    "lost_samples": 43,
+    "lost_chunks": 7,
+    "flat_self_share_display_precision_decimals": 2,
+    "flat_self_rows_at_or_above_half_percent": [
+      {
+        "percent": 40.58,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::execute_ex_inner"
+      },
+      {
+        "percent": 2.73,
+        "dso": "libc.so.6",
+        "symbol": "__memmove_avx512_unaligned_erms"
+      },
+      {
+        "percent": 2.14,
+        "dso": "candidate",
+        "symbol": "rphp::regex::match_seq_from"
+      },
+      {
+        "percent": 2.0,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::retire_return_frame_owners"
+      },
+      {
+        "percent": 1.8,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::op_instanceof"
+      },
+      {
+        "percent": 1.51,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::value_tree_requires_vm_release"
+      },
+      {
+        "percent": 1.09,
+        "dso": "libc.so.6",
+        "symbol": "__memcmp_evex_movbe"
+      },
+      {
+        "percent": 1.02,
+        "dso": "candidate",
+        "symbol": "<rphp::runtime::ExecutorGlobals>::find_class"
+      },
+      {
+        "percent": 0.91,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::caller_scope"
+      },
+      {
+        "percent": 0.86,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::execute_full_call"
+      },
+      {
+        "percent": 0.81,
+        "dso": "candidate",
+        "symbol": "core::ptr::drop_glue::<rphp::value::Value>"
+      },
+      {
+        "percent": 0.8,
+        "dso": "candidate",
+        "symbol": "<rphp::value::PhpArray>::try_push"
+      },
+      {
+        "percent": 0.79,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::op_assign_obj_prop_completion"
+      },
+      {
+        "percent": 0.75,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::retire_owned_frame_value"
+      },
+      {
+        "percent": 0.74,
+        "dso": "candidate",
+        "symbol": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>>::insert"
+      },
+      {
+        "percent": 0.68,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::op_fetch_class_const"
+      },
+      {
+        "percent": 0.64,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::op_foreach_next::<false, false>"
+      },
+      {
+        "percent": 0.63,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::op_fetch_obj_r_slow_inner::<false>"
+      },
+      {
+        "percent": 0.62,
+        "dso": "candidate",
+        "symbol": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>"
+      },
+      {
+        "percent": 0.61,
+        "dso": "candidate",
+        "symbol": "<rphp::value::PhpArray>::prepare_string_key_for_write"
+      },
+      {
+        "percent": 0.61,
+        "dso": "candidate",
+        "symbol": "<rphp::runtime::ExecutorGlobals>::class_ancestors"
+      },
+      {
+        "percent": 0.6,
+        "dso": "candidate",
+        "symbol": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert"
+      },
+      {
+        "percent": 0.6,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::retained_temp_containers::add"
+      },
+      {
+        "percent": 0.58,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::finish_foreach_step"
+      },
+      {
+        "percent": 0.58,
+        "dso": "candidate",
+        "symbol": "<rphp::runtime::ExecutorGlobals>::has_weak_object_release_work"
+      },
+      {
+        "percent": 0.56,
+        "dso": "candidate",
+        "symbol": "rphp::value::register_cycle_candidate_with_admission"
+      },
+      {
+        "percent": 0.54,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::check_type_hint_with_scope"
+      },
+      {
+        "percent": 0.53,
+        "dso": "candidate",
+        "symbol": "rphp::regex::match_quantifier"
+      },
+      {
+        "percent": 0.53,
+        "dso": "candidate",
+        "symbol": "<rphp::value::Value>::string::<alloc::string::String>"
+      },
+      {
+        "percent": 0.51,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::collect_destructor_children"
+      },
+      {
+        "percent": 0.5,
+        "dso": "candidate",
+        "symbol": "rphp::vm::execute::call_function_value_iter::<core::iter::adapters::chain::Chain<core::iter::adapters::chain::Chain<core::iter::adapters::cloned::Cloned<core::slice::iter::Iter<rphp::value::Value>>, alloc::vec::into_iter::IntoIter<rphp::value::Value>>, core::iter::adapters::map::Map<core::slice::iter::Iter<rphp::value::Value>, <rphp::value::Value>::clone_closure_capture>>, false, true>"
+      }
+    ],
+    "listed_self_share_percent": 67.85,
+    "unlisted_self_share_percent": 32.15,
+    "attribution": "Sampled flat self shares only; rounded, with lost records. No exact per-operation budget and no reliable inclusive call context. The generated inclusive table was not admitted as evidence.",
+    "accepted_scorecard_unchanged": true,
+    "concurrent_maintenance": "One additional workspace cleanup hook ran while the diagnostic service was active; exact retained binaries/source unaffected. Single timings are not an acceptance comparison."
+  },
+  "cleanup": {
+    "candidate_target_removed": true,
+    "exact_candidate_source_and_binary_retained": true,
+    "private_benchmark_host_configured": false
+  },
+  "goal_complete": false
+}

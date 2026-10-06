@@ -121,65 +121,35 @@ fn prepare_catch_variable_assignment(
 
 /// Drop all heap-backed slot values in a frame before popping it.
 ///
-/// Three-tier cleanup:
-///   1. No heap values at all (has_heap_slots == false) → skip entirely
-///   2. Bitmap-driven (total slots <= 64) → iterate only heap bits via trailing_zeros
-///   3. Full scan fallback (total slots > 64) → scan all slots by value type
-///
+/// A clear prefix bit proves that its slot owns no value, including in wide
+/// frames. Only the initialized tail beyond bit 63 needs a value scan.
 /// After dropping, zeros the slot so reused stack space sees Undef.
 #[inline(always)]
 pub(crate) unsafe fn cleanup_frame_slots(frame: *mut ExecuteData) {
-    let num_cvs = (*frame).num_cvs as usize;
-    let num_temps = (*frame).num_temps as usize;
-    let total = num_cvs + num_temps;
-
-    // Tier 1: no heap values written during this invocation.
+    let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
     if !(*frame).has_heap_slots {
         stats::inc_cleanup_frame(total, true);
         return;
     }
-
-    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-
-    // Tier 2: bitmap-driven — only drop slots with heap bit set.
-    if total <= 64 {
-        let bitmap = (*frame).owned_heap_bitmap();
-        if bitmap == 0 {
-            stats::inc_cleanup_frame(total, true);
-            return;
-        }
-        stats::inc_cleanup_frame(total, false);
-        for idx in HeapSlotIter::new(bitmap) {
-            let ptr = base.add(idx as usize);
-            std::ptr::drop_in_place(ptr);
-            std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
-        }
+    let bitmap = (*frame).owned_heap_bitmap();
+    if total <= 64 && bitmap == 0 {
+        stats::inc_cleanup_frame(total, true);
         return;
     }
-
-    // Tier 3: full scan fallback for large frames (> 64 slots).
     stats::inc_cleanup_frame(total, false);
-    for i in 0..total {
-        let ptr = base.add(i);
-        #[cfg(not(feature = "resource-lifetime"))]
-        match (*ptr).value_type() {
-            ValueType::String | ValueType::Array | ValueType::Object | ValueType::Closure => {
-                std::ptr::drop_in_place(ptr);
-                std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
-            }
-            _ => {}
-        }
-        #[cfg(feature = "resource-lifetime")]
-        match (*ptr).value_type() {
-            ValueType::String
-            | ValueType::Array
-            | ValueType::Object
-            | ValueType::Resource
-            | ValueType::Closure => {
-                std::ptr::drop_in_place(ptr);
-                std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
-            }
-            _ => {}
+    let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+    for index in HeapSlotIter::new(bitmap) {
+        let ptr = base.add(index as usize);
+        std::ptr::drop_in_place(ptr);
+        std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
+    }
+    (*frame).heap_bitmap &= !bitmap;
+    for index in 64..total {
+        let ptr = base.add(index);
+        // Owned reference cells own their referents; borrowed references do not.
+        if (*ptr).needs_cleanup() {
+            std::ptr::drop_in_place(ptr);
+            std::ptr::write_bytes(ptr as *mut u8, 0, std::mem::size_of::<Value>());
         }
     }
 }
@@ -310,12 +280,30 @@ fn value_is_shallow_plain_drop(eg: &ExecutorGlobals, value: &Value) -> bool {
 fn value_tree_requires_vm_release(
     eg: &ExecutorGlobals,
     value: &Value,
-    seen_objects: &mut IdentitySet,
-    seen_arrays: &mut IdentitySet,
-    seen_references: &mut IdentitySet,
-    seen_closures: &mut IdentitySet,
+    seen_objects: &mut InspectionIdentitySet,
+    seen_arrays: &mut InspectionIdentitySet,
+    seen_references: &mut InspectionIdentitySet,
+    seen_closures: &mut InspectionIdentitySet,
 ) -> bool {
-    type Counts = IdentityMap;
+    type Counts = InspectionIdentityCounts;
+
+    enum TreeHandle {
+        Borrowed(std::mem::ManuallyDrop<Value>),
+        Owned(Value),
+    }
+
+    impl TreeHandle {
+        fn value(&self) -> &Value {
+            match self {
+                Self::Borrowed(value) => value,
+                Self::Owned(value) => value,
+            }
+        }
+
+        fn rooted(&self) -> bool {
+            matches!(self, Self::Borrowed(_))
+        }
+    }
 
     #[inline]
     fn node_identity(value: &Value) -> Option<usize> {
@@ -329,18 +317,40 @@ fn value_tree_requires_vm_release(
     fn queue_cycle_child(
         value: &Value,
         depth: u32,
-        pending: &mut Vec<(Value, u32)>,
+        rooted: bool,
+        pending: &mut Vec<(TreeHandle, u32)>,
         queued: &mut Counts,
     ) {
+        if rooted {
+            let value = if value.cycle_node().is_some() {
+                value
+            } else {
+                let value = value.dereferenced();
+                if value.cycle_node().is_none() && !value.needs_vm_resource_release() {
+                    return;
+                }
+                value
+            };
+            // SAFETY: rooted edges are ordinary storage transitively owned by
+            // the original, borrowed root. This entire walk runs without PHP
+            // re-entry, graph mutation or owner retirement. Copying the Value
+            // preserves allocation provenance without borrowing its slot; only
+            // persistent deep-drop markers may change. ManuallyDrop never
+            // releases this non-owner. Opaque visitors and every descendant
+            // of their owned snapshots always pass rooted=false instead.
+            let value = std::mem::ManuallyDrop::new(unsafe { std::ptr::read(value) });
+            pending.push((TreeHandle::Borrowed(value), depth.saturating_add(1)));
+            return;
+        }
         if let Some(value) = value
             .clone_cycle_handle()
             .or_else(|| value.dereferenced().clone_cycle_handle())
             .or_else(|| value.dereferenced().needs_vm_resource_release().then(|| value.dereferenced().clone()))
         {
             if let Some(identity) = node_identity(value.dereferenced()) {
-                *queued.entry(identity).or_insert(0) += 1;
+                *queued.get_or_insert_zero(identity) += 1;
             }
-            pending.push((value, depth.saturating_add(1)));
+            pending.push((TreeHandle::Owned(value), depth.saturating_add(1)));
         }
     }
 
@@ -365,14 +375,15 @@ fn value_tree_requires_vm_release(
         }
     }
 
-    // Temporary Rc snapshots are read-only graph handles. Suppress ordinary
-    // possible-root registration until every snapshot has dropped; otherwise
-    // this predicate would itself perturb `gc_status()['roots']`.
+    // Ordinary edges borrow the graph pinned by `root`. Opaque native and
+    // generator visitors may expose transient Values, so they and their
+    // descendants retain owned snapshots. Suppress possible-root registration
+    // until those snapshots drop; inspection must not perturb GC root counts.
     let _cycle_snapshot_guard = crate::value::suppress_cycle_snapshot_roots();
     let root = value;
     let mut pending = Vec::new();
-    // Snapshot handles this walk itself holds per node, so a node's owner
-    // count can be reduced to the PHP references it really has.
+    // Only opaque owned handles alter strong counts. Ordinary borrowed edges
+    // need neither a retain/release pair nor an entry in this table.
     let mut queued: Counts = Counts::default();
     // In-tree references found so far per shared node. A container that
     // other PHP owners hold cannot die with this tree, so its children are
@@ -380,15 +391,17 @@ fn value_tree_requires_vm_release(
     // tree. That keeps a replaced cache array from walking the whole object
     // graph it shares with the rest of the program.
     let mut encounters: Counts = Counts::default();
-    let mut descended: IdentitySet =
+    let mut descended: InspectionIdentitySet =
         Default::default();
-    let mut current: Option<(Value, u32)> = None;
+    let mut current: Option<(TreeHandle, u32)> = None;
     let mut maximum_depth = 0u32;
     let mut requires_release = false;
     loop {
-        let (value, depth) = current
+        let (value, depth, rooted) = current
             .as_ref()
-            .map_or((value, 0), |(value, depth)| (value, *depth));
+            .map_or((value, 0, true), |(handle, depth)| {
+                (handle.value(), *depth, handle.rooted())
+            });
         maximum_depth = maximum_depth.max(depth);
         if let Some(identity) = value.reference_identity()
             && !seen_references.insert(identity)
@@ -419,12 +432,12 @@ fn value_tree_requires_vm_release(
                 None => is_new_node,
                 Some(identity) => {
                     let found = {
-                        let slot = encounters.entry(identity).or_insert(0);
+                        let slot = encounters.get_or_insert_zero(identity);
                         *slot += 1;
                         *slot
                     };
-                    // `queued` still counts the handle held in `current`;
-                    // it is released only after this node is processed.
+                    // An opaque handle held in `current` still counts until
+                    // this node is processed. Borrowed views add no owner.
                     let held_here = queued.get(&identity).copied().unwrap_or(0);
                     let owners = value
                         .cycle_strong_count()
@@ -441,28 +454,31 @@ fn value_tree_requires_vm_release(
                 if value.object_identity().is_some()
                     && let Some(object) = value.as_object()
                 {
-                    object.for_each_owned_value(|property| {
-                        queue_cycle_child(property, depth, &mut pending, &mut queued)
+                    object.for_each_native_value(|child| {
+                        queue_cycle_child(child, depth, false, &mut pending, &mut queued)
+                    });
+                    object.for_each_property(|_, property| {
+                        queue_cycle_child(property, depth, rooted, &mut pending, &mut queued)
                     });
                     if let Some(generator) = &object.generator {
                         generator
                             .as_ref()
                             .borrow()
                             .for_each_cycle_child(|child| {
-                                queue_cycle_child(child, depth, &mut pending, &mut queued)
+                                queue_cycle_child(child, depth, false, &mut pending, &mut queued)
                             });
                     }
                 } else if value.value_type() == ValueType::Closure {
                     if let Some(closure) = value.as_closure() {
                         if let Some(bound_this) = &closure.bound_this {
-                            queue_cycle_child(bound_this, depth, &mut pending, &mut queued);
+                            queue_cycle_child(bound_this, depth, rooted, &mut pending, &mut queued);
                         }
                         for capture in &closure.captures {
-                            queue_cycle_child(capture, depth, &mut pending, &mut queued);
+                            queue_cycle_child(capture, depth, rooted, &mut pending, &mut queued);
                         }
                         if let Some(static_vars) = &closure.static_vars {
                             for value in static_vars.as_ref().borrow().values() {
-                                queue_cycle_child(value, depth, &mut pending, &mut queued);
+                                queue_cycle_child(value, depth, rooted, &mut pending, &mut queued);
                             }
                         }
                     }
@@ -470,14 +486,14 @@ fn value_tree_requires_vm_release(
                     && let Some(array) = value.as_array()
                 {
                     for value in array.values() {
-                        queue_cycle_child(value, depth, &mut pending, &mut queued);
+                        queue_cycle_child(value, depth, rooted, &mut pending, &mut queued);
                     }
                 }
             }
         }
         // The finished snapshot handle drops with `current`; its identity no
         // longer counts as held by this walk.
-        if let Some((finished, _)) = current.take()
+        if let Some((TreeHandle::Owned(finished), _)) = current.take()
             && let Some(identity) = node_identity(finished.dereferenced())
             && let Some(slot) = queued.get_mut(&identity)
         {
@@ -488,6 +504,102 @@ fn value_tree_requires_vm_release(
             mark_deep_root(root, maximum_depth);
             return requires_release;
         }
+    }
+}
+
+#[cfg(test)]
+mod release_tree_observation_tests {
+    use super::*;
+    use crate::value::NativeObjectState;
+    use std::{any::Any, cell::Cell, rc::Rc};
+
+    #[derive(Clone, Default)]
+    struct SnapshotState {
+        visits: Rc<Cell<usize>>,
+        depth: usize,
+    }
+
+    impl NativeObjectState for SnapshotState {
+        fn clone_state(&self) -> Box<dyn NativeObjectState> {
+            Box::new(self.clone())
+        }
+        fn as_any(&self) -> &dyn Any {
+            self
+        }
+        fn as_any_mut(&mut self) -> &mut dyn Any {
+            self
+        }
+        fn for_each_value(&self, visit: &mut dyn FnMut(&Value)) {
+            self.visits.set(self.visits.get() + 1);
+            let mut value = Value::long(47);
+            for index in 0..self.depth {
+                value = match index % 3 {
+                    0 => {
+                        let mut array = PhpArray::new();
+                        array.push(value);
+                        Value::array(array)
+                    }
+                    1 => Value::object(PhpObject::dynamic(
+                        "TransientReleaseEdge".into(), 0,
+                        HashMap::from([("child".into(), value)]),
+                    )),
+                    _ => Value::owned_reference(value),
+                };
+            }
+            // No owner survives this method except what the observer retains.
+            // Descendants must remain owned after this temporary root retires.
+            visit(&value);
+        }
+    }
+
+    fn native_owner(state: SnapshotState) -> Value {
+        let mut object = PhpObject::dynamic("NativeReleaseEdges".into(), 0, HashMap::new());
+        *object.native_object_state_mut::<SnapshotState>() = state;
+        Value::object(object)
+    }
+
+    fn inspect(eg: &ExecutorGlobals, root: &Value) -> (usize, usize, usize) {
+        let mut objects = InspectionIdentitySet::default();
+        let mut arrays = InspectionIdentitySet::default();
+        let mut references = InspectionIdentitySet::default();
+        assert!(!value_tree_requires_vm_release(
+            eg, root, &mut objects, &mut arrays, &mut references,
+            &mut InspectionIdentitySet::default(),
+        ));
+        (objects.len(), arrays.len(), references.len())
+    }
+
+    #[test]
+    fn opaque_transient_roots_keep_deep_descendants_alive() {
+        let eg = ExecutorGlobals::new();
+        let state = SnapshotState { depth: 900, ..Default::default() };
+        let visits = Rc::clone(&state.visits);
+        let root = native_owner(state);
+        let roots_before = crate::value::cycle_collection_status().roots;
+        assert_eq!(inspect(&eg, &root), (301, 300, 300));
+        assert_eq!(visits.get(), 1);
+        assert_eq!(crate::value::cycle_collection_status().roots, roots_before);
+    }
+
+    #[test]
+    fn shared_subtrees_wait_for_every_in_tree_owner() {
+        let eg = ExecutorGlobals::new();
+        let state = SnapshotState::default();
+        let visits = Rc::clone(&state.visits);
+        let mut branch = PhpArray::new();
+        branch.push(native_owner(state));
+        let branch = Value::array(branch);
+        let mut root = PhpArray::new();
+        root.push(branch.clone());
+        root.push(branch.clone());
+        let root = Value::array(root);
+        assert_eq!(inspect(&eg, &root), (0, 2, 0));
+        assert_eq!(visits.get(), 0, "an external owner pins the whole subtree");
+        drop(branch);
+        let roots_before = crate::value::cycle_collection_status().roots;
+        assert_eq!(inspect(&eg, &root), (1, 2, 0));
+        assert_eq!(visits.get(), 1, "both in-tree edges identify one live child");
+        assert_eq!(crate::value::cycle_collection_status().roots, roots_before);
     }
 }
 
@@ -548,10 +660,10 @@ fn frame_requires_vm_release(
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
         let pending_identity = pending.object_identity();
-        let mut seen_objects = IdentitySet::default();
-        let mut seen_arrays = IdentitySet::default();
-        let mut seen_references = IdentitySet::default();
-        let mut seen_closures = IdentitySet::default();
+        let mut seen_objects = InspectionIdentitySet::default();
+        let mut seen_arrays = InspectionIdentitySet::default();
+        let mut seen_references = InspectionIdentitySet::default();
+        let mut seen_closures = InspectionIdentitySet::default();
         let mut inspect_release = |value: &Value| {
             !pending_identity.is_some_and(|identity| {
                 value.dereferenced().object_identity() == Some(identity)
@@ -819,6 +931,7 @@ fn run_final_object_destructor_tree(
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<bool, VmError> {
     stacker::maybe_grow(1024 * 1024, 8 * 1024 * 1024, || {
         run_final_object_destructor_tree_inner(
@@ -831,6 +944,7 @@ fn run_final_object_destructor_tree(
             internal_trace_origin,
             logical_caller_at_current_site,
             live_internal_caller,
+            callback_retirement,
         )
     })
 }
@@ -845,6 +959,7 @@ fn run_final_object_destructor_tree_inner(
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<bool, VmError> {
     if owner.vm_release_strong_count() != Some(expected_references) {
         return Ok(false);
@@ -927,6 +1042,7 @@ fn run_final_object_destructor_tree_inner(
                 internal_trace_origin,
                 logical_caller_at_current_site,
                 live_internal_caller,
+                callback_retirement,
             )?;
             if eg.exception.is_some() {
                 if detach_lazy_state {
@@ -965,9 +1081,20 @@ fn run_final_object_destructor_tree_inner(
                         &owner,
                         "__destruct",
                         &[],
+                        callback_retirement,
                     )
                 };
                 let _ = destructor_result?;
+                if callback_retirement == CallbackReturnPolicy::Shutdown
+                    && let Some(exception) = eg.exception.take()
+                {
+                    let handled = crate::stdlib::dispatch_uncaught_exception_handler(
+                        eg, logical_caller, &exception,
+                    )?;
+                    if !handled && eg.exception.is_none() {
+                        eg.exception = Some(exception);
+                    }
+                }
                 ran_destructor = true;
                 if eg.exception.is_some() {
                     if detach_lazy_state {
@@ -1009,6 +1136,7 @@ fn run_final_object_destructor_tree_inner(
                 internal_trace_origin,
                 logical_caller_at_current_site,
                 live_internal_caller,
+                callback_retirement,
             )?;
             if eg.exception.is_some() {
                 return Ok(true);
@@ -1038,6 +1166,7 @@ fn run_final_object_destructor_tree_inner(
             internal_trace_origin,
             logical_caller_at_current_site,
             live_internal_caller,
+            callback_retirement,
         )?;
         if eg.exception.is_some() {
             break;
@@ -1230,7 +1359,28 @@ pub(crate) fn run_value_destructors(
     roots: &[Value],
     logical_caller: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    run_value_destructors_inner(eg, roots, logical_caller, false, true, false, false).map(|_| ())
+    run_value_destructors_inner(eg, roots, logical_caller, false, true, false, false,
+        CallbackReturnPolicy::Function,
+    ).map(|_| ())
+}
+
+#[cold]
+pub(crate) fn run_shutdown_value_destructors(
+    eg: &mut ExecutorGlobals,
+    roots: &[Value],
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    run_value_destructors_inner(
+        eg,
+        roots,
+        logical_caller,
+        false,
+        true,
+        false,
+        false,
+        CallbackReturnPolicy::Shutdown,
+    )
+    .map(|_| ())
 }
 
 #[cold]
@@ -1242,6 +1392,7 @@ fn run_value_destructors_inner(
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<bool, VmError> {
     let candidates = collect_retiring_root_destructors(
         eg,
@@ -1255,6 +1406,7 @@ fn run_value_destructors_inner(
         internal_trace_origin,
         logical_caller_at_current_site,
         live_internal_caller,
+        callback_retirement,
     )
 }
 
@@ -1278,6 +1430,7 @@ pub(crate) fn run_request_handler_destructors(
     }, false);
     run_collected_value_destructors(
         eg, candidates, logical_caller, true, false, false,
+        CallbackReturnPolicy::Shutdown,
     ).map(|_| ())
 }
 
@@ -1348,12 +1501,40 @@ fn run_request_surviving_global_destructors(
     }
 }
 
+/// Ownership and identity metadata travel together from collection to dispatch.
+/// The collection index becomes the reference-count table in place; no second
+/// hash allocation or rehash of the same identities is needed at the boundary.
+struct CollectedDestructors {
+    candidates: Vec<(usize, usize, Value)>,
+    references: IdentityMap,
+}
+
+impl CollectedDestructors {
+    fn new(candidates: Vec<(usize, usize, Value)>, mut indices: IdentityMap) -> Self {
+        for index in indices.values_mut() {
+            *index = candidates[*index].1;
+        }
+        Self { candidates, references: indices }
+    }
+
+    fn retain_live_generators(&mut self) {
+        self.candidates.retain(|(identity, _, value)| {
+            if value_is_live_generator_release(value) {
+                true
+            } else {
+                self.references.remove(identity);
+                false
+            }
+        });
+    }
+}
+
 #[cold]
 fn collect_retiring_root_destructors(
     eg: &ExecutorGlobals,
     visit_roots: impl Fn(&mut dyn FnMut(&Value)),
     canonical_direct_roots_retained: bool,
-) -> Vec<(usize, usize, Value)> {
+) -> CollectedDestructors {
     let mut candidates = Vec::<(usize, usize, Value)>::new();
     // Replacing a final outer container does not retire a shared or cyclic
     // descendant. Use the same ownership proof as statement and property
@@ -1398,56 +1579,67 @@ fn collect_retiring_root_destructors(
             }
         });
     }
-    candidates
+    CollectedDestructors::new(candidates, child_index)
 }
 
 #[cold]
 fn run_collected_value_destructors(
     eg: &mut ExecutorGlobals,
-    candidates: Vec<(usize, usize, Value)>,
+    collected: CollectedDestructors,
     logical_caller: *mut ExecuteData,
     internal_trace_origin: bool,
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<bool, VmError> {
-    if candidates.is_empty() {
+    let CollectedDestructors { candidates: mut pending, references } = collected;
+    if pending.is_empty() {
         return Ok(false);
     }
 
-    let release_references = candidates
-        .iter()
-        .map(|(identity, references, _)| (*identity, *references))
-        .collect::<IdentityMap>();
-    let mut pending = candidates;
     let mut any_progress = false;
     loop {
-        let mut deferred = Vec::new();
+        let mut deferred = 0;
         let mut progressed = false;
-        for (identity, references, owner) in pending {
-            if owner.vm_release_strong_count() != Some(references + 1) {
-                deferred.push((identity, references, owner));
+        for current in 0..pending.len() {
+            // Consume each owner exactly once, compacting deferred entries
+            // into the already allocated prefix. Cleared slots own nothing.
+            let candidate = std::mem::replace(
+                &mut pending[current], (0, 0, Value::undef()),
+            );
+            let (_, count, owner) = &candidate;
+            if owner.vm_release_strong_count() != Some(count + 1) {
+                pending[deferred] = candidate;
+                deferred += 1;
                 continue;
             }
-            progressed |= run_final_object_destructor_tree(
+            let result = run_final_object_destructor_tree(
                 eg,
-                owner,
-                references + 1,
-                Some(&release_references),
+                candidate.2,
+                candidate.1 + 1,
+                Some(&references),
                 false,
                 logical_caller,
                 internal_trace_origin,
                 logical_caller_at_current_site,
                 live_internal_caller,
-            )?;
-            if eg.exception.is_some() {
-                return Ok(true);
+                callback_retirement,
+            );
+            if result.is_err() || eg.exception.is_some() {
+                // Match the consuming iterator's early-exit drop order:
+                // unvisited owners first, then the deferred prefix. Rust
+                // drops can still affect GC registration and native owners.
+                drop(pending.drain(current + 1..));
+                pending.truncate(deferred);
+                return result.map(|_| true);
             }
+            progressed |= result?;
         }
+        pending.truncate(deferred);
         any_progress |= progressed;
         if !progressed {
             return Ok(any_progress);
         }
-        pending = deferred;
     }
 }
 
@@ -1496,6 +1688,7 @@ pub(crate) fn run_request_static_destructors(
             true,
             false,
             false,
+            CallbackReturnPolicy::Shutdown,
         )?;
         drop(constant_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
@@ -1509,6 +1702,7 @@ pub(crate) fn run_request_static_destructors(
             true,
             false,
             false,
+            CallbackReturnPolicy::Shutdown,
         )?;
         drop(class_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
@@ -1522,6 +1716,7 @@ pub(crate) fn run_request_static_destructors(
             true,
             false,
             false,
+            CallbackReturnPolicy::Shutdown,
         )?;
         drop(function_values);
         if eg.exception.is_some() && !dispatch_pending(eg)? {
@@ -1635,6 +1830,7 @@ fn run_cycle_object_destructor_from(
         if let Some(caller) = shutdown_caller {
             let _ = call_magic_method_from_logical_caller(
                 eg, caller, true, false, owner, "__destruct", &[],
+                CallbackReturnPolicy::Shutdown,
             )?;
         } else {
             let _ = call_magic_method(eg, owner, "__destruct", &[])?;
@@ -1675,11 +1871,17 @@ pub(crate) fn active_destructor_receiver_identity(
 /// all belong to the frame that is about to be released. The ordinary scalar
 /// path remains allocation-free; object counts are built only for frames that
 /// actually own heap values.
+/// Committed returns retire their actual slots through a separate boundary;
+/// this planner is used only while a frame must remain observable.
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum FrameRetirementPhase { LiveGenerators, Frame, ShutdownFrame }
+
 #[cold]
 fn run_frame_destructors_filtered(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
-    live_generators_only: bool,
+    phase: FrameRetirementPhase,
     detached_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
     // SAFETY: `frame` is the live activation being released. Its compiler-sized
@@ -1689,6 +1891,13 @@ fn run_frame_destructors_filtered(
         if !(*frame).has_heap_slots && variables.is_none() {
             return Ok(());
         }
+        // Preserve the existing owner-free exit for every retirement phase.
+        let callback_retirement = if phase == FrameRetirementPhase::ShutdownFrame {
+            CallbackReturnPolicy::Shutdown
+        } else {
+            CallbackReturnPolicy::Function
+        };
+        let live_generators_only = phase == FrameRetirementPhase::LiveGenerators;
 
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
@@ -1741,8 +1950,9 @@ fn run_frame_destructors_filtered(
                 &mut array_encounters,
                 );
             });
+            let mut candidates = CollectedDestructors::new(candidates, child_index);
             if live_generators_only {
-                candidates.retain(|(_, _, value)| value_is_live_generator_release(value));
+                candidates.retain_live_generators();
             }
             let logical_caller = if detached_caller_at_current_site {
                 frame
@@ -1752,6 +1962,7 @@ fn run_frame_destructors_filtered(
             return run_collected_value_destructors(
                 eg, candidates, logical_caller, false,
                 detached_caller_at_current_site, false,
+                callback_retirement,
             ).map(|_| ());
         }
         // Count actual PHP release candidates before allocating the slot
@@ -1877,6 +2088,7 @@ fn run_frame_destructors_filtered(
                     root_frame && !live_generators_only,
                     detached_caller_at_current_site,
                     false,
+                    callback_retirement,
                 )?;
                 // Private consumers cannot escape or resurrect. Commit each
                 // retired edge now, so a later consumer sees the actual last
@@ -1885,7 +2097,7 @@ fn run_frame_destructors_filtered(
                     let slot = base.cast_mut().add(index);
                     std::ptr::drop_in_place(slot);
                     std::ptr::write_bytes(slot as *mut u8, 0, std::mem::size_of::<Value>());
-                    if total <= 64 {
+                    if index < 64 {
                         (*frame).heap_bitmap &= !(1u64 << index);
                     }
                     progressed = true;
@@ -1921,12 +2133,200 @@ fn value_is_live_generator_release(value: &Value) -> bool {
         })
 }
 
+/// Retire one real owner after its slot has been detached. Retain that owner
+/// through callbacks, so a throwing destructor cannot discard its remaining
+/// children before the existing release proof gets another pass.
+#[cold]
+fn retire_owned_frame_value(
+    eg: &mut ExecutorGlobals,
+    owner: Value,
+    logical_caller: *mut ExecuteData,
+    pending: &mut Option<Value>,
+    callback_retirement: CallbackReturnPolicy,
+) -> Result<(), VmError> {
+    while let Some(release) = prepare_replaced_value_release(eg, &owner) {
+        let result = run_prepared_value_destructor_with_context(
+            eg,
+            Some(release),
+            logical_caller,
+            false,
+            false,
+            false,
+            None,
+            callback_retirement,
+        );
+        if let Some(replacement) = eg.exception.take() {
+            if callback_retirement == CallbackReturnPolicy::Shutdown {
+                *pending = Some(replacement);
+                return result;
+            }
+            if let Some(displaced) = pending.replace(replacement.clone()) {
+                append_replaced_exception(&replacement, &displaced, eg);
+            }
+        } else {
+            result?;
+            break;
+        }
+        result?;
+    }
+    Ok(())
+}
+
+/// A committed function return relinquishes its actual owners in slot order.
+/// Final-reference proofs therefore use the live counts; they need no graph of
+/// the whole frame, alias-count table, or deferred frame-candidate fixed point.
+/// Request shutdown and resumable exception/finally boundaries remain separate.
+#[cold]
+fn retire_return_frame_owners(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    callback_retirement: CallbackReturnPolicy,
+) -> Result<(), VmError> {
+    let mut pending = eg.exception.take();
+    // SAFETY: every caller has committed this function's return. The activation
+    // and its compiler-sized slots remain live until the subsequent frame pop.
+    // Only owned bitmap entries (or initialized wide-frame heap slots) move;
+    // each slot is cleared before PHP re-entry and no slot borrow crosses it.
+    unsafe {
+        let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
+        let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+        let logical_caller = eg.trace_caller(frame as usize, (*frame).prev_execute_data);
+        // Constructor completion used to inspect CV zero after planning. Keep
+        // precisely that receiver until local retirement succeeds, since the
+        // slots themselves now disappear before completion is published.
+        let construction_receiver = (*frame)
+            .is_original_constructor_call()
+            .then(|| (*frame).cv(0).clone());
+        let result = (|| {
+            if (*frame).has_heap_slots {
+                if total <= 64 {
+                    for index in HeapSlotIter::new((*frame).owned_heap_bitmap()) {
+                        let owner = std::mem::replace(&mut *base.add(index as usize), Value::undef());
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                        retire_owned_frame_value(
+                            eg, owner, logical_caller, &mut pending, callback_retirement,
+                        )?;
+                        if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
+                            return Ok(());
+                        }
+                    }
+                } else {
+                    let mut remaining = (*frame).owned_heap_bitmap();
+                    while remaining != 0 {
+                        let index = remaining.trailing_zeros();
+                        let owner = std::mem::replace(&mut *base.add(index as usize), Value::undef());
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                        retire_owned_frame_value(
+                            eg, owner, logical_caller, &mut pending, callback_retirement,
+                        )?;
+                        if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
+                            return Ok(());
+                        }
+                        // The former wide scan observed later slots after each
+                        // callback. Refresh their bits and keep ascending order;
+                        // a changed earlier slot is not revisited by that scan.
+                        let later = (u64::MAX << index) << 1;
+                        remaining = (*frame).owned_heap_bitmap() & later;
+                    }
+                    for index in 64..total {
+                        if (*base.add(index)).needs_cleanup() {
+                            let owner = std::mem::replace(&mut *base.add(index), Value::undef());
+                            retire_owned_frame_value(
+                                eg, owner, logical_caller, &mut pending, callback_retirement,
+                            )?;
+                            if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
+                                return Ok(());
+                            }
+                        }
+                    }
+                }
+            }
+            // Reuse the sparse table's empty-aware lookup. Unconditional
+            // HashMap::remove hashes the frame key even when no symbols exist.
+            let variables = eg
+                .dynamic_variables
+                .get_mut(&(frame as usize))
+                .map(|variables| {
+                    std::mem::replace(
+                        variables,
+                        crate::value::DynamicPropertyMap::with_capacity(0),
+                    )
+                });
+            if let Some(variables) = variables {
+                for owner in variables.into_values() {
+                    retire_owned_frame_value(
+                        eg,
+                        owner,
+                        logical_caller,
+                        &mut pending,
+                        callback_retirement,
+                    )?;
+                    if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
+                        return Ok(());
+                    }
+                }
+            }
+            // Surplus positional arguments have their own storage, outside
+            // the compiler CV/TMP extent. Retire their real owners after locals
+            // just as PHP does, before frame pop can drop their Rust snapshot.
+            if let Some(mut arguments) = eg.take_function_arguments(frame as usize) {
+                for owner in arguments.values.drain(..) {
+                    retire_owned_frame_value(
+                        eg, owner, logical_caller, &mut pending, callback_retirement,
+                    )?;
+                    if callback_retirement == CallbackReturnPolicy::Shutdown && pending.is_some() {
+                        return Ok(());
+                    }
+                }
+                eg.recycle_function_argument_buffer(arguments.values);
+            }
+            Ok(())
+        })();
+        eg.exception = pending;
+        if let Some(receiver) = construction_receiver {
+            (*frame).set_original_constructor_call(false);
+            if result.is_ok() && eg.exception.is_none() {
+                receiver.enable_constructed_object_destructor();
+            }
+        }
+        result
+    }
+}
+
+#[inline]
+fn run_return_frame_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+) -> Result<(), VmError> {
+    run_committed_frame_destructors(eg, frame, CallbackReturnPolicy::Function)
+}
+
+/// Test the live ownership metadata before entering destructor machinery.
+/// A scalar-only activation with no dynamic symbols owns nothing to retire.
+/// Keep that ordinary case outside the cold planner and its stack frame.
+#[inline]
+fn run_committed_frame_destructors(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    callback_retirement: CallbackReturnPolicy,
+) -> Result<(), VmError> {
+    // SAFETY: the caller has committed the live activation's return; its
+    // ownership metadata and slots remain allocated until the subsequent pop.
+    if !unsafe { (*frame).has_heap_slots }
+        && eg.dynamic_variables.get(&(frame as usize)).is_none()
+        && eg.function_argument_state.is_empty()
+    {
+        return Ok(());
+    }
+    retire_return_frame_owners(eg, frame, callback_retirement)
+}
+
 #[inline]
 fn run_frame_destructors(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    run_frame_destructors_filtered(eg, frame, false, false)
+    run_frame_destructors_filtered(eg, frame, FrameRetirementPhase::Frame, false)
 }
 
 #[inline]
@@ -1934,7 +2334,7 @@ fn run_detached_frame_destructors(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
 ) -> Result<(), VmError> {
-    run_frame_destructors_filtered(eg, frame, false, true)
+    run_frame_destructors_filtered(eg, frame, FrameRetirementPhase::Frame, true)
 }
 
 /// Close suspended generators while an uncaught exception is still unwinding
@@ -1947,7 +2347,7 @@ pub(crate) fn run_exception_frame_generator_destructors(
 ) -> Result<(), VmError> {
     let mut pending = eg.exception.take();
     loop {
-        run_frame_destructors_filtered(eg, frame, true, false)?;
+        run_frame_destructors_filtered(eg, frame, FrameRetirementPhase::LiveGenerators, false)?;
         let Some(replacement) = eg.exception.take() else {
             eg.exception = pending;
             return Ok(());
@@ -1980,7 +2380,7 @@ pub(crate) fn run_shutdown_frame_destructors(
 ) -> Result<(), VmError> {
     let mut pending = eg.exception.take();
     loop {
-        run_frame_destructors(eg, frame)?;
+        run_frame_destructors_filtered(eg, frame, FrameRetirementPhase::ShutdownFrame, false)?;
         let Some(replacement) = eg.exception.take() else {
             eg.exception = pending;
             return Ok(());
@@ -2016,6 +2416,15 @@ fn run_exception_unwind_destructors(
     mut pending: Value,
     chain_replacements: bool,
 ) -> Result<Value, VmError> {
+    if chain_replacements && eg.function_arguments_for(frame as usize).is_some() {
+        // This activation has no remaining handler. Its surplus arguments
+        // can alias its locals, so retire both sets of real owners together
+        // instead of proving finality from CVs while a tail snapshot retains
+        // the same object. Exception trace owners continue to retain values.
+        eg.exception = Some(pending);
+        retire_return_frame_owners(eg, frame, CallbackReturnPolicy::Function)?;
+        return Ok(eg.exception.take().expect("unwind retains its effective exception"));
+    }
     if !frame_requires_vm_release(eg, frame, &pending) {
         return Ok(pending);
     }
@@ -2097,7 +2506,9 @@ impl NativeRelease {
                     }
                     if !native_release_plain_object(eg, &node.owner) {
                         let node = self.nodes.pop().expect("active release node");
-                        run_final_object_destructor_tree(eg, node.owner, node.references, None, true, frame, false, true, false)?;
+                        run_final_object_destructor_tree(eg, node.owner, node.references, None, true, frame, false, true, false,
+                            CallbackReturnPolicy::Function,
+                        )?;
                         if eg.exception.is_some() { return Ok(None); }
                         continue;
                     }
@@ -2212,7 +2623,7 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
         return None;
     }
     let value = value.dereferenced();
-    if !value_may_require_vm_release_tree(eg, value) || value.vm_release_identity().is_none() {
+    if value.vm_release_identity().is_none() {
         return None;
     }
     let fiber_owned_references = value
@@ -2221,13 +2632,18 @@ pub(crate) fn prepare_replaced_value_destructor_with_references(
     if value.vm_release_strong_count() != Some(replaced_references + fiber_owned_references) {
         return None;
     }
+    // Child metadata is relevant only after the existing final-owner proof.
+    // A shared handle cannot retire any property regardless of its shape.
+    if !value_may_require_vm_release_tree(eg, value) {
+        return None;
+    }
     let requires_vm_release = value_tree_requires_vm_release(
         eg,
         value,
-        &mut IdentitySet::default(),
-        &mut IdentitySet::default(),
-        &mut IdentitySet::default(),
-        &mut IdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
+        &mut InspectionIdentitySet::default(),
     );
     requires_vm_release.then(|| PreparedValueDestructor::Direct {
         owner: value.clone(),
@@ -2266,10 +2682,10 @@ pub(crate) fn prepare_replaced_value_tree_destructor_with_references(
         || !value_tree_requires_vm_release(
             eg,
             value,
-            &mut IdentitySet::default(),
-            &mut IdentitySet::default(),
-            &mut IdentitySet::default(),
-            &mut IdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
+            &mut InspectionIdentitySet::default(),
         )
     {
         return None;
@@ -2406,6 +2822,7 @@ fn run_prepared_value_destructors_at_boundary(
             false,
             live_internal_caller,
             None,
+            CallbackReturnPolicy::Function,
         );
         if publish_trace_arguments {
             eg.take_function_arguments(logical_caller as usize);
@@ -2452,6 +2869,7 @@ fn run_prepared_value_destructor_with_trace_site(
         logical_caller_at_current_site,
         false,
         trace_site,
+        CallbackReturnPolicy::Function,
     )
 }
 
@@ -2464,6 +2882,7 @@ fn run_prepared_value_destructor_with_context(
     logical_caller_at_current_site: bool,
     live_internal_caller: bool,
     trace_site: Option<(&crate::compiler::OpArray, usize)>,
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<(), VmError> {
     let Some(release) = release else {
         return Ok(());
@@ -2490,6 +2909,7 @@ fn run_prepared_value_destructor_with_context(
                 internal_trace_origin,
                 logical_caller_at_current_site,
                 live_internal_caller,
+                callback_retirement,
             )?;
             replace_pending_destructor_trace_site(eg, trace_site);
         }
@@ -2520,6 +2940,7 @@ fn run_prepared_value_destructor_with_context(
                     internal_trace_origin,
                     logical_caller_at_current_site,
                     live_internal_caller,
+                    callback_retirement,
                 )?;
                 replace_pending_destructor_trace_site(eg, trace_site);
                 let Some(replacement) = eg.exception.take() else {
@@ -2804,7 +3225,57 @@ fn statement_temp_is_live_read_snapshot<'a>(
     false
 }
 
-#[cold]
+/// Proofs are relative to one release range, including ranges in wide frames.
+/// Only unusually wide statements need heap storage. The set is captured after
+/// PHP callbacks and consumed before any further PHP code can run.
+#[derive(Default)]
+struct StatementTempSnapshots {
+    inline: u64,
+    overflow: Vec<usize>,
+}
+
+impl StatementTempSnapshots {
+    #[inline]
+    fn insert(&mut self, offset: usize) {
+        if offset < u64::BITS as usize {
+            self.inline |= 1u64 << offset;
+        } else {
+            self.overflow.push(offset);
+        }
+    }
+
+    #[inline]
+    fn contains(&self, offset: usize) -> bool {
+        if offset < u64::BITS as usize {
+            self.inline & (1u64 << offset) != 0
+        } else {
+            self.overflow.contains(&offset)
+        }
+    }
+}
+
+#[test]
+fn statement_snapshot_proofs_keep_inline_and_overflow_slots_distinct() {
+    let mut snapshots = StatementTempSnapshots::default();
+    for offset in [0, 31, 63] {
+        snapshots.insert(offset);
+    }
+    assert_eq!(snapshots.overflow.capacity(), 0);
+    for offset in [64, 95, 127, 128] {
+        snapshots.insert(offset);
+    }
+    for offset in 0..192 {
+        assert_eq!(
+            snapshots.contains(offset),
+            [0, 31, 63, 64, 95, 127, 128].contains(&offset),
+            "snapshot proof for offset {offset}",
+        );
+    }
+}
+
+/// Dynamic internal intervals keep the same prefix geometry as compiler
+/// markers. Ordinary bytecode supplies its already-projected immutable mask.
+#[inline]
 fn release_statement_temps(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -2813,53 +3284,114 @@ fn release_statement_temps(
     release_mode: u8,
     logical_caller_at_current_site: bool,
 ) -> Result<(), VmError> {
+    let below = |bound: usize| u64::MAX.checked_shr((64 - bound.min(64)) as u32).unwrap_or(0);
+    release_statement_temps_with_mask(
+        eg, frame, first, end, release_mode, logical_caller_at_current_site,
+        below(end) & !below(first),
+    )
+}
+
+#[cold]
+fn release_statement_temps_with_mask(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    first: usize,
+    end: usize,
+    release_mode: u8,
+    logical_caller_at_current_site: bool,
+    prefix_mask: u64,
+) -> Result<(), VmError> {
     // SAFETY: the compiler emits a bounded statement-temporary range inside
     // this live frame; ownership bits identify which slots may be dropped.
     unsafe {
         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
         debug_assert!(first <= end && end <= total);
         let base = (frame as *mut Value).add(CALL_FRAME_SLOTS);
-        let compact = total <= 64;
-        let bitmap = compact.then(|| (*frame).owned_heap_bitmap());
+        // The interval is bounded by the physical slot capacity, so its mask
+        // excludes embedded class metadata as well as out-of-range owners.
+        let bitmap = (end <= 64).then(|| (*frame).heap_bitmap & prefix_mask);
 
-        // A range can contain many scalar slots but only one counted native
-        // handle. Find that owned slot without scanning the surrounding values
-        // or entering the PHP release graph. Callback-capable resources and
-        // marked return/foreach sources retain their ordinary planner below.
+        #[cfg(feature = "vm-stats")]
+        if stats::enabled() {
+            let mut count = 0;
+            let mut kind = 0;
+            let mut shared = false;
+            for index in first..end {
+                let owned = if index < 64 {
+                    (*frame).heap_bitmap & (1u64 << index) != 0
+                } else {
+                    (*base.add(index)).needs_cleanup()
+                };
+                if owned {
+                    count += 1;
+                    kind = (*base.add(index)).value_type() as usize;
+                    shared = (*base.add(index)).cycle_strong_count().is_some_and(|n| n > 1);
+                }
+            }
+            stats::record_statement_temp_owners(end <= 64, release_mode, count, kind, shared);
+        }
+
+        // Read current ownership at each pass: callback completion can change
+        // the live prefix just as it can change an initialized tail value.
+        let is_owned = move |index: usize| {
+            if index < 64 {
+                (*frame).heap_bitmap & (1u64 << index) != 0
+            } else {
+                (*base.add(index)).needs_cleanup()
+            }
+        };
+
+        // A single owned slot needs no range-wide release graph when its value
+        // cannot lose any PHP children. Another physical owner pins a direct
+        // array/object; strings and callback-free resources have no PHP cleanup.
+        // Final owners and marked return/foreach sources retain the planner.
         if release_mode != STATEMENT_TEMPS_FOREACH_OBJECT {
-            if let Some(bitmap) = bitmap {
-                let below_end = if end == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << end) - 1
-                };
-                let below_first = if first == 64 {
-                    u64::MAX
-                } else {
-                    (1u64 << first) - 1
-                };
-                let owned = bitmap & below_end & !below_first;
-                if owned.is_power_of_two() {
-                    let index = owned.trailing_zeros() as usize;
-                    let value = base.add(index);
-                    if (*value).value_type() == ValueType::Resource
-                        && !(*value).needs_vm_resource_release()
-                    {
-                        std::ptr::drop_in_place(value);
-                        std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                        (*frame).heap_bitmap &= !owned;
-                        return Ok(());
+            let single_owner = if let Some(bitmap) = bitmap {
+                bitmap.is_power_of_two().then(|| bitmap.trailing_zeros() as usize)
+            } else {
+                // Prefix bytes may be uninitialized; the ownership predicate
+                // reads only their bitmap. Tail slots retain their existing
+                // initialized-Value guarantee. Two owners disprove the sole
+                // owner case without scanning the rest of the interval.
+                let mut owned = (first..end).filter(|index| is_owned(*index));
+                owned.next().filter(|_| owned.next().is_none())
+            };
+            if let Some(index) = single_owner {
+                let value = base.add(index);
+                let direct_drop = match (*value).value_type() {
+                    ValueType::Resource => !(*value).needs_vm_resource_release(),
+                    ValueType::String | ValueType::Array | ValueType::Object => {
+                        // A pending argument may be the other owner. Retire
+                        // those copies before making the same ownership
+                        // proof used by the nested planner below.
+                        if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
+                            cleanup_pending_calls(eg, frame, None)?;
+                        }
+                        (*value).value_type() == ValueType::String
+                            || (*value).cycle_strong_count().is_some_and(|count| count > 1)
                     }
+                    _ => false,
+                };
+                if direct_drop {
+                    // Preserve normal GC admission. Only the current
+                    // canonical read-snapshot proof suppresses this drop;
+                    // no PHP callback occurs between that proof and drop.
+                    let snapshot = statement_temp_is_live_read_snapshot(
+                        eg, (*frame).op_array(), index, &*value,
+                        |operand, kind| &*(*frame).get_op_ptr(
+                            operand as u32, kind, (*frame).op_array(),
+                        ),
+                    );
+                    let _snapshot = snapshot.then(crate::value::suppress_cycle_snapshot_roots);
+                    std::ptr::drop_in_place(value);
+                    std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
+                    if index < 64 {
+                        (*frame).heap_bitmap &= !(1u64 << index);
+                    }
+                    return Ok(());
                 }
             }
         }
-
-        let is_owned = |index: usize| {
-            bitmap.map_or_else(
-                || (*base.add(index)).needs_cleanup(),
-                |bitmap| bitmap & (1u64 << index) != 0,
-            )
-        };
 
         // A single final object TMP has a completely owned native release
         // plan. The instruction can revisit its callback-free slot retirement
@@ -2886,17 +3418,34 @@ fn release_statement_temps(
         // is retired. Nested borrowed-property receivers may themselves be
         // earlier in the range. No proof may survive arbitrary PHP code.
         let op_array = (*frame).op_array();
-        let read_snapshots = |eg: &ExecutorGlobals| -> Vec<usize> {
-            (first..end).filter(|index| {
-                is_owned(*index) && statement_temp_is_live_read_snapshot(
-                    eg, op_array, *index, &*base.add(*index),
+        let read_snapshots = |eg: &ExecutorGlobals| {
+            let mut snapshots = StatementTempSnapshots::default();
+            let mut capture = |index: usize| {
+                if statement_temp_is_live_read_snapshot(
+                    eg, op_array, index, &*base.add(index),
                     |operand, kind| &*(*frame).get_op_ptr(operand as u32, kind, op_array),
                 )
-            }).collect()
+                {
+                    snapshots.insert(index - first);
+                }
+            };
+            if end <= 64 {
+                let bitmap = (*frame).heap_bitmap & prefix_mask;
+                for index in HeapSlotIter::new(bitmap) {
+                    capture(index as usize);
+                }
+            } else {
+                for index in first..end {
+                    if is_owned(index) {
+                        capture(index);
+                    }
+                }
+            }
+            snapshots
         };
         macro_rules! drop_statement_temp {
             ($value:expr, $index:expr, $snapshots:expr) => {{
-                let _snapshot = $snapshots.contains(&$index)
+                let _snapshot = $snapshots.contains($index - first)
                     .then(crate::value::suppress_cycle_snapshot_roots);
                 std::ptr::drop_in_place($value);
             }};
@@ -2933,6 +3482,7 @@ fn release_statement_temps(
                     false,
                     logical_caller_at_current_site,
                     false,
+                    CallbackReturnPolicy::Function,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -2940,7 +3490,7 @@ fn release_statement_temps(
                 let value = base.add(first);
                 drop_statement_temp!(value, first, read_snapshots(eg));
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                if compact {
+                if first < 64 {
                     (*frame).heap_bitmap &= !(1u64 << first);
                 }
                 return Ok(());
@@ -2958,7 +3508,7 @@ fn release_statement_temps(
             // ordinary post-call path the pending chain is already empty, so
             // this is a no-op.
             if release_mode == STATEMENT_TEMPS_NESTED_OBJECTS {
-                cleanup_pending_calls(eg, frame);
+                cleanup_pending_calls(eg, frame, None)?;
             }
             // A container that another PHP owner still holds (for example a
             // foreach source that is also a property) loses no child when
@@ -2993,7 +3543,7 @@ fn release_statement_temps(
                     let value = base.add(index);
                     drop_statement_temp!(value, index, snapshots);
                     std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                    if compact {
+                    if index < 64 {
                         (*frame).heap_bitmap &= !(1u64 << index);
                     }
                 }
@@ -3028,11 +3578,12 @@ fn release_statement_temps(
             }
             let _ = run_collected_value_destructors(
                 eg,
-                candidates,
+                CollectedDestructors::new(candidates, child_index),
                 frame,
                 false,
                 logical_caller_at_current_site,
                 false,
+                CallbackReturnPolicy::Function,
             )?;
             if eg.exception.is_some() {
                 return Ok(());
@@ -3045,7 +3596,7 @@ fn release_statement_temps(
                 let value = base.add(index);
                 drop_statement_temp!(value, index, snapshots);
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                if compact {
+                if index < 64 {
                     (*frame).heap_bitmap &= !(1u64 << index);
                 }
             }
@@ -3067,7 +3618,7 @@ fn release_statement_temps(
                 let value = base.add(index);
                 drop_statement_temp!(value, index, snapshots);
                 std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-                if compact {
+                if index < 64 {
                     (*frame).heap_bitmap &= !(1u64 << index);
                 }
             }
@@ -3132,6 +3683,7 @@ fn release_statement_temps(
                     false,
                     logical_caller_at_current_site,
                     false,
+                    CallbackReturnPolicy::Function,
                 )?;
                 if eg.exception.is_some() {
                     return Ok(());
@@ -3151,7 +3703,7 @@ fn release_statement_temps(
             let value = base.add(index);
             drop_statement_temp!(value, index, snapshots);
             std::ptr::write_bytes(value as *mut u8, 0, std::mem::size_of::<Value>());
-            if compact {
+            if index < 64 {
                 (*frame).heap_bitmap &= !(1u64 << index);
             }
         }
@@ -3161,7 +3713,7 @@ fn release_statement_temps(
 
 fn replace_throwable_first_trace_site(
     throwable: &Value,
-    file: std::rc::Rc<String>,
+    file: std::rc::Rc<crate::value::PhpString>,
     line: usize,
     eg: &ExecutorGlobals,
 ) {
@@ -3310,7 +3862,11 @@ fn pop_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
 
 #[cfg(test)]
 mod sparse_vm_frame_pop_tests {
-    use super::{ExecuteData, ExecutorGlobals, Value, VmError, pop_vm_call_frame};
+    use super::{
+        ExecuteData, ExecutorGlobals, PhpArray, Value, VmError, callback_arg_init,
+        cleanup_frame_slots, late_static_call_class_id, materialize_deferred_scalar_call,
+        pop_vm_call_frame, publish_late_static_call_class_id,
+    };
     use std::ptr::null_mut;
 
     fn empty_internal(
@@ -3319,6 +3875,72 @@ mod sparse_vm_frame_pop_tests {
         _: &mut ExecutorGlobals,
     ) -> Result<(), VmError> {
         Ok(())
+    }
+
+    #[test]
+    fn materialized_argument_owners_keep_scope_across_frame_geometries() {
+        for total in [16, 40, 80, 130] {
+            let mut code = crate::compiler::compile::Compiler::new()
+                .compile(&[]).unwrap().main;
+            code.num_cvs = 1;
+            code.num_temps = total - 1;
+            let function = crate::compiler::make_user_function(code);
+            let mut eg = ExecutorGlobals::new();
+            let retained = Value::array(PhpArray::new());
+            let compact = eg.pending_call_stack.push_deferred_scalar_call(
+                &function.common, 1, 1, null_mut(), null_mut(),
+            );
+            // SAFETY: this test owns the argument activation and publishes
+            // its only initialized slot before materialization. The transfer
+            // consumes compact storage; only the returned full frame is used
+            // afterwards and its ownership is retired before popping it.
+            unsafe {
+                callback_arg_init(compact, 0, retained.clone());
+                publish_late_static_call_class_id(&mut eg, compact, 83);
+                let full = materialize_deferred_scalar_call(&mut eg, compact);
+                assert_eq!((*full).owned_heap_bitmap(), 1);
+                assert_eq!(late_static_call_class_id(&eg, full), 83);
+                assert_eq!(retained.cycle_strong_count(), Some(2));
+                cleanup_frame_slots(full);
+                assert_eq!(retained.cycle_strong_count(), Some(1));
+                assert_eq!(late_static_call_class_id(&eg, full), 83);
+                pop_vm_call_frame(&mut eg, full);
+                assert_eq!(eg.late_static_scope_class_id(full as usize), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn frame_cleanup_releases_owned_reference_cells_without_dropping_borrowed_references() {
+        for slots in [2, 80] {
+            let function = crate::compiler::make_internal_function(empty_internal, slots, slots, vec![]);
+            let mut eg = ExecutorGlobals::new();
+            let mut retained = Value::object(crate::value::PhpObject::dynamic(
+                "RetainedFrameOwner".to_string(), 0, std::collections::HashMap::new(),
+            ));
+            let frame = eg.vm_stack.push_call_frame(&function.common, slots, slots, null_mut(), null_mut());
+            // SAFETY: this test owns the fresh activation and initializes every
+            // reserved slot once. The borrowed reference targets `retained`,
+            // whose storage remains live until after the frame is popped.
+            unsafe {
+                assert_eq!((*frame).num_cvs, slots);
+                for index in 0..slots {
+                    let value = match index {
+                        0 => Value::owned_reference(retained.clone()),
+                        1 => Value::reference(&mut retained),
+                        63 | 64 if slots > 64 => Value::owned_reference(retained.clone()),
+                        _ => Value::undef(),
+                    };
+                    super::callback_arg_init(frame, index as usize, value);
+                }
+                assert_eq!(retained.object_strong_count(), Some(if slots > 64 { 4 } else { 2 }));
+                assert_eq!((*frame).owned_heap_bitmap(), if slots > 64 { 1 | (1u64 << 63) } else { 1 });
+                super::cleanup_frame_slots(frame);
+            }
+            assert_eq!(retained.object_strong_count(), Some(1), "{slots} slots must relinquish the owned cell");
+            pop_vm_call_frame(&mut eg, frame);
+            assert!(retained.as_object().is_some(), "borrowed target must survive");
+        }
     }
 
     #[test]
@@ -3381,12 +4003,18 @@ pub(crate) fn complete_object_construction(
 
 /// Release a pending ordinary call that cannot enter its body.
 #[cold]
-fn discard_pending_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
+fn discard_pending_vm_call_frame(
+    eg: &mut ExecutorGlobals,
+    call: *mut ExecuteData,
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let result = retire_pending_call_owners(eg, call, logical_caller);
     // SAFETY: callers pass the live pending frame detached from its owning
     // ExecuteData. Its compiler-sized slots remain allocated until the
     // immediately following VM-stack pop.
     unsafe { cleanup_frame_slots(call) };
     pop_vm_call_frame(eg, call);
+    result
 }
 
 /// Append one dynamically resolved `__invoke` receiver to the packed internal
@@ -3395,14 +4023,7 @@ fn discard_pending_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteDat
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn push_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize, receiver: Value) {
-    let pending = eg
-        .pending_invoke_this
-        .get_or_insert_with(|| Value::array(PhpArray::with_packed_capacity(4)));
-    let stack = pending
-        .as_array_mut()
-        .expect("pending invoke state must remain a packed array");
-    stack.push(Value::long(call_key as i64));
-    stack.push(receiver);
+    eg.pending_invoke_this.get_or_insert_with(Default::default).push_receiver(call_key, receiver);
 }
 
 /// Pop the current dynamically resolved `__invoke` receiver without
@@ -3411,36 +4032,73 @@ fn push_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize, receiver:
 #[inline(never)]
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_cold"))]
 fn take_pending_invoke_this(eg: &mut ExecutorGlobals, call_key: usize) -> Option<Value> {
-    // Ordinary calls carry no pending receiver; answer before touching the
-    // stack representation.
-    if eg.pending_invoke_this.is_none() {
-        return None;
-    }
-    let matches_current = {
-        let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
-        let key_index = stack.len().checked_sub(2)?;
-        stack.get_value_at(key_index)?.as_long()? as usize == call_key
-    };
-    if !matches_current {
-        return None;
-    }
-
-    let (receiver, empty) = {
-        let stack = eg.pending_invoke_this.as_mut()?.as_array_mut()?;
-        let receiver = stack.pop()?;
-        let key = stack.pop()?;
-        debug_assert_eq!(key.as_long().map(|key| key as usize), Some(call_key));
-        (receiver, stack.is_empty())
-    };
-    if empty {
-        eg.pending_invoke_this = None;
-    }
+    let state = eg.pending_invoke_this.as_mut()?;
+    let receiver = state.take_receiver(call_key)?;
+    if state.is_empty() { eg.pending_invoke_this = None }
     Some(receiver)
 }
 
 // The high bit belongs to the late-static-scope entry sharing this packed
 // sidecar. Magic-call metadata uses the next disjoint non-pointer tag.
 const PENDING_MAGIC_CALL_TAG: usize = 1usize << (usize::BITS - 2);
+
+/// The packed side stack can remain populated by an outer pending call or a
+/// live late-static scope. Only its current record can be consumed by this
+/// callee: receiver extraction and late-static lookup use that same LIFO key.
+/// Preserve full preparation for every current-callee kind and for opaque
+/// embedding state; inspecting another activation never removes its owner.
+#[inline]
+fn has_pending_state_for_call(eg: &ExecutorGlobals, call_key: usize) -> bool {
+    eg.pending_invoke_this.as_ref().is_some_and(|state| state.has_call(call_key))
+}
+
+#[cfg(test)]
+mod call_side_state_admission_tests {
+    use super::*;
+
+    #[test]
+    fn nested_side_records_preserve_kind_and_actual_owners() {
+        let mut eg = ExecutorGlobals::new();
+        let receiver = Value::object(crate::value::PhpObject::dynamic(
+            "CallOwner".into(), 0, std::collections::HashMap::new(),
+        ));
+        assert!(!has_pending_state_for_call(&eg, 16));
+        push_pending_invoke_this(&mut eg, 16, receiver.clone());
+        assert_eq!(receiver.object_strong_count(), Some(2));
+        assert!(has_pending_state_for_call(&eg, 16));
+        assert!(!has_pending_state_for_call(&eg, 32));
+        assert!(take_pending_invoke_this(&mut eg, 32).is_none());
+
+        push_pending_magic_call(&mut eg, 32, Value::string("missing"));
+        assert!(has_pending_state_for_call(&eg, 32));
+        assert!(!has_pending_state_for_call(&eg, 48));
+        eg.push_late_static_scope(48, 7);
+        assert!(has_pending_state_for_call(&eg, 48));
+        assert!(!has_pending_state_for_call(&eg, 64));
+        assert_eq!(eg.late_static_scope_class_id(48), 7);
+        eg.discard_late_static_scope(64);
+        assert_eq!(eg.late_static_scope_class_id(48), 7);
+        eg.discard_late_static_scope(48);
+        assert_eq!(take_pending_magic_call(&mut eg, 32).unwrap().as_str(), Some("missing"));
+        assert!(has_pending_state_for_call(&eg, 16));
+        drop(take_pending_invoke_this(&mut eg, 16));
+        assert_eq!(receiver.object_strong_count(), Some(1));
+        assert!(eg.pending_invoke_this.is_none());
+    }
+
+    #[test]
+    fn opaque_and_incomplete_side_records_keep_full_preparation() {
+        let mut eg = ExecutorGlobals::new();
+        eg.pending_invoke_this = Some(crate::runtime::PendingCallState::opaque(Value::long(55)));
+        assert!(has_pending_state_for_call(&eg, 16));
+        for values in [vec![], vec![Value::long(32)], vec![Value::string("key"), Value::null()]] {
+            let mut array = PhpArray::new();
+            for value in values { array.push(value); }
+            eg.pending_invoke_this = Some(crate::runtime::PendingCallState::opaque(Value::array(array)));
+            assert!(has_pending_state_for_call(&eg, 16));
+        }
+    }
+}
 
 #[cold]
 #[inline(never)]
@@ -3459,21 +4117,7 @@ fn take_pending_magic_call(eg: &mut ExecutorGlobals, call_key: usize) -> Option<
 
 #[cold]
 fn pending_magic_call_name(eg: &ExecutorGlobals, call_key: usize) -> Option<String> {
-    let tagged_key = call_key | PENDING_MAGIC_CALL_TAG;
-    let stack = eg.pending_invoke_this.as_ref()?.as_array()?;
-    let mut key_index = stack.len().checked_sub(2)?;
-    loop {
-        if stack.get_value_at(key_index)?.as_long()? as usize == tagged_key {
-            return stack
-                .get_value_at(key_index + 1)
-                .and_then(Value::as_str)
-                .map(str::to_owned);
-        }
-        if key_index < 2 {
-            return None;
-        }
-        key_index -= 2;
-    }
+    eg.pending_invoke_this.as_ref()?.magic_name(call_key)
 }
 
 /// Compact arguments emitted by source-level `Closure->__invoke()` syntax.
@@ -3493,9 +4137,8 @@ fn compact_explicit_closure_method_arguments(call: *mut ExecuteData, source_posi
         }
         for index in 0..source_positional {
             let source = (*call).cv_mut(index + 1) as *mut Value;
-            let total = (*call).num_cvs + (*call).num_temps;
-            let value = if total <= 64 && (*source).needs_cleanup() {
-                let source_index = slot_idx(call, source);
+            let source_index = index + 1;
+            let value = if source_index < 64 && (*source).needs_cleanup() {
                 if (*call).heap_bitmap & (1u64 << source_index) == 0 {
                     let owned = (*source).clone_closure_capture();
                     source.write(Value::undef());
@@ -3582,9 +4225,24 @@ fn prepare_named_call_frame(
 /// an argument expression throws: Init has already linked the outer call, while
 /// DoFcall will never consume it. The helper also fixes the same lifetime hole
 /// for pre-existing ordinary pending frames.
-unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteData) {
+///
+/// # Safety
+/// `frame` and its pending call chain are live stack allocations. Initialized
+/// owned bits (small frames) or fully initialized wide storage identify every
+/// readable value. A detached pending activation remains live through all PHP
+/// callbacks and is popped only after its owners and side records are retired.
+unsafe fn cleanup_pending_calls(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    mut failure: Option<&mut Value>,
+) -> Result<bool, VmError> {
+    let original = failure.as_ref().and_then(|failure| failure.object_identity());
+    if let Some(failure) = failure.as_mut() {
+        eg.exception = Some(std::mem::replace(*failure, Value::undef()));
+    }
     let mut call = (*frame).call;
     (*frame).call = std::ptr::null_mut();
+    let mut result = Ok(());
     while !call.is_null() {
         let next = (*call).call;
         let call_key = call as usize;
@@ -3594,20 +4252,88 @@ unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteDat
         eg.discard_generic_member_call(call_key);
         let _ = take_pending_invoke_this(eg, call_key);
         let _ = take_pending_magic_call(eg, call_key);
+        if result.is_ok() {
+            result = retire_pending_call_owners(eg, call, frame);
+        }
         cleanup_frame_slots(call);
         pop_call_storage(eg, call);
         call = next;
     }
     #[cfg(feature = "php-generics-reified")]
     eg.discard_pending_reified_binding_scopes(frame as usize);
+    let changed = if let Some(failure) = failure {
+        *failure = eg.exception.take().expect("pending failure retained during argument retirement");
+        failure.object_identity() != original
+    } else {
+        false
+    };
+    result.map(|()| changed)
+}
+
+/// Retire actual argument owners when entry is rejected, expression evaluation
+/// abandons a call, or an internal handler has completed. Detach each owner
+/// before callbacks; the final-owner proof retires nested values and chains
+/// destructor exceptions while the activation remains allocated.
+#[cold]
+fn retire_pending_call_owners(
+    eg: &mut ExecutorGlobals,
+    call: *mut ExecuteData,
+    logical_caller: *mut ExecuteData,
+) -> Result<(), VmError> {
+    let mut pending = eg.exception.take();
+    // SAFETY: call cleanup supplies its still-allocated activation.
+    // Small frames inspect initialized owned bits only. Wide-frame allocation
+    // initializes the complete extent, including not-yet-sent arguments.
+    // A slot becomes Undef before any callback; no slot borrow crosses PHP.
+    let result = unsafe {
+        (|| {
+            if !(*call).has_heap_slots {
+                return Ok(());
+            }
+            let total = ((*call).num_cvs + (*call).num_temps) as usize;
+            let base = (call as *mut Value).add(CALL_FRAME_SLOTS);
+            for index in 0..total {
+                if index < 64 && (*call).owned_heap_bitmap() & (1u64 << index) == 0 {
+                    continue;
+                }
+                if !(*base.add(index)).needs_cleanup() {
+                    continue;
+                }
+                // Retirement preserves the native-argument GC marker. This
+                // local owner is not transferred into new PHP storage.
+                let owner = std::mem::replace(&mut *base.add(index), Value::undef());
+                if index < 64 {
+                    (*call).heap_bitmap &= !(1u64 << index);
+                }
+                while let Some(release) = prepare_replaced_value_release(eg, &owner) {
+                    let result = run_prepared_value_destructor_with_context(
+                        eg, Some(release), logical_caller, false, true, false, None, CallbackReturnPolicy::Function,
+                    );
+                    if let Some(replacement) = eg.exception.take() {
+                        if let Some(displaced) = pending.replace(replacement.clone()) {
+                            append_replaced_exception(&replacement, &displaced, eg);
+                        }
+                    } else {
+                        result?;
+                        break;
+                    }
+                    result?;
+                }
+            }
+            Ok(())
+        })()
+    };
+    eg.exception = pending;
+    result
 }
 
 /// Clean up a pending call frame and throw a catchable exception.
 /// Removes per-call side state, unlinks the call from the call chain, cleans up
 /// CV/TMP slots, pops the call frame, and delegates to throw_in_frame.
 ///
-/// SAFETY: `frame` and `call` must be valid ExecuteData pointers.
-///         `call` must be the current pending call on `frame` (i.e. `(*frame).call == call`).
+/// SAFETY: `frame` and `call` must be live ExecuteData pointers. `call` is
+/// either the current pending call on `frame` or the activation detached by
+/// DoFcall. In the latter case the caller may still own an outer pending call.
 unsafe fn cleanup_call_and_throw<'a>(
     eg: &mut ExecutorGlobals,
     frame: *mut ExecuteData,
@@ -3625,9 +4351,20 @@ unsafe fn cleanup_call_and_throw<'a>(
     }
     let _ = take_pending_invoke_this(eg, call_key);
     let _ = take_pending_magic_call(eg, call_key);
-    (*frame).call = (*call).call;
+    if (*frame).call == call {
+        (*frame).call = (*call).call;
+    }
+    if let Some(pending) = eg.exception.take()
+        && pending.object_identity() != err.object_identity()
+    {
+        append_replaced_exception(&err, &pending, eg);
+    }
+    eg.exception = Some(err);
+    let result = retire_pending_call_owners(eg, call, frame);
     cleanup_frame_slots(call);
     pop_call_storage(eg, call);
+    result?;
+    let err = eg.exception.take().expect("pending call failure retained during owner retirement");
     throw_in_frame(eg, frame, err)
 }
 
@@ -3859,6 +4596,7 @@ fn call_magic_method_from_logical_caller(
     obj_val: &Value,
     method_name: &str,
     args: &[Value],
+    callback_retirement: CallbackReturnPolicy,
 ) -> Result<Option<Value>, VmError> {
     let class_name = {
         let obj = obj_val.as_object().unwrap();
@@ -3881,6 +4619,7 @@ fn call_magic_method_from_logical_caller(
         func_ptr,
         call_args.len(),
         call_args.iter(),
+        callback_retirement,
     )?;
     Ok(Some(result))
 }
@@ -4319,6 +5058,7 @@ pub(crate) fn call_object_string_conversion_from_internal(
             function,
             1,
             std::slice::from_ref(&object).iter(),
+            CallbackReturnPolicy::Function,
         )?)
     };
     Ok(validate_object_string_conversion(
@@ -4566,7 +5306,7 @@ fn attach_throwable_origin_mode(
 /// call as frame zero of the trace, so snapshot both before releasing it.
 fn attach_argument_type_error_origin(
     throwable: &Value,
-    source_file: std::rc::Rc<String>,
+    source_file: std::rc::Rc<crate::value::PhpString>,
     declaration_line: usize,
     mut trace: PhpArray,
     caller_op_array: &crate::compiler::OpArray,
@@ -4603,6 +5343,46 @@ enum CatchOnlyThrowResult<'a> {
     NeedsGeneralDispatch(*mut ExecuteData, Value),
 }
 
+/// An exception resumes the caller just as a successful return does. Publish
+/// committed global writes before cleanup callbacks or catch/finally code can
+/// read a stale CV and overwrite the global table with its older mirror.
+#[cold]
+fn refresh_exception_frame_globals(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &crate::compiler::OpArray,
+) {
+    if eg.dirty_globals.is_empty() {
+        return;
+    }
+    let bindings = if !op_array.main_scope_vars.is_empty() {
+        &op_array.main_scope_vars
+    } else {
+        &op_array.global_vars
+    };
+    for (index, name) in bindings {
+        if eg.dirty_globals.contains(name)
+            && let Some(value) = eg.globals.get(name)
+        {
+            let value = if value.is_owned_reference() {
+                value.clone_owned_reference_alias()
+            } else {
+                value.clone()
+            };
+            // SAFETY: exception dispatch supplies the live activation owning
+            // this immutable op-array. Compiler global bindings name its CVs,
+            // and the replacement owns the same reference alias as globals.
+            unsafe {
+                let destination = (*frame).cv_mut(*index) as *mut Value;
+                frame_slot_set(frame, destination, value);
+            }
+        }
+    }
+    if !op_array.main_scope_vars.is_empty() {
+        eg.dirty_globals.clear();
+    }
+}
+
 #[inline(never)]
 fn throw_through_catch_only_frames<'a>(
     eg: &mut ExecutorGlobals,
@@ -4615,7 +5395,11 @@ fn throw_through_catch_only_frames<'a>(
     // is retired exactly once before traversal advances to its predecessor.
     unsafe {
         'search: loop {
+            eg.exception = Some(thrown);
+            cleanup_pending_calls(eg, frame, None)?;
+            thrown = eg.exception.take().expect("throw retains its effective exception");
             let op_array = (*frame).op_array();
+            refresh_exception_frame_globals(eg, frame, op_array);
             if op_array.has_finally
                 || (*frame).pending_return_after_finally
                 || !eg.finally_exceptions.is_empty()
@@ -4705,7 +5489,9 @@ fn throw_through_catch_only_frames<'a>(
                     } else {
                         (None, prepare_replaced_catch_value_release(eg, &thrown))
                     };
-                cleanup_pending_calls(eg, frame);
+                if cleanup_pending_calls(eg, frame, Some(&mut thrown))? {
+                    continue 'search;
+                }
                 if let Some(catch_cv) = catch.catch_cv {
                     let catch_slot = (*frame).cv_mut(catch_cv) as *mut Value;
                     let value = prepared_reference_assignment.unwrap_or_else(|| thrown.clone());
@@ -4729,6 +5515,7 @@ fn throw_through_catch_only_frames<'a>(
                     thrown = replacement;
                     continue 'search;
                 }
+                refresh_exception_frame_globals(eg, frame, op_array);
                 return Ok(CatchOnlyThrowResult::Finished(ThrowResult::Handled(
                     frame, op_array,
                 )));
@@ -4746,7 +5533,7 @@ fn throw_through_catch_only_frames<'a>(
             eg.discard_generic_member_call(frame as usize);
             #[cfg(feature = "php-generics-reified")]
             eg.discard_active_reified_binding_scope(frame as usize);
-            cleanup_pending_calls(eg, frame);
+            cleanup_pending_calls(eg, frame, Some(&mut thrown))?;
             cleanup_frame_slots(frame);
             pop_vm_call_frame(eg, frame);
             frame = previous;
@@ -4836,6 +5623,12 @@ fn throw_in_frame<'a>(
     let mut search_frame = frame;
     let mut return_cleanup_owner = None;
     'search: loop {
+        // Pending argument destructors can select a different catch/finally
+        // path. Preserve the original exception before retiring their owners.
+        eg.exception = Some(thrown);
+        // SAFETY: search_frame is the live activation currently being unwound.
+        unsafe { cleanup_pending_calls(eg, search_frame, None)? };
+        thrown = eg.exception.take().expect("throw retains its effective exception");
         // Once a later operation throws while a deferred return is traversing
         // finally blocks, the exception replaces that return.  Clear the
         // frame-local marker as soon as exception dispatch reaches the frame;
@@ -4845,6 +5638,7 @@ fn throw_in_frame<'a>(
         // its opline always belongs to the immutable op-array returned here.
         let (sf_op_array, current_ip) = unsafe {
             let sf_op_array = (*search_frame).op_array();
+            refresh_exception_frame_globals(eg, search_frame, sf_op_array);
             let current = &*(*search_frame).opline;
             if sf_op_array.has_finally && (*search_frame).pending_return_after_finally {
                 if current.opcode == OpCode::ReleaseTemps
@@ -5021,7 +5815,7 @@ fn throw_in_frame<'a>(
                         eg.discard_active_reified_binding_scope(frame as usize);
                     }
                     unsafe {
-                        cleanup_pending_calls(eg, frame);
+                        cleanup_pending_calls(eg, frame, Some(&mut thrown))?;
                         cleanup_frame_slots(frame);
                     };
                     pop_vm_call_frame(eg, frame);
@@ -5032,7 +5826,11 @@ fn throw_in_frame<'a>(
                 // CV and next opline come from its validated table;
                 // assignment_slot_set preserves a pre-existing reference.
                 unsafe {
-                    cleanup_pending_calls(eg, search_frame);
+                    if cleanup_pending_calls(eg, search_frame, Some(&mut thrown))? {
+                        frame = search_frame;
+                        eg.current_execute_data.set(frame);
+                        continue 'search;
+                    }
                     if let Some(catch_cv) = catch.catch_cv {
                         let catch_slot = (*search_frame).cv_mut(catch_cv) as *mut Value;
                         let value = prepared_reference_assignment
@@ -5056,6 +5854,7 @@ fn throw_in_frame<'a>(
                     frame = search_frame;
                     continue 'search;
                 }
+                refresh_exception_frame_globals(eg, frame, sf_op_array);
                 return Ok(ThrowResult::Handled(frame, sf_op_array));
             } else if entry.finally_start != 0xFFFFFFFF {
                 while frame != search_frame {
@@ -5068,13 +5867,15 @@ fn throw_in_frame<'a>(
                         eg.discard_active_reified_binding_scope(frame as usize);
                     }
                     unsafe {
-                        cleanup_pending_calls(eg, frame);
+                        cleanup_pending_calls(eg, frame, Some(&mut thrown))?;
                         cleanup_frame_slots(frame);
                     };
                     pop_vm_call_frame(eg, frame);
                     frame = prev;
                 }
-                unsafe { cleanup_pending_calls(eg, search_frame) };
+                // SAFETY: the selected live handler frame owns the pending
+                // chain; its initialized owners retire before the frame resumes.
+                unsafe { cleanup_pending_calls(eg, search_frame, Some(&mut thrown))? };
                 let base_ptr = sf_op_array.instructions.as_ptr();
                 let nested_inside_displaced_finally = displaced_exception
                     .as_ref()
@@ -5103,6 +5904,7 @@ fn throw_in_frame<'a>(
                     .push(thrown.clone());
                 unsafe { (*frame).opline = base_ptr.add(entry.finally_start as usize) };
                 let new_op_array = unsafe { (*frame).op_array() };
+                refresh_exception_frame_globals(eg, frame, new_op_array);
                 return Ok(ThrowResult::Handled(frame, new_op_array));
             }
         }
@@ -5126,7 +5928,7 @@ fn throw_in_frame<'a>(
         // SAFETY: `search_frame` is the current live activation; its pending
         // calls and compiler-sized slots are retired before the frame itself.
         unsafe {
-            cleanup_pending_calls(eg, search_frame);
+            cleanup_pending_calls(eg, search_frame, Some(&mut thrown))?;
             cleanup_frame_slots(search_frame);
         }
         pop_vm_call_frame(eg, search_frame);

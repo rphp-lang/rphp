@@ -1041,7 +1041,12 @@ pub(crate) unsafe fn materialize_deferred_scalar_call(
     }
     (*full).has_heap_slots = (*compact).has_heap_slots;
     (*full).named_args_used = (*compact).named_args_used;
-    (*full).heap_bitmap = (*compact).heap_bitmap;
+    // The argument-only activation can embed a called class even when the
+    // full body needs those upper bits for owners. Transfer scope through its
+    // publisher, using the destination geometry, instead of copying metadata
+    // into the ownership prefix.
+    (*full).heap_bitmap = (*compact).owned_heap_bitmap();
+    publish_late_static_call_class_id(eg, full, (*compact).embedded_late_static_class_id());
 
     // Ownership moved to the ordinary frame. The compact storage is now just
     // raw bump memory and must not release any captured heap value.

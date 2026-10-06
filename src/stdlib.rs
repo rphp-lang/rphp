@@ -35,15 +35,16 @@ use crate::vm::execute::{
     array_string_key_for_lookup, call_function, call_function_iter,
     call_function_iter_with_context, call_function_owned_iter,
     call_function_owned_iter_readback_arg0_with_context, call_function_owned_iter_with_context,
-    call_function_owned_iter_with_context_and_named, call_internal_function_iter_from_current_site,
-    call_object_property_get_hook, call_object_property_magic_get,
-    call_object_property_magic_isset, called_class_name_for_internal_call, check_type_hint,
-    displayed_function_name, explicit_float_conversion, explicit_long_conversion,
-    explicit_numeric_cast_warning, lexical_class_name_for_internal_call, php_is_numeric_string,
-    php_numeric_string_to_float, prepare_call_argument, prepare_replaced_value_release,
-    prepare_scalar_long_callback, prepare_scalar_long_reference_mutation_callback,
-    run_prepared_value_destructors_from_internal, try_execute_scalar_long_callback,
-    value_to_array_key, values_equal_checked_with_precision, values_identical_checked,
+    call_function_owned_iter_with_context_and_named, call_function_source_unpack_iter_with_context,
+    call_internal_function_iter_from_current_site, call_object_property_get_hook,
+    call_object_property_magic_get, call_object_property_magic_isset,
+    called_class_name_for_internal_call, check_type_hint, displayed_function_name,
+    explicit_float_conversion, explicit_long_conversion, explicit_numeric_cast_warning,
+    lexical_class_name_for_internal_call, php_is_numeric_string, php_numeric_string_to_float,
+    prepare_call_argument, prepare_replaced_value_release, prepare_scalar_long_callback,
+    prepare_scalar_long_reference_mutation_callback, run_prepared_value_destructors_from_internal,
+    try_execute_scalar_long_callback, value_to_array_key, values_equal_checked_with_precision,
+    values_identical_checked,
 };
 use crate::vm::frame::ExecuteData;
 use crate::vm::function::InternalFunction;
@@ -17043,7 +17044,16 @@ fn dispatch_php_error_encoded(
         eg.discard_detached_trace_origin(ed as usize);
         result
     } else {
-        call_resolved_with_values_from(eg, &resolved, &arguments, ed, file, line, false)
+        call_resolved_with_values_from(
+            eg,
+            &resolved,
+            &arguments,
+            ed,
+            file,
+            line,
+            false,
+            crate::vm::execute::CallbackReturnPolicy::Function,
+        )
     };
     eg.active_error_handler_generation = previous_active_generation;
     if eg.error_handler.is_none() {
@@ -17086,6 +17096,7 @@ pub(crate) fn dispatch_uncaught_exception_handler(
         "Unknown",
         0,
         false,
+        crate::vm::execute::CallbackReturnPolicy::Function,
     );
     if eg.exception.is_none()
         && eg.exception_handler.is_none()
@@ -17391,7 +17402,7 @@ pub fn run_shutdown_functions(
         let Some(next) = next else {
             eg.shutdown_functions = None;
             release_roots.extend(eg.take_libxml_release_roots());
-            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            crate::vm::execute::run_shutdown_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             streams::user_wrapper::shutdown_open_streams(eg)?;
             return Ok(());
@@ -17404,11 +17415,12 @@ pub fn run_shutdown_functions(
             "Unknown",
             0,
             true,
+            crate::vm::execute::CallbackReturnPolicy::Shutdown,
         );
         release_roots.extend(next.into_release_roots());
         if let Err(error) = result {
             drain_pending_roots(eg, &mut release_roots);
-            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            crate::vm::execute::run_shutdown_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(error);
@@ -17416,7 +17428,11 @@ pub fn run_shutdown_functions(
         if eg.exception.is_some() {
             if let Err(error) = dispatch_pending_uncaught_exception_handlers(eg, logical_caller) {
                 drain_pending_roots(eg, &mut release_roots);
-                crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+                crate::vm::execute::run_shutdown_value_destructors(
+                    eg,
+                    &release_roots,
+                    logical_caller,
+                )?;
                 #[cfg(feature = "stream-registry")]
                 let _ = streams::user_wrapper::shutdown_open_streams(eg);
                 return Err(error);
@@ -17429,7 +17445,7 @@ pub fn run_shutdown_functions(
                 .take()
                 .expect("unhandled shutdown exception must remain pending");
             drain_pending_roots(eg, &mut release_roots);
-            crate::vm::execute::run_value_destructors(eg, &release_roots, logical_caller)?;
+            crate::vm::execute::run_shutdown_value_destructors(eg, &release_roots, logical_caller)?;
             #[cfg(feature = "stream-registry")]
             let _ = streams::user_wrapper::shutdown_open_streams(eg);
             return Err(VmError::Fatal(
@@ -17664,6 +17680,7 @@ fn transform_output_buffer(
             "Unknown",
             0,
             true,
+            crate::vm::execute::CallbackReturnPolicy::Function,
         )
     } else {
         call_resolved_with_values(eg, &resolved, &arguments)
@@ -20646,7 +20663,7 @@ fn closure_debug_properties(closure: &PhpClosure, eg: &ExecutorGlobals) -> PhpAr
             .map_or(0, |(_, line)| i64::from(*line));
         Some((
             public_name.to_string(),
-            function.op_array.source_file.as_ref().clone(),
+            function.op_array.source_file.as_str().to_owned(),
             declaration_line,
         ))
     });
@@ -26791,6 +26808,7 @@ where
         (file.to_string(), line),
         None,
         true,
+        crate::vm::execute::CallbackReturnPolicy::Function,
     )
 }
 
@@ -26974,6 +26992,7 @@ fn call_resolved_with_values_from(
     file: &str,
     line: usize,
     capture_preentry_error_origin: bool,
+    callback_retirement: crate::vm::execute::CallbackReturnPolicy,
 ) -> Result<Value, VmError> {
     if resolved.is_magic_call {
         let method = resolved
@@ -26996,6 +27015,7 @@ fn call_resolved_with_values_from(
             file,
             line,
             capture_preentry_error_origin,
+            callback_retirement,
         );
     }
     let num_args = resolved.prepend_args.len() + args.len() + resolved.use_vars.len();
@@ -27029,6 +27049,7 @@ fn call_resolved_with_values_from(
             (file.to_string(), line),
             Some(&error),
             false,
+            callback_retirement,
         )?;
         eg.exception = Some(error);
         return Ok(Value::null());
@@ -27057,6 +27078,7 @@ fn call_resolved_with_values_from(
         (file.to_string(), line),
         None,
         capture_preentry_error_origin,
+        callback_retirement,
     )
 }
 
@@ -27321,11 +27343,11 @@ fn named_argument_lookup_name(name: &str, external_byte_keys: bool) -> Option<Co
 fn source_unpack_argument(
     eg: &mut ExecutorGlobals,
     resolved: &ResolvedCallback,
-    function_name: &str,
+    function_name: &std::cell::OnceCell<String>,
     public_index: usize,
     value: &Value,
     source_file: &str,
-    strict_types: bool,
+    call_origin: (*mut ExecuteData, usize),
 ) -> Result<Option<Value>, VmError> {
     let signature = resolved.signature();
     let reference_index = if public_index < signature.public_arity() as usize {
@@ -27335,18 +27357,27 @@ fn source_unpack_argument(
     } else {
         public_index
     };
-    let mut prepared = if !signature.is_param_by_ref(reference_index as u32) {
+    let prepared = if !signature.is_param_by_ref(reference_index as u32) {
         value.clone()
     } else if value.is_traversable_unpack_value() {
-        eg.write_output(
-            format!(
-                "\nWarning: Cannot pass by-reference argument {} of {}() by unpacking a Traversable, passing by-value instead in {} on line 0\n",
+        let function_name =
+            function_name.get_or_init(|| displayed_function_name(eg, resolved.func_ptr));
+        report_diagnostic_from(
+            eg,
+            call_origin.0,
+            source_file,
+            call_origin.1,
+            2,
+            "Warning",
+            &format!(
+                "Cannot pass by-reference argument {} of {}() by unpacking a Traversable, passing by-value instead",
                 public_index + 1,
                 function_name,
-                source_file,
-            )
-            .as_bytes(),
+            ),
         )?;
+        if eg.exception.is_some() {
+            return Ok(None);
+        }
         value.dereferenced().clone()
     } else if value.is_owned_reference() {
         value.clone_owned_reference_alias()
@@ -27355,6 +27386,8 @@ fn source_unpack_argument(
         // detached call, so a borrowed alias cannot outlive its target.
         Value::reference(unsafe { value.as_ref_ptr() })
     } else {
+        let function_name =
+            function_name.get_or_init(|| displayed_function_name(eg, resolved.func_ptr));
         let parameter = signature
             .diagnostic_parameter_name(public_index as u32)
             .map(|name| format!(" (${name})"))
@@ -27371,51 +27404,9 @@ fn source_unpack_argument(
         return Ok(None);
     };
 
-    // Internal calls validate in their canonical call frame (or their own
-    // argument parser). Pre-coercion here loses strict/null diagnostics and
-    // lets a later parameter error overtake an earlier handler-owned error.
-    if resolved.common().fn_type != FunctionType::Internal
-        && let Some(hint) = signature.param_type_hints.get(reference_index)
-        && !matches!(hint, ParamTypeHint::None | ParamTypeHint::Mixed)
-    {
-        let original = prepared.dereferenced().clone();
-        let callee_class = eg.declaring_class_of(resolved.func_ptr).map(str::to_string);
-        match prepare_call_argument(&original, hint, eg, strict_types, callee_class.as_deref())? {
-            CallArgumentPreparation::Exact => {}
-            CallArgumentPreparation::Coerced(value, _diagnostic) => {
-                if prepared.is_reference() {
-                    prepared.assign_dereferenced(value);
-                } else {
-                    prepared = value;
-                }
-            }
-            CallArgumentPreparation::Invalid => {
-                let parameter = if signature.is_variadic
-                    && reference_index == signature.public_arity() as usize
-                {
-                    String::new()
-                } else {
-                    signature
-                        .param_names
-                        .get(reference_index)
-                        .map(|name| format!(" (${name})"))
-                        .unwrap_or_default()
-                };
-                eg.exception = Some(crate::value::make_error_value(
-                    "TypeError",
-                    &format!(
-                        "{}(): Argument #{}{parameter} must be of type {}, {} given, called in {} on line 0",
-                        function_name,
-                        public_index + 1,
-                        hint.diagnostic_display_name(),
-                        original.diagnostic_type_name(),
-                        source_file,
-                    ),
-                ));
-                return Ok(None);
-            }
-        }
-    }
+    // Do not coerce while the input array still exposes live references to
+    // later arguments. The owned frame performs one canonical validation
+    // after every positional/named/reference argument has been collected.
     Ok(Some(prepared))
 }
 
@@ -27437,11 +27428,11 @@ fn call_resolved_with_source_unpack(
         return call_magic_resolved_with_array(eg, &resolved, arguments);
     }
     let signature = resolved.signature();
-    let function_name = displayed_function_name(eg, resolved.func_ptr);
+    let function_name = std::cell::OnceCell::new();
     let fixed_count = signature.public_arity() as usize;
     let required = signature.required_num_args as usize;
     let is_variadic = signature.is_variadic;
-    let param_names = signature.param_names.clone();
+    let param_names = &signature.param_names;
     let mut fixed = vec![Value::undef(); fixed_count];
     let mut positional_extras = Vec::new();
     let mut named_extras = Vec::new();
@@ -27460,7 +27451,7 @@ fn call_resolved_with_source_unpack(
                     public_index,
                     value,
                     source_file,
-                    strict_types,
+                    call_origin,
                 )?
                 else {
                     return Ok(Value::null());
@@ -27511,7 +27502,7 @@ fn call_resolved_with_source_unpack(
                             index,
                             value,
                             source_file,
-                            strict_types,
+                            call_origin,
                         )?
                         else {
                             return Ok(Value::null());
@@ -27535,7 +27526,7 @@ fn call_resolved_with_source_unpack(
                             public_index,
                             value,
                             source_file,
-                            strict_types,
+                            call_origin,
                         )?
                         else {
                             return Ok(Value::null());
@@ -27558,7 +27549,7 @@ fn call_resolved_with_source_unpack(
                         public_index,
                         value,
                         source_file,
-                        strict_types,
+                        call_origin,
                     )?
                     else {
                         return Ok(Value::null());
@@ -27581,13 +27572,11 @@ fn call_resolved_with_source_unpack(
     // Internal positional omissions belong to the canonical callee's arity
     // check. Only an actual named hole precedes that check; preserving the
     // highest supplied slot distinguishes it from a missing trailing argument.
-    let checked_required = if resolved.common().fn_type == FunctionType::Internal {
-        required.min(highest_fixed)
-    } else {
-        required
-    };
+    let checked_required = required.min(highest_fixed);
     for index in 0..checked_required {
         if fixed.get(index).is_none_or(Value::is_undef) {
+            let function_name =
+                function_name.get_or_init(|| displayed_function_name(eg, resolved.func_ptr));
             let parameter = param_names
                 .get(index)
                 .map(|name| &**name)
@@ -27609,39 +27598,31 @@ fn call_resolved_with_source_unpack(
     normalized.truncate(highest_fixed);
     normalized.extend(positional_extras);
     let num_args = resolved.prepend_args.len() + normalized.len() + resolved.use_vars.len();
-    if resolved.common().fn_type == FunctionType::Internal {
-        return with_detached_strict_call(call_origin.0, strict_types, || {
-            call_resolved_owned_iter_with_named_from(
-                eg,
-                &resolved,
-                num_args,
-                resolved
-                    .prepend_args
-                    .iter()
-                    .cloned()
-                    .chain(normalized)
-                    .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
-                named_extras,
-                args.has_external_byte_keys(),
-                call_origin.0,
-                source_file,
-                call_origin.1,
-            )
-        });
-    }
-    call_resolved_owned_iter_with_named(
-        eg,
-        &resolved,
-        num_args,
-        resolved
-            .prepend_args
-            .iter()
-            .cloned()
-            .chain(normalized)
-            .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
-        named_extras,
-        args.has_external_byte_keys(),
-    )
+    with_detached_strict_call(call_origin.0, strict_types, || {
+        if reject_scope_introspection_callback(eg, &resolved) {
+            return Ok(Value::null());
+        }
+        call_function_source_unpack_iter_with_context(
+            eg,
+            call_origin.0,
+            resolved.func_ptr,
+            num_args,
+            resolved
+                .prepend_args
+                .iter()
+                .cloned()
+                .chain(normalized)
+                .chain(resolved.use_vars.iter().map(Value::clone_closure_capture)),
+            resolved.called_scope_class_id,
+            resolved.closure_scope_class_id,
+            resolved.bound_this.clone(),
+            resolved.use_vars.len(),
+            resolved.closure_static_vars.clone(),
+            named_extras,
+            args.has_external_byte_keys(),
+            (source_file.to_string(), call_origin.1),
+        )
+    })
 }
 
 /// VM entry for PHP source-level argument unpacking. Unlike

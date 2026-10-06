@@ -10,7 +10,7 @@ fn detect_long_tail_trace_guard(
     if guard_ip.checked_add(2)? >= increment_ip {
         return None;
     }
-    let comparison = *op_array.instructions.get(guard_ip)?;
+    let comparison = op_array.canonical_instruction(guard_ip)?;
     let kind = match comparison.opcode {
         OpCode::IsIdentical => ScalarLongConditionKind::Equal,
         OpCode::IsNotIdentical => ScalarLongConditionKind::NotEqual,
@@ -46,7 +46,14 @@ fn detect_long_tail_trace_guard(
         lhs,
         rhs,
         expected,
-        condition_tmp: Some(comparison.result),
+        // A fused identity branch does not materialize the canonical boolean
+        // TMP. It has one proven branch reader, so neither native publication
+        // nor entry guards may require that eliminated temporary.
+        condition_tmp: (!matches!(
+            op_array.instructions[guard_ip].opcode,
+            OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical
+        ))
+        .then_some(comparison.result),
         resume_ip: guard_ip,
     })
 }

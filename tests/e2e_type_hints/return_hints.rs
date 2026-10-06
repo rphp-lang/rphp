@@ -1039,3 +1039,47 @@ echo get_class($bound(new BoundStaticReturn));
         ),
     );
 }
+
+#[test]
+fn relative_return_contracts_keep_trait_closure_union_and_reference_scopes() {
+    assert_eq!(
+        run_php(
+            r#"<?php
+interface FirstContract {} interface SecondContract {}
+class ConcreteContract implements FirstContract, SecondContract {}
+class RootContract {}
+trait RelativeContract {
+    public static function lexical($value): self|int { return $value; }
+    public static function ancestor($value): parent|false { return $value; }
+    public static function late($value): static|null { return $value; }
+    public static function mixedContract($value): (FirstContract&SecondContract)|self|null { return $value; }
+}
+class OwnerContract extends RootContract { use RelativeContract; }
+class ChildContract extends OwnerContract {}
+class OtherOwnerContract extends RootContract { use RelativeContract; }
+function verifyContract($callback, $value) {
+    try { $result=$callback($value); echo is_object($result) ? get_class($result) : gettype($result); }
+    catch (TypeError $error) { echo 'type-error'; }
+    echo '|';
+}
+foreach ([OwnerContract::class,ChildContract::class,OtherOwnerContract::class] as $class) {
+    verifyContract([$class,'lexical'],17);
+    verifyContract([$class,'lexical'],new OwnerContract);
+    verifyContract([$class,'ancestor'],new RootContract);
+    verifyContract([$class,'late'],new OwnerContract);
+    verifyContract([$class,'late'],null);
+    verifyContract([$class,'mixedContract'],new ConcreteContract);
+    verifyContract([$class,'mixedContract'],new RootContract);
+}
+$lexical = function ($value): self|int { return $value; };
+$parent = function ($value): parent|false { return $value; };
+verifyContract($lexical->bindTo(null,OwnerContract::class),new OwnerContract);
+verifyContract($lexical->bindTo(null,OtherOwnerContract::class),new OwnerContract);
+verifyContract($parent->bindTo(null,OwnerContract::class),new RootContract);
+function &concreteReference(&$value): ConcreteContract { return $value; }
+$object=new ConcreteContract;$held =& concreteReference($object);echo $held===$object ? 'reference' : 'bad';
+"#,
+        ),
+        "integer|OwnerContract|RootContract|OwnerContract|NULL|ConcreteContract|type-error|integer|OwnerContract|RootContract|type-error|NULL|ConcreteContract|type-error|integer|type-error|RootContract|type-error|NULL|ConcreteContract|type-error|OwnerContract|type-error|RootContract|reference",
+    );
+}

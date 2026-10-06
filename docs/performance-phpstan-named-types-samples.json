@@ -1,0 +1,3284 @@
+{
+  "checkpoint": "Request-guarded immutable named type descriptors",
+  "status": "rejected; shared-frame time regression confirmed and application timing benefit unconfirmed",
+  "goal_complete": false,
+  "baseline_commit": "5e9b0b38",
+  "baseline_build": {
+    "source_sha256": "854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565",
+    "binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+    "binary_bytes": 76331392,
+    "merged_profile_sha256": "1ec388ce039634d6ee29aec4a8361b8f2c2909546317b6ae0a2437e1bb9b755b"
+  },
+  "build": {
+    "complete": true,
+    "source_sha256": "a856ee6151161fbb161c12d0cd10f3c2ee6c186cac4eac18607ff8d80a9f1b60",
+    "baseline_commit": "5e9b0b38",
+    "baseline_binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+    "profdata_version": "LLVM (http://llvm.org/):\n  LLVM version 22.1.8-rust-1.98.1-stable\n  Optimized build.",
+    "training_selection": [
+      {
+        "path": "benches/corpus_ledger_pipeline.php",
+        "source_sha256": "ce7703e1c4ba6c86c1f7b54a0eb641299937be77df018d7017fea94b363dc207"
+      },
+      {
+        "path": "benches/corpus_order_pipeline.php",
+        "source_sha256": "c5f7b84b109a152e103b89db867c129f29bc814f8014cbe11c0b9aa8f587c4ee"
+      },
+      {
+        "path": "benches/corpus_typed_ledger_pipeline.php",
+        "source_sha256": "930fd5ba6dfcab96f8748399d4474e61ff8a3f503fb270e06b0221e898229c91"
+      },
+      {
+        "path": "benches/corpus_typed_order_pipeline.php",
+        "source_sha256": "d258cf3361b13a450123aaf5ba0e2530ab6319793e34d03709b24170fb58d72f"
+      },
+      {
+        "path": "benches/bench_array.php",
+        "source_sha256": "982a5b4f080ea9b3025066056aeb6a6b963c8ea0c2b46b0767115c6f5b643ea2"
+      },
+      {
+        "path": "benches/bench_string.php",
+        "source_sha256": "1c9e408330dbc1dfde85cd205a472551ad2d78b6f5727e5817ffceb0ac7dfe42"
+      },
+      {
+        "path": "benches/bench_type_function_params.php",
+        "source_sha256": "7687ae68c52ed6ef20ce9cdd1f0f538c71601ee3b2489da3a69fe320adf9c0fb"
+      },
+      {
+        "path": "benches/bench_type_function_return.php",
+        "source_sha256": "22912e2830ae83b6a73abc33043c4824fde0ee9b6d537311e0d086aa3ebc7206"
+      },
+      {
+        "path": "benches/bench_type_method_return_fanout_typed.php",
+        "source_sha256": "e41beff27da8bee058f74575711a2f408655bc85a311c1bce1e080145ecb4fc1"
+      },
+      {
+        "path": "benches/bench_type_chain_string_typed.php",
+        "source_sha256": "95d981bcf618bcdf19b2b5653366a6305f51ddd43b476023ddacc5f25c88aa4d"
+      },
+      {
+        "path": "benches/bench_closure_invoke_array.php",
+        "source_sha256": "96ef4c6b1955672312b54e19b5c16ff5d80673c9fb2af17131e9ae003c538c4c"
+      },
+      {
+        "path": "benches/bench_closure_storage.php",
+        "source_sha256": "d63498575f9c12a57c5883761248d65e57b40a003958f44dbc4fd8de6c988c3d"
+      },
+      {
+        "path": "benches/bench_callback_array_map_long.php",
+        "source_sha256": "cfb54ab09c9a6d1be77a51e4c7b7e3e87e9f1a9d1b7193bac633f4ea9ea610dc"
+      },
+      {
+        "path": "benches/bench_declared_object_lifecycle.php",
+        "source_sha256": "ff74f465e43327179f9ba9dd987995d3f56a9de8b6be7523988bf6c4455423f2"
+      },
+      {
+        "path": "benches/bench_json_decode_object_dynamic.php",
+        "source_sha256": "acd70e5106de29346246f58b442b82f5255885cc26f1e18eee57345c15b568cd"
+      },
+      {
+        "path": "benches/bench_hash_string_array_loop.php",
+        "source_sha256": "4adb68141550a71beaa65c7bb920cd07f866c4bdf9bd5b537bc431e8bda1d9ab"
+      },
+      {
+        "path": "benches/bench_regex_match_all.php",
+        "source_sha256": "a00ad05e245ea4dcd1d7bb0081b98f8c57f75cbeb1cf2a6c12fb363e75c15414"
+      },
+      {
+        "path": "benches/bench_regex_repeated_callback_groups.php",
+        "source_sha256": "a903fef9eb3e9cf1bfc33e426a63c348331e2dae0014a95fde81a705c38cea3c"
+      }
+    ],
+    "training": [
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.045829801994841546,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.008501431002514437,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.11821076700289268,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.010467271000379696,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "php",
+        "seconds": 0.04674986300233286,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.007880074001150206,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "php",
+        "seconds": 0.11448986400500871,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "baseline",
+        "seconds": 0.010544286997173913,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "php",
+        "seconds": 0.018908657992142253,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "baseline",
+        "seconds": 0.012667354996665381,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "php",
+        "seconds": 0.01108756499888841,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "baseline",
+        "seconds": 0.0060325079975882545,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "php",
+        "seconds": 0.07517879000806715,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "baseline",
+        "seconds": 0.09019807699951343,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "php",
+        "seconds": 0.07677941999281757,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "baseline",
+        "seconds": 0.09036930199363269,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "php",
+        "seconds": 0.11440452199894935,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "baseline",
+        "seconds": 0.2718455400026869,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "php",
+        "seconds": 0.040766820005956106,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "baseline",
+        "seconds": 0.1277879830013262,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "php",
+        "seconds": 0.021117910000612028,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "baseline",
+        "seconds": 0.024690621998161077,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "php",
+        "seconds": 0.013934322996647097,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "baseline",
+        "seconds": 0.014589633006835356,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "php",
+        "seconds": 0.02530369300802704,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "baseline",
+        "seconds": 0.025099585996940732,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "php",
+        "seconds": 0.0326355790020898,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "baseline",
+        "seconds": 0.007129253004677594,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "php",
+        "seconds": 0.05879085400374606,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "baseline",
+        "seconds": 0.06649840201134793,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "php",
+        "seconds": 0.08743645998765714,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "baseline",
+        "seconds": 0.5315687370020896,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "php",
+        "seconds": 0.01132541500555817,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "baseline",
+        "seconds": 0.007762292007100768,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "php",
+        "seconds": 0.01009187099407427,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "baseline",
+        "seconds": 0.007562924001831561,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0
+      },
+      {
+        "case": "corpus_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.014640451001469046,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4865184,
+            "sha256": "98d95c30c1ca6ee23792baa972cd9901e41cc0ff90d375bcba18952ae5235f5b"
+          }
+        ]
+      },
+      {
+        "case": "corpus_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.01645391300553456,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4865792,
+            "sha256": "4d755933296fe0bcb3ea0e49a10092c4144861eeba9b215a7fda281e44682ea8"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_ledger_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.013426442994386889,
+        "output_sha256": "67429765274f6f518f6bc03177f9daffd058028a149857160f67bcbdab9723e7",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4865168,
+            "sha256": "e88a71e955f6f938cc6f9bf4972024030a5ecae2ba6488d222ed8f580d77a689"
+          }
+        ]
+      },
+      {
+        "case": "corpus_typed_order_pipeline.php",
+        "stage": "instrumented",
+        "seconds": 0.016581864998443052,
+        "output_sha256": "85d5355a3b8dab751ce0bfeffcc8ec5787649cbc01f8714c76341ba1606b95ec",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4866368,
+            "sha256": "81fc51b20878499f6fd3d994136c7f8135eb5c51a8f77ba79af39baadf2b1264"
+          }
+        ]
+      },
+      {
+        "case": "bench_array.php",
+        "stage": "instrumented",
+        "seconds": 0.023037945007672533,
+        "output_sha256": "6654c5104fb10a4af129922caf55c205299e40474583166fa8fb043c896be6dd",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4860960,
+            "sha256": "5e3066d3fdb7f31f5eda2c6a415b53915ee9aaf05aa88f3484ef67b449e92ebe"
+          }
+        ]
+      },
+      {
+        "case": "bench_string.php",
+        "stage": "instrumented",
+        "seconds": 0.011675178000587039,
+        "output_sha256": "b552e632666bbf6125e3109e28a4fecc08340d017e44109dadbf497a280b8f82",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861024,
+            "sha256": "5e79b5f94421e7f04334b5e53c80fe927b5e03a9d4ef0093b5993cab47313a2b"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_params.php",
+        "stage": "instrumented",
+        "seconds": 0.14306162600405514,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861520,
+            "sha256": "1551d67162a4e9b8bc08246e83b5cd8297d890c80313bbbb88066375e946dce2"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_function_return.php",
+        "stage": "instrumented",
+        "seconds": 0.14330218199756928,
+        "output_sha256": "1a5944d8da8a7038f555293c55819907fc3a4ac7e283aeda6a44f3da10ea63fb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861552,
+            "sha256": "692d87cdfcdbbc1b1ec581ffc6da28c3e3b3767ce927342620eb0d7f5bd20619"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_method_return_fanout_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.3884169859957183,
+        "output_sha256": "8c049d973ff98404e55c0cc0c4fb49e6ccf124994ca55eef4815dbdccc706f7f",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862928,
+            "sha256": "0dcf76d796872462191d8262a931315fd275f08feac2e29cc568ef58d3b5f802"
+          }
+        ]
+      },
+      {
+        "case": "bench_type_chain_string_typed.php",
+        "stage": "instrumented",
+        "seconds": 0.22291604800557252,
+        "output_sha256": "415e90d9e30d50997751b49a2fbe5e9e418ddd3c9195d04376076ce5af2d35aa",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862928,
+            "sha256": "648d2cc5a595bf36fd44b44cb55723d5e8a9b60f08a3a8bc297ebc4ec1f6b999"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_invoke_array.php",
+        "stage": "instrumented",
+        "seconds": 0.03768536800635047,
+        "output_sha256": "1c40b6b74c6ecc5d4a910bd68b62896954ad65a860cc8d470677b09943a89665",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861824,
+            "sha256": "181ffd90bc38c7263467bdc64c76369fade7ec968f4d4fb005573e757fbab4ce"
+          }
+        ]
+      },
+      {
+        "case": "bench_closure_storage.php",
+        "stage": "instrumented",
+        "seconds": 0.022464137990027666,
+        "output_sha256": "cc3b17b87ed4895f13fcda71586b42f7d9cb51355a0d3e354f09dbc3ff6788eb",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862240,
+            "sha256": "1ce06ff20406a659118716706ca8cb597aa146c7bd45301e3afeb98342506e82"
+          }
+        ]
+      },
+      {
+        "case": "bench_callback_array_map_long.php",
+        "stage": "instrumented",
+        "seconds": 0.04362711400608532,
+        "output_sha256": "ea38abe4ff39f7d2eb244f2b4f7a0e1435184dfb7451de461b876b120d0de26b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861952,
+            "sha256": "a3983c99d9cf762f5619f7a7c7be29f8ebdefd5321937eee9f273bf4814a9a9c"
+          }
+        ]
+      },
+      {
+        "case": "bench_declared_object_lifecycle.php",
+        "stage": "instrumented",
+        "seconds": 0.012435928001650609,
+        "output_sha256": "7f9a97483e93e8110e1d71e33a5a9711b1dcad362dc028a708ebaf9bbb21ae0b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862832,
+            "sha256": "859f21f2eac5b6eae370831e747523a103e715738b179972e397ee27807027e4"
+          }
+        ]
+      },
+      {
+        "case": "bench_json_decode_object_dynamic.php",
+        "stage": "instrumented",
+        "seconds": 0.13253715699829627,
+        "output_sha256": "462d2bd5a19d5804586dc2f7ad2ddf188fce89f6bcbf2d6322d71a667fa8086b",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862256,
+            "sha256": "4cd5c1d0d95add9b8dc082e297c65ca3dbbea764c487df3288606b96473edc93"
+          }
+        ]
+      },
+      {
+        "case": "bench_hash_string_array_loop.php",
+        "stage": "instrumented",
+        "seconds": 0.918615194997983,
+        "output_sha256": "027f0aaae748272746d6dd2ff9b08678e2d171e94ee2fd8ec552d353bf969ce0",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4861120,
+            "sha256": "c37287095db72ce7cdf6968a45ade2f53c763350fbf3e9f782aa9199717555cb"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_match_all.php",
+        "stage": "instrumented",
+        "seconds": 0.014224493002984673,
+        "output_sha256": "ca2473eb8337cf55c4d026aa06be8107f46f6cea0b7e998e8f5786653ee8f79c",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862016,
+            "sha256": "66afde48ec430ce6fff98c4c87aaf12bf3544b2149ea6a01756620c5c97f0bc8"
+          }
+        ]
+      },
+      {
+        "case": "bench_regex_repeated_callback_groups.php",
+        "stage": "instrumented",
+        "seconds": 0.014041046000784263,
+        "output_sha256": "4520eeb3ad812cd23d834f7475ada6c20c749523575ee1ebbc79f4b8199e8930",
+        "exit": 0,
+        "raw_profiles": [
+          {
+            "index": 0,
+            "bytes": 4862000,
+            "sha256": "2332a5e183e5dc820f76a1c9bf34d84f6696613cee5402134f5215677b522327"
+          }
+        ]
+      }
+    ],
+    "builds": [
+      {
+        "stage": "instrumented",
+        "exit": 0,
+        "seconds": 258.389426054011,
+        "log_sha256": "1d1c744cd5feac998e72fbf9bc4025add7b198072de406c1b2e47b98777a0585",
+        "warning_lines": 0
+      },
+      {
+        "stage": "profile-use",
+        "exit": 0,
+        "seconds": 199.7981082799961,
+        "log_sha256": "702bbd90d367a6a26f668eb4815a8683e8941165f8aca8aef19995ac07899602",
+        "warning_lines": 27
+      }
+    ],
+    "profile_merge": {
+      "exit": 0,
+      "raw_count": 18,
+      "stderr": ""
+    },
+    "instrumented_binary_sha256": "2348efe9c0c19add86cd1dfb264599002eb7bd63c86929facc090f6dd8316959",
+    "merged_profile_sha256": "c5460c43ac8de678a69ed8cdc829e23ca30a502f539dce5b495afd9291efe02d",
+    "merged_profile_bytes": 6631920,
+    "binary_sha256": "b02b80ae74af684f96fb798ecef2384d566f0f51a755f6dd82e19b5b59e97ecc",
+    "binary_bytes": 76523352
+  },
+  "environment": {
+    "reference_packet": "performance-phpstan-symbol-hash-samples.json",
+    "cpu": "AMD Ryzen 9 7950X 16-Core Processor",
+    "native_architecture": "x86_64",
+    "affinity_cpu": 2
+  },
+  "build_policy": {
+    "profile": "max-perf",
+    "features": "default",
+    "cpu": "rustc default",
+    "debug": "line-tables-only",
+    "pgo": true,
+    "alignment": "-C llvm-args=--align-all-functions=6",
+    "training_manifest": "scripts/pgo-workloads.txt",
+    "target_and_controls_excluded_from_training": true
+  },
+  "checks": {
+    "complete": true,
+    "source_sha256": "a856ee6151161fbb161c12d0cd10f3c2ee6c186cac4eac18607ff8d80a9f1b60",
+    "baseline_commit": "5e9b0b38",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.5188122510007815,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "named_type_tests"
+        ],
+        "exit": 0,
+        "seconds": 56.60804879499483,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 898 filtered out; finished in 0.00s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_named_type_resolution",
+          "--test",
+          "e2e_type_hints",
+          "--test",
+          "e2e_instanceof",
+          "--test",
+          "e2e_typed_property_constraints",
+          "--test",
+          "e2e_closure_origin_binding"
+        ],
+        "exit": 0,
+        "seconds": 53.10453559500456,
+        "test_results": [
+          "test result: ok. 27 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.02s",
+          "test result: ok. 20 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 3 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 175 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.08s",
+          "test result: ok. 5 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.3671135640033754,
+        "test_results": []
+      }
+    ],
+    "php_cases": [
+      {
+        "index": 0,
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "miss|property-miss|111|argument|property|LaterType",
+        "stderr": ""
+      },
+      {
+        "index": 0,
+        "runtime": "baseline",
+        "exit": 0,
+        "stdout": "miss|property-miss|111|argument|property|LaterType",
+        "stderr": ""
+      },
+      {
+        "index": 1,
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "111111|self|parent|1|static",
+        "stderr": ""
+      },
+      {
+        "index": 1,
+        "runtime": "baseline",
+        "exit": 0,
+        "stdout": "111111|self|parent|1|static",
+        "stderr": ""
+      },
+      {
+        "index": 2,
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "7|:1::11|iterable|closure|literal",
+        "stderr": ""
+      },
+      {
+        "index": 2,
+        "runtime": "baseline",
+        "exit": 0,
+        "stdout": "7|:1::11|iterable|closure|literal",
+        "stderr": ""
+      }
+    ]
+  },
+  "feature_checks": {
+    "status": "not pursued after performance rejection",
+    "all_target_compilation": "initial migrated source passed all-target/all-feature compilation; final production source restored exactly to accepted baseline"
+  },
+  "application": {
+    "first": {
+      "complete": true,
+      "source_sha256": "a856ee6151161fbb161c12d0cd10f3c2ee6c186cac4eac18607ff8d80a9f1b60",
+      "cpu": 2,
+      "event": "instructions:u",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "runtime": "php",
+          "round": 0,
+          "instructions": 15473837519,
+          "analysis_seconds": 0.940459013,
+          "wall_seconds": 1.3861981709924294,
+          "max_rss_kib": 177840,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 98.57142857142857,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 1,
+          "instructions": 113524054968,
+          "analysis_seconds": 8.267845631,
+          "wall_seconds": 10.339621888997499,
+          "max_rss_kib": 609908,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.09727626459143969
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 2,
+          "instructions": 112530318193,
+          "analysis_seconds": 8.350764751,
+          "wall_seconds": 10.407782233989565,
+          "max_rss_kib": 612508,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.90403071017275,
+            "cpu18": 0.09652509652509653
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 3,
+          "instructions": 112515601868,
+          "analysis_seconds": 8.360160112,
+          "wall_seconds": 10.44723135199456,
+          "max_rss_kib": 612452,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.38424591738712777
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 4,
+          "instructions": 113537284945,
+          "analysis_seconds": 8.267603874,
+          "wall_seconds": 10.32613892700465,
+          "max_rss_kib": 611868,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.19398642095053345
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 5,
+          "instructions": 15473845588,
+          "analysis_seconds": 0.954092979,
+          "wall_seconds": 1.3857278740033507,
+          "max_rss_kib": 177720,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+        "candidate": "b02b80ae74af684f96fb798ecef2384d566f0f51a755f6dd82e19b5b59e97ecc",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    },
+    "confirmation": {
+      "complete": true,
+      "source_sha256": "a856ee6151161fbb161c12d0cd10f3c2ee6c186cac4eac18607ff8d80a9f1b60",
+      "cpu": 2,
+      "event": "instructions:u",
+      "outlier_policy": "retain all valid measured samples",
+      "samples": [
+        {
+          "runtime": "candidate",
+          "round": 0,
+          "instructions": 112521811681,
+          "analysis_seconds": 8.309592485,
+          "wall_seconds": 10.38876986199466,
+          "max_rss_kib": 612376,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.90366088631984,
+            "cpu18": 2.1215043394406945
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 1,
+          "instructions": 15473839017,
+          "analysis_seconds": 0.941332817,
+          "wall_seconds": 1.3706689769896911,
+          "max_rss_kib": 177792,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 2.18978102189781
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 2,
+          "instructions": 113531087736,
+          "analysis_seconds": 8.409991026,
+          "wall_seconds": 10.490478992011049,
+          "max_rss_kib": 610040,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 2.2900763358778624
+          }
+        },
+        {
+          "runtime": "baseline",
+          "round": 3,
+          "instructions": 113537856153,
+          "analysis_seconds": 8.324895859,
+          "wall_seconds": 10.369554648001213,
+          "max_rss_kib": 609820,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 99.90366088631984,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "runtime": "php",
+          "round": 4,
+          "instructions": 15473850884,
+          "analysis_seconds": 0.945000172,
+          "wall_seconds": 1.3772417200088967,
+          "max_rss_kib": 177880,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        },
+        {
+          "runtime": "candidate",
+          "round": 5,
+          "instructions": 112522254895,
+          "analysis_seconds": 8.245270491,
+          "wall_seconds": 10.286110915010795,
+          "max_rss_kib": 612452,
+          "counter_running_percent": 100.0,
+          "output_equal": true,
+          "cpu_busy_percent": {
+            "cpu2": 100.0,
+            "cpu18": 0.0
+          }
+        }
+      ],
+      "holdouts": [],
+      "binaries": {
+        "baseline": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+        "candidate": "b02b80ae74af684f96fb798ecef2384d566f0f51a755f6dd82e19b5b59e97ecc",
+        "php": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+      }
+    }
+  },
+  "controls": {
+    "first": {
+      "complete": true,
+      "seed": 291032,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.53286170959473,
+          "output": "45000000",
+          "cycles:u": 2850673947,
+          "instructions:u": 13250148074,
+          "branches:u": 2690382533,
+          "branch-misses:u": 559839
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.53109359741211,
+          "output": "45000000",
+          "cycles:u": 2849790887,
+          "instructions:u": 13250072156,
+          "branches:u": 2690374179,
+          "branch-misses:u": 555860
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.56090569496155,
+          "output": "45000000",
+          "cycles:u": 3007143442,
+          "instructions:u": 13250147731,
+          "branches:u": 2690382462,
+          "branch-misses:u": 555686
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.5340268611908,
+          "output": "45000000",
+          "cycles:u": 2861077434,
+          "instructions:u": 13250074308,
+          "branches:u": 2690374918,
+          "branch-misses:u": 554142
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.53068470954895,
+          "output": "45000000",
+          "cycles:u": 2841429008,
+          "instructions:u": 13250072678,
+          "branches:u": 2690374317,
+          "branch-misses:u": 553841
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.54362893104553,
+          "output": "45000000",
+          "cycles:u": 2914816530,
+          "instructions:u": 13250149785,
+          "branches:u": 2690383075,
+          "branch-misses:u": 570250
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.28447604179382,
+          "output": "45000000",
+          "cycles:u": 1520071596,
+          "instructions:u": 8294775603,
+          "branches:u": 1740320189,
+          "branch-misses:u": 448947
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.29126572608948,
+          "output": "45000000",
+          "cycles:u": 1554772738,
+          "instructions:u": 8294698376,
+          "branches:u": 1740311389,
+          "branch-misses:u": 446152
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.28850483894348,
+          "output": "45000000",
+          "cycles:u": 1540473266,
+          "instructions:u": 8294698135,
+          "branches:u": 1740311415,
+          "branch-misses:u": 446091
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.28341293334961,
+          "output": "45000000",
+          "cycles:u": 1513739391,
+          "instructions:u": 8294772037,
+          "branches:u": 1740319009,
+          "branch-misses:u": 446335
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.32634782791138,
+          "output": "45000000",
+          "cycles:u": 1753224440,
+          "instructions:u": 8294776087,
+          "branches:u": 1740320357,
+          "branch-misses:u": 451003
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.29262566566467,
+          "output": "45000000",
+          "cycles:u": 1564859487,
+          "instructions:u": 8294697616,
+          "branches:u": 1740311163,
+          "branch-misses:u": 447060
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.2121753692627,
+          "output": "48640000",
+          "cycles:u": 1138991800,
+          "instructions:u": 5932526429,
+          "branches:u": 1094201337,
+          "branch-misses:u": 305919
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.21647167205811,
+          "output": "48640000",
+          "cycles:u": 1162825229,
+          "instructions:u": 5932623877,
+          "branches:u": 1094214310,
+          "branch-misses:u": 306701
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.21126341819763,
+          "output": "48640000",
+          "cycles:u": 1134656376,
+          "instructions:u": 5932525011,
+          "branches:u": 1094200898,
+          "branch-misses:u": 305787
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.21935224533081,
+          "output": "48640000",
+          "cycles:u": 1178740018,
+          "instructions:u": 5932623699,
+          "branches:u": 1094214238,
+          "branch-misses:u": 306823
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.2145676612854,
+          "output": "48640000",
+          "cycles:u": 1152742211,
+          "instructions:u": 5932627505,
+          "branches:u": 1094215514,
+          "branch-misses:u": 307708
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.21055364608765,
+          "output": "48640000",
+          "cycles:u": 1129743112,
+          "instructions:u": 5932525918,
+          "branches:u": 1094201342,
+          "branch-misses:u": 306553
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.84499478340149,
+          "output": "5000000",
+          "cycles:u": 4525534263,
+          "instructions:u": 19989697574,
+          "branches:u": 3882798829,
+          "branch-misses:u": 478058
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.7949652671814,
+          "output": "5000000",
+          "cycles:u": 4248381578,
+          "instructions:u": 19999772893,
+          "branches:u": 3867806795,
+          "branch-misses:u": 479002
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.79772758483887,
+          "output": "5000000",
+          "cycles:u": 4272504496,
+          "instructions:u": 19999771555,
+          "branches:u": 3867806378,
+          "branch-misses:u": 481778
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.88898849487305,
+          "output": "5000000",
+          "cycles:u": 4767310791,
+          "instructions:u": 19989698485,
+          "branches:u": 3882799174,
+          "branch-misses:u": 5475545
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.85050535202026,
+          "output": "5000000",
+          "cycles:u": 4558932729,
+          "instructions:u": 20114703036,
+          "branches:u": 3902800104,
+          "branch-misses:u": 477278
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.79480147361755,
+          "output": "5000000",
+          "cycles:u": 4251932603,
+          "instructions:u": 19999771298,
+          "branches:u": 3867806292,
+          "branch-misses:u": 478893
+        }
+      ]
+    },
+    "confirmation": {
+      "complete": true,
+      "seed": 291045,
+      "outlier_rule": "retain every valid sample",
+      "samples": [
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.53182697296143,
+          "output": "45000000",
+          "cycles:u": 2843736440,
+          "instructions:u": 13250072949,
+          "branches:u": 2690374429,
+          "branch-misses:u": 564046
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.55866122245789,
+          "output": "45000000",
+          "cycles:u": 2995117779,
+          "instructions:u": 13250147561,
+          "branches:u": 2690382310,
+          "branch-misses:u": 563258
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.5291645526886,
+          "output": "45000000",
+          "cycles:u": 2833456533,
+          "instructions:u": 13250073599,
+          "branches:u": 2690374627,
+          "branch-misses:u": 555190
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.54045653343201,
+          "output": "45000000",
+          "cycles:u": 2895938974,
+          "instructions:u": 13250149096,
+          "branches:u": 2690382857,
+          "branch-misses:u": 554886
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.53390502929688,
+          "output": "45000000",
+          "cycles:u": 2864626623,
+          "instructions:u": 13250151169,
+          "branches:u": 2690383239,
+          "branch-misses:u": 551688
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.5323691368103,
+          "output": "45000000",
+          "cycles:u": 2847521987,
+          "instructions:u": 13250077879,
+          "branches:u": 2690376033,
+          "branch-misses:u": 551144
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.53322291374207,
+          "output": "45000000",
+          "cycles:u": 2859565819,
+          "instructions:u": 13250073979,
+          "branches:u": 2690374809,
+          "branch-misses:u": 560073
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.54036569595337,
+          "output": "45000000",
+          "cycles:u": 2899110818,
+          "instructions:u": 13250147619,
+          "branches:u": 2690382342,
+          "branch-misses:u": 556922
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.5372633934021,
+          "output": "45000000",
+          "cycles:u": 2882059603,
+          "instructions:u": 13250149674,
+          "branches:u": 2690383052,
+          "branch-misses:u": 1228140
+        },
+        {
+          "case": "bench_shared_frame_release.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.53554177284241,
+          "output": "45000000",
+          "cycles:u": 2866966743,
+          "instructions:u": 13250074953,
+          "branches:u": 2690375134,
+          "branch-misses:u": 554833
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.28889989852905,
+          "output": "45000000",
+          "cycles:u": 1540300092,
+          "instructions:u": 8294698209,
+          "branches:u": 1740311333,
+          "branch-misses:u": 445524
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.28252911567688,
+          "output": "45000000",
+          "cycles:u": 1509407148,
+          "instructions:u": 8294774000,
+          "branches:u": 1740319650,
+          "branch-misses:u": 446395
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.28841209411621,
+          "output": "45000000",
+          "cycles:u": 1541508910,
+          "instructions:u": 8294698473,
+          "branches:u": 1740311480,
+          "branch-misses:u": 444793
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.28251004219055,
+          "output": "45000000",
+          "cycles:u": 1510707270,
+          "instructions:u": 8294774241,
+          "branches:u": 1740319762,
+          "branch-misses:u": 445806
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.28740549087524,
+          "output": "45000000",
+          "cycles:u": 1535896207,
+          "instructions:u": 8294698650,
+          "branches:u": 1740311586,
+          "branch-misses:u": 445756
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.28293657302856,
+          "output": "45000000",
+          "cycles:u": 1511476501,
+          "instructions:u": 8294775925,
+          "branches:u": 1740320343,
+          "branch-misses:u": 446375
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.28290963172913,
+          "output": "45000000",
+          "cycles:u": 1509945544,
+          "instructions:u": 8294775245,
+          "branches:u": 1740320094,
+          "branch-misses:u": 445845
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.29404878616333,
+          "output": "45000000",
+          "cycles:u": 1574062622,
+          "instructions:u": 8294699295,
+          "branches:u": 1740311762,
+          "branch-misses:u": 445947
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.28550410270691,
+          "output": "45000000",
+          "cycles:u": 1525904981,
+          "instructions:u": 8294774191,
+          "branches:u": 1740319731,
+          "branch-misses:u": 446748
+        },
+        {
+          "case": "bench_scalar_frame_return.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.28793716430664,
+          "output": "45000000",
+          "cycles:u": 1539679835,
+          "instructions:u": 8294698182,
+          "branches:u": 1740311390,
+          "branch-misses:u": 445940
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.21648335456848,
+          "output": "48640000",
+          "cycles:u": 1158807267,
+          "instructions:u": 5932523872,
+          "branches:u": 1094201127,
+          "branch-misses:u": 306182
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.21111702919006,
+          "output": "48640000",
+          "cycles:u": 1133193968,
+          "instructions:u": 5932623519,
+          "branches:u": 1094214312,
+          "branch-misses:u": 308014
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.21943283081055,
+          "output": "48640000",
+          "cycles:u": 1178733854,
+          "instructions:u": 5932630255,
+          "branches:u": 1094215634,
+          "branch-misses:u": 308498
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.21332597732544,
+          "output": "48640000",
+          "cycles:u": 1145042395,
+          "instructions:u": 5932524603,
+          "branches:u": 1094200827,
+          "branch-misses:u": 305596
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.21357369422913,
+          "output": "48640000",
+          "cycles:u": 1143040925,
+          "instructions:u": 5932625927,
+          "branches:u": 1094214926,
+          "branch-misses:u": 306473
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.21135783195496,
+          "output": "48640000",
+          "cycles:u": 1134113561,
+          "instructions:u": 5932529349,
+          "branches:u": 1094202173,
+          "branch-misses:u": 306471
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.21082806587219,
+          "output": "48640000",
+          "cycles:u": 1131576263,
+          "instructions:u": 5932526659,
+          "branches:u": 1094201452,
+          "branch-misses:u": 305709
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.22585082054138,
+          "output": "48640000",
+          "cycles:u": 1213222021,
+          "instructions:u": 5932623929,
+          "branches:u": 1094214394,
+          "branch-misses:u": 306908
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.21076965332031,
+          "output": "48640000",
+          "cycles:u": 1131763533,
+          "instructions:u": 5932622523,
+          "branches:u": 1094213925,
+          "branch-misses:u": 306198
+        },
+        {
+          "case": "bench_foreach_declared_property_reads.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.21171736717224,
+          "output": "48640000",
+          "cycles:u": 1136817903,
+          "instructions:u": 5932526717,
+          "branches:u": 1094201392,
+          "branch-misses:u": 306157
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 0,
+          "seconds": 0.84417104721069,
+          "output": "5000000",
+          "cycles:u": 4522597636,
+          "instructions:u": 19989696973,
+          "branches:u": 3882798555,
+          "branch-misses:u": 479951
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 0,
+          "seconds": 0.7950599193573,
+          "output": "5000000",
+          "cycles:u": 4242425776,
+          "instructions:u": 19999774187,
+          "branches:u": 3867807236,
+          "branch-misses:u": 476528
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 1,
+          "seconds": 0.79386806488037,
+          "output": "5000000",
+          "cycles:u": 4240247357,
+          "instructions:u": 19999772643,
+          "branches:u": 3867806732,
+          "branch-misses:u": 478436
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 1,
+          "seconds": 0.89234757423401,
+          "output": "5000000",
+          "cycles:u": 4791490274,
+          "instructions:u": 19989696702,
+          "branches:u": 3882798521,
+          "branch-misses:u": 476654
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 2,
+          "seconds": 0.79371666908264,
+          "output": "5000000",
+          "cycles:u": 4242014401,
+          "instructions:u": 19999770952,
+          "branches:u": 3867806173,
+          "branch-misses:u": 475884
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 2,
+          "seconds": 0.87903261184692,
+          "output": "5000000",
+          "cycles:u": 4714729683,
+          "instructions:u": 19989698494,
+          "branches:u": 3882799208,
+          "branch-misses:u": 5476689
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 3,
+          "seconds": 0.84245562553406,
+          "output": "5000000",
+          "cycles:u": 4511638288,
+          "instructions:u": 19989697988,
+          "branches:u": 3882798874,
+          "branch-misses:u": 477851
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 3,
+          "seconds": 0.79280066490173,
+          "output": "5000000",
+          "cycles:u": 4236611165,
+          "instructions:u": 19999770756,
+          "branches:u": 3867806106,
+          "branch-misses:u": 480323
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "candidate",
+          "round": 4,
+          "seconds": 0.96156644821167,
+          "output": "5000000",
+          "cycles:u": 5154830226,
+          "instructions:u": 19999771708,
+          "branches:u": 3867806609,
+          "branch-misses:u": 875900
+        },
+        {
+          "case": "return-self.php",
+          "runtime": "baseline",
+          "round": 4,
+          "seconds": 0.8910391330719,
+          "output": "5000000",
+          "cycles:u": 4772066722,
+          "instructions:u": 19989698106,
+          "branches:u": 3882799034,
+          "branch-misses:u": 5494499
+        }
+      ]
+    }
+  },
+  "resolution_callsite_diagnostic": {
+    "complete": true,
+    "baseline_commit": "5e9b0b38ed6c14acd67c3271af4b356ba20634ad",
+    "production_source_sha256": "854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565",
+    "diagnostic_source_sha256": "aefdb78ddbc53b0559ce7380f2b12ac77249b06044cf1fb21ad7cd82a70ad951",
+    "probe": "track_caller counts for class, method and lexical scope lookup; whole-command, no time claim",
+    "build": {
+      "exit": 0,
+      "seconds": 198.01690989099734
+    },
+    "binary_sha256": "b32940fbf12aead8966b0860397464b0ee3a2293502c9b7fcab340ec6fd0077f",
+    "counts": [
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 4033,
+        "count": 9,
+        "name_bytes": 333
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 4505,
+        "count": 3093,
+        "name_bytes": 93819
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 4517,
+        "count": 2602,
+        "name_bytes": 55473
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 4721,
+        "count": 15,
+        "name_bytes": 975
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5065,
+        "count": 3999,
+        "name_bytes": 115148
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5083,
+        "count": 3083,
+        "name_bytes": 65424
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5219,
+        "count": 141599,
+        "name_bytes": 4074691
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5278,
+        "count": 30,
+        "name_bytes": 1950
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5422,
+        "count": 615,
+        "name_bytes": 12125
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5433,
+        "count": 186,
+        "name_bytes": 3924
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5559,
+        "count": 287,
+        "name_bytes": 8079
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5735,
+        "count": 44,
+        "name_bytes": 2058
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5763,
+        "count": 2,
+        "name_bytes": 77
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5771,
+        "count": 2,
+        "name_bytes": 77
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5833,
+        "count": 447,
+        "name_bytes": 18942
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 5959,
+        "count": 59,
+        "name_bytes": 2509
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6010,
+        "count": 31168,
+        "name_bytes": 1087879
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6113,
+        "count": 1,
+        "name_bytes": 45
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6353,
+        "count": 1488,
+        "name_bytes": 69158
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6473,
+        "count": 108,
+        "name_bytes": 2531
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6479,
+        "count": 127,
+        "name_bytes": 3040
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6609,
+        "count": 8611,
+        "name_bytes": 232815
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6705,
+        "count": 511,
+        "name_bytes": 13931
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6763,
+        "count": 778,
+        "name_bytes": 19669
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6930,
+        "count": 18,
+        "name_bytes": 288
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 6955,
+        "count": 14,
+        "name_bytes": 202
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7045,
+        "count": 121,
+        "name_bytes": 5700
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7181,
+        "count": 472,
+        "name_bytes": 20417
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7293,
+        "count": 2268,
+        "name_bytes": 91563
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7430,
+        "count": 75,
+        "name_bytes": 2338
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7472,
+        "count": 888,
+        "name_bytes": 22512
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7493,
+        "count": 453,
+        "name_bytes": 19203
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7698,
+        "count": 900,
+        "name_bytes": 38145
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7843,
+        "count": 4,
+        "name_bytes": 163
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 7982,
+        "count": 633,
+        "name_bytes": 16643
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 8084,
+        "count": 633,
+        "name_bytes": 16660
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9271,
+        "count": 4591,
+        "name_bytes": 174443
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9302,
+        "count": 310,
+        "name_bytes": 8
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9334,
+        "count": 1459,
+        "name_bytes": 56338
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9335,
+        "count": 1471,
+        "name_bytes": 56574
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9421,
+        "count": 1061,
+        "name_bytes": 25887
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9439,
+        "count": 7668,
+        "name_bytes": 152437
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9463,
+        "count": 2314,
+        "name_bytes": 84104
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9726,
+        "count": 2518717,
+        "name_bytes": 54446949
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9728,
+        "count": 2518717,
+        "name_bytes": 87094777
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9768,
+        "count": 8668922,
+        "name_bytes": 205288507
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9809,
+        "count": 2328,
+        "name_bytes": 60005
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9835,
+        "count": 2299,
+        "name_bytes": 58730
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 9898,
+        "count": 20,
+        "name_bytes": 960
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10008,
+        "count": 985,
+        "name_bytes": 47944
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10126,
+        "count": 193073,
+        "name_bytes": 7227345
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10129,
+        "count": 622,
+        "name_bytes": 23697
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10416,
+        "count": 27855,
+        "name_bytes": 1325206
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10438,
+        "count": 918151,
+        "name_bytes": 34857262
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10512,
+        "count": 12361,
+        "name_bytes": 335127
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10601,
+        "count": 1694226,
+        "name_bytes": 55281714
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 10757,
+        "count": 1957049,
+        "name_bytes": 70624363
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 11342,
+        "count": 83820,
+        "name_bytes": 3206545
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 11351,
+        "count": 6857,
+        "name_bytes": 146026
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 11617,
+        "count": 490,
+        "name_bytes": 14088
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 11620,
+        "count": 490,
+        "name_bytes": 16624
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 11629,
+        "count": 264,
+        "name_bytes": 10124
+      },
+      {
+        "kind": "class",
+        "file": "src/runtime/mod.rs",
+        "line": 11700,
+        "count": 114808,
+        "name_bytes": 2748736
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14311,
+        "count": 70,
+        "name_bytes": 2940
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14456,
+        "count": 5271,
+        "name_bytes": 249257
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14466,
+        "count": 4134,
+        "name_bytes": 122404
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14473,
+        "count": 4112,
+        "name_bytes": 122096
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14498,
+        "count": 3960,
+        "name_bytes": 193176
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14502,
+        "count": 295,
+        "name_bytes": 7250
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14506,
+        "count": 295,
+        "name_bytes": 7250
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14525,
+        "count": 2692,
+        "name_bytes": 116588
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 14527,
+        "count": 8,
+        "name_bytes": 384
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 15002,
+        "count": 1,
+        "name_bytes": 12
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 16212,
+        "count": 93,
+        "name_bytes": 1299
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 16292,
+        "count": 380,
+        "name_bytes": 7359
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 18955,
+        "count": 52583,
+        "name_bytes": 2172200
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 21664,
+        "count": 3443,
+        "name_bytes": 139889
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 24689,
+        "count": 352361,
+        "name_bytes": 10143023
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 25360,
+        "count": 176,
+        "name_bytes": 6688
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 26052,
+        "count": 7860,
+        "name_bytes": 211765
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 27694,
+        "count": 7825,
+        "name_bytes": 208462
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib.rs",
+        "line": 27979,
+        "count": 7,
+        "name_bytes": 343
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/autoload.rs",
+        "line": 761,
+        "count": 22,
+        "name_bytes": 635
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/builtin_classes.rs",
+        "line": 985,
+        "count": 1,
+        "name_bytes": 29
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/builtin_classes.rs",
+        "line": 997,
+        "count": 1,
+        "name_bytes": 29
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/builtin_classes/recursive_tree.rs",
+        "line": 469,
+        "count": 1,
+        "name_bytes": 25
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 833,
+        "count": 4,
+        "name_bytes": 148
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 874,
+        "count": 24,
+        "name_bytes": 1074
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 1239,
+        "count": 12049,
+        "name_bytes": 516878
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 1309,
+        "count": 12049,
+        "name_bytes": 124859
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 1320,
+        "count": 12049,
+        "name_bytes": 124859
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 2511,
+        "count": 67287,
+        "name_bytes": 2399135
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 5735,
+        "count": 35,
+        "name_bytes": 1383
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6608,
+        "count": 49,
+        "name_bytes": 715
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6675,
+        "count": 2,
+        "name_bytes": 85
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6727,
+        "count": 984,
+        "name_bytes": 47915
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6795,
+        "count": 27855,
+        "name_bytes": 1363662
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6797,
+        "count": 27855,
+        "name_bytes": 1325206
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6895,
+        "count": 2,
+        "name_bytes": 85
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 6901,
+        "count": 2,
+        "name_bytes": 85
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7471,
+        "count": 6760,
+        "name_bytes": 273735
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7621,
+        "count": 1941,
+        "name_bytes": 95863
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7693,
+        "count": 18,
+        "name_bytes": 817
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7714,
+        "count": 17,
+        "name_bytes": 768
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7758,
+        "count": 2942,
+        "name_bytes": 143988
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7765,
+        "count": 2942,
+        "name_bytes": 143988
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7827,
+        "count": 1002,
+        "name_bytes": 48879
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 7843,
+        "count": 4829,
+        "name_bytes": 214447
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 8005,
+        "count": 6,
+        "name_bytes": 222
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 8413,
+        "count": 35,
+        "name_bytes": 630
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 8447,
+        "count": 984,
+        "name_bytes": 47915
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 8452,
+        "count": 984,
+        "name_bytes": 47915
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 8480,
+        "count": 151,
+        "name_bytes": 4331
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 9483,
+        "count": 2,
+        "name_bytes": 114
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 9489,
+        "count": 2,
+        "name_bytes": 114
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 9577,
+        "count": 7,
+        "name_bytes": 334
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 9696,
+        "count": 25,
+        "name_bytes": 1115
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 10380,
+        "count": 2719,
+        "name_bytes": 117561
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 10386,
+        "count": 2719,
+        "name_bytes": 117561
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 10486,
+        "count": 96,
+        "name_bytes": 4741
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 10546,
+        "count": 671,
+        "name_bytes": 32720
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 10774,
+        "count": 1,
+        "name_bytes": 37
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/reflection.rs",
+        "line": 11140,
+        "count": 35,
+        "name_bytes": 1383
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/streams/user_wrapper.rs",
+        "line": 1402,
+        "count": 19,
+        "name_bytes": 1370
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/streams/user_wrapper.rs",
+        "line": 1405,
+        "count": 19,
+        "name_bytes": 1370
+      },
+      {
+        "kind": "class",
+        "file": "src/stdlib/weak.rs",
+        "line": 25,
+        "count": 5,
+        "name_bytes": 65
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute.rs",
+        "line": 1038,
+        "count": 42,
+        "name_bytes": 1764
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute.rs",
+        "line": 3975,
+        "count": 284602,
+        "name_bytes": 8950237
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute.rs",
+        "line": 4532,
+        "count": 986067,
+        "name_bytes": 24630063
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 145,
+        "count": 3110,
+        "name_bytes": 99777
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 212,
+        "count": 127,
+        "name_bytes": 3040
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 769,
+        "count": 29,
+        "name_bytes": 1353
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 972,
+        "count": 2,
+        "name_bytes": 58
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 982,
+        "count": 1089,
+        "name_bytes": 44284
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 998,
+        "count": 425,
+        "name_bytes": 12705
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_control_ops.rs",
+        "line": 1067,
+        "count": 419,
+        "name_bytes": 12444
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch.rs",
+        "line": 123,
+        "count": 6760,
+        "name_bytes": 101456
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 3226,
+        "count": 2212,
+        "name_bytes": 62859
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 3358,
+        "count": 2487,
+        "name_bytes": 22048
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 3661,
+        "count": 3058407,
+        "name_bytes": 86862014
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 4334,
+        "count": 1980,
+        "name_bytes": 53315
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 5492,
+        "count": 4953,
+        "name_bytes": 227587
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 5496,
+        "count": 227763,
+        "name_bytes": 7588668
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 5693,
+        "count": 188,
+        "name_bytes": 8303
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_dispatch_cold.rs",
+        "line": 5698,
+        "count": 453,
+        "name_bytes": 19203
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 360,
+        "count": 11,
+        "name_bytes": 540
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 417,
+        "count": 2,
+        "name_bytes": 58
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 870,
+        "count": 39129,
+        "name_bytes": 1300546
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 1322,
+        "count": 164738,
+        "name_bytes": 6008398
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 1324,
+        "count": 77029,
+        "name_bytes": 2555598
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 2061,
+        "count": 12389,
+        "name_bytes": 200229
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 4061,
+        "count": 81466,
+        "name_bytes": 3042225
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6284,
+        "count": 1638850,
+        "name_bytes": 54483057
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6591,
+        "count": 50,
+        "name_bytes": 1798
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6607,
+        "count": 86,
+        "name_bytes": 2621
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6648,
+        "count": 45,
+        "name_bytes": 1745
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6665,
+        "count": 172,
+        "name_bytes": 7652
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6816,
+        "count": 2383,
+        "name_bytes": 75897
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 7121,
+        "count": 434,
+        "name_bytes": 15205
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 7147,
+        "count": 2317,
+        "name_bytes": 73943
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 7486,
+        "count": 52,
+        "name_bytes": 2641
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 8418,
+        "count": 31,
+        "name_bytes": 1953
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 8693,
+        "count": 141,
+        "name_bytes": 5699
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/call_frames.rs",
+        "line": 734,
+        "count": 115,
+        "name_bytes": 1035
+      },
+      {
+        "kind": "class",
+        "file": "src/vm/execute/call_frames.rs",
+        "line": 1075,
+        "count": 255433,
+        "name_bytes": 8357583
+      },
+      {
+        "kind": "method",
+        "file": "src/runtime/mod.rs",
+        "line": 9271,
+        "count": 4591,
+        "name_bytes": 174443
+      },
+      {
+        "kind": "method",
+        "file": "src/runtime/mod.rs",
+        "line": 9302,
+        "count": 310,
+        "name_bytes": 8
+      },
+      {
+        "kind": "method",
+        "file": "src/runtime/mod.rs",
+        "line": 9334,
+        "count": 1459,
+        "name_bytes": 56338
+      },
+      {
+        "kind": "method",
+        "file": "src/runtime/mod.rs",
+        "line": 9335,
+        "count": 1471,
+        "name_bytes": 56574
+      },
+      {
+        "kind": "method",
+        "file": "src/runtime/mod.rs",
+        "line": 10601,
+        "count": 1694226,
+        "name_bytes": 55281714
+      },
+      {
+        "kind": "method",
+        "file": "src/stdlib.rs",
+        "line": 18955,
+        "count": 52583,
+        "name_bytes": 2172200
+      },
+      {
+        "kind": "method",
+        "file": "src/stdlib/reflection.rs",
+        "line": 9577,
+        "count": 7,
+        "name_bytes": 334
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute.rs",
+        "line": 1038,
+        "count": 42,
+        "name_bytes": 1764
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 870,
+        "count": 39129,
+        "name_bytes": 1300546
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 1322,
+        "count": 164738,
+        "name_bytes": 6008398
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 1324,
+        "count": 77029,
+        "name_bytes": 2555598
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6284,
+        "count": 1638850,
+        "name_bytes": 54483057
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6648,
+        "count": 45,
+        "name_bytes": 1745
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6665,
+        "count": 172,
+        "name_bytes": 7652
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 6816,
+        "count": 2383,
+        "name_bytes": 75897
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 7486,
+        "count": 52,
+        "name_bytes": 2641
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/call_frames.rs",
+        "line": 734,
+        "count": 115,
+        "name_bytes": 1035
+      },
+      {
+        "kind": "method",
+        "file": "src/vm/execute/call_frames.rs",
+        "line": 1075,
+        "count": 255433,
+        "name_bytes": 8357583
+      },
+      {
+        "kind": "scope",
+        "file": "src/vm/execute.rs",
+        "line": 311,
+        "count": 7026626,
+        "name_bytes": 0
+      },
+      {
+        "kind": "scope",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 2436,
+        "count": 636695,
+        "name_bytes": 0
+      },
+      {
+        "kind": "scope",
+        "file": "src/vm/execute/baseline_object_calls.rs",
+        "line": 5366,
+        "count": 36493,
+        "name_bytes": 0
+      }
+    ],
+    "output_equal": true,
+    "location_note": "Locations refer to the isolated instrumented source, not production line numbers."
+  },
+  "phase_only_diagnostic": {
+    "complete": true,
+    "archive_sha256": "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431",
+    "source_probe_sha256": "ba96eb92779c9fe913d609e34c03c21dd4bf39f9d21505b6534460f98fc5e46b",
+    "counter_scope": "Events explicitly enabled at analysis entry and disabled at analysis completion using perf FIFO acknowledgements; startup excluded",
+    "samples": [
+      {
+        "runtime": "php",
+        "binary_sha256": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6",
+        "instructions": 10332616660,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 1.3975292810064275,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "binary_sha256": "410a0cadb25886e9b1d68554f123cbd6b11f7c9c22f282527b2bafd023ef3750",
+        "instructions": 94086084065,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 10.419450777990278,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "binary_sha256": "b02b80ae74af684f96fb798ecef2384d566f0f51a755f6dd82e19b5b59e97ecc",
+        "instructions": 93141520874,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 10.39711050799815,
+        "output_equal": true
+      }
+    ],
+    "profiles": [
+      {
+        "runtime": "baseline",
+        "event": "instructions:u",
+        "period": 1000003,
+        "callgraph": false,
+        "wall_seconds": 10.793361415999243,
+        "output_equal": true,
+        "data_bytes": 3952320
+      },
+      {
+        "runtime": "candidate",
+        "event": "instructions:u",
+        "period": 1000003,
+        "callgraph": false,
+        "wall_seconds": 10.667877450003289,
+        "output_equal": true,
+        "data_bytes": 3912752
+      }
+    ]
+  },
+  "code_sizes": {
+    "baseline": {
+      "<rphp::runtime::ExecutorGlobals>::find_class": {
+        "address": 4380864,
+        "size": 3213
+      },
+      "rphp::vm::execute::caller_scope": {
+        "address": 4606144,
+        "size": 2202
+      },
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3808768,
+        "size": 399328
+      },
+      "rphp::vm::execute::check_type_hint_in_scopes": {
+        "address": 3757504,
+        "size": 2669
+      }
+    },
+    "candidate": {
+      "<rphp::vm::function::TypeName>::resolve_class_id": {
+        "address": 7453760,
+        "size": 90
+      },
+      "<rphp::runtime::ExecutorGlobals>::find_class": {
+        "address": 4440192,
+        "size": 3213
+      },
+      "rphp::vm::execute::caller_scope": {
+        "address": 4608064,
+        "size": 2206
+      },
+      "rphp::vm::execute::execute_ex_inner": {
+        "address": 3813632,
+        "size": 399303
+      },
+      "rphp::vm::execute::check_type_hint_in_scopes": {
+        "address": 3763584,
+        "size": 1428
+      }
+    }
+  },
+  "boundaries": {
+    "parity-named-types-check": {
+      "complete": true,
+      "exit": 101,
+      "seconds": 21.616727942004218,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3803119616,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-named-types-check2": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 19.081373205001,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3609219072,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-named-types-prepare": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 17.35772643100063,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 2023985152,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-named-types-prepare2": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 635.5261657910014,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 5015674880,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parity-named-types-finish": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 110.5183193450066,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 702898176,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "initial_test_compilation_failure": {
+    "complete": false,
+    "source_sha256": "70a6ef8b424af2574c19ce0cb804242a7bcb6ff9d92ee0d7755ec117fb98bf62",
+    "baseline_commit": "5e9b0b38",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.719929626007797,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "named_type_tests"
+        ],
+        "exit": 101,
+        "seconds": 13.386490314995172,
+        "test_results": []
+      }
+    ],
+    "php_cases": [
+      {
+        "index": 0,
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "miss|property-miss|111|argument|property|LaterType",
+        "stderr": ""
+      },
+      {
+        "index": 0,
+        "runtime": "baseline",
+        "exit": 0,
+        "stdout": "miss|property-miss|111|argument|property|LaterType",
+        "stderr": ""
+      },
+      {
+        "index": 1,
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "111111|self|parent|1|static",
+        "stderr": ""
+      },
+      {
+        "index": 1,
+        "runtime": "baseline",
+        "exit": 0,
+        "stdout": "111111|self|parent|1|static",
+        "stderr": ""
+      },
+      {
+        "index": 2,
+        "runtime": "php",
+        "exit": 0,
+        "stdout": "7|:1::11|iterable|closure|literal",
+        "stderr": ""
+      },
+      {
+        "index": 2,
+        "runtime": "baseline",
+        "exit": 0,
+        "stdout": "7|:1::11|iterable|closure|literal",
+        "stderr": ""
+      }
+    ],
+    "reason": "The new Rust unit test used Result::unwrap with a non-Debug existing error type; changed to is_ok. No production behavior failure or valid performance run was discarded."
+  },
+  "rejection": {
+    "status": "rejected",
+    "production_restored_to": "5e9b0b38",
+    "restored_source_sha256": "854e5c7ffa73fdceef75736532e2020ba5ca240b7130884ac372eb4743cd5565",
+    "reason": "Approximately one percent phase instructions removed, but application time changes +1.06 percent and -1.08 percent in separate windows; shared-frame time regresses +2.36 percent initially and +1.50 percent on independent confirmation. No tradeoff exception accepted.",
+    "compatibility": "232 focused tests and three exact PHP differentials passed; broader feature test execution was not pursued after performance rejection.",
+    "prototype": "Exact source, binary, patch, tests and all samples retained privately."
+  },
+  "fixtures": {
+    "confirm-bench_scalar_frame_return.php": "5dce2e51d71d3635f59b487f6ececb8ac13981e6c1b6a518dc6cb5dce72508ff",
+    "confirm-return-self.php": "2b3c47d6a3bea1f28fff7d7851ff225d71fd37a00c2a0fc617ffdbd5a7f093ba",
+    "confirm-bench_shared_frame_release.php": "1ed4edc65342545945ac0a61175e1c832c90b4cf3b1e88542dd8cad8f5f804ef",
+    "confirm-bench_foreach_declared_property_reads.php": "390f222c8f87894a6bd71e8116216b6e7fca66439b7f69593ad2aeede9b5381e",
+    "differential-0.php": "3920b641324626eee8cbd459303c90faaa19b873893de6890f6cf8837c31a194",
+    "differential-2.php": "542d1c5a6d6e8503d55e6bf0d03da00c73e11729495c23071ea81536b7a60c8c",
+    "differential-1.php": "0058592853287451f72b69e57132ddff2b72a70b74c4dc74e4c20f6c0510c7f9"
+  },
+  "limitations": [
+    "The PHP parity goal remains open.",
+    "Native measurements are available only on x86-64; there is no new architecture-specific code or unsafe operation.",
+    "Whole-command hardware instructions and analysis-only time have different scopes. The separate FIFO-gated profile excludes startup.",
+    "Named type descriptors are thread-confined, like runtime functions and executors. Their spelling is immutable; only positive request-guarded class IDs are cached.",
+    "The general type-hint enum and function/frame geometry are unchanged; each independently constructed named hint adds an Rc descriptor allocation, while cloned hints share it. RSS and build costs are retained."
+  ]
+}

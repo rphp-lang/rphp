@@ -582,7 +582,7 @@ struct Declaration {
 fn string_or_false() -> ParamTypeHint {
     ParamTypeHint::Union(vec![
         ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".to_string()),
+        ParamTypeHint::ClassName("false".into()),
     ])
 }
 
@@ -598,7 +598,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 ParamTypeHint::Union(vec![
                     ParamTypeHint::Array,
                     ParamTypeHint::String,
-                    ParamTypeHint::ClassName("false".to_string()),
+                    ParamTypeHint::ClassName("false".into()),
                 ])
             },
             defaults: || vec![None],
@@ -663,7 +663,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             result: || {
                 ParamTypeHint::Union(vec![
                     ParamTypeHint::Int,
-                    ParamTypeHint::ClassName("false".to_string()),
+                    ParamTypeHint::ClassName("false".into()),
                 ])
             },
             defaults: Vec::new,
@@ -678,7 +678,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             result: || {
                 ParamTypeHint::Union(vec![
                     ParamTypeHint::Array,
-                    ParamTypeHint::ClassName("false".to_string()),
+                    ParamTypeHint::ClassName("false".into()),
                 ])
             },
             defaults: || vec![Some(Value::long(0))],
@@ -693,7 +693,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             result: || {
                 ParamTypeHint::Union(vec![
                     ParamTypeHint::Array,
-                    ParamTypeHint::ClassName("false".to_string()),
+                    ParamTypeHint::ClassName("false".into()),
                 ])
             },
             defaults: Vec::new,

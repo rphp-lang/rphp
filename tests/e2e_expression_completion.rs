@@ -3,6 +3,38 @@ mod common;
 use common::run_php;
 
 #[test]
+fn array_reference_elements_promote_borrowed_heap_arguments_before_escape() {
+    for padding in [0, 80] {
+        let locals = (0..padding)
+            .map(|index| format!("$pad{index}={index};"))
+            .collect::<String>();
+        let source = format!(
+            r#"<?php
+class EscapingArrayOwner {{ public function __destruct() {{ echo 'drop|'; }} }}
+function pair($value) {{ {locals} return [&$value, &$value]; }}
+$text = str_repeat('x', 3); $pair = pair($text); $pair[0] .= 'y';
+echo $text, ':', $pair[1], '|';
+$array = [1]; $pair = pair($array); $pair[0][] = 2;
+echo count($array), ':', count($pair[1]), '|';
+$object = new EscapingArrayOwner; $weak = WeakReference::create($object);
+$pair = pair($object); unset($object);
+echo $weak->get() === $pair[1] ? 'held|' : 'lost|';
+$pair[0] = null; echo $pair[1] === null ? 'aliased|' : 'split|';
+echo $weak->get() === null ? 'cleared|' : 'retained|';
+$closure = static fn () => 47; $weak = WeakReference::create($closure);
+$pair = pair($closure); unset($closure); echo $pair[1] === $weak->get() ? 'held|' : 'lost|';
+$pair[0] = null; echo $weak->get() === null ? 'cleared' : 'retained';
+"#
+        );
+        assert_eq!(
+            run_php(&source),
+            "xxx:xxxy|1:2|held|drop|aliased|cleared|held|cleared",
+            "padding={padding}"
+        );
+    }
+}
+
+#[test]
 fn casting_a_container_retires_only_its_unshared_children() {
     assert_eq!(
         run_php(

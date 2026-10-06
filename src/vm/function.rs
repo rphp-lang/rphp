@@ -994,10 +994,213 @@ pub enum ParamTypeHint {
     Void,
     Mixed,
     Never,
-    ClassName(std::string::String),
+    ClassName(TypeName),
     Nullable(Box<ParamTypeHint>),
     Union(Vec<ParamTypeHint>),
     Intersection(Vec<ParamTypeHint>),
+}
+
+/// Immutable named type metadata shared by cloned declarations. The cache
+/// stores no borrowed pointer and is guarded by the executor that owns the ID.
+#[derive(Clone)]
+pub struct TypeName(Rc<TypeNameData>);
+
+struct TypeNameData {
+    name: String,
+    kind: NamedTypeKind,
+    resolved: Cell<(u64, u32)>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NamedTypeKind {
+    Class,
+    Null,
+    False,
+    True,
+    Closure,
+    Object,
+    Iterable,
+    SelfClass,
+    Parent,
+    Static,
+}
+
+impl From<String> for TypeName {
+    fn from(name: String) -> Self {
+        let kind = [
+            ("null", NamedTypeKind::Null),
+            ("false", NamedTypeKind::False),
+            ("true", NamedTypeKind::True),
+            ("Closure", NamedTypeKind::Closure),
+            ("object", NamedTypeKind::Object),
+            ("iterable", NamedTypeKind::Iterable),
+            ("self", NamedTypeKind::SelfClass),
+            ("parent", NamedTypeKind::Parent),
+            ("static", NamedTypeKind::Static),
+        ]
+        .into_iter()
+        .find_map(|(spelling, kind)| name.eq_ignore_ascii_case(spelling).then_some(kind))
+        .unwrap_or(NamedTypeKind::Class);
+        Self(Rc::new(TypeNameData {
+            name,
+            kind,
+            resolved: Cell::new((0, 0)),
+        }))
+    }
+}
+
+impl From<&str> for TypeName {
+    fn from(name: &str) -> Self {
+        name.to_owned().into()
+    }
+}
+
+impl std::ops::Deref for TypeName {
+    type Target = str;
+
+    fn deref(&self) -> &str {
+        self.as_str()
+    }
+}
+
+impl std::fmt::Debug for TypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.as_str().fmt(f)
+    }
+}
+
+impl std::fmt::Display for TypeName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl PartialEq for TypeName {
+    fn eq(&self, other: &Self) -> bool {
+        self.as_str() == other.as_str()
+    }
+}
+
+impl TypeName {
+    #[inline]
+    pub fn as_str(&self) -> &str {
+        &self.0.name
+    }
+
+    #[inline]
+    pub(crate) fn kind(&self) -> NamedTypeKind {
+        self.0.kind
+    }
+
+    /// Only immutable, published identities may be reused. A miss must be
+    /// looked up again because a later declaration or alias can satisfy it.
+    #[inline]
+    pub(crate) fn resolved_class_id(&self, eg: &ExecutorGlobals) -> u32 {
+        let (owner, class_id) = self.0.resolved.get();
+        if owner == eg.type_resolution_id {
+            return class_id;
+        }
+        self.resolve_class_id(eg)
+    }
+
+    #[cold]
+    fn resolve_class_id(&self, eg: &ExecutorGlobals) -> u32 {
+        debug_assert!(!matches!(
+            self.kind(),
+            NamedTypeKind::SelfClass | NamedTypeKind::Parent | NamedTypeKind::Static
+        ));
+        let target = if self.kind() == NamedTypeKind::Iterable {
+            "Traversable"
+        } else {
+            self.as_str()
+        };
+        let class_id = eg.find_class(target).map_or(0, |class| class.class_id);
+        if class_id != 0 {
+            self.0.resolved.set((eg.type_resolution_id, class_id));
+        }
+        class_id
+    }
+}
+
+#[cfg(test)]
+mod named_type_tests {
+    use super::{ParamTypeHint, TypeName};
+    use crate::runtime::ExecutorGlobals;
+
+    fn register(eg: &mut ExecutorGlobals, source: &str) {
+        let tokens = crate::lexer::Lexer::new(source).tokenize().unwrap();
+        let statements = crate::parser::Parser::new(tokens).parse().unwrap();
+        let compiled = crate::compiler::compile::Compiler::new()
+            .compile(&statements)
+            .unwrap();
+        for class in compiled.class_defs.into_iter().chain(
+            compiled
+                .runtime_class_defs
+                .into_iter()
+                .map(|(_, class)| class),
+        ) {
+            eg.register_class(class).unwrap();
+        }
+    }
+
+    #[test]
+    fn shared_named_type_cache_is_guarded_across_executor_moves_and_reuse() {
+        let name = TypeName::from("Target");
+        let cloned = name.clone();
+        let mut first = ExecutorGlobals::new();
+        register(&mut first, "<?php class Target {}");
+        let mut second = ExecutorGlobals::with_output(Box::new(Vec::<u8>::new()));
+        register(&mut second, "<?php class Other {} class Target {}");
+        let first_id = first.class_id_of("Target");
+        let second_id = second.class_id_of("Target");
+        assert_ne!(first_id, second_id);
+        for _ in 0..3 {
+            assert_eq!(name.resolved_class_id(&first), first_id);
+            assert_eq!(cloned.resolved_class_id(&second), second_id);
+        }
+        let moved = Box::new(first);
+        assert_eq!(name.resolved_class_id(&moved), first_id);
+        drop(moved);
+        let mut third = ExecutorGlobals::new();
+        register(&mut third, "<?php class Other {}");
+        assert_eq!(cloned.resolved_class_id(&third), 0);
+        register(&mut third, "<?php class Target {}");
+        assert_eq!(
+            cloned.resolved_class_id(&third),
+            third.class_id_of("Target")
+        );
+        assert_eq!(name, TypeName::from("Target"));
+        assert_eq!(format!("{name:?}"), "\"Target\"");
+        assert_eq!(
+            std::mem::size_of::<TypeName>(),
+            std::mem::size_of::<usize>()
+        );
+        assert_eq!(
+            std::mem::size_of::<ParamTypeHint>(),
+            4 * std::mem::size_of::<usize>()
+        );
+    }
+
+    #[test]
+    fn named_type_misses_observe_later_aliases_and_preserve_spelling() {
+        let mut eg = ExecutorGlobals::new();
+        register(
+            &mut eg,
+            "<?php interface Target {} class Value implements Target {}",
+        );
+        let name = TypeName::from("\\lAtErAlIaS");
+        assert_eq!(name.resolved_class_id(&eg), 0);
+        assert!(eg.register_class_alias("Target", "LaterAlias").is_ok());
+        let id = eg.class_id_of("Target");
+        assert_ne!(id, 0);
+        assert_eq!(name.resolved_class_id(&eg), id);
+        assert_eq!(name.resolved_class_id(&eg), id);
+        assert_eq!(name.as_str(), "\\lAtErAlIaS");
+        assert_eq!(
+            ParamTypeHint::ClassName(name).display_name(),
+            "\\lAtErAlIaS"
+        );
+    }
 }
 
 impl ParamTypeHint {
@@ -1006,11 +1209,10 @@ impl ParamTypeHint {
     #[inline]
     pub fn uses_declaring_class_scope(&self) -> bool {
         match self {
-            Self::ClassName(name) => {
-                name.eq_ignore_ascii_case("self")
-                    || name.eq_ignore_ascii_case("parent")
-                    || name.eq_ignore_ascii_case("static")
-            }
+            Self::ClassName(name) => matches!(
+                name.kind(),
+                NamedTypeKind::SelfClass | NamedTypeKind::Parent | NamedTypeKind::Static
+            ),
             Self::Nullable(inner) => inner.uses_declaring_class_scope(),
             Self::Union(parts) | Self::Intersection(parts) => {
                 parts.iter().any(Self::uses_declaring_class_scope)
@@ -1034,7 +1236,7 @@ impl ParamTypeHint {
     #[inline]
     pub fn uses_late_static(&self) -> bool {
         match self {
-            ParamTypeHint::ClassName(name) => name.eq_ignore_ascii_case("static"),
+            ParamTypeHint::ClassName(name) => name.kind() == NamedTypeKind::Static,
             ParamTypeHint::Nullable(inner) => inner.uses_late_static(),
             ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
                 parts.iter().any(ParamTypeHint::uses_late_static)
@@ -1053,7 +1255,7 @@ impl ParamTypeHint {
             ParamTypeHint::Bool => "bool".to_string(),
             ParamTypeHint::Array => "array".to_string(),
             ParamTypeHint::Callable => "callable".to_string(),
-            ParamTypeHint::ClassName(name) => name.clone(),
+            ParamTypeHint::ClassName(name) => name.to_string(),
             ParamTypeHint::Nullable(inner) => format!("?{}", inner.display_name()),
             ParamTypeHint::Void => "void".to_string(),
             ParamTypeHint::Mixed => "mixed".to_string(),
@@ -1401,7 +1603,6 @@ pub struct CallPlan {
 }
 
 impl CallPlan {
-    const BORROW_THIS: u8 = 1;
     const LATE_STATIC_SCOPE: u8 = 1 << 1;
     const EMBEDDED_LATE_STATIC_SCOPE: u8 = 1 << 2;
     const DEPRECATED_ATTRIBUTE: u8 = 1 << 3;
@@ -1409,19 +1610,6 @@ impl CallPlan {
     const TRAIT_CLASS_SCOPE: u8 = 1 << 5;
     const REFERENCE_FOREACH: u8 = 1 << 6;
     const STATIC_METHOD: u8 = 1 << 7;
-
-    /// `$this` may be copied into a nested method frame without incrementing
-    /// its Rc. The caller owns the object for the entire synchronous call and
-    /// the method has no direct `return $this` path.
-    #[inline(always)]
-    pub fn borrow_this(&self) -> bool {
-        self.flags & Self::BORROW_THIS != 0
-    }
-
-    #[inline]
-    pub fn set_borrow_this(&mut self, enabled: bool) {
-        self.flags = (self.flags & !Self::BORROW_THIS) | u8::from(enabled) * Self::BORROW_THIS;
-    }
 
     /// The function was declared as a static method. This shares the final
     /// spare CallPlan flag, preserving every function and frame layout while
@@ -1850,9 +2038,6 @@ pub struct UserFunction {
     /// either repeated case a single integer guard while new classes retain
     /// the canonical hierarchy check.
     pub compact_class_guard: Cell<u64>,
-    /// Public by-value parameters that may borrow an immutable heap Value from
-    /// their synchronous caller. Indexed by public parameter position.
-    pub borrowable_heap_args: u64,
     /// Monomorphic owner/value cache for the hidden trait `__CLASS__` TMP.
     /// Only functions carrying that TMP allocate this cold sidecar.
     pub(crate) trait_class_scope_cache: Option<Box<TraitClassScopeCache>>,
@@ -1940,7 +2125,7 @@ mod layout_tests {
         assert_eq!(std::mem::offset_of!(UserFunction, common), 0);
         assert!(
             std::mem::offset_of!(UserFunction, attributes)
-                > std::mem::offset_of!(UserFunction, borrowable_heap_args)
+                > std::mem::offset_of!(UserFunction, trait_class_scope_cache)
         );
         assert!(
             std::mem::offset_of!(UserFunction, parameter_attributes)

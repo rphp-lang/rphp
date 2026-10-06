@@ -60,11 +60,11 @@ use super::instruction::{
     REFERENCE_RESULT_INTERNAL, REFERENCE_SOURCE_MAY_BE_NONREFERENCEABLE,
     RELEASE_TEMPS_CONSTRUCTOR_ARGUMENTS, RELEASE_TEMPS_INTERNAL_CVS, RELEASE_TEMPS_NESTED_OBJECTS,
     RELEASE_TEMPS_ON_RETURN, RELEASE_TEMPS_RETURN_COMPLETION_SITE, RELEASE_TEMPS_SUBEXPRESSION,
-    SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY, SEND_FLAG_NONREFERENCEABLE,
-    SEND_FLAG_PREPARED_PROPERTY_ARGUMENT, SEND_FLAG_TEMPORARY_WRITE_ERROR,
-    SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME, STATIC_PROP_DYNAMIC_OWNER,
-    STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND, STATIC_PROP_REFERENCE_FETCH,
-    STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
+    SEND_FLAG_CONSUME_TEMP, SEND_FLAG_GLOBALS, SEND_FLAG_INDIRECT_TEMPORARY,
+    SEND_FLAG_NONREFERENCEABLE, SEND_FLAG_PREPARED_PROPERTY_ARGUMENT,
+    SEND_FLAG_TEMPORARY_WRITE_ERROR, SEND_FLAG_YIELD_SNAPSHOT, STATIC_PROP_DYNAMIC_NAME,
+    STATIC_PROP_DYNAMIC_OWNER, STATIC_PROP_INDIRECT_MODIFY, STATIC_PROP_REFERENCE_BIND,
+    STATIC_PROP_REFERENCE_FETCH, STATIC_PROP_SILENT, THROW_FLAG_UNHANDLED_MATCH, UNSET_DIM_NESTED,
 };
 use super::opcode::OpCode;
 #[cfg(all(feature = "quick-loops", feature = "jit-prototype"))]
@@ -318,13 +318,15 @@ fn get_caller_class(frame: *mut ExecuteData, eg: &ExecutorGlobals) -> Option<Str
 /// depends on frame state (rebound closure, trait composition, late static
 /// scope) and must not be keyed on the function. The third element is the
 /// bound class id of a closure frame (0 otherwise): closure sites key their
-/// entries on it instead and verify it on every hit.
+/// entries on it instead and verify it on every hit. The fourth element is
+/// the hidden receiver class of an instance trait scope recovered from CV0.
+/// Hidden lexical-scope TMPs and static trait frames do not provide that proof.
 fn caller_scope(
     frame: *mut ExecuteData,
     eg: &ExecutorGlobals,
-) -> (Option<String>, *const FunctionCommon, u32) {
+) -> (Option<String>, *const FunctionCommon, u32, u32) {
     if frame.is_null() {
-        return (None, std::ptr::null(), 0);
+        return (None, std::ptr::null(), 0, 0);
     }
     // SAFETY: callers pass the live executing frame; its function pointer,
     // compiler-sized CV range and scope TMP remain valid for this
@@ -334,7 +336,7 @@ fn caller_scope(
     let declaring_trait = unsafe {
         let func = (*frame).func;
         if func.is_null() {
-            return (None, std::ptr::null(), 0);
+            return (None, std::ptr::null(), 0, 0);
         }
         if (*frame).has_closure_scope() {
             let id = (*frame).tmp((*frame).num_temps - 1).as_long().unwrap_or(0) as u32;
@@ -342,6 +344,7 @@ fn caller_scope(
                 eg.class_by_id(id).map(|class| class.name.clone()),
                 std::ptr::null(),
                 id,
+                0,
             );
         }
         let mut declaring_trait = None;
@@ -351,16 +354,19 @@ fn caller_scope(
                 .get(class)
                 .is_some_and(|definition| definition.is_trait);
             if !is_trait {
-                return (Some(class.to_string()), func, 0);
+                return (Some(class.to_string()), func, 0, 0);
             }
             declaring_trait = Some(class);
 
+            let mut receiver_scope_proved = false;
             if (*func).fn_type == FunctionType::User {
                 let function = &*(func as *const UserFunction);
+                receiver_scope_proved = function.common.sig.this_offset == 1
+                    && function.op_array.trait_class_scope_tmp.is_none();
                 if let Some(scope_tmp) = function.op_array.trait_class_scope_tmp {
                     let scope = &*(*frame).slot_ptr(scope_tmp as u32);
                     if let Some(scope) = scope.as_str() {
-                        return (Some(scope.to_string()), std::ptr::null(), 0);
+                        return (Some(scope.to_string()), std::ptr::null(), 0, 0);
                     }
                 }
             }
@@ -369,13 +375,26 @@ fn caller_scope(
                 None
             } else {
                 let receiver = (*frame).cv(0);
-                (receiver.value_type() == ValueType::Object)
-                    .then(|| receiver.object_class_name_unchecked().to_string())
+                (receiver.value_type() == ValueType::Object).then(|| {
+                    (
+                        receiver.object_class_name_unchecked().to_string(),
+                        receiver.object_class_id_unchecked(),
+                    )
+                })
             };
-            if let Some(receiver_class) = receiver_class
+            if let Some((receiver_class, receiver_class_id)) = receiver_class
                 && let Some(scope) = eg.trait_composition_scope(&receiver_class, class)
             {
-                return (Some(scope.to_string()), std::ptr::null(), 0);
+                return (
+                    Some(scope.to_string()),
+                    std::ptr::null(),
+                    0,
+                    if receiver_scope_proved {
+                        receiver_class_id
+                    } else {
+                        0
+                    },
+                );
             }
         }
         declaring_trait
@@ -395,7 +414,7 @@ fn caller_scope(
             class_id = called_class_id_for_frame(eg, frame, 0);
         }
         let Some(called) = eg.class_by_id(class_id) else {
-            return (None, std::ptr::null(), 0);
+            return (None, std::ptr::null(), 0, 0);
         };
         return (
             Some(
@@ -404,11 +423,13 @@ fn caller_scope(
             ),
             std::ptr::null(),
             0,
+            0,
         );
     }
     (
         eg.class_by_id(class_id).map(|class| class.name.clone()),
         std::ptr::null(),
+        0,
         0,
     )
 }
@@ -707,8 +728,9 @@ fn write_array_union_result(
 
 #[inline]
 fn write_fetch_dim_result(frame: *mut ExecuteData, result_ptr: *mut Value, value: Value) {
-    // SAFETY: FetchDimR always publishes into its compiler-owned TMP result in
-    // this live frame; frame_tmp_set handles first write and later overwrite.
+    // SAFETY: dimension reads and mutable property-container fetches publish
+    // compiler-owned TMP/VAR results in this live frame. frame_tmp_set handles
+    // both first write and later overwrite; no PHP-visible CV alias is passed.
     unsafe { frame_tmp_set(frame, result_ptr, value) }
 }
 
@@ -1013,6 +1035,94 @@ fn check_type_hint_in_scopes(
     callee_class: Option<&str>,
     called_class: Option<&str>,
 ) -> bool {
+    check_type_hint_with_scope(
+        val,
+        hint,
+        eg,
+        strict,
+        &TypeCheckScope::Classes {
+            lexical: callee_class,
+            called: called_class,
+        },
+    )
+}
+
+/// Scope is an input to relative class names, not to every type check. Carry
+/// its source through nullable/union/intersection recursion without resolving
+/// names that no visited member consumes.
+enum TypeCheckScope<'a> {
+    Classes {
+        lexical: Option<&'a str>,
+        called: Option<&'a str>,
+    },
+    Return {
+        frame: *mut ExecuteData,
+        // The return site already holds the callee's common header. Retain its
+        // identity until a relative hint needs the declaring-name fallback;
+        // ordinary return checks do not materialize an owned class name.
+        function: *const FunctionCommon,
+    },
+}
+
+impl TypeCheckScope<'_> {
+    fn lexical_class<'a>(&'a self, eg: &'a ExecutorGlobals) -> Option<Cow<'a, str>> {
+        match self {
+            Self::Classes { lexical, .. } => lexical.map(Cow::Borrowed),
+            Self::Return { frame, function } => get_caller_class(*frame, eg)
+                .map(Cow::Owned)
+                .or_else(|| eg.declaring_class_of(*function).map(Cow::Borrowed)),
+        }
+    }
+
+    fn called_class<'a>(&'a self, eg: &'a ExecutorGlobals) -> Option<&'a str> {
+        let frame = match self {
+            Self::Classes { called, .. } => return *called,
+            Self::Return { frame, .. } => *frame,
+        };
+        // SAFETY: return checks carry the same live callee frame as canonical
+        // Return execution. No scope probe invokes PHP or retires that frame.
+        let common = unsafe { &*(*frame).func };
+        let receiver_cv = if common.sig.this_offset == 1 {
+            Some(0)
+        } else if common.fn_type == FunctionType::User {
+            // SAFETY: the checked tag identifies the request-owned user
+            // function whose common header is stored in this live frame.
+            let function = unsafe { &*((*frame).func as *const UserFunction) };
+            function
+                .op_array
+                .all_cvs
+                .iter()
+                .find(|(_, name)| name == "this")
+                .map(|(index, _)| *index)
+        } else {
+            None
+        };
+        let receiver_scope = receiver_cv.and_then(|index| {
+            // SAFETY: the signature or compiler CV table proves this slot is
+            // part of the live frame. The probe is immutable and non-reentrant.
+            let receiver = unsafe { &*(*frame).cv(index) };
+            match receiver.value_type() {
+                // SAFETY: the Object tag guarantees a live object payload;
+                // its immutable class name outlives this synchronous check.
+                ValueType::Object => Some(unsafe { receiver.object_class_name_unchecked() }),
+                ValueType::Closure => Some("Closure"),
+                _ => None,
+            }
+        });
+        receiver_scope.or_else(|| {
+            eg.class_by_id(late_static_call_class_id(eg, frame))
+                .map(|class| class.name.as_str())
+        })
+    }
+}
+
+fn check_type_hint_with_scope(
+    val: &Value,
+    hint: &ParamTypeHint,
+    eg: &ExecutorGlobals,
+    strict: bool,
+    scope: &TypeCheckScope<'_>,
+) -> bool {
     use crate::vm::function::ParamTypeHint;
     match hint {
         ParamTypeHint::None => true,
@@ -1039,52 +1149,56 @@ fn check_type_hint_in_scopes(
             })
         }
         ParamTypeHint::ClassName(class_name) => {
-            if class_name.eq_ignore_ascii_case("null") {
-                return val.value_type() == ValueType::Null;
-            }
-            if class_name.eq_ignore_ascii_case("false") {
-                return val.value_type() == ValueType::False;
-            }
-            if class_name.eq_ignore_ascii_case("true") {
-                return val.value_type() == ValueType::True;
-            }
-            if val.value_type() == ValueType::Closure
-                && (class_name.eq_ignore_ascii_case("Closure")
-                    || class_name.eq_ignore_ascii_case("object"))
-            {
-                return true;
-            }
-            if class_name.eq_ignore_ascii_case("iterable") {
-                return val.as_array().is_some()
-                    || val
-                        .as_object()
-                        .is_some_and(|object| eg.class_is_a(&object.class_name, "Traversable"));
-            }
-            if let Some(obj) = val.as_object() {
-                if class_name.eq_ignore_ascii_case("object") {
+            use crate::vm::function::NamedTypeKind;
+            let kind = class_name.kind();
+            match kind {
+                NamedTypeKind::Null => return val.value_type() == ValueType::Null,
+                NamedTypeKind::False => return val.value_type() == ValueType::False,
+                NamedTypeKind::True => return val.value_type() == ValueType::True,
+                NamedTypeKind::Closure | NamedTypeKind::Object
+                    if val.value_type() == ValueType::Closure =>
+                {
                     return true;
                 }
-                // `self`/`parent` are lexical; `static` is the runtime called class.
-                let resolved = match class_name.as_str() {
-                    "self" => callee_class.unwrap_or(class_name.as_str()),
-                    "static" => called_class.unwrap_or(class_name.as_str()),
-                    "parent" => {
-                        if let Some(decl) = callee_class {
-                            if let Some(class_def) = eg.class_table.get(decl) {
-                                class_def.parent.as_deref().unwrap_or(class_name.as_str())
-                            } else {
-                                class_name.as_str()
-                            }
-                        } else {
-                            class_name.as_str()
+                NamedTypeKind::Iterable if val.as_array().is_some() => return true,
+                _ => {}
+            }
+            let Some(object) = val.as_object() else {
+                return false;
+            };
+            let resolved = match kind {
+                NamedTypeKind::Object => return true,
+                // Relative declarations must observe the current activation's
+                // lexical/called scope, never the shared positive-name cache.
+                NamedTypeKind::SelfClass => scope
+                    .lexical_class(eg)
+                    .unwrap_or_else(|| Cow::Borrowed(class_name.as_str())),
+                NamedTypeKind::Static => {
+                    Cow::Borrowed(scope.called_class(eg).unwrap_or(class_name.as_str()))
+                }
+                NamedTypeKind::Parent => {
+                    let lexical = scope.lexical_class(eg);
+                    let parent = lexical
+                        .as_deref()
+                        .and_then(|decl| eg.class_table.get(decl))
+                        .and_then(|class| class.parent.as_deref());
+                    Cow::Borrowed(parent.unwrap_or(class_name.as_str()))
+                }
+                _ => {
+                    if object.class_id != 0 {
+                        let target_id = class_name.resolved_class_id(eg);
+                        if target_id != 0 {
+                            return eg.class_is_a_ids(object.class_id, target_id);
                         }
                     }
-                    _ => class_name.as_str(),
-                };
-                eg.class_is_a(&obj.class_name, resolved)
-            } else {
-                false
-            }
+                    Cow::Borrowed(if kind == NamedTypeKind::Iterable {
+                        "Traversable"
+                    } else {
+                        class_name.as_str()
+                    })
+                }
+            };
+            eg.object_is_a(&object, &resolved)
         }
         ParamTypeHint::Nullable(inner) => {
             if val.value_type() == ValueType::Null {
@@ -1092,7 +1206,7 @@ fn check_type_hint_in_scopes(
             } else if matches!(inner.as_ref(), ParamTypeHint::None) {
                 false
             } else {
-                check_type_hint_in_scopes(val, inner, eg, strict, callee_class, called_class)
+                check_type_hint_with_scope(val, inner, eg, strict, scope)
             }
         }
         ParamTypeHint::Void => false,
@@ -1100,10 +1214,10 @@ fn check_type_hint_in_scopes(
         ParamTypeHint::Never => false,
         ParamTypeHint::Union(types) => types
             .iter()
-            .any(|t| check_type_hint_in_scopes(val, t, eg, strict, callee_class, called_class)),
+            .any(|t| check_type_hint_with_scope(val, t, eg, strict, scope)),
         ParamTypeHint::Intersection(types) => types
             .iter()
-            .all(|t| check_type_hint_in_scopes(val, t, eg, strict, callee_class, called_class)),
+            .all(|t| check_type_hint_with_scope(val, t, eg, strict, scope)),
     }
 }
 
@@ -1994,18 +2108,34 @@ fn coerce_scalar_value(
     }
 }
 
+/// Probe live return storage without creating an inspection-only owner. This
+/// function cannot call PHP; the operand borrow ends before owned preparation
+/// runs coercion or diagnostics. Failed probes resume the original owned preparation.
+#[inline(never)]
+fn return_type_is_exact(
+    value: &Value,
+    hint: &ParamTypeHint,
+    eg: &ExecutorGlobals,
+    frame: *mut ExecuteData,
+    function: *const FunctionCommon,
+) -> bool {
+    check_return_type_hint(value, hint, eg, true, frame, function)
+}
+
+#[cold]
+#[inline(never)]
 fn prepare_return_type_value(
     value: &Value,
     hint: &ParamTypeHint,
     eg: &mut ExecutorGlobals,
     strict: bool,
     frame: *mut ExecuteData,
-    callee_class: Option<&str>,
+    function: *const FunctionCommon,
 ) -> Result<ReturnTypePreparation, VmError> {
     // Exact runtime members always win. Use the strict checker here because
     // weak acceptance alone is not enough: a declared float must return a
     // Double value even when the source was an integer.
-    if check_return_type_hint(value, hint, eg, true, frame, callee_class) {
+    if check_return_type_hint(value, hint, eg, true, frame, function) {
         return Ok(ReturnTypePreparation::Exact);
     }
     if let Some((coerced, diagnostic)) = coerce_scalar_value(value, hint, !strict) {
@@ -2019,6 +2149,75 @@ fn prepare_return_type_value(
         return Ok(ReturnTypePreparation::Coerced(rendered, None));
     }
     Ok(ReturnTypePreparation::Invalid)
+}
+
+#[cfg(test)]
+mod borrowed_return_snapshot_tests {
+    use super::*;
+
+    #[test]
+    fn exact_storage_accepts_the_pure_predicate() {
+        let eg = ExecutorGlobals::new();
+        for (value, hint) in [
+            (Value::string("held"), ParamTypeHint::String),
+            (Value::long(42), ParamTypeHint::Mixed),
+            (
+                Value::owned_reference(Value::string("held")),
+                ParamTypeHint::String,
+            ),
+        ] {
+            assert!(return_type_is_exact(
+                &value,
+                &hint,
+                &eg,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            ));
+        }
+    }
+
+    #[test]
+    fn nested_reference_failure_keeps_canonical_exact_union_precedence() {
+        let mut eg = ExecutorGlobals::new();
+        for (value, hint) in [
+            (Value::long(42), ParamTypeHint::Int),
+            (
+                Value::long(42),
+                ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int]),
+            ),
+            (
+                Value::string("42"),
+                ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]),
+            ),
+            (
+                Value::null(),
+                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+            ),
+        ] {
+            let reference =
+                Value::owned_reference(Value::owned_reference(Value::owned_reference(value)));
+            assert!(!return_type_is_exact(
+                &reference,
+                &hint,
+                &eg,
+                std::ptr::null_mut(),
+                std::ptr::null(),
+            ));
+            let snapshot = reference.dereferenced().clone();
+            assert!(matches!(
+                prepare_return_type_value(
+                    &snapshot,
+                    &hint,
+                    &mut eg,
+                    false,
+                    std::ptr::null_mut(),
+                    std::ptr::null(),
+                )
+                .unwrap(),
+                ReturnTypePreparation::Exact,
+            ));
+        }
+    }
 }
 
 /// Apply the object-to-string argument conversion used by weak PHP call sites.
@@ -2120,43 +2319,15 @@ fn check_return_type_hint(
     eg: &ExecutorGlobals,
     strict: bool,
     frame: *mut ExecuteData,
-    callee_class: Option<&str>,
+    function: *const FunctionCommon,
 ) -> bool {
-    let lexical_scope = get_caller_class(frame, eg);
-    let lexical_scope = lexical_scope.as_deref().or(callee_class);
-    if !hint.uses_late_static() {
-        return check_type_hint(value, hint, eg, strict, lexical_scope);
-    }
-    let common = unsafe { &*(*frame).func };
-    let receiver_cv = if common.sig.this_offset == 1 {
-        Some(0)
-    } else if common.fn_type == FunctionType::User {
-        // SAFETY: `frame` is the live callee frame already dereferenced above,
-        // and the checked function tag guarantees its common header belongs to
-        // a request-owned `UserFunction` for the duration of this return check.
-        let function = unsafe { &*((*frame).func as *const UserFunction) };
-        function
-            .op_array
-            .all_cvs
-            .iter()
-            .find(|(_, name)| name == "this")
-            .map(|(index, _)| *index)
-    } else {
-        None
-    };
-    let receiver_scope = receiver_cv.and_then(|index| {
-        let receiver = unsafe { &*(*frame).cv(index) };
-        match receiver.value_type() {
-            ValueType::Object => Some(unsafe { receiver.object_class_name_unchecked() }),
-            ValueType::Closure => Some("Closure"),
-            _ => None,
-        }
-    });
-    let called_scope = receiver_scope.or_else(|| {
-        eg.class_by_id(late_static_call_class_id(eg, frame))
-            .map(|class| class.name.as_str())
-    });
-    check_type_hint_in_scopes(value, hint, eg, strict, lexical_scope, called_scope)
+    check_type_hint_with_scope(
+        value.dereferenced(),
+        hint,
+        eg,
+        strict,
+        &TypeCheckScope::Return { frame, function },
+    )
 }
 
 /// Validate exact argument storage for the compact scalar call protocol.
@@ -3311,6 +3482,10 @@ pub(crate) type IdentitySet =
 pub(crate) type IdentityMap =
     HashMap<usize, usize, std::hash::BuildHasherDefault<crate::runtime::SymbolHasher>>;
 
+#[path = "execute/release_identities.rs"]
+mod release_identities;
+use release_identities::{InspectionIdentityCounts, InspectionIdentitySet};
+
 #[cfg(all(feature = "quick-loops", not(target_vendor = "apple")))]
 include!("execute/quick_dispatch.rs");
 
@@ -4215,7 +4390,7 @@ pub(crate) fn resolved_type_diagnostic_name(
         match hint {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("self") => {
                 if let Some(class) = lexical_class {
-                    *name = displayed_class_name(eg, class);
+                    *name = displayed_class_name(eg, class).into();
                 }
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("parent") => {
@@ -4223,12 +4398,12 @@ pub(crate) fn resolved_type_diagnostic_name(
                     .and_then(|class| eg.find_class(class))
                     .and_then(|class| class.parent.as_deref())
                 {
-                    *name = displayed_class_name(eg, parent);
+                    *name = displayed_class_name(eg, parent).into();
                 }
             }
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
                 if let Some(class) = called_class.or(lexical_class) {
-                    *name = displayed_class_name(eg, class);
+                    *name = displayed_class_name(eg, class).into();
                 }
             }
             ParamTypeHint::Nullable(inner) => resolve(inner, eg, lexical_class, called_class),
@@ -4486,14 +4661,7 @@ fn execute_full_call<'a>(
         // Retain its actual supplied arguments before frame cleanup, just as
         // synchronous internal-handler errors do on their cold error path.
         attach_internal_call_trace_if_missing(&error, call, frame, eg);
-        // SAFETY: `call` is the live pending call owned by `frame`; its
-        // compiler-sized slots were initialized by the preceding sends.
-        unsafe { cleanup_frame_slots(call) };
-        pop_vm_call_frame(eg, call);
-        return Ok(match throw_in_frame(eg, frame, error)? {
-            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-        });
+        return cleanup_named_call_and_throw(eg, frame, call, error);
     }
 
     if func_common.plan.needs_late_static_scope() {
@@ -4617,12 +4785,7 @@ fn execute_full_call<'a>(
                             report_php_deprecation(eg, frame, op_array, opline, &deprecation)?;
                         }
                         if let Some(exception) = eg.exception.take() {
-                            cleanup_frame_slots(call);
-                            pop_vm_call_frame(eg, call);
-                            return Ok(match throw_in_frame(eg, frame, exception)? {
-                                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                                ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                            });
+                            return cleanup_named_call_and_throw(eg, frame, call, exception);
                         }
                         if resolved.is_some() {
                             continue;
@@ -4676,12 +4839,7 @@ fn execute_full_call<'a>(
                                 )?;
                             }
                             if let Some(exception) = eg.exception.take() {
-                                cleanup_frame_slots(call);
-                                pop_vm_call_frame(eg, call);
-                                return Ok(match throw_in_frame(eg, frame, exception)? {
-                                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                                    ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                                });
+                                return cleanup_named_call_and_throw(eg, frame, call, exception);
                             }
                         }
                         let slot = (*call).cv_mut(cv_idx) as *mut Value;
@@ -4695,12 +4853,7 @@ fn execute_full_call<'a>(
                     CallArgumentPreparation::Invalid => {}
                 }
                 if let Some(exception) = eg.exception.take() {
-                    cleanup_frame_slots(call);
-                    pop_vm_call_frame(eg, call);
-                    return Ok(match throw_in_frame(eg, frame, exception)? {
-                        ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                        ThrowResult::Unhandled(thrown) => ColdResult::Unhandled(thrown),
-                    });
+                    return cleanup_named_call_and_throw(eg, frame, call, exception);
                 }
                 type_error = Some(argument_type_error(
                     eg,
@@ -4792,12 +4945,7 @@ fn execute_full_call<'a>(
                         );
                     }
                 }
-                cleanup_frame_slots(call);
-                pop_vm_call_frame(eg, call);
-                return Ok(match throw_in_frame(eg, frame, err)? {
-                    ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                    ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-                });
+                return cleanup_named_call_and_throw(eg, frame, call, err);
             }
         }
     }
@@ -4850,14 +4998,7 @@ fn execute_full_call<'a>(
                 );
             }
         }
-        // SAFETY: `call` is the live pending frame owned by `frame`; every
-        // initialized send slot must be released before the frame is popped.
-        unsafe { cleanup_frame_slots(call) };
-        pop_vm_call_frame(eg, call);
-        return Ok(match throw_in_frame(eg, frame, error)? {
-            ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-            ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-        });
+        return cleanup_named_call_and_throw(eg, frame, call, error);
     }
 
     // Named arguments can leave holes even when the public count is correct.
@@ -4886,14 +5027,7 @@ fn execute_full_call<'a>(
                     i + 1
                 ),
             );
-            // SAFETY: `call` is still the live pending frame and all initialized
-            // slots must be released before removing it from the VM stack.
-            unsafe { cleanup_frame_slots(call) };
-            pop_vm_call_frame(eg, call);
-            return Ok(match throw_in_frame(eg, frame, error)? {
-                ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),
-                ThrowResult::Unhandled(t) => ColdResult::Unhandled(t),
-            });
+            return cleanup_named_call_and_throw(eg, frame, call, error);
         }
     }
 
@@ -5236,8 +5370,17 @@ fn execute_full_call<'a>(
             if internal_exception.is_none() && handler_result.is_ok() {
                 complete_object_construction(eg, call);
             }
+            // A handler has completed its effects, but its arguments are still
+            // real owners. Retire them before the caller observes the result;
+            // weak references and a throwing destructor use the same boundary.
+            eg.exception = internal_exception;
+            let retirement = retire_pending_call_owners(eg, call, frame);
+            let internal_exception = eg.exception.take();
+            // SAFETY: synchronous retirement keeps the completed internal
+            // activation allocated and clears its consumed owner slots.
             unsafe { cleanup_frame_slots(call) };
             pop_vm_call_frame(eg, call);
+            retirement?;
             if let Some(exc) = internal_exception {
                 return Ok(match throw_in_frame(eg, frame, exc)? {
                     ThrowResult::Handled(nf, no) => ColdResult::NewFrame(nf, no),

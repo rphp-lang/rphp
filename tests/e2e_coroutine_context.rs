@@ -93,7 +93,7 @@ struct CoroutineExecutionState {
     exception: Option<Value>,
     pending_named_variadic: rphp::runtime::PendingNamedVariadic,
     active_generator: Option<GeneratorRef>,
-    pending_invoke_this: Option<Value>,
+    pending_invoke_this: Option<rphp::runtime::PendingCallState>,
 }
 
 impl CoroutineExecutionState {

@@ -170,10 +170,15 @@ impl VmStack {
         // Zero-init CV slots beyond argument count. Small-frame TMPs are
         // protected by the heap bitmap and may retain arbitrary stack bytes;
         // large frames have no per-slot bitmap, so initialize their TMPs too.
-        // Arg-storage slots (0..storage_num_args) are left uninitialized —
-        // written by SendVal or hidden-value binding before DoFcall.
+        // Small frames exclude unwritten arguments through their heap bitmap.
+        // A wide pending call may be abandoned before every send completes;
+        // its scan must therefore see Undef in every unwritten argument too.
         // CVs beyond args are set to Undef (zeroed) so BindDefaultParam can check for Undef.
-        let zero_start = storage_num_args as usize;
+        let zero_start = if effective_cvs + num_temps > 64 {
+            0
+        } else {
+            storage_num_args as usize
+        };
         let zero_end = effective_cvs;
         let zero_count = zero_end.saturating_sub(zero_start);
 

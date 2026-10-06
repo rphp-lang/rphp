@@ -125,7 +125,11 @@ pub enum MacroStep {
     },
 
     /// Copy slot[src] to callee's CV[arg_idx]. Raw 16-byte copy, no clone ceremony.
-    SendValSlot { src_slot: u16, arg_idx: u32 },
+    SendValSlot {
+        src_slot: u16,
+        arg_idx: u32,
+        consume_owner: bool,
+    },
 
     /// DoFcall via FastScalar protocol. Macro yields here — callee runs in baseline.
     /// On resume, macro continues from next step. result_slot receives return value.
@@ -302,7 +306,11 @@ pub fn plan_hot_block(op_array: &OpArray, block_idx: usize) -> Option<MacroPlan>
             OpCode::SendVal => {
                 let src_slot = instr.op1;
                 let arg_idx = instr.op2 as u32;
-                steps.push(MacroStep::SendValSlot { src_slot, arg_idx });
+                steps.push(MacroStep::SendValSlot {
+                    src_slot,
+                    arg_idx,
+                    consume_owner: instr._pad & super::instruction::SEND_FLAG_CONSUME_TEMP != 0,
+                });
             }
 
             OpCode::DoFcall => {
@@ -507,7 +515,11 @@ pub unsafe fn execute_macro(
                 (*frame).call = call;
             }
 
-            MacroStep::SendValSlot { src_slot, arg_idx } => {
+            MacroStep::SendValSlot {
+                src_slot,
+                arg_idx,
+                consume_owner,
+            } => {
                 let call = (*frame).call;
                 debug_assert!(!call.is_null());
                 let src = slot_base.add(*src_slot as usize);
@@ -522,11 +534,17 @@ pub unsafe fn execute_macro(
                     std::ptr::copy_nonoverlapping(src, dst, 1);
                 } else {
                     // Heap/reference: must clone + mark callee frame
-                    let cloned = src_val.clone();
+                    let mut cloned = if *consume_owner {
+                        super::execute::take_call_argument_owner(&mut *frame, &mut *src, *src_slot)
+                    } else {
+                        src_val.clone()
+                    };
+                    if *consume_owner && (*(*call).func).fn_type == FunctionType::Internal {
+                        cloned.mark_internal_argument_snapshot();
+                    }
                     dst.write(cloned);
                     (*call).has_heap_slots = true;
-                    let total = (*call).num_cvs + (*call).num_temps;
-                    if total <= 64 {
+                    if *arg_idx < 64 {
                         (*call).heap_bitmap |= 1u64 << *arg_idx;
                     }
                 }

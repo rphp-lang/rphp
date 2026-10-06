@@ -1,0 +1,641 @@
+--- a/src/compiler/mod.rs
++++ b/src/compiler/mod.rs
+@@ -1582 +1581,0 @@
+-        borrowable_heap_args: 0,
+@@ -1617 +1615,0 @@
+-    function.borrowable_heap_args = build_borrowable_heap_args(&function);
+@@ -1810 +1807,0 @@
+-        borrowable_heap_args: 0,
+@@ -1845 +1841,0 @@
+-    function.borrowable_heap_args = build_borrowable_heap_args(&function);
+@@ -1847,111 +1842,0 @@
+-}
+-
+-/// Prove which ordinary heap parameters can use the same synchronous borrowed
+-/// ABI as `$this`. Rebinding and String/Array COW mutation stay canonical;
+-/// object property mutation remains eligible because PHP shares object identity.
+-fn build_borrowable_heap_args(function: &UserFunction) -> u64 {
+-    let common = &function.common;
+-    let public_args = common.sig.public_arity().min(64);
+-    if function.op_array.is_generator
+-        || function.op_array.num_cvs + function.op_array.num_temps > 64
+-        || !function.op_array.try_entries.is_empty()
+-    {
+-        return 0;
+-    }
+-
+-    let mut mask = if public_args == 64 {
+-        u64::MAX
+-    } else {
+-        (1u64 << public_args) - 1
+-    };
+-    mask &= !common.sig.ref_args;
+-
+-    let clear_cv = |mask: &mut u64, cv: u16| {
+-        let cv = cv as u32;
+-        if cv >= common.sig.this_offset && cv < common.sig.this_offset + public_args {
+-            *mask &= !(1u64 << (cv - common.sig.this_offset));
+-        }
+-    };
+-
+-    for instruction in &function.op_array.instructions {
+-        match instruction.opcode {
+-            // These opcodes may overwrite/drop the parameter variable itself.
+-            // Property mutation is intentionally absent: PHP objects have
+-            // shared identity, so `$arg->field = ...` is safe and observable.
+-            OpCode::AssignCv
+-            | OpCode::AssignConcat
+-            | OpCode::PreInc
+-            | OpCode::PreDec
+-            | OpCode::PostInc
+-            | OpCode::PostDec
+-            | OpCode::BindDefaultParam
+-            | OpCode::BindGlobal
+-            | OpCode::CheckStatic
+-            | OpCode::BindStatic => clear_cv(&mut mask, instruction.op1),
+-            // A local `=&` may expose either participating parameter through
+-            // the other CV for the rest of this frame.
+-            OpCode::BindCvRef => return 0,
+-            // A reference element promotes its source CV into an owned cell.
+-            // That cell can outlive this frame, so it must receive a real
+-            // argument owner rather than the caller's uncounted borrowed bits.
+-            // Ordinary by-value elements still only require destination COW.
+-            OpCode::AddArrayElement => {
+-                if instruction.op1_type == OpType::Cv {
+-                    clear_cv(&mut mask, instruction.op1);
+-                }
+-                if instruction.op2_type == OpType::Cv
+-                    && instruction._pad & ARRAY_ELEMENT_REFERENCE != 0
+-                {
+-                    clear_cv(&mut mask, instruction.op2);
+-                }
+-            }
+-            // In-place array operations require an owned Rc so make_mut can
+-            // observe the caller and detach according to PHP COW semantics.
+-            OpCode::AddArrayUnpack
+-            | OpCode::AddCallArgument
+-            | OpCode::AddCallUnpack
+-            | OpCode::AssignDim
+-            | OpCode::ArrayPushOp
+-            | OpCode::BindArrayAppendRef
+-            | OpCode::BindArrayDimRef
+-            | OpCode::UnsetDim
+-                if instruction.op1_type == OpType::Cv =>
+-            {
+-                clear_cv(&mut mask, instruction.op1)
+-            }
+-            // Argument unpacking promotes members of its source array (op2)
+-            // to reference cells in place and may detach it first.
+-            OpCode::AddCallUnpack if instruction.op2_type == OpType::Cv => {
+-                clear_cv(&mut mask, instruction.op2)
+-            }
+-            // Mutable/reference dimension traversal may detach the root or
+-            // publish a cell that a nested call mutates. A borrowed parameter
+-            // would then alias a caller-owned Rc without contributing an
+-            // owner, violating the COW decrement performed by the canonical
+-            // dimension opcode.
+-            OpCode::FetchDimR
+-                if instruction.op1_type == OpType::Cv
+-                    && instruction._pad & (FETCH_DIM_MUTABLE | FETCH_DIM_REFERENCE_SOURCE) != 0 =>
+-            {
+-                clear_cv(&mut mask, instruction.op1)
+-            }
+-            // Foreach target placement is intentionally conservative until
+-            // its destination CV is explicit in the ownership analysis.
+-            OpCode::ForeachNext | OpCode::ForeachNextPlain => return 0,
+-            // A runtime-selected symbol-table name may designate any
+-            // parameter CV. Mutation or reference binding therefore defeats
+-            // every per-parameter uniqueness proof in this frame.
+-            OpCode::AssignDynamicVar
+-            | OpCode::UnsetDynamicVar
+-            | OpCode::BindDynamicVarRef
+-            | OpCode::AssignDynamicVarRef
+-            | OpCode::BindDynamicGlobal => return 0,
+-            // A direct return transfers a Value out of the frame. Aliases made
+-            // through another CV are owned clones and remain eligible.
+-            OpCode::Return if instruction.op1_type == OpType::Cv => {
+-                clear_cv(&mut mask, instruction.op1)
+-            }
+-            _ => {}
+-        }
+-    }
+-    mask
+@@ -6737,19 +6621,0 @@
+-    // `$this` ownership is independent of the public argument ABI. Every
+-    // synchronous method executes while its caller still owns the receiver,
+-    // so the callee can borrow CV 0 unless it directly transfers that slot as
+-    // its return value. Generators are excluded because their frame outlives
+-    // the initiating call.
+-    let borrow_this = !is_static
+-        && !function.op_array.is_generator
+-        // Borrowed slots are represented by an intentionally-clear ownership
+-        // bit. Frames wider than the bitmap use full-scan cleanup and must own
+-        // `$this` conventionally.
+-        && function.op_array.num_cvs + function.op_array.num_temps <= 64
+-        && !function.op_array.instructions.iter().any(|instruction| {
+-            instruction.opcode == OpCode::Return
+-                && instruction.op1_type == OpType::Cv
+-                && instruction.op1 == 0
+-        });
+-    function.common.plan.set_borrow_this(borrow_this);
+-    function.borrowable_heap_args = build_borrowable_heap_args(&function);
+-
+@@ -6889 +6754,0 @@
+-    plan.set_borrow_this(source.common.plan.borrow_this());
+@@ -6941 +6805,0 @@
+-        borrowable_heap_args: 0,
+--- a/src/vm/execute/baseline_dispatch.rs
++++ b/src/vm/execute/baseline_dispatch.rs
+@@ -3532 +3531,0 @@
+-                                cleanup_pending_calls(eg, frame);
+@@ -6094 +6093 @@
+-                            cleanup_pending_calls(eg, frame);
++
+@@ -6119,12 +6117,0 @@
+-                // SAFETY: source is resolved from the live caller op-array and
+-                // dst is the compiler-sized argument slot in the pending call.
+-                let borrowed = !unsafe { (*source).is_undef() }
+-                    && opline.op2 as u32 >= common.sig.this_offset
+-                    && unsafe {
+-                        try_init_borrowed_heap_arg(
+-                            call,
+-                            opline.op2 as u32 - common.sig.this_offset,
+-                            source,
+-                            dst,
+-                        )
+-                    };
+@@ -6140,3 +6126,0 @@
+-                } else if borrowed {
+-                    // The destination deliberately remains outside the owned
+-                    // heap bitmap; cleanup must not decrement the caller's Rc.
+@@ -6229 +6213 @@
+-                        cleanup_pending_calls(eg, frame);
++
+@@ -6333 +6316,0 @@
+-                    let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
+@@ -6341 +6324 @@
+-                            unsafe { cleanup_pending_calls(eg, frame) };
++
+@@ -6355,8 +6338 @@
+-                    } else if !unsafe {
+-                        try_init_borrowed_heap_arg(
+-                            call,
+-                            param_idx,
+-                            source,
+-                            arg_slot as *mut Value,
+-                        )
+-                    } {
++                    } else {
+@@ -6505 +6481 @@
+-                        discard_pending_vm_call_frame(eg, call);
++                        discard_pending_vm_call_frame(eg, call, frame)?;
+@@ -6512 +6488,5 @@
+-                        discard_pending_vm_call_frame(eg, call);
++                        // Publish the failure before argument retirement so
++                        // destructor replacements retain the original chain.
++                        eg.exception = Some(exception);
++                        discard_pending_vm_call_frame(eg, call, frame)?;
++                        let exception = eg.exception.take().expect("discard retains its effective exception");
+@@ -6547 +6527 @@
+-                        discard_pending_vm_call_frame(eg, call);
++                        discard_pending_vm_call_frame(eg, call, frame)?;
+@@ -6554 +6534,5 @@
+-                        discard_pending_vm_call_frame(eg, call);
++                        // Publish the failure before argument retirement so
++                        // destructor replacements retain the original chain.
++                        eg.exception = Some(exception);
++                        discard_pending_vm_call_frame(eg, call, frame)?;
++                        let exception = eg.exception.take().expect("discard retains its effective exception");
+@@ -6751,0 +6736,6 @@
++                        // The completed handler relinquishes actual argument
++                        // owners before its frame disappears. A callback may
++                        // have replaced their caller-side PHP references.
++                        eg.exception = internal_exception;
++                        let retirement = run_return_frame_destructors(eg, call);
++                        let internal_exception = eg.exception.take();
+@@ -6753,0 +6744 @@
++                        retirement?;
+@@ -9311,3 +9301,0 @@
+-                    // SAFETY: this opcode executes only after an Init*Call
+-                    // established the pending activation inspected above.
+-                    unsafe { cleanup_pending_calls(eg, frame) };
+@@ -10804,5 +10792 @@
+-                            if common.plan.borrow_this() {
+-                                frame_set_borrowed_this(call, obj_val as *const Value);
+-                            } else {
+-                                frame_set_this(call, obj_val.clone());
+-                            }
++                            frame_set_this(call, obj_val.clone());
+--- a/src/vm/execute/baseline_dispatch_cold.rs
++++ b/src/vm/execute/baseline_dispatch_cold.rs
+@@ -235 +235 @@
+-                cleanup_pending_calls(eg, frame);
++
+--- a/src/vm/execute/baseline_entry.rs
++++ b/src/vm/execute/baseline_entry.rs
+@@ -2197,0 +2198,6 @@
++            if user.common.plan.needs_trait_class_scope() {
++                let trait_scope = eg.class_by_id(called_scope_class_id).map_or(0, |class| {
++                    trait_class_scope_for_dispatch(eg, func_ptr, &class.name)
++                });
++                initialize_trait_class_scope(eg, frame, func_ptr, trait_scope);
++            }
+@@ -2271,0 +2278,5 @@
++    } else if function_type == FunctionType::Internal {
++        let retirement = run_return_frame_destructors(eg, frame);
++        if execution_result.is_ok() {
++            execution_result = retirement;
++        }
+@@ -4269 +4280,3 @@
+-            cleanup_pending_calls(eg, frame);
++            if let Err(error) = cleanup_pending_calls(eg, frame) {
++                cleanup_error = Some(error);
++            }
+@@ -4435,0 +4449,3 @@
++        eg.exception = internal_exception;
++        let retirement = run_return_frame_destructors(eg, call);
++        let internal_exception = eg.exception.take();
+@@ -4437,0 +4454 @@
++        retirement?;
+--- a/src/vm/execute/baseline_object_calls.rs
++++ b/src/vm/execute/baseline_object_calls.rs
+@@ -6556,2 +6555,0 @@
+-            } else if common.plan.borrow_this() {
+-                frame_set_borrowed_this(call, obj_val as *const Value);
+@@ -7441,5 +7439 @@
+-            if direct_receiver.is_some() && common.plan.borrow_this() {
+-                frame_set_borrowed_this(call, receiver as *const Value);
+-            } else {
+-                frame_set_this(call, receiver.clone());
+-            }
++            frame_set_this(call, receiver.clone());
+@@ -7806,5 +7800 @@
+-            if common.plan.borrow_this() {
+-                frame_set_borrowed_this(call, (*frame).cv(0) as *const Value);
+-            } else {
+-                frame_set_this(call, receiver);
+-            }
++            frame_set_this(call, receiver);
+--- a/src/vm/execute/call_frames.rs
++++ b/src/vm/execute/call_frames.rs
+@@ -3344 +3344 @@
+-                            cleanup_pending_calls(eg, frame);
++                            cleanup_pending_calls(eg, frame)?;
+@@ -3487 +3487 @@
+-                cleanup_pending_calls(eg, frame);
++                cleanup_pending_calls(eg, frame)?;
+@@ -3982 +3982,6 @@
+-fn discard_pending_vm_call_frame(eg: &mut ExecutorGlobals, call: *mut ExecuteData) {
++fn discard_pending_vm_call_frame(
++    eg: &mut ExecutorGlobals,
++    call: *mut ExecuteData,
++    logical_caller: *mut ExecuteData,
++) -> Result<(), VmError> {
++    let result = retire_pending_call_owners(eg, call, logical_caller);
+@@ -3987,0 +3993 @@
++    result
+@@ -4198 +4204,6 @@
+-unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteData) {
++///
++/// # Safety
++/// `frame` and its pending call chain must remain live until cleanup completes.
++/// Each pending activation is owned exclusively by that chain and may be popped
++/// once; its writable argument slots obey the normal frame ownership metadata.
++unsafe fn cleanup_pending_calls(eg: &mut ExecutorGlobals, frame: *mut ExecuteData) -> Result<(), VmError> {
+@@ -4200,0 +4212 @@
++    let mut result = Ok(());
+@@ -4209,0 +4222,3 @@
++        if result.is_ok() {
++            result = retire_pending_call_owners(eg, call, frame);
++        }
+@@ -4215,0 +4231,45 @@
++    result
++}
++
++/// A pending call owns its argument values even though its body
++/// never ran. Retire those actual owners at the caller's instruction boundary;
++/// a destructor may replace the exception that abandoned the call. Borrowed
++/// prefix slots are excluded by the same ownership bitmap as frame cleanup.
++#[cold]
++fn retire_pending_call_owners(
++    eg: &mut ExecutorGlobals,
++    call: *mut ExecuteData,
++    logical_caller: *mut ExecuteData,
++) -> Result<(), VmError> {
++    let mut pending = eg.exception.take();
++    // SAFETY: only pending-call cleanup passes its still-live activation.
++    // Owned prefix bits and initialized tail Values identify readable slots.
++    // Detach each owner and clear its bit before re-entry; the pending frame
++    // and its caller remain allocated until every callback has returned.
++    let result = unsafe {
++        (|| {
++            if !(*call).has_heap_slots {
++                return Ok(());
++            }
++            let total = ((*call).num_cvs + (*call).num_temps) as usize;
++            let base = (call as *mut Value).add(CALL_FRAME_SLOTS);
++            let mut remaining = (*call).owned_heap_bitmap();
++            while remaining != 0 {
++                let index = remaining.trailing_zeros();
++                let owner = std::mem::replace(&mut *base.add(index as usize), Value::undef());
++                (*call).heap_bitmap &= !(1u64 << index);
++                retire_owned_frame_value(eg, owner, logical_caller, &mut pending, CallbackReturnPolicy::Function)?;
++                let later = (u64::MAX << index) << 1;
++                remaining = (*call).owned_heap_bitmap() & later;
++            }
++            for index in 64..total {
++                if (*base.add(index)).needs_cleanup() {
++                    let owner = std::mem::replace(&mut *base.add(index), Value::undef());
++                    retire_owned_frame_value(eg, owner, logical_caller, &mut pending, CallbackReturnPolicy::Function)?;
++                }
++            }
++            Ok(())
++        })()
++    };
++    eg.exception = pending;
++    result
+@@ -4241,0 +4302,7 @@
++    if let Some(pending) = eg.exception.take()
++        && pending.object_identity() != err.object_identity()
++    {
++        append_replaced_exception(&err, &pending, eg);
++    }
++    eg.exception = Some(err);
++    let result = retire_pending_call_owners(eg, call, frame);
+@@ -4243,0 +4311,2 @@
++    result?;
++    let err = eg.exception.take().expect("failed call retains its effective exception");
+@@ -5233,0 +5303,3 @@
++            eg.exception = Some(thrown);
++            cleanup_pending_calls(eg, frame)?;
++            thrown = eg.exception.take().expect("throw retains its effective exception");
+@@ -5324 +5396 @@
+-                cleanup_pending_calls(eg, frame);
++                cleanup_pending_calls(eg, frame)?;
+@@ -5365 +5437 @@
+-            cleanup_pending_calls(eg, frame);
++            cleanup_pending_calls(eg, frame)?;
+@@ -5454,0 +5527,6 @@
++        // Pending argument destructors can select a different catch/finally
++        // path. Preserve the original exception before retiring their owners.
++        eg.exception = Some(thrown);
++        // SAFETY: search_frame is the live activation currently being unwound.
++        unsafe { cleanup_pending_calls(eg, search_frame)? };
++        thrown = eg.exception.take().expect("throw retains its effective exception");
+@@ -5640 +5718 @@
+-                        cleanup_pending_calls(eg, frame);
++                        cleanup_pending_calls(eg, frame)?;
+@@ -5651 +5729 @@
+-                    cleanup_pending_calls(eg, search_frame);
++                    cleanup_pending_calls(eg, search_frame)?;
+@@ -5687 +5765 @@
+-                        cleanup_pending_calls(eg, frame);
++                        cleanup_pending_calls(eg, frame)?;
+@@ -5693 +5771,3 @@
+-                unsafe { cleanup_pending_calls(eg, search_frame) };
++                // SAFETY: search_frame is the live unwind activation and owns
++                // every still-linked pending call being consumed here.
++                unsafe { cleanup_pending_calls(eg, search_frame)? };
+@@ -5745 +5825 @@
+-            cleanup_pending_calls(eg, search_frame);
++            cleanup_pending_calls(eg, search_frame)?;
+--- a/src/vm/execute/frame_runtime.rs
++++ b/src/vm/execute/frame_runtime.rs
+@@ -599,36 +598,0 @@
+-/// Borrow `$this` from the caller for the lifetime of a synchronous method
+-/// frame. The slot deliberately stays out of heap cleanup bookkeeping.
+-///
+-/// SAFETY: the caller's source Value must outlive `frame`, and the compiled
+-/// call plan must prove that CV 0 is never returned directly.
+-#[inline(always)]
+-unsafe fn frame_set_borrowed_this(frame: *mut ExecuteData, val: *const Value) {
+-    let ptr = (frame as *mut Value).add(CALL_FRAME_SLOTS);
+-    Value::raw_copy(val, ptr);
+-}
+-
+-/// Initialize a by-value heap parameter as a synchronous borrow. The caller
+-/// keeps the owning Value alive until DoFcall returns, and the callee's proof
+-/// excludes direct transfer, rebinding and String/Array COW mutation.
+-#[inline(always)]
+-unsafe fn try_init_borrowed_heap_arg(
+-    call: *mut ExecuteData,
+-    public_param: u32,
+-    source: *const Value,
+-    destination: *mut Value,
+-) -> bool {
+-    let common = &*(*call).func;
+-    if common.fn_type != FunctionType::User
+-        || public_param >= 64
+-        || common.sig.is_param_by_ref(public_param)
+-    {
+-        return false;
+-    }
+-    let user = &*((*call).func as *const UserFunction);
+-    if user.borrowable_heap_args & (1u64 << public_param) == 0 || !(*source).needs_cleanup() {
+-        return false;
+-    }
+-    Value::raw_copy(source, destination);
+-    true
+-}
+-
+--- a/src/vm/execute.rs
++++ b/src/vm/execute.rs
+@@ -5413,0 +5414,3 @@
++            eg.exception = internal_exception;
++            let retirement = run_return_frame_destructors(eg, call);
++            let internal_exception = eg.exception.take();
+@@ -5415,0 +5419 @@
++            retirement?;
+--- a/src/vm/function.rs
++++ b/src/vm/function.rs
+@@ -1606 +1605,0 @@
+-    const BORROW_THIS: u8 = 1;
+@@ -1614,13 +1612,0 @@
+-
+-    /// `$this` may be copied into a nested method frame without incrementing
+-    /// its Rc. The caller owns the object for the entire synchronous call and
+-    /// the method has no direct `return $this` path.
+-    #[inline(always)]
+-    pub fn borrow_this(&self) -> bool {
+-        self.flags & Self::BORROW_THIS != 0
+-    }
+-
+-    #[inline]
+-    pub fn set_borrow_this(&mut self, enabled: bool) {
+-        self.flags = (self.flags & !Self::BORROW_THIS) | u8::from(enabled) * Self::BORROW_THIS;
+-    }
+@@ -2055,3 +2040,0 @@
+-    /// Public by-value parameters that may borrow an immutable heap Value from
+-    /// their synchronous caller. Indexed by public parameter position.
+-    pub borrowable_heap_args: u64,
+@@ -2145 +2128 @@
+-                > std::mem::offset_of!(UserFunction, borrowable_heap_args)
++                > std::mem::offset_of!(UserFunction, trait_class_scope_cache)
+--- a/src/vm/hot.rs
++++ b/src/vm/hot.rs
+@@ -1690,9 +1690,3 @@
+-                    if func_common.plan.borrow_this() {
+-                        // The caller owns the object for the complete nested
+-                        // call; do not add this borrowed slot to cleanup.
+-                        Value::raw_copy(obj_val as *const Value, this_ptr);
+-                    } else {
+-                        this_ptr.write(obj_val.clone());
+-                        (*call).has_heap_slots = true;
+-                        (*call).heap_bitmap |= 1u64;
+-                    }
++                    this_ptr.write(obj_val.clone());
++                    (*call).has_heap_slots = true;
++                    (*call).heap_bitmap |= 1u64;
+--- /dev/null
++++ b/tests/e2e_call_argument_ownership.rs
+@@ -0,0 +1,140 @@
++mod common;
++use common::run_php;
++
++#[test]
++fn value_arguments_survive_replacement_of_the_callers_reference() {
++    assert_eq!(
++        run_php(
++            r#"<?php
++class OwnedArgumentSnapshot { public $value = 'old'; public function __destruct() { echo 'drop|'; } }
++function readOwnedArgument($value, $replace) { $replace(); echo $value->value, '|'; }
++$source = new OwnedArgumentSnapshot;
++$alias =& $source;
++readOwnedArgument($source, function () use (&$source) { $source = null; });
++echo 'after';
++"#
++        ),
++        "old|drop|after"
++    );
++}
++
++#[test]
++fn already_sent_arguments_survive_later_argument_evaluation() {
++    assert_eq!(
++        run_php(
++            r#"<?php
++class OwnedPendingArgument { public $value = 'old'; public function __destruct() { echo 'drop|'; } }
++function readPendingArgument($value, $unused) { echo $value->value, '|'; }
++function replacePendingArgument(&$source) { $source = null; return 0; }
++$source = new OwnedPendingArgument;
++$alias =& $source;
++readPendingArgument($source, replacePendingArgument($source));
++echo 'after';
++"#
++        ),
++        "old|drop|after"
++    );
++}
++
++#[test]
++fn method_receivers_survive_callback_and_later_argument_replacement() {
++    assert_eq!(
++        run_php(
++            r#"<?php
++class OwnedReceiverSnapshot {
++    public $value = 'old';
++    public function __destruct() { echo 'drop|'; }
++    public function callback($replace) { $replace(); echo $this->value, '|'; }
++    public function later($unused) { echo $this->value, '|'; }
++}
++function replacePendingReceiver(&$source) { $source = null; return 0; }
++$source = new OwnedReceiverSnapshot;
++$alias =& $source;
++$source->callback(function () use (&$source) { $source = null; });
++echo 'after|';
++$source = new OwnedReceiverSnapshot;
++$source->later(replacePendingReceiver($source));
++echo 'after';
++"#
++        ),
++        "old|drop|after|old|drop|after"
++    );
++}
++
++#[test]
++fn array_argument_snapshots_preserve_copy_on_write() {
++    assert_eq!(
++        run_php(
++            r#"<?php
++function readOwnedArray($value, $replace) { $replace(); echo $value['key'], '|'; }
++$source = ['key' => 'old'];
++$alias =& $source;
++readOwnedArray($source, function () use (&$source) { $source['key'] = 'new'; });
++echo $source['key'];
++"#
++        ),
++        "old|new"
++    );
++}
++
++#[test]
++fn abandoned_argument_owners_run_destructors_before_catch_selection() {
++    assert_eq!(
++        run_php(
++            r#"<?php
++class PendingOwnedArgument { function __destruct() { echo 'drop|'; } }
++function pendingOwnedTarget($value, $unused) { echo 'entered|'; }
++function pendingOwnedFailure(&$source) { $source = null; throw new Exception('caught'); }
++$source = new PendingOwnedArgument; $alias =& $source;
++try { pendingOwnedTarget($source, pendingOwnedFailure($source)); } catch (Exception $e) { echo $e->getMessage(), '|'; }
++echo 'after';
++"#
++        ),
++        "drop|caught|after"
++    );
++}
++
++#[test]
++fn abandoned_argument_destructor_can_replace_the_original_exception() {
++    assert_eq!(
++        run_php(
++            r#"<?php
++class PendingOwnedThrow { function __destruct() { echo 'drop|'; throw new RuntimeException('replacement'); } }
++function pendingOwnedThrowTarget($value, $unused) { echo 'entered|'; }
++function pendingOwnedThrowFailure(&$source) { $source = null; throw new Exception('original'); }
++$source = new PendingOwnedThrow; $alias =& $source;
++try { pendingOwnedThrowTarget($source, pendingOwnedThrowFailure($source)); } catch (Exception $e) { echo $e->getMessage(), '|'; }
++echo 'after';
++"#
++        ),
++        "drop|replacement|after"
++    );
++}
++
++#[test]
++fn diagnostic_failure_preserves_destructor_exception_and_previous_chain() {
++    let source = r#"<?php
++class DiagnosticArgumentOwner {
++    function __destruct() { echo 'drop|'; throw new RuntimeException('replacement'); }
++}
++#[OWNER_ATTRIBUTE]
++function diagnosticArgumentTarget($owner) { echo 'entered|'; return 0; }
++$source = new DiagnosticArgumentOwner; $alias =& $source;
++set_error_handler(function () use (&$source) { $source = null; throw new Exception('original'); });
++try { diagnosticArgumentTarget($source); }
++catch (Throwable $error) {
++    echo get_class($error), ':', $error->getMessage(), '|';
++    $previous = $error->getPrevious();
++    echo $previous === null ? 'none' : $previous->getMessage();
++}
++restore_error_handler();
++echo '|after';
++"#;
++    for attribute in ["Deprecated", "NoDiscard"] {
++        assert_eq!(
++            run_php(&source.replace("OWNER_ATTRIBUTE", attribute)),
++            "drop|RuntimeException:replacement|original|after",
++            "{attribute} must retire the pending owner's exception at the diagnostic boundary"
++        );
++    }
++}
+--- a/tests/e2e_hot_tier/promotion_and_scalar_plans.rs
++++ b/tests/e2e_hot_tier/promotion_and_scalar_plans.rs
+@@ -395 +394,0 @@
+-    assert!(method.common.plan.borrow_this());
+@@ -427 +425,0 @@
+-    assert!(!method.common.plan.borrow_this());
+--- a/tests/e2e_type_hints/object_plans.rs
++++ b/tests/e2e_type_hints/object_plans.rs
+@@ -34 +33,0 @@
+-    assert!(consume.common.plan.borrow_this());

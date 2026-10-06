@@ -1,0 +1,11 @@
+parent|child|parent|recomposed|magic:value
+parent|child|parent|recomposed|magic:value
+parent|child|parent|recomposed|magic:value
+parent|child|parent|recomposed|magic:value
+[10,1,2,3,4]|[20,1,2,3,4]|[10,1,2,3,4,99]
+parent|child|parent
+parent|child|parent
+parent|child|parent
+parent|child
+parent|child
+parent|child

@@ -1,0 +1,125 @@
+{
+  "accepted": false,
+  "baseline_commit": "d05dd37b",
+  "candidate_source_sha256": "71cdbb062554ba2c3c24fa215614b0615cde52ebffd16052d16748570ffe1776",
+  "decision": "Reject as a performance migration: only 0.599228% ordinary analysis instruction improvement. Preserve a separate baseline compatibility finding; no PGO or broad feature gate run and no runtime change accepted.",
+  "ordinary_native_selector": {
+    "complete": true,
+    "purpose": "exploratory instruction feedback, not an acceptance gate",
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 2,
+    "warmup": "none; fresh TMPDIR per run",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "outlier_policy": "retain every valid output-checked sample",
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 9.363460421998752,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.194932461,
+        "instructions": 74651097901,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 9.25334376799583,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.067201853,
+        "instructions": 74204560592,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 9.408639872010099,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.240038872,
+        "instructions": 74190002343,
+        "counter_running_percent": 100.0,
+        "round": 1
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 9.283634772989899,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 7.100567818,
+        "instructions": 74638047843,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "binaries": {
+      "baseline": "e99eeb48edad7ed88ac7318449d462f652b0ba15e44a4149c5ebcbe08dfba584",
+      "candidate": "8b9bc47af175a252546278f531c9c174646d1abc3479c595e5ed7c089fc2b5ee",
+      "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "inputs": [
+      "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.371475582011044,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.941098928,
+      "instructions": 10337789103,
+      "counter_running_percent": 100.0
+    },
+    "medians": {
+      "baseline": 74644572872.0,
+      "candidate": 74197281467.5
+    },
+    "delta_percent": {
+      "baseline": 0.0,
+      "candidate": -0.5992282992455578
+    },
+    "memory_peak_bytes": 666963968,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "focused_test_executions": 4,
+  "supported_differential_cases": 4,
+  "supported_differential_observations": 12,
+  "canonical_build": "dev-fast with vm-stats, direct/composed/deferred/getter plans and quick loops disabled",
+  "canonical_binary_sha256": "94e9edeaf60aaa7483d256ec9319dcd491fdc97e52926a58f5a8aad0cc454208",
+  "preexisting_unsupported_boundary": {
+    "case": "Fiber suspension while an abandoned pending argument is being retired",
+    "php_exit": 0,
+    "rphp_exit": 255,
+    "php_pass": false
+  },
+  "full_feature_matrix": false,
+  "pgo_cycle": false,
+  "runtime_restored_to_head": true,
+  "accepted_pgo_scorecard_unchanged": true
+}

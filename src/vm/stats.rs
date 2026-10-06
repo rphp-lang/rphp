@@ -186,6 +186,14 @@ mod inner {
     static RESOLVED_VIRTUAL_AGGREGATE_GUARD_FALLBACKS: AtomicU64 = AtomicU64::new(0);
     static OPCODE_COUNTS: [AtomicU64; OPCODE_KIND_COUNT] =
         [const { AtomicU64::new(0) }; OPCODE_KIND_COUNT];
+    static STATEMENT_TEMP_RANGES: [AtomicU64; 2] = [const { AtomicU64::new(0) }; 2];
+    static STATEMENT_TEMP_SINGLE_OWNERS: [AtomicU64; 4 * VALUE_KIND_COUNT] =
+        [const { AtomicU64::new(0) }; 4 * VALUE_KIND_COUNT];
+    static STATEMENT_TEMP_PREFIX_SINGLE_OWNERS: [AtomicU64; 4 * VALUE_KIND_COUNT] =
+        [const { AtomicU64::new(0) }; 4 * VALUE_KIND_COUNT];
+    static STATEMENT_TEMP_PREFIX_SHARED_OWNERS: [AtomicU64; 4 * VALUE_KIND_COUNT] =
+        [const { AtomicU64::new(0) }; 4 * VALUE_KIND_COUNT];
+    static STATEMENT_TEMP_MULTIPLE_OWNERS: AtomicU64 = AtomicU64::new(0);
 
     #[inline]
     pub fn configure_from_env() {
@@ -273,6 +281,19 @@ mod inner {
         for counter in &OPCODE_COUNTS {
             counter.store(0, Ordering::Relaxed);
         }
+        for counter in &STATEMENT_TEMP_RANGES {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &STATEMENT_TEMP_SINGLE_OWNERS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &STATEMENT_TEMP_PREFIX_SINGLE_OWNERS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        for counter in &STATEMENT_TEMP_PREFIX_SHARED_OWNERS {
+            counter.store(0, Ordering::Relaxed);
+        }
+        STATEMENT_TEMP_MULTIPLE_OWNERS.store(0, Ordering::Relaxed);
     }
 
     #[inline]
@@ -810,6 +831,8 @@ mod inner {
             223 => Some("BitwiseXor_LongLong"),
             224 => Some("BitwiseAnd_LongLong"),
             225 => Some("BitwiseOr_LongLong"),
+            227 => Some("JmpZ_Identical"),
+            228 => Some("JmpNZ_Identical"),
             _ => None,
         }
     }
@@ -849,6 +872,28 @@ mod inner {
             0 => "no_typed_span",
             1 => "no_dense_kernel",
             _ => "unknown",
+        }
+    }
+
+    pub fn record_statement_temp_owners(
+        prefix: bool,
+        mode: u8,
+        count: usize,
+        kind: usize,
+        shared: bool,
+    ) {
+        STATEMENT_TEMP_RANGES[usize::from(prefix)].fetch_add(1, Ordering::Relaxed);
+        if count == 1 && kind < VALUE_KIND_COUNT && mode < 4 {
+            let index = mode as usize * VALUE_KIND_COUNT + kind;
+            STATEMENT_TEMP_SINGLE_OWNERS[index].fetch_add(1, Ordering::Relaxed);
+            if prefix {
+                STATEMENT_TEMP_PREFIX_SINGLE_OWNERS[index].fetch_add(1, Ordering::Relaxed);
+                if shared {
+                    STATEMENT_TEMP_PREFIX_SHARED_OWNERS[index].fetch_add(1, Ordering::Relaxed);
+                }
+            }
+        } else if count > 1 {
+            STATEMENT_TEMP_MULTIPLE_OWNERS.fetch_add(1, Ordering::Relaxed);
         }
     }
 
@@ -1218,6 +1263,51 @@ mod inner {
             "resolved_virtual_aggregate_guard_fallbacks={}",
             RESOLVED_VIRTUAL_AGGREGATE_GUARD_FALLBACKS.load(Ordering::Relaxed)
         );
+
+        let _ = writeln!(
+            err,
+            "statement_temp_prefix_ranges={}",
+            STATEMENT_TEMP_RANGES[1].load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "statement_temp_tail_ranges={}",
+            STATEMENT_TEMP_RANGES[0].load(Ordering::Relaxed)
+        );
+        let _ = writeln!(
+            err,
+            "statement_temp_multiple_owners={}",
+            STATEMENT_TEMP_MULTIPLE_OWNERS.load(Ordering::Relaxed)
+        );
+        for mode in 0..4 {
+            for kind in 0..VALUE_KIND_COUNT {
+                let index = mode * VALUE_KIND_COUNT + kind;
+                let count = STATEMENT_TEMP_SINGLE_OWNERS[index].load(Ordering::Relaxed);
+                if count != 0 {
+                    let _ = writeln!(
+                        err,
+                        "statement_temp_single_{}_mode_{}={}",
+                        value_kind_name(kind),
+                        mode,
+                        count
+                    );
+                    let _ = writeln!(
+                        err,
+                        "statement_temp_prefix_single_{}_mode_{}={}",
+                        value_kind_name(kind),
+                        mode,
+                        STATEMENT_TEMP_PREFIX_SINGLE_OWNERS[index].load(Ordering::Relaxed)
+                    );
+                    let _ = writeln!(
+                        err,
+                        "statement_temp_prefix_shared_{}_mode_{}={}",
+                        value_kind_name(kind),
+                        mode,
+                        STATEMENT_TEMP_PREFIX_SHARED_OWNERS[index].load(Ordering::Relaxed)
+                    );
+                }
+            }
+        }
 
         let mut opcodes = Vec::new();
         for (idx, counter) in OPCODE_COUNTS.iter().enumerate() {
@@ -1683,6 +1773,18 @@ pub fn inc_opcode(opcode: usize) {
 #[cfg(not(feature = "vm-stats"))]
 #[inline(always)]
 pub fn inc_opcode(_opcode: usize) {}
+
+#[cfg(feature = "vm-stats")]
+#[inline(always)]
+pub fn record_statement_temp_owners(
+    prefix: bool,
+    mode: u8,
+    count: usize,
+    kind: usize,
+    shared: bool,
+) {
+    inner::record_statement_temp_owners(prefix, mode, count, kind, shared);
+}
 
 #[cfg(feature = "vm-stats")]
 #[inline(always)]

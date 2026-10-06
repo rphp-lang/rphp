@@ -1,0 +1,646 @@
+--- a/src/compiler/mod.rs
++++ b/src/compiler/mod.rs
+@@ -987,0 +988,31 @@
++        }
++
++        // General value/ownership graphs attach to original read entry points.
++        // Every graph is bounded by operations, not by unrelated frame width.
++        // The suffix stores independent programs; canonical indexed blocks and
++        // established loop plans retain their identities and priorities.
++        for entry_ip in 0..self.instructions.len() {
++            let entry = self.instructions[entry_ip];
++            if closed_region_ip[entry_ip]
++                || !matches!(entry.opcode, OpCode::FetchObjR | OpCode::FetchDimR)
++                || entry._pad != 0
++                || entry.extended_value != 0
++            {
++                continue;
++            }
++            let Some(plan) = crate::vm::planner::build_value_graph(self, entry_ip) else {
++                continue;
++            };
++            let index = self.block_plans.len();
++            let Some(token) = u32::try_from(index)
++                .ok()
++                .and_then(|index| index.checked_add(1))
++            else {
++                break;
++            };
++            self.block_plans.push(BlockPlan::Macro(plan));
++            self.block_counters
++                .resize_with(self.block_plans.len(), || Cell::new(0));
++            self.instructions[entry_ip].extended_value = token;
++            #[cfg(feature = "vm-stats")]
++            crate::vm::stats::inc_value_region_admitted();
+--- a/src/vm/execute/baseline_dispatch.rs
++++ b/src/vm/execute/baseline_dispatch.rs
+@@ -7653 +7653 @@
+-                        execute_quick_region_entry(eg, frame, op_array, opline)?
++                        execute_quick_region_entry(eg, frame, op_array, opline, &mut tick)?
+@@ -9815,0 +9816,4 @@
++                #[cfg(feature = "quick-loops")]
++                if opline._pad == 0 && opline.extended_value != 0 && unsafe {
++                    execute_quick_region_entry(eg, frame, op_array, opline, &mut tick)?
++                } { continue 'vm; }
+--- a/src/vm/execute/baseline_object_calls.rs
++++ b/src/vm/execute/baseline_object_calls.rs
+@@ -1475 +1475 @@
+-enum CachedFetchObjResult {
++pub(super) enum CachedFetchObjResult {
+@@ -1913 +1913 @@
+-fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
++pub(super) fn try_cached_fetch_obj_r<const RUNTIME_NAME: bool, const FUNC_ARG: bool>(
+--- a/src/vm/execute/frame_runtime.rs
++++ b/src/vm/execute/frame_runtime.rs
+@@ -175 +175 @@
+-unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
++pub(super) unsafe fn frame_tmp_set(frame: *mut ExecuteData, ptr: *mut Value, val: Value) {
+@@ -343 +343 @@
+-fn move_heap_source_to_primitive_cv(
++pub(super) fn move_heap_source_to_primitive_cv(
+@@ -383 +383 @@
+-unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) {
++pub(super) unsafe fn frame_tmp_set_bool(frame: *mut ExecuteData, ptr: *mut Value, v: bool) {
+--- a/src/vm/execute/quick_array_access.rs
++++ b/src/vm/execute/quick_array_access.rs
+@@ -7 +7 @@
+-unsafe fn cached_string_array_value<'a>(
++pub(super) unsafe fn cached_string_array_value<'a>(
+--- a/src/vm/execute.rs
++++ b/src/vm/execute.rs
+@@ -3495 +3495 @@
+-    eg: &ExecutorGlobals,
++    eg: &mut ExecutorGlobals,
+@@ -3498,0 +3499 @@
++    tick: &mut u8,
+@@ -3500,0 +3502,48 @@
++    if let Some(super::planner::BlockPlan::Macro(plan)) = op_array.block_plans.get(block_idx) {
++        let ip =
++            (opline as *const Instruction).offset_from(op_array.instructions.as_ptr()) as usize;
++        if plan.start_ip as usize != ip
++            || eg.memory_budget.is_limited()
++            || eg.exception.is_some()
++            || (*frame).num_cvs != op_array.num_cvs
++            || (*frame).num_temps < op_array.num_temps
++            || usize::from(*tick) + plan.steps.len().saturating_sub(1) >= 256
++        {
++            return Ok(false);
++        }
++        let hot_counter = &op_array.block_counters[block_idx];
++        let count = hot_counter.get();
++        if count == QUICK_LOOP_DISABLED {
++            return Ok(false);
++        }
++        if count % QUICK_LOOP_COUNTER_STRIDE < QUICK_LOOP_HOT_THRESHOLD {
++            hot_counter.set(count + 1);
++            return Ok(false);
++        }
++        let super::planner::MacroResult::ValueExit {
++            resume_ip,
++            operations,
++        } = super::planner::execute_macro(eg, frame, op_array, plan, 0)
++        else {
++            return Ok(false);
++        };
++        if operations == 0 {
++            stats::inc_value_region_guard_failed();
++            let failures = count / QUICK_LOOP_COUNTER_STRIDE + 1;
++            hot_counter.set(if failures >= QUICK_LOOP_FAILURE_LIMIT {
++                QUICK_LOOP_DISABLED
++            } else {
++                failures * QUICK_LOOP_COUNTER_STRIDE
++            });
++            return Ok(false);
++        }
++        *tick = tick.wrapping_add((operations - 1) as u8);
++        (*frame).opline = op_array.instructions.as_ptr().add(resume_ip as usize);
++        hot_counter.set(QUICK_LOOP_HOT_THRESHOLD);
++        if resume_ip as usize == plan.end_ip as usize + 1 {
++            stats::inc_value_region_completed();
++        } else {
++            stats::inc_value_region_partial();
++        }
++        return Ok(true);
++    }
+@@ -5440 +5489 @@
+-enum ArrayKeyRef<'a> {
++pub(super) enum ArrayKeyRef<'a> {
+@@ -5475 +5524 @@
+-fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, ArrayKeyError> {
++pub(super) fn value_to_array_key_ref(val: &Value) -> Result<ArrayKeyRef<'_>, ArrayKeyError> {
+--- a/src/vm/instruction.rs
++++ b/src/vm/instruction.rs
+@@ -629 +629 @@
+-const KNOWN_RESULT_TYPE_MASK: u16 = 0b111 << KNOWN_RESULT_TYPE_SHIFT;
++pub(crate) const KNOWN_RESULT_TYPE_MASK: u16 = 0b111 << KNOWN_RESULT_TYPE_SHIFT;
+--- a/src/vm/planner.rs
++++ b/src/vm/planner.rs
+@@ -83,0 +84,41 @@
++    // General value nodes retain canonical instruction identities so shared
++    // cache and lifecycle operations use the same metadata as interpretation.
++    LoadProperty {
++        ip: u32,
++    },
++    LoadDimension {
++        ip: u32,
++    },
++    CopyValue {
++        ip: u32,
++    },
++    LongBinary {
++        ip: u32,
++        kind: OpCode,
++    },
++    LongCompare {
++        ip: u32,
++        kind: OpCode,
++    },
++    IdentityValue {
++        ip: u32,
++        invert: bool,
++    },
++    NotValue {
++        ip: u32,
++    },
++    IssetValue {
++        ip: u32,
++    },
++    BranchValue {
++        ip: u32,
++        on_true: bool,
++    },
++    IdentityBranch {
++        ip: u32,
++        on_true: bool,
++    },
++    ReleaseValues {
++        ip: u32,
++    },
++
+@@ -85 +126,3 @@
+-    GuardLong { slot: u16 },
++    GuardLong {
++        slot: u16,
++    },
+@@ -102 +145,4 @@
+-    JmpZBool { cond_slot: u16, target_ip: u32 },
++    JmpZBool {
++        cond_slot: u16,
++        target_ip: u32,
++    },
+@@ -119 +165,4 @@
+-    ReturnSlot { slot: u16, slot_type: OpType },
++    ReturnSlot {
++        slot: u16,
++        slot_type: OpType,
++    },
+@@ -128 +177,4 @@
+-    SendValSlot { src_slot: u16, arg_idx: u32 },
++    SendValSlot {
++        src_slot: u16,
++        arg_idx: u32,
++    },
+@@ -132 +184,3 @@
+-    DoFcallFastScalar { result_slot: u16 },
++    DoFcallFastScalar {
++        result_slot: u16,
++    },
+@@ -136,0 +191,3 @@
++    /// Complete value prefix, already published in canonical frame storage.
++    /// Resume never replays a completed read, write or lifetime boundary.
++    ValueExit { resume_ip: u32, operations: u16 },
+@@ -384,0 +442,37 @@
++    let mut value_operations = 0u16;
++    macro_rules! value_exit {
++        ($resume:expr) => {
++            return MacroResult::ValueExit {
++                resume_ip: $resume as u32,
++                operations: value_operations,
++            }
++        };
++    }
++    macro_rules! value_completed {
++        () => {{
++            if value_operations == 0 {
++                super::stats::inc_value_region_entered();
++            }
++            value_operations += 1;
++            super::stats::inc_value_region_operation();
++        }};
++    }
++    macro_rules! fresh_value_result {
++        ($instruction:expr, $ip:expr) => {{
++            let instruction = $instruction;
++            let index = instruction.result as usize;
++            // The allocated prefix may contain uninitialized scalar TMP bytes.
++            // Only its heap bit is read; initialized wide slots retain the
++            // canonical tail-ownership predicate. The builder bounds indices.
++            if (*frame).has_heap_slots
++                && if index < 64 {
++                    (*frame).heap_bitmap & (1u64 << index) != 0
++                } else {
++                    (*slot_base.add(index)).needs_cleanup()
++                }
++            {
++                value_exit!($ip);
++            }
++            slot_base.add(index)
++        }};
++    }
+@@ -388,0 +483,221 @@
++            MacroStep::LoadProperty { ip } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let _result = fresh_value_result!(instruction, *ip);
++                let outcome = if instruction.op2_type == OpType::Const {
++                    super::execute::try_cached_fetch_obj_r::<false, false>(
++                        eg,
++                        frame,
++                        op_array,
++                        instruction,
++                    )
++                } else {
++                    super::execute::try_cached_fetch_obj_r::<true, false>(
++                        eg,
++                        frame,
++                        op_array,
++                        instruction,
++                    )
++                };
++                match outcome {
++                    super::execute::CachedFetchObjResult::Miss => value_exit!(*ip),
++                    super::execute::CachedFetchObjResult::Complete => value_completed!(),
++                    super::execute::CachedFetchObjResult::CompleteAndSkipNext => {
++                        value_completed!();
++                        value_exit!(*ip + 2);
++                    }
++                }
++            }
++            MacroStep::LoadDimension { ip } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let result = fresh_value_result!(instruction, *ip);
++                let root =
++                    (&*(*frame).get_op_ptr(instruction.op1.into(), instruction.op1_type, op_array))
++                        .dereferenced();
++                let Some(array) = root.as_array() else {
++                    value_exit!(*ip);
++                };
++                let key =
++                    &*(*frame).get_op_ptr(instruction.op2.into(), instruction.op2_type, op_array);
++                let normalized = if key.value_type() == ValueType::String {
++                    super::execute::array_string_key_for_lookup(array, key)
++                } else {
++                    None
++                };
++                if key.value_type() == ValueType::String && normalized.is_none() {
++                    value_exit!(*ip);
++                }
++                let Ok(key_ref) = super::execute::value_to_array_key_ref(key) else {
++                    value_exit!(*ip);
++                };
++                let value = match key_ref {
++                    super::execute::ArrayKeyRef::Int(key) => array.get_int(key),
++                    super::execute::ArrayKeyRef::String(key) => {
++                        super::execute::cached_string_array_value(
++                            op_array,
++                            *ip as usize,
++                            array,
++                            normalized.as_deref().unwrap_or(key),
++                        )
++                    }
++                };
++                let Some(value) = value else {
++                    value_exit!(*ip);
++                };
++                super::execute::frame_tmp_set(frame, result, value.clone());
++                value_completed!();
++            }
++            MacroStep::CopyValue { ip } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let destination = (*frame).cv_mut(instruction.op1.into()) as *mut Value;
++                if (*destination).value_type() as u8 > ValueType::Double as u8 {
++                    value_exit!(*ip);
++                }
++                let source =
++                    (*frame).get_op_ptr(instruction.op2.into(), instruction.op2_type, op_array);
++                let kind = (*source).value_type();
++                let moving = instruction._pad & crate::vm::instruction::ASSIGN_CV_MOVE_SOURCE != 0
++                    && matches!(instruction.op2_type, OpType::Tmp | OpType::Var)
++                    && matches!(
++                        kind,
++                        ValueType::String
++                            | ValueType::Array
++                            | ValueType::Object
++                            | ValueType::Closure
++                            | ValueType::Resource
++                    );
++                if moving {
++                    super::execute::move_heap_source_to_primitive_cv(
++                        &mut *frame,
++                        op_array.num_cvs,
++                        &mut *source.cast_mut(),
++                        instruction.op2,
++                        &mut *destination,
++                        instruction.op1,
++                    );
++                } else {
++                    super::execute::frame_slot_set(frame, destination, (*source).clone());
++                }
++                value_completed!();
++            }
++            MacroStep::LongBinary { ip, kind } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let result = fresh_value_result!(instruction, *ip);
++                let left =
++                    &*(*frame).get_op_ptr(instruction.op1.into(), instruction.op1_type, op_array);
++                let right =
++                    &*(*frame).get_op_ptr(instruction.op2.into(), instruction.op2_type, op_array);
++                let (Some(left), Some(right)) = (left.as_long(), right.as_long()) else {
++                    value_exit!(*ip);
++                };
++                let value = match kind {
++                    OpCode::Add => left.checked_add(right),
++                    OpCode::Sub => left.checked_sub(right),
++                    OpCode::Mul => left.checked_mul(right),
++                    OpCode::Mod => left.checked_rem(right),
++                    OpCode::BitwiseAnd => Some(left & right),
++                    OpCode::BitwiseOr => Some(left | right),
++                    OpCode::BitwiseXor => Some(left ^ right),
++                    _ => unreachable!("validated value binary"),
++                };
++                let Some(value) = value else {
++                    value_exit!(*ip);
++                };
++                super::execute::frame_tmp_set_long(frame, result, value);
++                value_completed!();
++            }
++            MacroStep::LongCompare { ip, kind } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let result = fresh_value_result!(instruction, *ip);
++                let left =
++                    &*(*frame).get_op_ptr(instruction.op1.into(), instruction.op1_type, op_array);
++                let right =
++                    &*(*frame).get_op_ptr(instruction.op2.into(), instruction.op2_type, op_array);
++                let (Some(left), Some(right)) = (left.as_long(), right.as_long()) else {
++                    value_exit!(*ip);
++                };
++                let value = match kind {
++                    OpCode::IsEqual => left == right,
++                    OpCode::IsNotEqual => left != right,
++                    OpCode::IsSmaller => left < right,
++                    OpCode::IsSmallerOrEqual => left <= right,
++                    _ => unreachable!("validated value comparison"),
++                };
++                super::execute::frame_tmp_set_bool(frame, result, value);
++                value_completed!();
++            }
++            MacroStep::IdentityValue { ip, invert }
++            | MacroStep::IdentityBranch {
++                ip,
++                on_true: invert,
++            } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let result = if matches!(plan.steps[i], MacroStep::IdentityValue { .. }) {
++                    Some(fresh_value_result!(instruction, *ip))
++                } else {
++                    None
++                };
++                let left =
++                    &*(*frame).get_op_ptr(instruction.op1.into(), instruction.op1_type, op_array);
++                let right =
++                    &*(*frame).get_op_ptr(instruction.op2.into(), instruction.op2_type, op_array);
++                if left.dereferenced().value_type() == ValueType::Array
++                    || right.dereferenced().value_type() == ValueType::Array
++                {
++                    value_exit!(*ip);
++                }
++                let Ok(equal) = super::execute::values_identical_checked(left, right) else {
++                    value_exit!(*ip);
++                };
++                if let Some(result) = result {
++                    super::execute::frame_tmp_set_bool(frame, result, equal != *invert);
++                    value_completed!();
++                } else {
++                    value_completed!();
++                    value_exit!(if equal == *invert {
++                        instruction.result as u32
++                    } else {
++                        *ip + 2
++                    });
++                }
++            }
++            MacroStep::NotValue { ip } | MacroStep::IssetValue { ip } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let result = fresh_value_result!(instruction, *ip);
++                let value =
++                    &*(*frame).get_op_ptr(instruction.op1.into(), instruction.op1_type, op_array);
++                let output = if matches!(plan.steps[i], MacroStep::NotValue { .. }) {
++                    !value.is_truthy()
++                } else {
++                    !matches!(value.value_type(), ValueType::Undef | ValueType::Null)
++                };
++                super::execute::frame_tmp_set_bool(frame, result, output);
++                value_completed!();
++            }
++            MacroStep::BranchValue { ip, on_true } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let value =
++                    &*(*frame).get_op_ptr(instruction.op1.into(), instruction.op1_type, op_array);
++                value_completed!();
++                value_exit!(if value.is_truthy() == *on_true {
++                    instruction.op2 as u32
++                } else {
++                    *ip + 1
++                });
++            }
++            MacroStep::ReleaseValues { ip } => {
++                let instruction = &op_array.instructions[*ip as usize];
++                let first = instruction.op1 as usize;
++                let end = instruction.op2 as usize;
++                let mask = op_array.cache[*ip as usize].release_prefix_mask();
++                let owns = (*frame).heap_bitmap & mask != 0
++                    || (end > 64
++                        && (*frame).has_heap_slots
++                        && (first.max(64)..end)
++                            .any(|index| (*slot_base.add(index)).needs_cleanup()));
++                if owns {
++                    value_exit!(*ip);
++                }
++                // No PHP owner retires here. The exact interval remains visible
++                // to canonical execution whenever a callback/GC effect is possible.
++                value_completed!();
++            }
+@@ -594,0 +910,3 @@
++    if value_operations != 0 {
++        value_exit!(plan.end_ip + 1);
++    }
+@@ -620,0 +939,2 @@
++
++include!("value_graph_plan.rs");
+--- a/src/vm/stats.rs
++++ b/src/vm/stats.rs
+@@ -116,0 +117 @@
++    static VALUE_REGIONS: [AtomicU64; 6] = [const { AtomicU64::new(0) }; 6];
+@@ -209,0 +211,3 @@
++        for counter in &VALUE_REGIONS {
++            counter.store(0, Ordering::Relaxed);
++        }
+@@ -899,0 +904,7 @@
++    #[inline(always)]
++    pub fn inc_value_region(index: usize) {
++        if enabled() {
++            VALUE_REGIONS[index].fetch_add(1, Ordering::Relaxed);
++        }
++    }
++
+@@ -906,0 +918,19 @@
++        let _ = writeln!(err, "-- general value region statistics --");
++        for (index, name) in [
++            "admitted",
++            "entered",
++            "operations",
++            "completed",
++            "partial",
++            "guard_failed",
++        ]
++        .iter()
++        .enumerate()
++        {
++            let _ = writeln!(
++                err,
++                "value_region_{name}={}",
++                VALUE_REGIONS[index].load(Ordering::Relaxed)
++            );
++        }
++        let _ = writeln!(err, "-- ordinary VM statistics --");
+@@ -1796,0 +1827,36 @@
++
++#[inline(always)]
++pub(crate) fn inc_value_region_admitted() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_value_region(0);
++}
++
++#[inline(always)]
++pub(crate) fn inc_value_region_entered() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_value_region(1);
++}
++
++#[inline(always)]
++pub(crate) fn inc_value_region_operation() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_value_region(2);
++}
++
++#[inline(always)]
++pub(crate) fn inc_value_region_completed() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_value_region(3);
++}
++
++#[inline(always)]
++pub(crate) fn inc_value_region_partial() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_value_region(4);
++}
++
++#[inline(always)]
++pub(crate) fn inc_value_region_guard_failed() {
++    #[cfg(feature = "vm-stats")]
++    inner::inc_value_region(5);
++}
+--- a/src/vm/value_graph_plan.rs
++++ b/src/vm/value_graph_plan.rs
+@@ -0,0 +1,92 @@
++// General value graphs use canonical operand/ownership storage. Their finite
++// instruction footprint is independent of unrelated frame capacity.
++#[cfg(feature = "quick-loops")]
++pub(crate) fn build_value_graph(op_array: &OpArray, start: usize) -> Option<MacroPlan> {
++    use crate::vm::instruction::{ASSIGN_CV_MOVE_SOURCE, KNOWN_RESULT_TYPE_MASK};
++    const MAX_VALUE_OPERATIONS: usize = 16;
++    let total = op_array.num_cvs.checked_add(op_array.num_temps)? as usize;
++    let operand_valid = |operand: u16, kind: OpType| match kind {
++        OpType::Const => usize::from(operand) < op_array.literals.len(),
++        OpType::Cv => u32::from(operand) < op_array.num_cvs,
++        OpType::Tmp | OpType::Var => usize::from(operand) >= op_array.num_cvs as usize && usize::from(operand) < total,
++        OpType::Unused => false,
++    };
++    let output_valid = |instruction: &Instruction| matches!(instruction.result_type, OpType::Tmp | OpType::Var)
++        && operand_valid(instruction.result, instruction.result_type);
++    let mut steps = Vec::new();
++    let mut end = start;
++    for ip in start..op_array.instructions.len().min(start.checked_add(MAX_VALUE_OPERATIONS)?) {
++        let instruction = &op_array.instructions[ip];
++        let node_ip = u32::try_from(ip).ok()?;
++        let mut terminal = false;
++        // Keep the existing property/strlen fusion in the canonical executor:
++        // it writes another result slot and owns its exact retirement boundary.
++        if instruction.opcode == OpCode::FetchObjR && op_array.instructions.get(ip + 1).is_some_and(|next|
++            matches!(next.opcode, OpCode::Strlen | OpCode::Strlen_String)
++            && next.op1_type == instruction.result_type && next.op1 == instruction.result) { break; }
++
++        let node = match instruction.opcode {
++            OpCode::FetchObjR if instruction._pad == 0 && output_valid(instruction)
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && operand_valid(instruction.op2, instruction.op2_type) => MacroStep::LoadProperty { ip: node_ip },
++            OpCode::FetchDimR if instruction._pad == 0 && output_valid(instruction)
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && operand_valid(instruction.op2, instruction.op2_type) => MacroStep::LoadDimension { ip: node_ip },
++            OpCode::AssignCv if instruction.op1_type == OpType::Cv
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && instruction.result_type == OpType::Unused
++                && instruction._pad & !ASSIGN_CV_MOVE_SOURCE == 0
++                && operand_valid(instruction.op2, instruction.op2_type) => MacroStep::CopyValue { ip: node_ip },
++            OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp | OpCode::Add_LongLong |
++            OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp | OpCode::Sub_LongLong |
++            OpCode::Mul | OpCode::Mod | OpCode::BitwiseAnd | OpCode::BitwiseOr | OpCode::BitwiseXor
++                if instruction._pad & !KNOWN_RESULT_TYPE_MASK == 0 && output_valid(instruction)
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && operand_valid(instruction.op2, instruction.op2_type) => {
++                let kind = match instruction.opcode {
++                    OpCode::Add | OpCode::Add_TmpTmp | OpCode::Add_CvTmp | OpCode::Add_LongLong => OpCode::Add,
++                    OpCode::Sub | OpCode::Sub_CvConst | OpCode::Sub_TmpTmp | OpCode::Sub_LongLong => OpCode::Sub,
++                    other => other,
++                };
++                MacroStep::LongBinary { ip: node_ip, kind }
++            }
++            OpCode::IsEqual | OpCode::IsNotEqual | OpCode::IsSmaller | OpCode::IsSmallerOrEqual
++                if instruction._pad & !KNOWN_RESULT_TYPE_MASK == 0 && output_valid(instruction)
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && operand_valid(instruction.op2, instruction.op2_type) => MacroStep::LongCompare { ip: node_ip, kind: instruction.opcode },
++            OpCode::IsIdentical | OpCode::IsNotIdentical
++                if instruction._pad & !KNOWN_RESULT_TYPE_MASK == 0 && output_valid(instruction)
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && operand_valid(instruction.op2, instruction.op2_type) => MacroStep::IdentityValue {
++                    ip: node_ip, invert: instruction.opcode == OpCode::IsNotIdentical },
++            OpCode::BoolNot | OpCode::Isset
++                if instruction._pad & !KNOWN_RESULT_TYPE_MASK == 0 && output_valid(instruction)
++                && operand_valid(instruction.op1, instruction.op1_type) => {
++                if instruction.opcode == OpCode::BoolNot { MacroStep::NotValue { ip: node_ip } }
++                else { MacroStep::IssetValue { ip: node_ip } }
++            }
++            OpCode::JmpZ | OpCode::JmpNZ if instruction._pad == 0
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && usize::from(instruction.op2) < op_array.instructions.len() => {
++                terminal = true;
++                MacroStep::BranchValue { ip: node_ip, on_true: instruction.opcode == OpCode::JmpNZ }
++            }
++            OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical if instruction._pad == 0
++                && operand_valid(instruction.op1, instruction.op1_type)
++                && operand_valid(instruction.op2, instruction.op2_type)
++                && usize::from(instruction.result) < op_array.instructions.len()
++                && ip + 2 < op_array.instructions.len() => {
++                terminal = true;
++                MacroStep::IdentityBranch { ip: node_ip, on_true: instruction.opcode == OpCode::JmpNZ_Identical }
++            }
++            OpCode::ReleaseTemps if instruction.op1 <= instruction.op2
++                && usize::from(instruction.op2) <= total => MacroStep::ReleaseValues { ip: node_ip },
++            _ => break,
++        };
++        steps.push(node);
++        end = ip;
++        if terminal { break; }
++    }
++    if steps.len() < 2 || end + 1 >= op_array.instructions.len() { return None; }
++    Some(MacroPlan { steps, guard_failures: 0, start_ip: u32::try_from(start).ok()?, end_ip: u32::try_from(end).ok()? })
++}

@@ -106,6 +106,10 @@ pub const SEND_FLAG_PREPARED_PROPERTY_ARGUMENT: u16 = 1 << 6;
 /// temporary expression rather than with the ordinary argument-number Error.
 pub const SEND_FLAG_TEMPORARY_WRITE_ERROR: u16 = 1 << 7;
 
+/// The compiler proved one TMP definition and one send in an uninterrupted
+/// entry region. Its actual owner may leave the caller with this argument.
+pub const SEND_FLAG_CONSUME_TEMP: u16 = 1 << 8;
+
 /// FetchCvR flag: evaluate this read under PHP's `@` reporting mask. Custom
 /// handlers still run and observe the suppressed mask.
 pub const FETCH_CV_ERROR_SUPPRESS: u16 = 1;
@@ -817,6 +821,29 @@ impl InlineCache {
         }
     }
 
+    /// Immutable geometry for a ReleaseTemps entry. Its property words are
+    /// otherwise unused, and its function pointer remains empty. The frame's
+    /// live bits, rather than this mask, still decide which Values are owned.
+    pub(crate) fn for_release_range(first: u16, end: u16) -> Self {
+        let below = |bound: u16| {
+            u64::MAX
+                .checked_shr(64 - u32::from(bound.min(64)))
+                .unwrap_or(0)
+        };
+        let mask = below(end) & !below(first);
+        Self {
+            func: std::ptr::null(),
+            class_id: mask as u32,
+            prop_info: (mask >> 32) as u32,
+        }
+    }
+
+    /// Read only for the ReleaseTemps instruction owning this metadata slot.
+    #[inline(always)]
+    pub(crate) fn release_prefix_mask(&self) -> u64 {
+        u64::from(self.class_id) | (u64::from(self.prop_info) << 32)
+    }
+
     /// Declaration ID cached by CheckGenericArgs. Opcode-local cache slots do
     /// not share property/call meanings, so the existing packed word can hold
     /// index+1 without changing InlineCache's 16-byte layout.
@@ -940,6 +967,30 @@ impl InlineCache {
     /// declaration pointer. Such entries are never typed (`flags != 2`), so
     /// the typed-declaration tag bits cannot collide with this tag.
     const CLOSURE_SCOPE_TAG: usize = 1;
+
+    /// A constant-name read proved in an instance trait frame. Its lexical
+    /// scope follows from the immutable hidden receiver's class, independently
+    /// of the object whose property is read. Typed write declarations use
+    /// flags 2 and cannot share this tagged scope word.
+    const TRAIT_RECEIVER_SCOPE_TAG: usize = 3;
+
+    #[inline]
+    pub fn set_trait_receiver_scope_class(&mut self, class_id: u32) {
+        debug_assert_ne!(class_id, 0);
+        debug_assert_ne!(self.property_flags(), 2);
+        self.mark_scoped_property();
+        self.func =
+            (((class_id as usize) << 3) | Self::TRAIT_RECEIVER_SCOPE_TAG) as *const FunctionCommon;
+    }
+
+    #[inline(always)]
+    pub fn trait_receiver_scope_class(&self) -> Option<u32> {
+        let raw = self.func as usize;
+        (self.is_scoped_property()
+            && self.property_flags() != 2
+            && raw & 0b111 == Self::TRAIT_RECEIVER_SCOPE_TAG)
+            .then(|| (raw >> 3) as u32)
+    }
 
     #[inline]
     pub fn set_closure_scope_class(&mut self, class_id: u32) {
@@ -1527,6 +1578,28 @@ mod inline_cache_tests {
     use crate::vm::function::ParamTypeHint;
 
     #[test]
+    fn release_mask_covers_only_the_owned_prefix_interval() {
+        // Include the embedded-scope boundary, the last ownership bit and
+        // intervals entirely beyond the tracked prefix. Build the expected
+        // result by slot membership rather than repeating the shift formula.
+        for first in 0..=67u16 {
+            for end in first..=67u16 {
+                let cache = InlineCache::for_release_range(first, end);
+                let expected = (first..end)
+                    .filter(|slot| *slot < 64)
+                    .fold(0u64, |mask, slot| mask | (1u64 << slot));
+                assert_eq!(cache.release_prefix_mask(), expected, "{first}..{end}");
+                assert!(cache.func.is_null());
+            }
+        }
+        assert_eq!(std::mem::size_of::<InlineCache>(), 16);
+        assert_eq!(
+            InlineCache::for_release_range(63, u16::MAX).release_prefix_mask(),
+            1u64 << 63
+        );
+    }
+
+    #[test]
     fn dynamic_property_marker_does_not_alias_a_declared_slot() {
         let mut cache = InlineCache::empty();
         assert!(!cache.is_dynamic_property_read());
@@ -1560,6 +1633,33 @@ mod inline_cache_tests {
 
         cache.set_property(7, 3, 1);
         assert_eq!(cache.generic_property_declaration(), None);
+    }
+
+    #[test]
+    fn trait_receiver_scope_is_distinct_and_survives_polymorphic_restore() {
+        let mut cache = InlineCache::empty();
+        for class_id in [1, 7, 65_535] {
+            cache.set_property(11, 3, 3);
+            cache.set_trait_receiver_scope_class(class_id);
+            assert!(cache.is_scoped_property());
+            assert_eq!(cache.class_id, 11);
+            assert_eq!(cache.property_slot(), 3);
+            assert_eq!(cache.trait_receiver_scope_class(), Some(class_id));
+            assert_eq!(cache.closure_scope_class(), None);
+            let (receiver, info, scope) = cache.property_cache_state();
+            let mut restored = InlineCache::empty();
+            restored.restore_property_cache(receiver, info, scope);
+            assert_eq!(restored.trait_receiver_scope_class(), Some(class_id));
+
+            cache.set_property(11, 3, 1);
+            cache.set_closure_scope_class(class_id);
+            assert_eq!(cache.closure_scope_class(), Some(class_id));
+            assert_eq!(cache.trait_receiver_scope_class(), None);
+        }
+        cache.set_generic_property(2, 11, 3);
+        assert_eq!(cache.trait_receiver_scope_class(), None);
+        cache.set_property(11, 3, 3);
+        assert_eq!(cache.trait_receiver_scope_class(), None);
     }
 
     #[test]

@@ -1,0 +1,221 @@
+{
+  "status": "rejected exploratory checkpoint; runtime fully restored",
+  "baseline_commit": "3d7aa6ae",
+  "restored_source_sha256": "f1ebb4d1a2249bf68f6a2e648c67f3781f286948f133d52587990be7d9708e8e",
+  "contract": "# Iterative deterministic regex continuations\n\nBaseline: accepted 3d7aa6ae, source f1ebb4d1a2249bf68f6a2e648c67f3781f286948f133d52587990be7d9708e8e; native PGO analysis 73.4727G versus PHP 10.3379G. Sole integrator owns regex.rs for the only active implementation.\n\nEvidence: exact preceding accepted PGO profile assigns 1.1581G self instructions to match_seq_from and 15,277,605 entries to its grouped function identities. Public Regex entry functions cost 4.2762G inclusive, with 3.3435G entering match_seq_from. Recursive inclusive edges are overlapping and cannot be summed as a 23G regex budget. Pure consuming/anchor atoms currently call match_rest then re-enter the large Rust matcher for the next atom, despite having no state to roll back.\n\nOutcome/hypothesis: advance every deterministic atom's existing continuation through a Rust loop within the same activation. Retain existing recursive boundaries for alternation, groups, quantifiers, capture restore, MARK/control and all rollback-bearing nodes. This removes ordinary function entry/return and rest-copy work, without pattern recognition, new guards, allocations or unsafe. Empty sequences may advance the same continuation.\n\nSemantics: preserve budget/error observation at every matcher step, ACCEPT before continuation, exact character/Unicode/anchor flags, capture participation/restoration, recursion-budget increments, backtracking order, MARK/control, lookarounds/subroutines and public preg errors. LocalFlags keeps its existing scoped recursion. The linked continuation's borrowed nodes remain within their existing enclosing Rust activations; no references to self-mutating continuation storage are introduced. No public ABI/feature/JIT change.\n\nGates: exact source/binary preservation, default focused regex engine and preg suites; PHP and baseline differential fixtures for global/nested continuations, empty alternatives, captures, local flags, control and limits. Early same-policy opt-level-one native phase comparison against the exact named-types exploratory binary must preserve outputs and reduce whole analysis instructions at least 0.5% before broader matrix or fresh PGO. Accepted release requires >=0.5% independently confirmed PGO reduction with focused no-default/all-feature correctness, independent controls, RSS/code-size and cleanup. Reject changed semantics, growing stack/heap or the early instruction filter; remove the whole source change and choose another quantified cost. Native architecture evidence remains x86-64 only.\n\nExisting differential exception: nested output line 15 carries the previously documented PRUNE PHP mismatch in performance-phpstan-regex-continuations-samples.json. The initial broad PHP-equality gate remains a failure. An explicit supported-line validation must preserve every baseline/candidate line and all other PHP lines, while retaining PRUNE as a known failed PHP contract, never counting it as a pass. This does not relax any candidate semantic-change rejection.\n",
+  "preparation": {
+    "complete": false,
+    "source_sha256": "0310fbe297adc70404e184e7407b3914097344509877bba2b03453df07210729",
+    "baseline_commit": "3d7aa6ae",
+    "profile": "test-fast",
+    "features": "default",
+    "checks": [
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.4681694129976677,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.4172315299983893,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--bin",
+          "rphp"
+        ],
+        "exit": 0,
+        "seconds": 61.16783654900064,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--lib",
+          "regex::tests"
+        ],
+        "exit": 0,
+        "seconds": 57.860671554000874,
+        "test_results": [
+          "test result: ok. 112 passed; 0 failed; 0 ignored; 0 measured; 801 filtered out; finished in 0.02s"
+        ]
+      }
+    ],
+    "php_cases": [
+      {
+        "case": "global.php",
+        "source_sha256": "a456e08501c6bd3b523bece2589663de1630deda5699fe6bda8e6210db2d6328",
+        "equal": true
+      },
+      {
+        "case": "nested.php",
+        "source_sha256": "33d4df557290cb7a5a9b92c5bb90fdfa75816419b69978078e6c4d7e18112c9e",
+        "equal": false
+      }
+    ],
+    "binary_sha256": "b26af5461660c7f24f9f74c48bb5af547aee50d8f2de09c45fc241fad114ac03"
+  },
+  "differentials": {
+    "complete": true,
+    "cases": [
+      {
+        "case": "global.php",
+        "source_sha256": "a456e08501c6bd3b523bece2589663de1630deda5699fe6bda8e6210db2d6328",
+        "supported_php_lines": 12,
+        "known_failed_php_lines": 0,
+        "all_baseline_candidate_equal": true
+      },
+      {
+        "case": "nested.php",
+        "source_sha256": "33d4df557290cb7a5a9b92c5bb90fdfa75816419b69978078e6c4d7e18112c9e",
+        "supported_php_lines": 18,
+        "known_failed_php_lines": 1,
+        "all_baseline_candidate_equal": true
+      }
+    ],
+    "known_php_gap": {
+      "case": "nested.php",
+      "line": 15,
+      "baseline_candidate_equal": true,
+      "php_pass": false,
+      "documented_in": "performance-phpstan-regex-continuations-samples.json",
+      "contract": "PRUNE forbids the alternate branch after a failed continuation"
+    }
+  },
+  "native_selection": {
+    "complete": true,
+    "purpose": "exploratory instruction feedback, not an acceptance gate",
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 1,
+    "warmup": "none; fresh TMPDIR per run",
+    "outlier_policy": "retain every valid output-checked sample",
+    "inputs": [
+      "3d5ea65c14a3eec357973a117ea8ed40d062912ee763f77e7479e2be1dcad431"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 1.3566850509996584,
+      "output": {
+        "exit": 1,
+        "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+        "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+      },
+      "analysis_seconds": 0.936074972,
+      "instructions": 10337806950,
+      "counter_running_percent": 100.0
+    },
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 12.400826778997725,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 9.764936686,
+        "instructions": 115276105192,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "candidate",
+        "wall_seconds": 12.50763501199981,
+        "output": {
+          "exit": 1,
+          "stdout_sha256": "9793248f9ee1d0915bbb8835b4e116071425a7a74360bd505387f5a29f59441c",
+          "stderr_sha256": "f84b1d0d98df02680fb88fc6c2ef1d45725cec045d69fc0c3f25c6c25cd66e50"
+        },
+        "analysis_seconds": 9.833974838,
+        "instructions": 115413756585,
+        "counter_running_percent": 100.0,
+        "round": 0
+      }
+    ],
+    "medians": {
+      "baseline": 115276105192,
+      "candidate": 115413756585
+    },
+    "delta_percent": {
+      "baseline": 0.0,
+      "candidate": 0.11941016984460262
+    },
+    "memory_peak_bytes": 649666560,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    },
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0
+  },
+  "acceptance_threshold_percent": -0.5,
+  "retained_pgo_analysis_instructions": 73472673882,
+  "full_pgo_or_feature_matrix_run": false,
+  "boundaries": {
+    "regex-continuation-loop-preparation": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 125.13823263000086,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 3475279872,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "regex-continuation-loop-differentials": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 0.07176297800106113,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 44265472,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  }
+}

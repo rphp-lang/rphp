@@ -83,22 +83,6 @@ fn never_return_type_error_value(
     error
 }
 
-#[inline]
-fn return_type_callee_class(
-    eg: &ExecutorGlobals,
-    frame: *mut ExecuteData,
-    function: *const FunctionCommon,
-    hint: &ParamTypeHint,
-) -> Option<String> {
-    eg.declaring_class_of(function)
-        .map(str::to_owned)
-        .or_else(|| {
-            hint.uses_declaring_class_scope()
-                .then(|| get_caller_class(frame, eg))
-                .flatten()
-        })
-}
-
 #[cold]
 #[inline(never)]
 fn throw_invalid_dynamic_call_class<'a>(
@@ -148,6 +132,15 @@ fn enum_comparison_result(eg: &ExecutorGlobals, left: &Value, right: &Value) -> 
 }
 
 enum DiagnosticFrameAction {
+    CloneIndirectArrayContainer {
+        operand: u16,
+        op_type: OpType,
+        require_php_owner: bool,
+    },
+    TakeDetachedIndirectArrayContainer {
+        operand: u16,
+        op_type: OpType,
+    },
     CloneOperand {
         operand: u16,
         op_type: OpType,
@@ -200,6 +193,34 @@ fn diagnostic_frame_action(
     // Store/Refresh destinations are compiler-retained live TMP/CV slots.
     unsafe {
         match action {
+            DiagnosticFrameAction::TakeDetachedIndirectArrayContainer { operand, op_type } => {
+                if !matches!(op_type, OpType::Tmp | OpType::Var) {
+                    return None;
+                }
+                let slot = (*frame).get_op_mut(operand as u32, op_type);
+                let value = &*slot;
+                if !value.is_internal_reference_alias()
+                    || !value.is_indirect_property_modification_result()
+                    || value.owned_reference_has_php_owner()
+                {
+                    return None;
+                }
+                let owner = frame_tmp_take!(frame, slot);
+                // Preserve completed-writeback state after detaching the last
+                // private cell, including when its destructor recreates the
+                // property. This is the same sentinel used by silent unset.
+                let mut completed = Value::undef();
+                completed.mark_indirect_property_modification_result();
+                frame_tmp_set(frame, slot, completed);
+                Some(owner)
+            }
+            DiagnosticFrameAction::CloneIndirectArrayContainer { operand, op_type, require_php_owner } => {
+                let value = &*(*frame).get_op_ptr(operand as u32, op_type, op_array);
+                (value.is_internal_reference_alias()
+                    && value.is_indirect_property_modification_result()
+                    && (!require_php_owner || value.owned_reference_has_php_owner()))
+                    .then(|| value.dereferenced().clone())
+            }
             DiagnosticFrameAction::CloneOperand { operand, op_type } => {
                 Some((&*(*frame).get_op_ptr(operand as u32, op_type, op_array)).clone())
             }
@@ -1874,6 +1895,161 @@ fn array_access_offset_error(value: &Value, isset_or_empty: bool) -> String {
     }
 }
 
+enum MutationArrayKey<'a> {
+    Key(ArrayKey),
+    Clobbered,
+    Throw(ThrowResult<'a>),
+}
+
+/// Diagnostic key conversion may enter PHP and replace or publish its array
+/// container. Ordinary normalized keys never enter this completion boundary.
+#[cold]
+#[inline(never)]
+fn mutation_array_key_after_diagnostic<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    op_array: &'a crate::compiler::OpArray,
+    opline: &Instruction,
+    source: Value,
+    error: ArrayKeyError,
+) -> Result<MutationArrayKey<'a>, VmError> {
+    // The canonical operand slot owns the key through exception cleanup. Do
+    // not retain a Rust-only mirror while that cleanup proves final owners.
+    let unsetting = opline.opcode == OpCode::UnsetDim;
+    let rendered = match &error {
+        ArrayKeyError::DeprecatedFloat(_) | ArrayKeyError::NonRepresentableFloat { .. } => {
+            source.echo_to_string_with_precision(-1)
+        }
+        ArrayKeyError::Illegal => source.diagnostic_type_name().into_owned(),
+        _ => String::new(),
+    };
+    drop(source);
+    if matches!(error, ArrayKeyError::Illegal) {
+        let instruction_index = (opline as *const Instruction as usize
+            - op_array.instructions.as_ptr() as usize) / std::mem::size_of::<Instruction>();
+        return Ok(MutationArrayKey::Throw(throw_illegal_offset_type(
+            eg, frame, op_array, instruction_index,
+            &format!("Cannot {} offset of type {rendered} on array", if unsetting { "unset" } else { "access" }),
+        )?));
+    }
+    let report_conversion = if unsetting {
+        !matches!(error, ArrayKeyError::DeprecatedNull)
+    } else {
+        opline._pad & ASSIGN_DIM_KEY_ALREADY_NORMALIZED == 0
+    };
+    let snapshot = report_conversion.then(|| diagnostic_frame_action(
+        frame,
+        op_array,
+        DiagnosticFrameAction::CloneIndirectArrayContainer {
+            operand: opline.op1,
+            op_type: opline.op1_type,
+            require_php_owner: false,
+        },
+    )).flatten();
+    let snapshot_owners = snapshot.as_ref().and_then(Value::cycle_strong_count);
+    macro_rules! finish_diagnostic {
+        () => {
+            if eg.exception.is_some() {
+                return Ok(None);
+            }
+        };
+    }
+    let conversion: Result<Option<ArrayKey>, VmError> = (|| {
+    let key = match error {
+        ArrayKeyError::Resource(resource) => {
+            if report_conversion {
+                report_php_warning(eg, frame, op_array, opline,
+                    &format!("Resource ID#{resource} used as offset, casting to integer ({resource})"), false)?;
+                finish_diagnostic!();
+            }
+            ArrayKey::Int(resource)
+        }
+        ArrayKeyError::DeprecatedNull => {
+            if report_conversion {
+                report_php_deprecation(eg, frame, op_array, opline,
+                    "Using null as an array offset is deprecated, use an empty string instead")?;
+                finish_diagnostic!();
+            }
+            ArrayKey::String(String::new())
+        }
+        ArrayKeyError::DeprecatedFloat(integer) => {
+            if report_conversion {
+                report_php_deprecation(eg, frame, op_array, opline,
+                    &format!("Implicit conversion from float {rendered} to int loses precision"))?;
+                finish_diagnostic!();
+            }
+            ArrayKey::Int(integer)
+        }
+        ArrayKeyError::NonRepresentableFloat { integer, also_deprecated } => {
+            if report_conversion {
+                report_php_warning(eg, frame, op_array, opline,
+                    &format!("The float {rendered} is not representable as an int, cast occurred"), false)?;
+                finish_diagnostic!();
+                if also_deprecated {
+                    report_php_deprecation(eg, frame, op_array, opline,
+                        &format!("Implicit conversion from float {rendered} to int loses precision"))?;
+                    finish_diagnostic!();
+                }
+            }
+            ArrayKey::Int(integer)
+        }
+        ArrayKeyError::Illegal => unreachable!("illegal keys are rejected before retaining a guard"),
+    };
+    Ok(Some(key))
+    })();
+    let mut clobbered = false;
+    if let Some(snapshot) = snapshot {
+        let live = diagnostic_frame_action(frame, op_array, DiagnosticFrameAction::CloneIndirectArrayContainer {
+            operand: opline.op1,
+            op_type: opline.op1_type,
+            require_php_owner: true,
+        });
+        // The live observation adds one owner. Further retained owners were
+        // published by the handler; PHP keeps those snapshots unchanged too.
+        let externally_shared = snapshot_owners.is_some_and(|owners| {
+            snapshot.cycle_strong_count().is_some_and(|current| current > owners + 1)
+        });
+        clobbered = live.as_ref().and_then(Value::array_identity) != snapshot.array_identity()
+            || externally_shared;
+        drop(live);
+        // A handler may have removed the last PHP owner of this old array.
+        // Retire the guard through the normal destructor protocol before
+        // unwinding the frame or replacing its catch variable. Raw Rust Drop
+        // cannot invoke PHP destructors or preserve a throwing destructor.
+        let mut pending = eg.exception.take();
+        let retired = (|| {
+            // An aborted unset may also retain compiler transaction mirrors.
+            // Consume the detached lvalue now, while this guard still owns its
+            // old payload, rather than relying on later exception cleanup to
+            // infer which private mirrors retire together.
+            if let Some(owner) = diagnostic_frame_action(
+                frame, op_array, DiagnosticFrameAction::TakeDetachedIndirectArrayContainer {
+                    operand: opline.op1,
+                    op_type: opline.op1_type,
+                },
+            ) {
+                retire_owned_frame_value(
+                    eg, owner, frame, &mut pending, CallbackReturnPolicy::Function,
+                )?;
+            }
+            retire_owned_frame_value(
+                eg, snapshot, frame, &mut pending, CallbackReturnPolicy::Function,
+            )
+        })();
+        eg.exception = pending;
+        retired?;
+    }
+    let key = conversion?;
+    if let Some(exception) = eg.exception.take() {
+        return Ok(MutationArrayKey::Throw(throw_in_frame(eg, frame, exception)?));
+    }
+    Ok(if clobbered {
+        MutationArrayKey::Clobbered
+    } else {
+        MutationArrayKey::Key(key.expect("key conversion completed without an exception"))
+    })
+}
+
 #[cold]
 #[inline(never)]
 fn fetch_dim_after_array_key_diagnostic<'a>(
@@ -2285,20 +2461,25 @@ unsafe fn validate_reference_return_after_finally(
         return Ok(());
     }
 
-    let source = (&*return_target).dereferenced().clone();
-    let callee_class = return_type_callee_class(
+    if return_type_is_exact(
+        &*return_target,
+        hint,
         eg,
         frame,
         function as *const FunctionCommon,
-        hint,
-    );
+    ) {
+        return Ok(());
+    }
+    let source = (&*return_target).dereferenced().clone();
+    // SAFETY: the live function header proven above supplies the same lexical
+    // fallback identity; the type probe borrows it only before PHP conversion.
     let preparation = prepare_return_type_value(
         &source,
         hint,
         eg,
         op_array.strict_types,
         frame,
-        callee_class.as_deref(),
+        function as *const FunctionCommon,
     )?;
     let marker = &*(*frame).opline;
     let opline = if marker.op2_type == OpType::Cv {
@@ -2400,6 +2581,39 @@ fn execute_ex(eg: &mut ExecutorGlobals, mut initial_frame: *mut ExecuteData) -> 
     }
 }
 
+/// GC may re-enter PHP only at an instruction boundary. Keep its frame
+/// publication and exception dispatch out of the ordinary opcode loop so the
+/// pending flag is the only state that loop must inspect before dispatch.
+#[cold]
+#[inline(never)]
+fn collect_cycles_at_instruction_boundary<'a>(
+    eg: &mut ExecutorGlobals,
+    frame: *mut ExecuteData,
+    previous_opline: Option<std::ptr::NonNull<Instruction>>,
+) -> Result<Option<ThrowResult<'a>>, VmError> {
+    if eg.exception.is_some() {
+        return Ok(None);
+    }
+    // SAFETY: the caller is between opcodes in a live activation. Both the
+    // next and previous instruction belong to that activation, and no opcode
+    // borrow survives collection or PHP re-entry. Restore the next instruction
+    // before propagating a VM error; PHP exceptions retain the original site.
+    unsafe {
+        let next = (*frame).opline;
+        let origin = previous_opline.map_or(next, |instruction| instruction.as_ptr().cast_const());
+        (*frame).opline = origin;
+        eg.current_execute_data.set(frame);
+        let collected = eg.collect_automatic_cycles();
+        (*frame).opline = next;
+        collected?;
+        if let Some(exception) = eg.exception.take() {
+            (*frame).opline = origin;
+            return throw_in_frame(eg, frame, exception).map(Some);
+        }
+    }
+    Ok(None)
+}
+
 fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -> Result<(), VmError> {
     // SAFETY: the executor enters with a live user activation and its metadata.
     let mut activation = (initial_frame, unsafe { (*initial_frame).op_array() });
@@ -2425,34 +2639,27 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
             }
         }
 
-        // SAFETY: the active frame's opline and the preceding instruction
-        // both belong to this live activation. At this loop boundary no
-        // opcode-local value/container borrow survives PHP callback re-entry.
-        let (mut opline_ptr, opline) = unsafe {
-            if crate::value::automatic_cycle_collection_pending() && eg.exception.is_none() {
-                let next = (*frame).opline;
-                let origin = previous_opline.unwrap_or(next);
-                (*frame).opline = origin;
-                eg.current_execute_data.set(frame);
-                let collected = eg.collect_automatic_cycles();
-                (*frame).opline = next;
-                collected?;
-                if let Some(exception) = eg.exception.take() {
-                    (*frame).opline = origin;
-                    match throw_in_frame(eg, frame, exception)? {
-                        ThrowResult::Handled(new_frame, new_op_array) => {
-                            resume_activation!(new_frame, new_op_array);
-                        }
-                        ThrowResult::Unhandled(exception) => {
-                            eg.exception = Some(exception);
-                            return Ok(());
-                        }
+        if crate::value::automatic_cycle_collection_pending() {
+            if let Some(result) = collect_cycles_at_instruction_boundary(eg, frame, previous_opline)? {
+                match result {
+                    ThrowResult::Handled(new_frame, new_op_array) => {
+                        resume_activation!(new_frame, new_op_array);
+                    }
+                    ThrowResult::Unhandled(exception) => {
+                        eg.exception = Some(exception);
+                        return Ok(());
                     }
                 }
             }
+        }
+        // SAFETY: the active frame's instruction is a non-null pointer into
+        // this live activation. Collection and frame transitions have completed.
+        // NonNull retains the same optional origin in one pointer-sized word.
+        let (mut opline_ptr, opline) = unsafe {
             let opline_ptr: *const Instruction = (*frame).opline;
-            previous_opline = Some(opline_ptr);
-            (opline_ptr, &*opline_ptr)
+            let opline = &*opline_ptr;
+            previous_opline = Some(std::ptr::NonNull::from(opline));
+            (opline_ptr, opline)
         };
         macro_rules! array_key_or_throw {
             ($conversion:expr, $message:expr) => {
@@ -3285,7 +3492,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 stats::inc_value_clone(kind as usize);
                                 let value = std::ptr::read(source);
                                 if (*frame).has_heap_slots
-                                    && ((*frame).num_cvs + (*frame).num_temps > 64
+                                    && (opline.result >= 64
                                         || (*frame).heap_bitmap
                                             & (1u64 << u32::from(opline.result)) != 0)
                                 {
@@ -3322,7 +3529,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 opline._pad & crate::vm::instruction::FETCH_CV_ERROR_SUPPRESS != 0,
                             )?;
                             if let Some(exception) = eg.exception.take() {
-                                cleanup_pending_calls(eg, frame);
+                                let mut exception = exception;
+                                // SAFETY: the live caller owns this initialized pending chain;
+                                // retirement restores the effective failure before throw dispatch.
+                                cleanup_pending_calls(eg, frame, Some(&mut exception))?;
                                 match throw_in_frame(eg, frame, exception)? {
                                     ThrowResult::Handled(new_frame, new_op_array) => {
                                         resume_activation!(new_frame, new_op_array);
@@ -4806,20 +5016,41 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
             }
 
-            OpCode::IsIdentical | OpCode::IsNotIdentical => {
+            OpCode::IsIdentical | OpCode::IsNotIdentical
+            | OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical => {
                 let op1 = unsafe { &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array) };
                 let op2 = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
-                let result_ptr = unsafe { (*frame).get_op_mut(opline.result as u32, opline.result_type) };
-
                 let Ok(identical) = values_identical_checked(op1, op2) else {
                     throw_operator!("Error", "Nesting level too deep - recursive dependency?");
                 };
 
-                let result = match opline.opcode {
-                    OpCode::IsIdentical => identical,
-                    _ => !identical,
-                };
-                unsafe { frame_tmp_set_bool(frame, result_ptr, result) };
+                match opline.opcode {
+                    OpCode::IsIdentical | OpCode::IsNotIdentical => {
+                        let result = identical == (opline.opcode == OpCode::IsIdentical);
+                        // SAFETY: the canonical comparison owns this bounded
+                        // result slot in the active frame. The tracked writer
+                        // retires its old owner before publishing the bool.
+                        unsafe {
+                            let result_ptr = (*frame).get_op_mut(opline.result as u32, opline.result_type);
+                            frame_tmp_set_bool(frame, result_ptr, result);
+                        }
+                    }
+                    OpCode::JmpZ_Identical | OpCode::JmpNZ_Identical => {
+                        // SAFETY: compiler finalization proved the adjacent
+                        // unmarked branch, target bound and sole scalar use.
+                        // Both retained instruction positions stay in this
+                        // live op array; no operand borrow crosses a callback.
+                        unsafe {
+                            (*frame).opline = if identical == (opline.opcode == OpCode::JmpNZ_Identical) {
+                                op_array.instructions.as_ptr().add(usize::from(opline.result))
+                            } else {
+                                opline_ptr.add(2)
+                            };
+                        }
+                        continue;
+                    }
+                    _ => unreachable!(),
+                }
             }
 
             OpCode::Isset => {
@@ -5133,7 +5364,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let end = cv_count + (opline.extended_value >> 16) as usize;
                         let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
                         debug_assert!(first < end && end <= total);
-                        let owned = if total <= 64 {
+                        let owned = if end <= 64 {
                             let below_end = if end == 64 {
                                 u64::MAX
                             } else {
@@ -5863,7 +6094,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                             attach_call_argument_throwable_origin(
                                 &error, eg, frame, op_array, opline,
                             );
-                            cleanup_pending_calls(eg, frame);
+                            let mut error = error;
+                            // SAFETY: the live caller owns this initialized pending chain;
+                            // retirement restores the effective failure before throw dispatch.
+                            cleanup_pending_calls(eg, frame, Some(&mut error))?;
                             match throw_in_frame(eg, frame, error)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     resume_activation!(new_frame, new_op_array);
@@ -5888,30 +6122,15 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         &*(*call).func,
                     )
                 };
-                // SAFETY: source is resolved from the live caller op-array and
-                // dst is the compiler-sized argument slot in the pending call.
-                let borrowed = !unsafe { (*source).is_undef() }
-                    && opline.op2 as u32 >= common.sig.this_offset
-                    && unsafe {
-                        try_init_borrowed_heap_arg(
-                            call,
-                            opline.op2 as u32 - common.sig.this_offset,
-                            source,
-                            dst,
-                        )
-                    };
                 // For TMP/Var operands that are provably scalar (Long, Double, Bool, Null),
                 // use raw 16-byte bitwise copy — no clone/drop overhead.
                 // TMP values are consumed (not read again), so move semantics are valid.
                 // IMPORTANT: owned types (String, Array, Object, Resource, Closure) and References
-                // MUST go through clone to maintain refcount / avoid double-free.
+                // Retain their owner: move a proven consumed TMP, otherwise clone.
                 // SAFETY: source and dst are live slots established above;
                 // Undef has no owned payload and dst has not been initialized.
                 if unsafe { (*source).is_undef() } {
                     unsafe { dst.write(Value::null()) };
-                } else if borrowed {
-                    // The destination deliberately remains outside the owned
-                    // heap bitmap; cleanup must not decrement the caller's Rc.
                 } else if opline.op1_type == OpType::Tmp || opline.op1_type == OpType::Var {
                     let src = unsafe {
                         (frame as *const Value).add(CALL_FRAME_SLOTS + opline.op1 as usize)
@@ -5921,20 +6140,28 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         // Scalar TMP/Var: safe bitwise move
                         unsafe { Value::raw_copy(src, dst) };
                     } else {
-                        // Heap or reference TMP/Var: must clone + mark callee heap bits
-                        let cloned = src_val.clone();
+                        // Heap or reference TMP/Var: retain owner + mark callee heap bits
                         // SAFETY: caller TMP and pending argument are disjoint
-                        // live slots; the clone above owns the callee edge.
+                        // live slots. A consume proof moves the caller owner
+                        // before publishing the argument; other reads clone.
                         unsafe {
+                            let mut cloned = if opline._pad & SEND_FLAG_CONSUME_TEMP != 0 {
+                                take_call_argument_owner(&mut *frame, &mut *src.cast_mut(), opline.op1)
+                            } else {
+                                src_val.clone()
+                            };
                             if common.fn_type == FunctionType::Internal {
-                                // Preserve failed-expression lifetime without
-                                // publishing a duplicate source TMP GC edge.
-                                (*src.cast_mut()).mark_internal_argument_snapshot();
+                                if opline._pad & SEND_FLAG_CONSUME_TEMP != 0 {
+                                    // A native activation retains lifetime but
+                                    // does not introduce another PHP GC edge.
+                                    cloned.mark_internal_argument_snapshot();
+                                } else {
+                                    (*src.cast_mut()).mark_internal_argument_snapshot();
+                                }
                             }
                             dst.write(cloned);
                             (*call).has_heap_slots = true;
-                            let total = (*call).num_cvs + (*call).num_temps;
-                            if total <= 64 {
+                            if opline.op2 < 64 {
                                 (*call).heap_bitmap |= 1u64 << opline.op2;
                             }
                         }
@@ -5947,8 +6174,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     if unsafe { (*dst).needs_cleanup() } {
                         unsafe {
                             (*call).has_heap_slots = true;
-                            let total = (*call).num_cvs + (*call).num_temps;
-                            if total <= 64 {
+                            if opline.op2 < 64 {
                                 (*call).heap_bitmap |= 1u64 << opline.op2;
                             }
                         }
@@ -6000,7 +6226,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         attach_call_argument_throwable_origin(
                             &error, eg, frame, op_array, opline,
                         );
-                        cleanup_pending_calls(eg, frame);
+                        let mut error = error;
+                        // SAFETY: the live caller owns this initialized pending chain;
+                        // retirement restores the effective failure before throw dispatch.
+                        cleanup_pending_calls(eg, frame, Some(&mut error))?;
                         match throw_in_frame(eg, frame, error)? {
                             ThrowResult::Handled(new_frame, new_op_array) => {
                                 resume_activation!(new_frame, new_op_array);
@@ -6104,7 +6333,6 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     let source = unsafe {
                         (*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                     };
-                    let arg_slot = unsafe { (*call).cv_mut(opline.op2 as u32) };
                     if opline._pad & crate::vm::instruction::SEND_FLAG_FETCH_CV_R != 0
                         && unsafe { (*source).is_undef() }
                     {
@@ -6112,7 +6340,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                             eg, frame, op_array, opline,
                         )?;
                         if let Some(exception) = eg.exception.take() {
-                            unsafe { cleanup_pending_calls(eg, frame) };
+                            let mut exception = exception;
+                            // SAFETY: the live caller owns this initialized pending chain;
+                            // retirement restores the effective failure before throw dispatch.
+                            unsafe { cleanup_pending_calls(eg, frame, Some(&mut exception))? };
                             match throw_in_frame(eg, frame, exception)? {
                                 ThrowResult::Handled(new_frame, new_op_array) => {
                                     resume_activation!(new_frame, new_op_array);
@@ -6126,27 +6357,26 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         // SAFETY: the resumed successful send still owns the
                         // same uninitialized, compiler-sized argument CV.
                         unsafe { callback_arg_init(call, opline.op2 as usize, snapshot) };
-                    } else if !unsafe {
-                        try_init_borrowed_heap_arg(
-                            call,
-                            param_idx,
-                            source,
-                            arg_slot as *mut Value,
-                        )
-                    } {
+                    } else {
                         // SAFETY: the live caller source and pending callee
                         // slot are disjoint. Clone first, then mark only the
                         // caller TMP and initialize the unowned destination.
                         unsafe {
-                            let cloned = if (*source).is_undef() {
+                            let mut cloned = if (*source).is_undef() {
                                 Value::null()
+                            } else if opline._pad & SEND_FLAG_CONSUME_TEMP != 0 {
+                                take_call_argument_owner(&mut *frame, &mut *source.cast_mut(), opline.op1)
                             } else {
                                 (&*source).clone()
                             };
                             if internal_callee
                                 && matches!(opline.op1_type, OpType::Tmp | OpType::Var)
                             {
-                                (*source.cast_mut()).mark_internal_argument_snapshot();
+                                if opline._pad & SEND_FLAG_CONSUME_TEMP != 0 {
+                                    cloned.mark_internal_argument_snapshot();
+                                } else {
+                                    (*source.cast_mut()).mark_internal_argument_snapshot();
+                                }
                             }
                             callback_arg_init(call, opline.op2 as usize, cloned);
                         }
@@ -6276,22 +6506,22 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         if suppressed_call {
                             eg.end_error_suppression(call as usize);
                         }
-                        discard_pending_vm_call_frame(eg, call);
+                        discard_pending_vm_call_frame(eg, call, frame)?;
                         return Err(error);
                     }
                     if let Some(exception) = eg.exception.take() {
                         if suppressed_call {
                             eg.end_error_suppression(call as usize);
                         }
-                        discard_pending_vm_call_frame(eg, call);
-                        match throw_in_frame(eg, frame, exception)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
+                        match cleanup_named_call_and_throw(eg, frame, call, exception)? {
+                            ColdResult::NewFrame(new_frame, new_op_array) => {
                                 resume_activation!(new_frame, new_op_array);
                             }
-                            ThrowResult::Unhandled(exception) => {
+                            ColdResult::Unhandled(exception) => {
                                 eg.exception = Some(exception);
                                 return Ok(());
                             }
+                            _ => unreachable!("failed entry must throw or resume a handler"),
                         }
                     }
                 }
@@ -6318,22 +6548,22 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         if suppressed_call {
                             eg.end_error_suppression(call as usize);
                         }
-                        discard_pending_vm_call_frame(eg, call);
+                        discard_pending_vm_call_frame(eg, call, frame)?;
                         return Err(error);
                     }
                     if let Some(exception) = eg.exception.take() {
                         if suppressed_call {
                             eg.end_error_suppression(call as usize);
                         }
-                        discard_pending_vm_call_frame(eg, call);
-                        match throw_in_frame(eg, frame, exception)? {
-                            ThrowResult::Handled(new_frame, new_op_array) => {
+                        match cleanup_named_call_and_throw(eg, frame, call, exception)? {
+                            ColdResult::NewFrame(new_frame, new_op_array) => {
                                 resume_activation!(new_frame, new_op_array);
                             }
-                            ThrowResult::Unhandled(exception) => {
+                            ColdResult::Unhandled(exception) => {
                                 eg.exception = Some(exception);
                                 return Ok(());
                             }
+                            _ => unreachable!("failed entry must throw or resume a handler"),
                         }
                     }
                 }
@@ -6373,7 +6603,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     && !has_generic_member_contract
                     && unsafe { (*call).num_args } == 1
                     && !unsafe { (*call).named_args_used }
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                     && matches!(opline.result_type, OpType::Tmp | OpType::Var | OpType::Unused)
@@ -6447,7 +6677,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 if func_common_fast.fn_type == FunctionType::Internal
                     && !suppressed_call
                     && func_common_fast.plan.call == CallStrategy::Fast
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                 {
@@ -6523,8 +6753,15 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         if internal_exception.is_none() && handler_result.is_ok() {
                             complete_object_construction(eg, call);
                         }
+                        eg.exception = internal_exception;
+                        let retirement = retire_pending_call_owners(eg, call, frame);
+                        let internal_exception = eg.exception.take();
+                        // SAFETY: the completed internal activation stays
+                        // allocated while its owners retire; consumed slots
+                        // are cleared before reentrant PHP callbacks.
                         unsafe { cleanup_frame_slots(call) };
                         pop_vm_call_frame(eg, call);
+                        retirement?;
 
                         if let Some(exc) = internal_exception {
                             match throw_in_frame(eg, frame, exc)? {
@@ -6557,7 +6794,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     // argument. The required public count is therefore the
                     // exact arity, excluding the hidden method `$this`.
                     && unsafe { (*call).num_args } == func_common_fast.sig.required_num_args
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                 {
@@ -6643,7 +6880,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         func_common_fast.plan.call,
                         CallStrategy::Fast | CallStrategy::FastTypedScalar
                     )
-                    && eg.pending_invoke_this.is_none()
+                    && !has_pending_state_for_call(eg, call as usize)
                     && eg.pending_named_variadic.is_empty()
                     && eg.pending_closure_captures.is_empty()
                 {
@@ -8519,9 +8756,12 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         }
                     };
                 }
-                // SAFETY: arr_ptr was resolved from the active frame after
-                // any reentrant callback and remains owned by its operand.
-                let arr = unsafe { &mut *arr_ptr };
+                // SAFETY: arr_ptr belongs to the retained operand. Each
+                // borrow ends before diagnostic re-entry; acquire a fresh
+                // borrow only after its completion guard succeeds. An internal
+                // property alias retains the cell even if the member is unset.
+                let array_slot = || unsafe { &mut *arr_ptr };
+                let arr = array_slot();
                 if matches!(arr.value_type(), ValueType::Object | ValueType::Closure) {
                     if opline._pad
                         & (ASSIGN_DIM_INDIRECT_REBUILD
@@ -8688,16 +8928,22 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 if arr.value_type() != ValueType::Array {
                     throw_operator!("Error", "Cannot use a scalar value as an array");
                 }
-                let mut key = array_key_owned_or_throw!(
-                    idx_val,
-                    &format!(
-                        "Cannot access offset of type {} on array",
-                        idx_val.diagnostic_type_name()
-                    ),
-                    false
-                    ,
-                    opline._pad & ASSIGN_DIM_KEY_ALREADY_NORMALIZED == 0
-                );
+                let mut key = match value_to_array_key(idx_val) {
+                    Ok(key) => key,
+                    Err(error) => match mutation_array_key_after_diagnostic(
+                        eg, frame, op_array, opline, idx_val.clone(), error,
+                    )? {
+                        MutationArrayKey::Key(key) => key,
+                        MutationArrayKey::Clobbered => break 'assign_dim,
+                        MutationArrayKey::Throw(ThrowResult::Handled(new_frame, new_op_array)) => {
+                            resume_activation!(new_frame, new_op_array);
+                        }
+                        MutationArrayKey::Throw(ThrowResult::Unhandled(exception)) => {
+                            eg.exception = Some(exception);
+                            return Ok(());
+                        }
+                    },
+                };
                 if opline._pad & ASSIGN_DIM_DIAGNOSTIC_GUARD != 0
                     && let Some((target, _, _)) =
                         diagnostic_write_guard_target(eg, frame, op_array, opline)
@@ -8710,6 +8956,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     continue 'vm;
                 }
                 let mut replaced_value_release = None;
+                let arr = array_slot();
                 if let Some(php_arr) = arr.as_array_mut() {
                     key = php_arr.prepare_string_key_for_write(key, idx_val);
                     if let Some(element) = php_arr.get_key_mut_for_replacement(&key, &cloned_val) {
@@ -9074,7 +9321,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     );
                     // SAFETY: this opcode executes only after an Init*Call
                     // established the pending activation inspected above.
-                    unsafe { cleanup_pending_calls(eg, frame) };
+                    let mut error = error;
+                    // SAFETY: the live caller owns this initialized pending chain;
+                    // retirement restores the effective failure before throw dispatch.
+                    unsafe { cleanup_pending_calls(eg, frame, Some(&mut error))? };
                     match throw_in_frame(eg, frame, error)? {
                         ThrowResult::Handled(new_frame, new_op_array) => {
                             resume_activation!(new_frame, new_op_array);
@@ -9292,7 +9542,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 }
             }
 
-            OpCode::UnsetDim => {
+            OpCode::UnsetDim => 'unset_dim: {
                 // Remove key op2 from array op1
                 let idx_val = unsafe { &*(*frame).get_op_ptr(opline.op2 as u32, opline.op2_type, op_array) };
                 // SAFETY: `frame` is the active activation for `opline`; the
@@ -9366,19 +9616,22 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let original_array_identity = arr
                             .array_identity()
                             .expect("validated unset target remains an array before diagnostics");
-                        let report_conversion = !matches!(
-                            value_to_array_key(idx_val),
-                            Err(ArrayKeyError::DeprecatedNull)
-                        );
-                        let mut key = array_key_owned_or_throw!(
-                            idx_val,
-                            &format!(
-                                "Cannot unset offset of type {} on array",
-                                idx_val.diagnostic_type_name()
-                            ),
-                            false,
-                            report_conversion
-                        );
+                        let mut key = match value_to_array_key(idx_val) {
+                            Ok(key) => key,
+                            Err(error) => match mutation_array_key_after_diagnostic(
+                                eg, frame, op_array, opline, idx_val.clone(), error,
+                            )? {
+                                MutationArrayKey::Key(key) => key,
+                                MutationArrayKey::Clobbered => break 'unset_dim,
+                                MutationArrayKey::Throw(ThrowResult::Handled(new_frame, new_op_array)) => {
+                                    resume_activation!(new_frame, new_op_array);
+                                }
+                                MutationArrayKey::Throw(ThrowResult::Unhandled(exception)) => {
+                                    eg.exception = Some(exception);
+                                    return Ok(());
+                                }
+                            },
+                        };
                         // Key normalization can invoke a synchronous error
                         // handler. PHP abandons this unset when that callback
                         // replaces the destination, regardless of the new
@@ -10291,6 +10544,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                     if opline._pad & CALL_FLAG_DEFERRED_SCALAR_CANDIDATE != 0
                                         && unsafe {
                                             try_execute_composed_long_property_call(
+                                                eg,
                                                 frame,
                                                 op_array,
                                                 opline_ptr,
@@ -10330,6 +10584,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                     let do_fcall_ptr = unsafe { opline_ptr.add(1) };
                                     if unsafe {
                                         try_execute_direct_property_getter(
+                                            eg,
                                             frame,
                                             obj_val,
                                             do_fcall_ptr,
@@ -10560,11 +10815,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         };
                         unsafe {
                             (*frame).call = call;
-                            if common.plan.borrow_this() {
-                                frame_set_borrowed_this(call, obj_val as *const Value);
-                            } else {
-                                frame_set_this(call, obj_val.clone());
-                            }
+                            frame_set_this(call, obj_val.clone());
                         }
                         initialize_trait_class_scope(
                             eg,
@@ -10637,6 +10888,16 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                             opline_ptr = unsafe { opline_ptr.add(bound) };
                         }
                     } else {
+                        // A class change can reuse an earlier immutable literal
+                        // resolution. No PHP effect has started: resume this same
+                        // InitMethodCall with its complete primary cache restored.
+                        if obj_class_id != 0
+                            && ic.class_id != obj_class_id
+                            && opline.op2_type == OpType::Const
+                            && try_memoized_method_cache(eg, frame, op_array, ip, obj_class_id)
+                        {
+                            continue 'vm;
+                        }
                         // Cache miss — full resolution in cold helper
                         match op_init_method_call(eg, frame, op_array, opline)? {
                             ColdResult::NewFrame(nf, no) => { resume_activation!(nf, no); }
@@ -10961,14 +11222,14 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     }
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
-                        run_frame_destructors(eg, frame)?;
+                        run_return_frame_destructors(eg, frame)?;
                         complete_object_construction(eg, frame);
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11020,21 +11281,23 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                         let retval = unsafe {
                             &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                         };
-                        if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true) {
-                            let source = retval.dereferenced().clone();
-                            let callee_class = return_type_callee_class(
+                        if check_fast_scalar_return_type_hint(retval, ret_hint) != Some(true)
+                            && !return_type_is_exact(
+                                retval,
+                                ret_hint,
                                 eg,
                                 frame,
                                 func_common_ret as *const FunctionCommon,
-                                ret_hint,
-                            );
+                            )
+                        {
+                            let source = retval.dereferenced().clone();
                             let preparation = prepare_return_type_value(
                                 &source,
                                 ret_hint,
                                 eg,
                                 op_array.strict_types,
                                 frame,
-                                callee_class.as_deref(),
+                                func_common_ret as *const FunctionCommon,
                             )?;
                             resume_pending_exception!();
                             match preparation {
@@ -11148,14 +11411,14 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     }
                     // Recursive execute_ex boundary: callee done → return to caller's macro loop
                     if frame == initial_frame {
-                        run_frame_destructors(eg, frame)?;
+                        run_return_frame_destructors(eg, frame)?;
                         complete_object_construction(eg, frame);
                         eg.current_execute_data.set(prev);
                         unsafe { cleanup_frame_slots(frame) };
                         pop_vm_call_frame(eg, frame);
                         return Ok(());
                     }
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11307,86 +11570,88 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 let retval = unsafe {
                                     &*(*frame).get_op_ptr(opline.op1 as u32, opline.op1_type, op_array)
                                 };
-                                let source = retval.dereferenced().clone();
-                                let ret_callee_class = return_type_callee_class(
+                                if !return_type_is_exact(
+                                    retval,
+                                    hint,
                                     eg,
                                     frame,
                                     func_common as *const FunctionCommon,
-                                    hint,
-                                );
-                                let preparation = prepare_return_type_value(
-                                    &source,
-                                    hint,
-                                    eg,
-                                    op_array.strict_types,
-                                    frame,
-                                    ret_callee_class.as_deref(),
-                                )?;
-                                resume_pending_exception!();
-                                match preparation {
-                                    ReturnTypePreparation::Exact => {}
-                                    ReturnTypePreparation::Coerced(value, diagnostic) => {
-                                        if let Some(diagnostic) = diagnostic {
-                                            report_scalar_coercion_diagnostic(
+                                ) {
+                                    let source = retval.dereferenced().clone();
+                                    let preparation = prepare_return_type_value(
+                                        &source,
+                                        hint,
+                                        eg,
+                                        op_array.strict_types,
+                                        frame,
+                                        func_common as *const FunctionCommon,
+                                    )?;
+                                    resume_pending_exception!();
+                                    match preparation {
+                                        ReturnTypePreparation::Exact => {}
+                                        ReturnTypePreparation::Coerced(value, diagnostic) => {
+                                            if let Some(diagnostic) = diagnostic {
+                                                report_scalar_coercion_diagnostic(
+                                                    eg,
+                                                    frame,
+                                                    op_array,
+                                                    opline,
+                                                    &source,
+                                                    diagnostic,
+                                                )?;
+                                                if let Some(exception) = eg.exception.take() {
+                                                    if matches!(
+                                                        diagnostic,
+                                                        ScalarCoercionDiagnostic::FloatToInt
+                                                            | ScalarCoercionDiagnostic::FloatStringToInt
+                                                    ) {
+                                                        let outcome = format!(
+                                                            "{} returned",
+                                                            declared_type_error_value_name(&source)
+                                                        );
+                                                        let err = return_type_error_value(
+                                                            eg,
+                                                            frame,
+                                                            func_common as *const FunctionCommon,
+                                                            op_array,
+                                                            opline,
+                                                            hint,
+                                                            &outcome,
+                                                        );
+                                                        append_replaced_exception(
+                                                            &err,
+                                                            &exception,
+                                                            eg,
+                                                        );
+                                                        match throw_in_frame(eg, frame, err)? {
+                                                            ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
+                                                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
+                                                        }
+                                                    }
+                                                    eg.exception = Some(exception);
+                                                    resume_pending_exception!();
+                                                }
+                                            }
+                                            prepared_return = Some(value);
+                                        }
+                                        ReturnTypePreparation::Invalid => {
+                                            let outcome = format!(
+                                                "{} returned",
+                                                declared_type_error_value_name(&source)
+                                            );
+                                            let err = return_type_error_value(
                                                 eg,
                                                 frame,
+                                                func_common as *const FunctionCommon,
                                                 op_array,
                                                 opline,
-                                                &source,
-                                                diagnostic,
-                                            )?;
-                                            if let Some(exception) = eg.exception.take() {
-                                                if matches!(
-                                                    diagnostic,
-                                                    ScalarCoercionDiagnostic::FloatToInt
-                                                        | ScalarCoercionDiagnostic::FloatStringToInt
-                                                ) {
-                                                    let outcome = format!(
-                                                        "{} returned",
-                                                        declared_type_error_value_name(&source)
-                                                    );
-                                                    let err = return_type_error_value(
-                                                        eg,
-                                                        frame,
-                                                        func_common as *const FunctionCommon,
-                                                        op_array,
-                                                        opline,
-                                                        hint,
-                                                        &outcome,
-                                                    );
-                                                    append_replaced_exception(
-                                                        &err,
-                                                        &exception,
-                                                        eg,
-                                                    );
-                                                    match throw_in_frame(eg, frame, err)? {
-                                                        ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
-                                                        ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
-                                                    }
-                                                }
-                                                eg.exception = Some(exception);
-                                                resume_pending_exception!();
+                                                hint,
+                                                &outcome,
+                                            );
+                                            match throw_in_frame(eg, frame, err)? {
+                                                ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
+                                                ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                             }
-                                        }
-                                        prepared_return = Some(value);
-                                    }
-                                    ReturnTypePreparation::Invalid => {
-                                        let outcome = format!(
-                                            "{} returned",
-                                            declared_type_error_value_name(&source)
-                                        );
-                                        let err = return_type_error_value(
-                                            eg,
-                                            frame,
-                                            func_common as *const FunctionCommon,
-                                            op_array,
-                                            opline,
-                                            hint,
-                                            &outcome,
-                                        );
-                                        match throw_in_frame(eg, frame, err)? {
-                                            ThrowResult::Handled(nf, no) => { resume_activation!(nf, no); }
-                                            ThrowResult::Unhandled(t) => { eg.exception = Some(t); return Ok(()); }
                                         }
                                     }
                                 }
@@ -11536,10 +11801,10 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
 
                     let prev = unsafe { (*frame).prev_execute_data };
                     if prev.is_null() {
-                        run_frame_destructors(eg, frame)?;
+                        run_return_frame_destructors(eg, frame)?;
                         return Ok(());
                     }
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11600,7 +11865,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 }
                 // Recursive execute_ex boundary: callee done → return to caller's macro loop
                 if frame == initial_frame {
-                    run_frame_destructors(eg, frame)?;
+                    run_return_frame_destructors(eg, frame)?;
                     complete_object_construction(eg, frame);
                     eg.current_execute_data.set(prev);
                     unsafe { cleanup_frame_slots(frame) };
@@ -11608,7 +11873,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                     return Ok(());
                 }
 
-                run_frame_destructors(eg, frame)?;
+                run_return_frame_destructors(eg, frame)?;
                 complete_object_construction(eg, frame);
                 eg.current_execute_data.set(prev);
                 unsafe { cleanup_frame_slots(frame) };
@@ -11829,35 +12094,33 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                 let return_cleanup = opline._pad & RELEASE_TEMPS_ON_RETURN != 0;
                 let nested_objects = opline._pad & RELEASE_TEMPS_NESTED_OBJECTS != 0;
                 // SAFETY: the compiler emits a bounded CV/TMP interval for the
-                // active frame. Compact frames maintain exact ownership bits;
-                // wide frames retain the existing slot-level fallback.
-                let range_owned = unsafe {
+                // active frame. Every frame tracks its first 64 slots;
+                // intervals beyond that prefix retain the initialized-slot fallback.
+                // SAFETY: the active instruction and its equally sized cache
+                // share an index; finalization initialized this marker's mask
+                // after resolving its absolute bounds. Masks contain no bits
+                // beyond the interval, so embedded scope bits are excluded.
+                let (range_owned, prefix_mask) = unsafe {
                     let first = opline.op1 as usize;
                     let end = opline.op2 as usize;
                     let total = ((*frame).num_cvs + (*frame).num_temps) as usize;
                     debug_assert!(first <= end && end <= total);
-                    if total <= 64 {
-                        let below_end = if end == 64 {
-                            u64::MAX
-                        } else {
-                            (1u64 << end) - 1
-                        };
-                        let below_first = if first == 64 {
-                            u64::MAX
-                        } else {
-                            (1u64 << first) - 1
-                        };
-                        (*frame).owned_heap_bitmap() & (below_end & !below_first) != 0
+                    let ip = opline_ptr.offset_from(op_array.instructions.as_ptr()) as usize;
+                    let prefix_mask = op_array.cache.get_unchecked(ip).release_prefix_mask();
+                    let owned = if end <= 64 {
+                        (*frame).heap_bitmap & prefix_mask != 0
                     } else if !(*frame).has_heap_slots {
                         false
                     } else {
                         let base = (frame as *const Value).add(CALL_FRAME_SLOTS);
-                        (first..end).any(|index| (*base.add(index)).needs_cleanup())
-                    }
+                        (*frame).heap_bitmap & prefix_mask != 0
+                            || (first.max(64)..end).any(|index| (*base.add(index)).needs_cleanup())
+                    };
+                    (owned, prefix_mask)
                 };
                 if !return_cleanup || op_array.try_entries.is_empty() {
                     if range_owned {
-                        release_statement_temps(
+                        release_statement_temps_with_mask(
                             eg,
                             frame,
                             opline.op1 as usize,
@@ -11875,6 +12138,7 @@ fn execute_ex_inner(eg: &mut ExecutorGlobals, initial_frame: *mut ExecuteData) -
                                 STATEMENT_TEMPS_ORDINARY
                             },
                             return_cleanup,
+                            prefix_mask,
                         )?;
                     }
                     resume_pending_exception!();

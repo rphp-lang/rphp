@@ -1,0 +1,1895 @@
+{
+  "complete": true,
+  "baseline_commit": "2488921c",
+  "scope": "isolated real-parser replay; ASTs retained through phase, initialization/digest/teardown excluded; does not equal the whole PHPStan phase",
+  "driver_sha256": "9eb7282918e487f1280db014dbd5183f8cf8a064a703bb7fcfdfd425d0831a11",
+  "input_count": 331,
+  "unique_input_count": 270,
+  "input_bytes": 3799889,
+  "native": {
+    "complete": true,
+    "purpose": "exploratory instruction feedback, not an acceptance gate",
+    "event": "instructions:u",
+    "counter_scope": "analysis FIFO",
+    "cpu": 2,
+    "rounds": 2,
+    "warmup": "none; fresh TMPDIR per run",
+    "memory_max_bytes": 6442450944,
+    "memory_swap_max_bytes": 0,
+    "outlier_policy": "retain every valid output-checked sample",
+    "samples": [
+      {
+        "runtime": "baseline",
+        "wall_seconds": 2.092979101013043,
+        "output": {
+          "exit": 0,
+          "stdout_sha256": "f39e2d6d7be3bb014fcd4566e37acbb7780ab5bc291d31634b30bd5c0f2e2416",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "analysis_seconds": 1.199471235,
+        "instructions": 16161037537,
+        "counter_running_percent": 100.0,
+        "round": 0
+      },
+      {
+        "runtime": "baseline",
+        "wall_seconds": 2.067829753999831,
+        "output": {
+          "exit": 0,
+          "stdout_sha256": "f39e2d6d7be3bb014fcd4566e37acbb7780ab5bc291d31634b30bd5c0f2e2416",
+          "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+        },
+        "analysis_seconds": 1.170953751,
+        "instructions": 16155516087,
+        "counter_running_percent": 100.0,
+        "round": 1
+      }
+    ],
+    "binaries": {
+      "baseline": "8c95f735eca9d6ab8e26adf2d7aa05640756557be739b558bb7db34ff3013ed8",
+      "reference": "2d059aa6d433b73285c68cef6fa37b66bf7f4834240b34b944ad68caade7aad6"
+    },
+    "inputs": [
+      "9eb7282918e487f1280db014dbd5183f8cf8a064a703bb7fcfdfd425d0831a11",
+      "0335fe28e70618e0e38e54d56f2ce361d2372e691474036a0a68318d36d990c2",
+      "3397e2f6b8dbddd2dcd045394d40e1163bd172f43e6ac524a93c458bb672b793",
+      "cb8b31e82c61ce197871c9e8a6f122256751f2ab606dd2be90846d4fa5f8933e",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "5d8933108231c05edfca068501af1c40bf7b51b0248c8b0cdca20378f290f10b",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "79d4a950209bb09f6ebe9f8b32a50b5bf0ee36442eea0d02426d1e1717f220b0",
+      "e0bb6e7434c02e158568bb3c1e702185e1be14b82e677d807ca5904b2ab1a765",
+      "cef48fd78eaf10d0d9fcc67242cf8125d8429a4ce1f1933db3dd17a0078aa007",
+      "38514bff6c25c1579b7eee8cacd48abc918e841c7a643e79daba57a857d4532b",
+      "08b80478ba85424ce226803be32acc0b817b46cc84d130e90ba322427bc4d16c",
+      "d9b3f8977bdd2767dbdb4f310ff3486544e6ed1a48f6dc7af3861bfcfc60f499",
+      "5d0dd6c82917f08b8032eb602ea8722c745625366907831dc961740a120fd456",
+      "339ffa06b9f47fe814530eedf63344f5dfc1c4cc2a45fbd6303ab51e407e6faf",
+      "d1d1ef454b16aad094135ee94e3b78c73078c14eeff4d740d4191c04c5112831",
+      "2b68db679daec569f1293db1a80d5f1d6263e17987d360fd99209c110b5fdccf",
+      "fdb0cfc0fe4f6e6dff4e62c57ec80c546039e9ef46e0375035c773386ffe90a5",
+      "e7dca87af76354fb6b31362bc88a465b62a25703b85f48d1dc20c8536bf190d1",
+      "28797a93a76842b29c74ec194b2d757b0a105aed354945be12ad27a1f9d23d2d",
+      "9b04aa6261dd390e11ff8c429c183734215402cb96bc73db24bb39cf19c8851d",
+      "c5c3419f3ef4018aafdc65d68615c2b686a01787261459c5f21a397362148700",
+      "7bc847983818c0cd75802eddbea09af69f37acdda283079a8a4122b9e46a9395",
+      "0274ad8c6e8e376abf6fbb7eb436fbe79cde8e9f2fbc2329a82de22cf4f1c545",
+      "c52164233a3307f99d9875e15c7307fa90124035838ffc1b4fb545ed33506a1b",
+      "eb14c877878249e9684700c7ca3ca4c7ed017531a4f685e76d76bfb56dc30148",
+      "0a1e4fe949bc71f914a670d93bf2410f357ad7d3cd9d38ae9be957dcd120298c",
+      "a644a567ba6e2f9745ef40b45767b076d63c8315b4eb7572fe52914da7c66e7a",
+      "3de05a806abbf0f7bfdd5b72015c0da62da4f49e53681d93b49c667e9e99b55c",
+      "429cd907b3402d420ab8b8103754172e4bb6309e3eae93f7221b5fe082121be2",
+      "339c6fb49871baf8ac7b65e9d2a4ff13f7f4119874dc2237056763d8d117cfb8",
+      "d1cee858fb50b9223dca567fde0ac580cf6009b16c116082ff3b988da7d67659",
+      "b746aad75e1ee3ee709b9a8b9a2a02c5a5fc8e8b12e83c33558fa43522e17d5b",
+      "13332f074fb7abec1de6fc27a25836abf2900463e4f036d880a91525d782e6d2",
+      "49c17934b05b1b1f3bba2141532a7a7ef05fdecc8b984e1ae1653f2092f5b724",
+      "4c1599540c9a5a986e48a54af69dba39bb26363bdd59decdf4f3799fa91cebd0",
+      "a068b03bef4b3cad51b9f4b3a6fc16a0ba249aedab691e70907c1e6f9dd635ea",
+      "908d6b0f1b3f41764d2d3d9e4c193739a3972ab83e5f502a00c932653308b90c",
+      "0a8854f2accccd6fd2ee6ef14e49612ca4521cbe572a878968a8a90a6759cf94",
+      "35118b090cb41c7ffa5647ca12222796385f0604e9119a13293178996b488b8f",
+      "4e55ff1668f10ad30a583d7a64e2ed7665ac19be303241325f7473a7921006e6",
+      "db4c0a85ebb3c48ca30a8ca4019f0ffb944f72552ec449b764ac6e8980d9bb49",
+      "b0e2309f46b8769ab2eb0f3cd0b301814572b1f7abe49c0291cc67cc526f9cff",
+      "c325ac2b2496bb13a11f9e5a244d83952b62e716e603a6bfcf010b26b2b78b56",
+      "ad3097e27c92af045dde41386c04ebc22d6604a39c3601a0eda288f90e6cfcf1",
+      "5d6d3b27844a1637c6528f99fc6593c86b6d8996e50403e6abc6c505c2a843a7",
+      "8deef51464b7761e436a5a66675bcee07fb0457b0c1f291a69515ebf364fef88",
+      "96307d28c54e2f2acc0281305315d3ff77ce3b53c40685b1b35433cf73352e9c",
+      "c2f4d1b4ee31de945ab735d01b7512decb633cd7871b61659c3305b356a6d2a4",
+      "bc05343dc225aeff7253bf70d37f4aea8e8f8afd6bb4375cc1af373dfcbb312e",
+      "13f30bc1f2ce36c4be3d98d784c2dacbb7742c1e23ef18bd75e2fb8dffec935c",
+      "e8545842ba6ddd374318f090083ab7637ac9b80e70b0e0aada04627ed59e2269",
+      "8e13c378227621ae85916063f104f90dea7c2168813d472c3f560f95a2cfce03",
+      "96307d28c54e2f2acc0281305315d3ff77ce3b53c40685b1b35433cf73352e9c",
+      "c2f4d1b4ee31de945ab735d01b7512decb633cd7871b61659c3305b356a6d2a4",
+      "15e2ba126bde089df56cece7f6f8c8f653fb3d774a1776ba819668a38f70389e",
+      "4431109d74e0c1baf17458b514aef16ad7a1f98517a4dc07e502b749ee59e3e4",
+      "101a71e841cfad36fd201fd747421aa6e54fe781950284616f76a12ff4341fa8",
+      "4431109d74e0c1baf17458b514aef16ad7a1f98517a4dc07e502b749ee59e3e4",
+      "dd79bff3c2dfb569d8bd510b9b4470ac00cd823143b6e210104522af9afb1b88",
+      "934f6977e29f7083e33ebef58440af00d32b1d89e5730764c94178563678dc4e",
+      "430b648a021176072a24c049b016e76b0d344e5255585e10c60fde3ecdcea981",
+      "a9084c5fe8433b9ead1703dbf80b2b8a6957f57ab171c0146e1921a4f465810e",
+      "2e5946e3c353566011871c00418f94a9f12658dd5ee558348a87b672d5c425fb",
+      "f3d3cd182f61e18dd42d8d561c2d224a5843fc7751140588dbdf723085b44257",
+      "6538589fadf65ab8970a567641af824b3af6e8eeb8f5b7fe3a8b146d9f769f80",
+      "f3d3cd182f61e18dd42d8d561c2d224a5843fc7751140588dbdf723085b44257",
+      "6da5567cd940bcd64e92cd604b50befc1373cfa00a9276c36d485cad9cb89e4a",
+      "8b971cba21835f588e11c95e44c789acb0137c95c9701d3b683a83932e7bec41",
+      "56c5d4e5b00432432173ff0bba4693f366c40853302cb121773b8cf1597e687a",
+      "573bf880ee7cd6617bbfb7ebdf252b73f05048e436a8f98797078bf52f17c9a0",
+      "52118fdca894cc970e11d954f21c7cd9b3245ed54a1910bafef90f6669112b70",
+      "141ee774a0e87b57dc9eee1ef19a7d74499ef2ce8dfc9184976faa8621603933",
+      "5b54acc9abd9e4d1de27cac3d082252b4341028ddacc63c76044686468d99375",
+      "141ee774a0e87b57dc9eee1ef19a7d74499ef2ce8dfc9184976faa8621603933",
+      "2e90cb7bea3a84f66638938a0cd8a4485476e90d1769a1a84655b43eab847ac6",
+      "36749d81fc3e99dc4912d6d314766e6c8c327cbb3e6138eee2f0f25f42110704",
+      "9f52d761bd8fc8232aa4e3083f1c33f2c4eea85a4a42a39e6f1d9bc5a9647334",
+      "03c81cecf12bf36900175bbc9943095138fd04feda76a5dc33f2366666afbae3",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "1bbd00b17988df76ebba5ed52b82557888dd035a737109674da4a805f81432bb",
+      "2adc813c51b43476b08c7173dbdfce1b1c91f93f39a29408f76f45bb5ecbc505",
+      "3a304a36d36a1122c4138aebaa2da9440439292b0d4f7e0f5f09f8d6a35bc76c",
+      "34d738b37c95a69ce859c7888a1f35b2e1a2a141e3af83b82632c6afa5168318",
+      "6e0dee0c6ed68c70d23c84e9b066042e40c18cb021e23b5693ed04996a900d07",
+      "0756a237d938a651f10e1a1f01f719f80535313a431210285bcef326c4915798",
+      "fa35a279269b965ddf4d02212978be497512ab6b29dc4313fb8f81ddee9a6567",
+      "0756a237d938a651f10e1a1f01f719f80535313a431210285bcef326c4915798",
+      "d83e53a8669a7b350e9f8735af72286aec9dad4d1a56017ae11b4e96159fa19a",
+      "a704462ad7acfa9aeae9851a9acbf58f6ff0c4a86b65c0558a536a0eedbe8552",
+      "0a3500cf8c7eea4d9f575c6205b3309dd1a4a3b76827915cd1a14fc494cb8572",
+      "a704462ad7acfa9aeae9851a9acbf58f6ff0c4a86b65c0558a536a0eedbe8552",
+      "d38f08219c951d48d43a8b498400e39b18e58ae45e09c1c378e8d96a7d21d0b6",
+      "fccbde1dcca2584e9b25e8b6bcb43fb470faedc731b00bbc6d9f2405db6eb4a9",
+      "58d4a8270854c3c8e07b52f0733e95fdc5c4f358990919fa1a9da07d3f0d89c0",
+      "2efb9e7ddad33a7eb2fb571349fd2db11f9d32b67b35be3f372d850c962a0e8b",
+      "7328b6acce134b7456680b2bbc396445eca13ba794a56521e53132a7a973c3f6",
+      "34e9d46ed2a4ebcd6eb022565a36f68c906b8b667da322ee9352c00f51f9129f",
+      "bd143b656df4258eafc9a2cfd9e767f275518a224ce8541f1c351ff66f1201fb",
+      "c0996fef104b1f10b2c2af1d9ab819c9522c6a46b78d99d24b94427c27be1d7b",
+      "7e48b909f1078d201e01ddde181f46b1e77c7a29ce53df641aed461d7eaf57ee",
+      "621d35bc932d91ea1914694fe1c7dcde1d18c1caa36a5136bc9ce9bf3dc51da3",
+      "7b81e688532576c211fc8517a63d974424e5c430b66e2188f24d2487f130fc2f",
+      "b32398b64b4e5efc2169fe8d03d9d2118957bc13b77d1011d945f82543935124",
+      "6a316182a1ff17b4e08d745f75fb5f1d340bb406ac77095a6b9cc752b484c067",
+      "7b5ed841ab54d36e442fb95d12bcedceba4a4bbf07357ba70854f24513c630f3",
+      "aa5bb1efcfad0f94269ec52a267ca1dbef38abcda43995e56b22bb12613f6a5e",
+      "621d35bc932d91ea1914694fe1c7dcde1d18c1caa36a5136bc9ce9bf3dc51da3",
+      "2fe8d7af427093027dab5fc0fcb3d9526ef17067564485b4b862b9f5338f558c",
+      "f4841cbd44992dd568d02e5f75f3e7a4ddb32c79104855acd9e483169dadab8c",
+      "3d51dfa9d41a543292836603522edaa1eeb188e074bca2502c89bb4368a1c2be",
+      "68c6f3d952c542353dd67edcd2ec9d8ea3bd987923d7b9d21e3891277cc73057",
+      "600b6c1b544697df227e240edb0f55d068c4f2454edfea79c3f9653cc9839bdc",
+      "bb98865f7b73b16b98a2326b257205198812ea305961bb895cad95d96266a30f",
+      "b601c108fbbec89a44e628d14237dbe4b35125ef51957cee178ba138fc8a548f",
+      "4d01a2f52fda464e1bd990880f84b5a00feb75c4c7d1cee77fb18b883877a94e",
+      "d0ca10d3dcbd54778ee9b9c54dfa5117fd67e20b941092cf180518bb9c5177af",
+      "8441a72c48426fc97ba41d79c069b1f8592847315c54246edf643219051bb80a",
+      "810e875db33fc1f9ab885dca2d62f68963d7435b335937e3eda620589ed95198",
+      "d9ae265c977d2c128cd33a8dd3a54f1f1c547c18480577fce2ee17482bac0f37",
+      "89d4b79cd48dc1684a54c771bdb7a596f4714a113d86a9f75acceb246c21e90d",
+      "c8c96abe593387ff7cb625affdfa0fdd860e05976f959bbfcecd89971d3bbb2d",
+      "46e0c0afb214b7d3c49e4b4312fd8a7a98fe03d81a21d363d30fb3cb7ace580e",
+      "4645f2abf7ab77aa3f8eeaab43df21e9c1576f45d7352a834473123e4c7dab27",
+      "b4f25041c6c89508526a6fbe2fc33683d6de6a1ae5217c6038e3d7c651886c38",
+      "b25c488ee400cb7155535c70d13aa91c1274afd6acbb19da9efafdede30a2539",
+      "927406b4962c73b6d5015d21b025011bc35b5e85341ff4dac6fc953c6bf9f6ea",
+      "4f05a426c7033f90a76f87a7c5da65178f6c223e0b690c6f1a9728bc9e09a8ad",
+      "c2f4d1b4ee31de945ab735d01b7512decb633cd7871b61659c3305b356a6d2a4",
+      "b1417eb894743ffad749293fec099bea9c4053c2cedc5e2abaf5fb2a0bd59e0e",
+      "2ef88659addcd7f4f8b518c8be5666139ee2fa53110637f9efb4843369cefb30",
+      "2981dfa863cec66e8fe0a7bfbead06191a109e59613702714cdab77239c29450",
+      "8b411c97cff5f775cee657f5f9750af6b49243ecc13e06c54c61d92da3050698",
+      "6afd80bc0213205031803ffb75871c1971dfda1be8f98820d03d796d5b2d2782",
+      "8b411c97cff5f775cee657f5f9750af6b49243ecc13e06c54c61d92da3050698",
+      "f74d00c60bde992fda22e2b7883f27c72c55a6a792759346ac26255081b03585",
+      "3a304a36d36a1122c4138aebaa2da9440439292b0d4f7e0f5f09f8d6a35bc76c",
+      "dafe0584b7f5d8f5c13010b1fc77040bdf44b27bdd687c5a1407799497ab176b",
+      "3a304a36d36a1122c4138aebaa2da9440439292b0d4f7e0f5f09f8d6a35bc76c",
+      "faa31345b0022d2ce7f10712dc4995b825ab503a46683b297b0b5d4f2bd52344",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "ba9fa7d4046e8416f16b2c7c5d204430830723b6c0688bff25e8bef7e89b84b6",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "8520f94cfdbb9e638d2934ba7d6a4c482c2ed3e016cc5169633540171cbcbf0d",
+      "450b01dac25dbfbd86cb73423f85fe5625953496dba9de4a8d36e5c79a9e166f",
+      "4d6c87bce15da1acf9faab6b7a154396ea976ec2f154a99bae7564cbe3f7d8f3",
+      "1458c4f902b0efa81d1290836823e037e50057f2f8bc65c4c47a7f1f5b3b795f",
+      "ff4ba038a71bd79fefcf9a675d0b1830fdb2398778a4f2c735e0eae7bd6009da",
+      "1458c4f902b0efa81d1290836823e037e50057f2f8bc65c4c47a7f1f5b3b795f",
+      "25d0ca70023f61aada8b992abd99d0537d333ac8bb435d3ed5876ce6ef75dd3d",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "f6eb2a1f3405a8bb7013133a18fa927b4b05c0a747a4bb92e9a8df64397a7118",
+      "00ae77a8813eb558013a2c1637f5b17680b11b024072661915ee87730ab76557",
+      "4431109d74e0c1baf17458b514aef16ad7a1f98517a4dc07e502b749ee59e3e4",
+      "2c952293fbbd5b76e4502d018cbdb31273c12afcfc7a37521ac2f10b8c5f70c7",
+      "078dcd32b34bafa9d5dc9a7fc0d086ef42ceda3e697aa1bb6fdeebb5c0c0718d",
+      "a4c1d347952b86f903bba6a700f82f556d72ab1077b96d6c425ed53735ff55dc",
+      "89539fdb4a6811f948d45c25d3d45966439935be92acb268afbe6065c577c1e6",
+      "4de3f3ed91b8e8c4721d8978e7b3cbbb516d76f30306e0f157d00cfdd9029b2a",
+      "5f1950561f362c964468d7f426b7ff465b6b01745c036ac3c485b4905ce451db",
+      "f3d3cd182f61e18dd42d8d561c2d224a5843fc7751140588dbdf723085b44257",
+      "6c646827088d74aa54a046710e17eafcd61e5a589185a0c3d6928f273c44c7c7",
+      "989a63f455a71a8b36e8e2e0e77429302a386c1648d326f0e13f419899e0127e",
+      "2fd17bd4dd2da9ff50c63ba3daccea73e6ff92b8eaa8c84998306671870978c8",
+      "b6730b517dafa4b8169bed73f0e796ec2fd93d9cda826fbf85df58589787ae95",
+      "f2b9b019b3d1e9ada1298e558c9d53b5488e2e54fee55ea702b5dd4257a9e83f",
+      "ad95c1ade0324455539157bb5434b3945a350b64041908dd845a3eeeddcf9ec0",
+      "f9809bbeff7d308e2a119fa7c5350bcc5c70036417488780fe7c4f61840f7119",
+      "811ced001c65cdb080eaf372d030ca4ebc6a1df0689c1703aef148e41b20362e",
+      "f9809bbeff7d308e2a119fa7c5350bcc5c70036417488780fe7c4f61840f7119",
+      "963b543337075bda760056adacc7911a0dfcda29dc60cb58f082d4bf0e04de5d",
+      "844cb3837c91225685b773e2d36ece597fd6d5f674c980e886f5f3d0178ccdb5",
+      "963b543337075bda760056adacc7911a0dfcda29dc60cb58f082d4bf0e04de5d",
+      "04a4a792d3a688a17f1071ad8f23afd0ac0fb01f24c9fe0473029cb0b7f64a93",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "da035f0d1979b70c102c3880839c16e88f0b31bd6f972cf17a19418da617e909",
+      "0da5c1ae70a0c9a9b7dbe359c9c2a33b5b5587622c39d0c8574016de605b5996",
+      "ca5f85ad1059ef1e9bdfe1ca926807d6c896786782a8f50293d8e957a2a2a412",
+      "b187aec4dfdedd9856661daf8ea051479a7b2a2c9bfb90ce7972015ad3faa7c2",
+      "141ee774a0e87b57dc9eee1ef19a7d74499ef2ce8dfc9184976faa8621603933",
+      "f39b6593d35336cf6eace0565fffbe07eebba69ff18b1303ec2e2bd2b757c0a9",
+      "e2de648d7afc1fcfcddaa9f1ba81050f0d0eac6c42bf60cd538df5c13a519a8e",
+      "7056d2da2ef0061e93854c64e9ab1d8049ddfd42e1e1fceaa60cf240d8448921",
+      "dc0a1fa9348eac264cfc0830f29d4039dd2c3df6cd3cfdb14911fa1ec81c442f",
+      "4431109d74e0c1baf17458b514aef16ad7a1f98517a4dc07e502b749ee59e3e4",
+      "82d486149227428248830dabba6a7820705afff7b19e5d6c96c2bd1ce611d44c",
+      "5e537e2840fe90b66183e49460ba516a5588ee928a0bd7c7b97db23a84a76f13",
+      "a82851a586c7d8fbf13f06232021faabbcba3cd7d053d36161e2ae27c9da3bf0",
+      "5d6d3b27844a1637c6528f99fc6593c86b6d8996e50403e6abc6c505c2a843a7",
+      "dfc05fa23121eb3ddb47f0027d83f3b247c84b2cdd325dcdf9859fdab2dc06de",
+      "8b411c97cff5f775cee657f5f9750af6b49243ecc13e06c54c61d92da3050698",
+      "35a07bb6cc172093099b6d81a29676c90448f0927597b9c7cc634a21c3be2dac",
+      "700ad0082593b3f603ec5f38a079a8b2705635ee8d2737ded93c232cb8bd8947",
+      "8e103794022b9c4d8fb59c241e5b8aec635dcf6c4a21d6145eae6a148d225532",
+      "3a304a36d36a1122c4138aebaa2da9440439292b0d4f7e0f5f09f8d6a35bc76c",
+      "cbabd184e68c495f76d26f64e8181d5bb0bfabd25e7509dde541561d6ed2a397",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "3830f53babf95c68de620f8502aa5accc6cd7965c5c6f85ca03a5da801990050",
+      "b32cd2872abea9c7e97044fc29f00268c79447860e26be59ebaab0ae542b4ec1",
+      "bf40f097538a36d530cb510f4d8f719d53eca0049aba1f9840f5312018caf485",
+      "a3c7cf256d4bb5a772017e6bf00791db34357df1abd3c9974809625b2da9cc92",
+      "bf40f097538a36d530cb510f4d8f719d53eca0049aba1f9840f5312018caf485",
+      "44f9bc3e26b241b52a6000148530343d78371ffe1560930b07c18fdbccfd6e2f",
+      "24faef393bd0e1569626c822515db23082346d96ca4a7e52014b8df40a7c76dc",
+      "835d53b3e6be0d56d9bd7acb270f33b1352d3cd2be24d8185a153c352f07aa4a",
+      "c718b1471bb8815811dbf4a30e2991895471b09d983778eadc9cbf5d1b561e8a",
+      "bc15f0a94d34be3a6cb4fc3e8aa9116cff3ce812450531e1473f9545ce97c96b",
+      "40924bed8216243b6fa2c72dcba0fb56aec5ee3b5902b407cb544df45f83aec8",
+      "4270a9766f53eda98c9cf81bd8839f33b49919643475e64666c5b259e2bd3723",
+      "ad35d75dc39abbc3131dec08cf6d8f05d114c67a113e56ccc0e39254f164354f",
+      "4431109d74e0c1baf17458b514aef16ad7a1f98517a4dc07e502b749ee59e3e4",
+      "4c187f10f3eb91d6e3df701e44f831ec20e230c2b86ef04483c592148e5ab3c3",
+      "5e2beb8cdccfc6c496faf290e9dd712fd4c8e4e2eceed930923b393f164702a6",
+      "27ec3e11f674208ce1dc27ebe062f7239778316c1a02085b88ebbe95111a3229",
+      "24f540a05528e141944902787f7b0888a28f1ba135af45fb3535a623139708d7",
+      "963b543337075bda760056adacc7911a0dfcda29dc60cb58f082d4bf0e04de5d",
+      "6cdd04b97da4451e5194d532973d117b95c8d12e59592b67e028e04ebdc1efce",
+      "7d1872370052015680b243bdf74cf303eff0838bad32a00982e0d245b27a169d",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "b870f3005cc8afe65c271fd0523e08ce2616377636c272446ca9685cd4382140",
+      "cea9bf2e676d943776c795c1ce909fc9ca310597a9993f669ea229b20f834788",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "fa86150704fd727374bc73a200b8854c0b4c783680d22984a06275523b6d60cd",
+      "8e606d25d717b4516b7f3bbb25f70114b2b3acae76f86f9dc392ff1a1c3671fc",
+      "a67f18590592b0620bb065388aa0c48b0451b546f7e755c058628059b7a5fb2f",
+      "141ee774a0e87b57dc9eee1ef19a7d74499ef2ce8dfc9184976faa8621603933",
+      "d9383513a51fd18fd563a008b4f327e178d1de737cf8554175315b3e8fd569d3",
+      "1d875e86cbe6a5c924f6fcee2ddbc280593921b731dc267bbc8ffed6ba55349a",
+      "cafc09f4fd5b6348008bab88ecae4ca4cc5065fe76b3d1902c1a9cb7c8a5fcac",
+      "471f22cc66844f27dc3ced1a5d90ac00c8bb3a0831af1f005589459d418295d2",
+      "cafc09f4fd5b6348008bab88ecae4ca4cc5065fe76b3d1902c1a9cb7c8a5fcac",
+      "d9290a8f5890512144bcaa3037f145e5d1ba7fb9c3c66e3569701d3290619685",
+      "8b411c97cff5f775cee657f5f9750af6b49243ecc13e06c54c61d92da3050698",
+      "5afeb7f08e4ddc39f9e512dd9971c846395220f27b695a96b659cdd2f87b48a5",
+      "ff6031737729101b062b44dfd5036919ff31f54c3d5c3d356b75e75dbe410917",
+      "fbbaabca2e3aef45de180f855be15cb978a2b8a5a4d9e4156d13ee141e7b3239",
+      "3065126bef4859000b40abbec9ca7a3111792d9846a3e7e81067153962ff6cec",
+      "f3d3cd182f61e18dd42d8d561c2d224a5843fc7751140588dbdf723085b44257",
+      "3c5089e6979c029d3253eceb2514b4f35319bf45e4687bf0e279cdaba73d06a4",
+      "9b5bf5692e865dbd24649dfc29c4ceb969b131aa60429d32ec4eb583a8e25ad5",
+      "0756a237d938a651f10e1a1f01f719f80535313a431210285bcef326c4915798",
+      "2b3d14681e42ec0f8f6d0b25ae58276cef03b9429b4c43ef41a0eb58cce8ef8e",
+      "fd8ddf6cd078b9884504712ff46c56f0a15eae7ebdc22003d42b41a37d13e034",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "39b6ae20c1e90380e3f8cf73fba4622c0a06f2869e71eaba2b22addc600179bb",
+      "45d7c8707b8fc9247068523d24df5b042ebc6863c1ff5ea3283a225f40d2944d",
+      "c308d7284737dcee586c8155f00ec2ce32d111e2138ac4c68caf449d319e80be",
+      "e526d32b0400ad060ad1196963a04397e01812cfddef30de822236a5d9b3a758",
+      "5d6d3b27844a1637c6528f99fc6593c86b6d8996e50403e6abc6c505c2a843a7",
+      "e1ae816d56aa1434c41aa49e96bad2f0fc3ddd3e7f98783122fff746ec16c184",
+      "c943864fc667e5e45b0c787fe6db040ce93243794829c7e41619b50484d41ba0",
+      "07313edce50b9c1ba1b043babb781fc43755279a4c9c095e2f50ea971ef6cd21",
+      "141ee774a0e87b57dc9eee1ef19a7d74499ef2ce8dfc9184976faa8621603933",
+      "ec9785bff422f1ecd813a5b482bc5567702519e529de1d881e5d25f0479bb360",
+      "ef2dd4303c186d4617e98083c10dbf1b241a870edf51e9b5b14a2934f8a22d6f",
+      "4431109d74e0c1baf17458b514aef16ad7a1f98517a4dc07e502b749ee59e3e4",
+      "cf4b4c61bf817abc70716e8d627956aa5b80271e731ca0973f7b1eea27bd58e3",
+      "579b4d371a01166604012eb54f8b49147ea9454fc5698d38110093f4af1a7e7b",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "4fd76e8a49a475e7b4a3d2738e75f99b4288d5c8157ea82635994810a829102b",
+      "af3914b0379f25d4b9fa743add78bb029f9018484ef95c1b5904910c169acdbe",
+      "1558d98d8226c31e0a710b1f3beab6967dc6c6818e5cf49bfbbf0e6ceee3f99c",
+      "5d6d3b27844a1637c6528f99fc6593c86b6d8996e50403e6abc6c505c2a843a7",
+      "ba1301d8fa44ed37ad60b90d18c4d2b6422dc20fbc4f3bb12ea66ade2b017b93",
+      "4163fe43fd10b545eee9c119a60efcea2908e11404773770cedbc6208c13d8b9",
+      "ba1301d8fa44ed37ad60b90d18c4d2b6422dc20fbc4f3bb12ea66ade2b017b93",
+      "816df4a101349a01022d2a80d611c91d795c6615c3992eb475f6caef26931970",
+      "3a304a36d36a1122c4138aebaa2da9440439292b0d4f7e0f5f09f8d6a35bc76c",
+      "2a6f0f779d2b5367bcea8ccafb948b15612632e4e88614f6aadd661e9f2220a3",
+      "3342e99938e724070f579b412ad80cd117ab535b3379bcf726c51f5545960564",
+      "4fe24f8b67c96334107bd1ae82a6f2fe02a0dfcf6b5711c4a519ac48440e1dd1",
+      "3342e99938e724070f579b412ad80cd117ab535b3379bcf726c51f5545960564",
+      "50ca66d778c5fc714446ad6f3ef1d95c9596964e1433b13654e7c43ec16c07e6",
+      "963b543337075bda760056adacc7911a0dfcda29dc60cb58f082d4bf0e04de5d",
+      "b47559a8bb6ddff452907380ffe7386bca2ddeed0805976f718c84ee619761f1",
+      "189e370caf8c0f1986c88a669fbd4b6152d0efa1ce9fb52713d79c1e0ffba6b1",
+      "b2c08d00d985ef8783952531d86c2b0fbc238a4a0c0e817069b18d64b64b5d18",
+      "87348198009a8d0b2364917f6e075fc0a511707624c3191e01e6a6f106f08aec",
+      "06fa60f008ac0e391fcc99d0b1b2ee69924bb8dcfee4452b6d5fd51ed00d70a0",
+      "2d52e9d422d02237ec5e9cd2d26829904edcce74a2d913eb8c4d1d6aeda78771",
+      "06fa60f008ac0e391fcc99d0b1b2ee69924bb8dcfee4452b6d5fd51ed00d70a0",
+      "d60a6bfb8d3116bd556c141174c7fdbdca22f0d214c4edbc2660e088f42aebae",
+      "967845f15c19f09fd8de5f5f5745a5ec3c52913fed8ef413e5277192e88d6bb2",
+      "71df1eb142acb0acd322c7652400d91dfe400e84e2a7d30258058e341fc96bce",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "f7399ef15d085fb446884a3338581c3456a6dcd53a4ba7224a7fceb906a19564",
+      "b16064d8826fdfc74bf2869492f152d3425141860a9298f7e6aa20d023724a0a",
+      "a704462ad7acfa9aeae9851a9acbf58f6ff0c4a86b65c0558a536a0eedbe8552",
+      "c2589df8d0b2de088f5fc6edddec6c65aca2411ef5cf8d6f73e3630cbddc3e9c",
+      "68e23be53df628a739216624125859035ecacfa9169692b27b7ee6a1994558c0",
+      "1aaa293057063bd4fd9bc9dc2d2f99bffeac0aa7e248517698cc9a22a97b082a",
+      "ca3c0c8474eda2e430004e684da89da56bb9d27bc3009be536deae42225c4d16",
+      "7e17a25d25749f3254d7549b2f239470969ff0478d9df418390f502bd061ecf0",
+      "d30144f87c347c1feed6869621b7ef9ded96cc72a71702bbb17ce3f1d0b52135",
+      "7e17a25d25749f3254d7549b2f239470969ff0478d9df418390f502bd061ecf0",
+      "9fd3c7348ed37354f6701043561cc5a1ac3ab6e56582b86d2c1eac083bc7d4fd",
+      "963b543337075bda760056adacc7911a0dfcda29dc60cb58f082d4bf0e04de5d",
+      "7252279e04a9fb2cab926ea9cf3b7ff01c0f2ecba39d88434438896a363504c4",
+      "46e8c1619982208c83af46d31cdc57447e205beb73eae83f3889e20e004c9682",
+      "1458c4f902b0efa81d1290836823e037e50057f2f8bc65c4c47a7f1f5b3b795f",
+      "30e8f67311b32d780ad0dce15bd3827a5bc6b28722ebd1b1febbd33306941424",
+      "5bbf3e17a2310f9598a5e0cadc59d4ad2b7a3bf3eb36e36b37367993e349a1e9",
+      "1c583b637a0d5edaaed6aab8fb520176e2e8f876748cac5165efd20a99675c02",
+      "03196037a35223fd39f8c7f2a7633eaeccc08bacfa683e150ac90bf15a70824b",
+      "0756a237d938a651f10e1a1f01f719f80535313a431210285bcef326c4915798",
+      "43532926b5d1b0e20bd97fceff28e7b739e0c6cc089db00ea110715bfd4761d6",
+      "c052a49d08e5b5054f200a650db467250b7010aedc1460a8bc5cb4ffceb378b9",
+      "0b83456a88350bc147c8f52256f768bdcb2af54f5c279763120ac220af35f0af",
+      "fc9df20871cd6015b67ef9629daa74d8af701b4e8d8f2a50a4a10cb5a033a739",
+      "be944e1c3eb311e2a2652db4c17f9a92010f90a39cb48925544ec1753d6af4e8",
+      "07a951f4cd9681eadb8d8831f6bc2aee40abbf74c09bd5f7fb32389b87350c4e",
+      "bf40f097538a36d530cb510f4d8f719d53eca0049aba1f9840f5312018caf485",
+      "c177f2e68f40f21b932a46778fc223eba3feaa98a3ef3fa7668a2cb49b1af403",
+      "0468500d17a48edd0f2bb03ebbda5d12505a5c5e5ef58ee295b16f251ef6cf02",
+      "8b411c97cff5f775cee657f5f9750af6b49243ecc13e06c54c61d92da3050698",
+      "a5a7bbc4ca17df7094704cf97e26762fbc167917183b031fbfcf26491b36d08c",
+      "2f7ee279136a2af2a5614dcd48156e729dc2a42412bc67e86673f9cba30bdd27",
+      "a070c2073d71107cfc5495dc41d33975da8632a4c2544004841a726e4dacca61",
+      "963b543337075bda760056adacc7911a0dfcda29dc60cb58f082d4bf0e04de5d",
+      "91ad2eafdc683f54299d897aecd3254a5f087f228872c22ac5cbab399d96d6da",
+      "780180308d7879f7ae7a5fbe437380289270b79896da8d7fcbed5bac86cd3149",
+      "2ad4d89dbe865c22ff90a7875c71f091fc94a62437500a26f5e4549319bab7dd",
+      "e376c1fe1735ea4806bd61b2a53e1322ebe0adb271ba14b1af57082ee3c70cdd",
+      "f1cb5e801ff3167379b698f677ae32a8349a846d4665cb6f4f2293ef073b9c91",
+      "6414020da2cabe6ee1eb5fe9bc827efee159b1bc55c9dd55d209dc6c95177f3e",
+      "7e17a25d25749f3254d7549b2f239470969ff0478d9df418390f502bd061ecf0",
+      "3596f82eefb4813ca556569dcb2ede58565e599d4f97145ce1f2817aff84088f",
+      "06ec95861a6d8b22745c88b52d1f9174532512f505cd881194d30e60d676b65b",
+      "7d0bafcea5b5869468b45061d3918794c20d7532e82ca894ad503161dd44a218",
+      "613c420192a4427358065da738778155f6d782ae7ede66ca19b7457c9877639c",
+      "b41ede063c150056705db97c10c132ba6dd6d7cb1f664a9e6897e6e87a5f13ee",
+      "c6ae43e8fb4774cb3818b494def17f7628645c6b25bdfeea047451d389223683",
+      "cdd252bc2bf7ddb18563f1cbf2cab694820ce7d694f8dbca973b1a8e8e45dd00"
+    ],
+    "reference": {
+      "runtime": "reference",
+      "wall_seconds": 0.41362677300639916,
+      "output": {
+        "exit": 0,
+        "stdout_sha256": "f39e2d6d7be3bb014fcd4566e37acbb7780ab5bc291d31634b30bd5c0f2e2416",
+        "stderr_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+      },
+      "analysis_seconds": 0.218712091,
+      "instructions": 2840633437,
+      "counter_running_percent": 100.0
+    },
+    "medians": {
+      "baseline": 16158276812.0
+    },
+    "delta_percent": {
+      "baseline": 0.0
+    },
+    "memory_peak_bytes": 455118848,
+    "memory_events": {
+      "low": 0,
+      "high": 0,
+      "max": 0,
+      "oom": 0,
+      "oom_kill": 0,
+      "oom_group_kill": 0,
+      "sock_throttled": 0
+    }
+  },
+  "exact_profile": {
+    "instructions": 16260662059,
+    "seconds": 69.4147562529979,
+    "profile_sha256": "74ccd39e9d38adc38f1a044341f0b1a3bd475aa6515adbf9987ddb8b36561a64",
+    "output_equal": true
+  },
+  "opcode_budget": {
+    "baseline_binary_sha256": "8c95f735eca9d6ab8e26adf2d7aa05640756557be739b558bb7db34ff3013ed8",
+    "main_total": 10270208821,
+    "unique_body_instructions": 8168061034,
+    "shared_body_instructions": 1834319705,
+    "unattributed_instructions": 267828082,
+    "note": "Exact recorded PC instruction costs grouped only when the executed/direct machine CFG is reachable from one opcode target without crossing central dispatch. Shared tails, setup and called functions are not attributed to an individual opcode. Direct conditional edges are conservative; this is a lower bound for each body, not an inclusive opcode cost.",
+    "rows": [
+      {
+        "opcodes": [
+          "FetchObjR"
+        ],
+        "dispatches": 14383283,
+        "unique_reachable_body_instructions": 1774182746
+      },
+      {
+        "opcodes": [
+          "ReleaseTemps"
+        ],
+        "dispatches": 22307052,
+        "unique_reachable_body_instructions": 1690544766
+      },
+      {
+        "opcodes": [
+          "AssignCv",
+          "BindCvRef"
+        ],
+        "dispatches": 9630052,
+        "unique_reachable_body_instructions": 892212311
+      },
+      {
+        "opcodes": [
+          "FetchDimR"
+        ],
+        "dispatches": 7377793,
+        "unique_reachable_body_instructions": 844260494
+      },
+      {
+        "opcodes": [
+          "AssignDim"
+        ],
+        "dispatches": 2121252,
+        "unique_reachable_body_instructions": 549650393
+      },
+      {
+        "opcodes": [
+          "AssignObjProp"
+        ],
+        "dispatches": 2691706,
+        "unique_reachable_body_instructions": 457344078
+      },
+      {
+        "opcodes": [
+          "IsIdentical",
+          "IsNotIdentical",
+          "JmpZ_Identical",
+          "JmpNZ_Identical"
+        ],
+        "dispatches": 4833014,
+        "unique_reachable_body_instructions": 343781517
+      },
+      {
+        "opcodes": [
+          "DoFcall"
+        ],
+        "dispatches": 1185581,
+        "unique_reachable_body_instructions": 240918553
+      },
+      {
+        "opcodes": [
+          "IsEqual",
+          "IsNotEqual",
+          "IsSmaller",
+          "IsSmallerOrEqual"
+        ],
+        "dispatches": 3321594,
+        "unique_reachable_body_instructions": 226153393
+      },
+      {
+        "opcodes": [
+          "JmpZ"
+        ],
+        "dispatches": 9631787,
+        "unique_reachable_body_instructions": 175691247
+      },
+      {
+        "opcodes": [
+          "Return"
+        ],
+        "dispatches": 771897,
+        "unique_reachable_body_instructions": 173462509
+      },
+      {
+        "opcodes": [
+          "Sub"
+        ],
+        "dispatches": 1387739,
+        "unique_reachable_body_instructions": 93445088
+      },
+      {
+        "opcodes": [
+          "SendVal"
+        ],
+        "dispatches": 1066125,
+        "unique_reachable_body_instructions": 81689390
+      },
+      {
+        "opcodes": [
+          "AddArrayElement"
+        ],
+        "dispatches": 857803,
+        "unique_reachable_body_instructions": 67292574
+      },
+      {
+        "opcodes": [
+          "SendVarEx"
+        ],
+        "dispatches": 967556,
+        "unique_reachable_body_instructions": 63811929
+      },
+      {
+        "opcodes": [
+          "FetchConst"
+        ],
+        "dispatches": 999921,
+        "unique_reachable_body_instructions": 63748519
+      },
+      {
+        "opcodes": [
+          "InitMethodCall"
+        ],
+        "dispatches": 301518,
+        "unique_reachable_body_instructions": 60813451
+      },
+      {
+        "opcodes": [
+          "FetchCvR"
+        ],
+        "dispatches": 1170638,
+        "unique_reachable_body_instructions": 53524255
+      },
+      {
+        "opcodes": [
+          "Add_LongLong",
+          "Sub_LongLong",
+          "Mul_LongLong",
+          "Mod_LongLong",
+          "BitwiseXor_LongLong",
+          "BitwiseAnd_LongLong",
+          "BitwiseOr_LongLong"
+        ],
+        "dispatches": 640454,
+        "unique_reachable_body_instructions": 45128423
+      },
+      {
+        "opcodes": [
+          "Add"
+        ],
+        "dispatches": 599360,
+        "unique_reachable_body_instructions": 41001461
+      },
+      {
+        "opcodes": [
+          "InitFcall"
+        ],
+        "dispatches": 429266,
+        "unique_reachable_body_instructions": 37348782
+      },
+      {
+        "opcodes": [
+          "PreInc"
+        ],
+        "dispatches": 865625,
+        "unique_reachable_body_instructions": 32675772
+      },
+      {
+        "opcodes": [
+          "Jmp"
+        ],
+        "dispatches": 5133342,
+        "unique_reachable_body_instructions": 25666710
+      },
+      {
+        "opcodes": [
+          "JmpNZ"
+        ],
+        "dispatches": 1394930,
+        "unique_reachable_body_instructions": 23844400
+      },
+      {
+        "opcodes": [
+          "Add_TmpTmp"
+        ],
+        "dispatches": 453255,
+        "unique_reachable_body_instructions": 21738729
+      },
+      {
+        "opcodes": [
+          "InitArray"
+        ],
+        "dispatches": 225380,
+        "unique_reachable_body_instructions": 14444548
+      },
+      {
+        "opcodes": [
+          "BoolNot"
+        ],
+        "dispatches": 232847,
+        "unique_reachable_body_instructions": 9927635
+      },
+      {
+        "opcodes": [
+          "FetchClassConst"
+        ],
+        "dispatches": 562384,
+        "unique_reachable_body_instructions": 8435760
+      },
+      {
+        "opcodes": [
+          "PostInc"
+        ],
+        "dispatches": 263365,
+        "unique_reachable_body_instructions": 8164315
+      },
+      {
+        "opcodes": [
+          "Add_CvTmp"
+        ],
+        "dispatches": 147463,
+        "unique_reachable_body_instructions": 6488372
+      },
+      {
+        "opcodes": [
+          "NewObj"
+        ],
+        "dispatches": 290915,
+        "unique_reachable_body_instructions": 6102264
+      },
+      {
+        "opcodes": [
+          "ForeachNextPlain"
+        ],
+        "dispatches": 300339,
+        "unique_reachable_body_instructions": 5105763
+      },
+      {
+        "opcodes": [
+          "InitDynamicCall"
+        ],
+        "dispatches": 295067,
+        "unique_reachable_body_instructions": 4721072
+      },
+      {
+        "opcodes": [
+          "ArrayPushOp"
+        ],
+        "dispatches": 41829,
+        "unique_reachable_body_instructions": 4592669
+      },
+      {
+        "opcodes": [
+          "Sub_TmpTmp"
+        ],
+        "dispatches": 91023,
+        "unique_reachable_body_instructions": 4005009
+      },
+      {
+        "opcodes": [
+          "PreDec"
+        ],
+        "dispatches": 55119,
+        "unique_reachable_body_instructions": 3021553
+      },
+      {
+        "opcodes": [
+          "BindDefaultParam"
+        ],
+        "dispatches": 367788,
+        "unique_reachable_body_instructions": 2955528
+      },
+      {
+        "opcodes": [
+          "Isset"
+        ],
+        "dispatches": 73185,
+        "unique_reachable_body_instructions": 2707845
+      },
+      {
+        "opcodes": [
+          "Mul"
+        ],
+        "dispatches": 19979,
+        "unique_reachable_body_instructions": 1238698
+      },
+      {
+        "opcodes": [
+          "Instanceof"
+        ],
+        "dispatches": 78201,
+        "unique_reachable_body_instructions": 1173015
+      },
+      {
+        "opcodes": [
+          "BindObjPropRef"
+        ],
+        "dispatches": 58814,
+        "unique_reachable_body_instructions": 1117726
+      },
+      {
+        "opcodes": [
+          "InitStaticCall"
+        ],
+        "dispatches": 55547,
+        "unique_reachable_body_instructions": 944299
+      },
+      {
+        "opcodes": [
+          "Concat_StringString"
+        ],
+        "dispatches": 2179,
+        "unique_reachable_body_instructions": 878290
+      },
+      {
+        "opcodes": [
+          "BitwiseAnd",
+          "BitwiseOr",
+          "BitwiseXor"
+        ],
+        "dispatches": 9387,
+        "unique_reachable_body_instructions": 528682
+      },
+      {
+        "opcodes": [
+          "ForeachInit"
+        ],
+        "dispatches": 28600,
+        "unique_reachable_body_instructions": 466264
+      },
+      {
+        "opcodes": [
+          "ForeachNext"
+        ],
+        "dispatches": 23948,
+        "unique_reachable_body_instructions": 407116
+      },
+      {
+        "opcodes": [
+          "Cast"
+        ],
+        "dispatches": 4420,
+        "unique_reachable_body_instructions": 400660
+      },
+      {
+        "opcodes": [
+          "CreateClosure"
+        ],
+        "dispatches": 2181,
+        "unique_reachable_body_instructions": 122154
+      },
+      {
+        "opcodes": [
+          "Concat"
+        ],
+        "dispatches": 4358,
+        "unique_reachable_body_instructions": 65370
+      },
+      {
+        "opcodes": [
+          "CheckDefaultType"
+        ],
+        "dispatches": 3020,
+        "unique_reachable_body_instructions": 45300
+      },
+      {
+        "opcodes": [
+          "Sub_CvConst"
+        ],
+        "dispatches": 624,
+        "unique_reachable_body_instructions": 32231
+      },
+      {
+        "opcodes": [
+          "FetchStaticProp"
+        ],
+        "dispatches": 1122,
+        "unique_reachable_body_instructions": 16830
+      },
+      {
+        "opcodes": [
+          "SendRef"
+        ],
+        "dispatches": 121,
+        "unique_reachable_body_instructions": 7865
+      },
+      {
+        "opcodes": [
+          "FetchLateStaticProp"
+        ],
+        "dispatches": 512,
+        "unique_reachable_body_instructions": 7680
+      },
+      {
+        "opcodes": [
+          "Include"
+        ],
+        "dispatches": 114,
+        "unique_reachable_body_instructions": 2736
+      },
+      {
+        "opcodes": [
+          "DeclareClass"
+        ],
+        "dispatches": 114,
+        "unique_reachable_body_instructions": 1368
+      },
+      {
+        "opcodes": [
+          "AssertCheck"
+        ],
+        "dispatches": 309,
+        "unique_reachable_body_instructions": 927
+      }
+    ],
+    "shared": [
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "Jmp"
+          ],
+          [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "Sub"
+          ],
+          [
+            "DoFcall"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "PreInc"
+          ],
+          [
+            "AddArrayElement"
+          ],
+          [
+            "Return"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "Add_TmpTmp"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "BindDefaultParam"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "PostInc"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "PreDec"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "Mul"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "Concat_StringString"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "SendRef"
+          ],
+          [
+            "DeclareClass"
+          ],
+          [
+            "Include"
+          ]
+        ],
+        "instructions": 1175065485
+      },
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "Sub"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "AddArrayElement"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "Add_TmpTmp"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "BindDefaultParam"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "Mul"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "Concat_StringString"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "SendRef"
+          ],
+          [
+            "DeclareClass"
+          ]
+        ],
+        "instructions": 317106224
+      },
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "Jmp"
+          ],
+          [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "Sub"
+          ],
+          [
+            "DoFcall"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "PreInc"
+          ],
+          [
+            "AddArrayElement"
+          ],
+          [
+            "Return"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "Add"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "Add_TmpTmp"
+          ],
+          [
+            "InitFcall"
+          ],
+          [
+            "BindDefaultParam"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "InitDynamicCall"
+          ],
+          [
+            "NewObj"
+          ],
+          [
+            "BoolNot"
+          ],
+          [
+            "InitArray"
+          ],
+          [
+            "Add_CvTmp"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "PreDec"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "Mul"
+          ],
+          [
+            "BitwiseAnd",
+            "BitwiseOr",
+            "BitwiseXor"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Concat"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "CreateClosure"
+          ],
+          [
+            "Concat_StringString"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "Sub_CvConst"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssertCheck"
+          ],
+          [
+            "SendRef"
+          ],
+          [
+            "DeclareClass"
+          ],
+          [
+            "Include"
+          ]
+        ],
+        "instructions": 186630986
+      },
+      {
+        "opcodes": [
+          [
+            "DoFcall"
+          ],
+          [
+            "Return"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "BindObjPropRef"
+          ],
+          [
+            "Include"
+          ]
+        ],
+        "instructions": 30868100
+      },
+      {
+        "opcodes": [
+          [
+            "ReleaseTemps"
+          ],
+          [
+            "FetchObjR"
+          ],
+          [
+            "IsEqual",
+            "IsNotEqual",
+            "IsSmaller",
+            "IsSmallerOrEqual"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "Mul"
+          ]
+        ],
+        "instructions": 27148680
+      },
+      {
+        "opcodes": [
+          [
+            "FetchObjR"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "Cast"
+          ],
+          [
+            "Concat_StringString"
+          ]
+        ],
+        "instructions": 27000612
+      },
+      {
+        "opcodes": [
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "PostInc"
+          ]
+        ],
+        "instructions": 17806356
+      },
+      {
+        "opcodes": [
+          [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          [
+            "BoolNot"
+          ]
+        ],
+        "instructions": 14592004
+      },
+      {
+        "opcodes": [
+          [
+            "FetchObjR"
+          ],
+          [
+            "JmpZ"
+          ],
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "FetchDimR"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "AssignDim"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "FetchCvR"
+          ],
+          [
+            "SendVal"
+          ],
+          [
+            "FetchConst"
+          ],
+          [
+            "SendVarEx"
+          ],
+          [
+            "Add_LongLong",
+            "Sub_LongLong",
+            "Mul_LongLong",
+            "Mod_LongLong",
+            "BitwiseXor_LongLong",
+            "BitwiseAnd_LongLong",
+            "BitwiseOr_LongLong"
+          ],
+          [
+            "FetchClassConst"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "Sub_TmpTmp"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "Isset"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "ArrayPushOp"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "FetchLateStaticProp"
+          ],
+          [
+            "AssertCheck"
+          ]
+        ],
+        "instructions": 14090836
+      },
+      {
+        "opcodes": [
+          [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          [
+            "JmpNZ"
+          ],
+          [
+            "PreInc"
+          ],
+          [
+            "InitMethodCall"
+          ],
+          [
+            "PreDec"
+          ]
+        ],
+        "instructions": 6157821
+      },
+      {
+        "opcodes": [
+          [
+            "IsIdentical",
+            "IsNotIdentical",
+            "JmpZ_Identical",
+            "JmpNZ_Identical"
+          ],
+          [
+            "JmpNZ"
+          ]
+        ],
+        "instructions": 3934920
+      },
+      {
+        "opcodes": [
+          [
+            "AssignCv",
+            "BindCvRef"
+          ],
+          [
+            "PreInc"
+          ]
+        ],
+        "instructions": 3023208
+      },
+      {
+        "opcodes": [
+          [
+            "FetchObjR"
+          ],
+          [
+            "AssignObjProp"
+          ],
+          [
+            "InitMethodCall"
+          ]
+        ],
+        "instructions": 3000110
+      },
+      {
+        "opcodes": [
+          [
+            "FetchClassConst"
+          ],
+          [
+            "ForeachNextPlain"
+          ],
+          [
+            "Instanceof"
+          ],
+          [
+            "InitStaticCall"
+          ],
+          [
+            "ForeachInit"
+          ],
+          [
+            "ForeachNext"
+          ],
+          [
+            "CheckDefaultType"
+          ],
+          [
+            "FetchStaticProp"
+          ],
+          [
+            "FetchLateStaticProp"
+          ]
+        ],
+        "instructions": 2087410
+      },
+      {
+        "opcodes": [
+          [
+            "FetchObjR"
+          ],
+          [
+            "FetchConst"
+          ]
+        ],
+        "instructions": 1805488
+      }
+    ]
+  },
+  "self_rows": [
+    {
+      "function": "rphp::vm::execute::execute_ex_inner",
+      "self_instructions": 10270208821,
+      "self_percent": 63.159844191679845
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::value::IntKeyHasher>>>::insert",
+      "self_instructions": 277332316,
+      "self_percent": 1.7055413549198095
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_drop_and_update",
+      "self_instructions": 264054526,
+      "self_percent": 1.623885454613764
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::collect_cycle_pass",
+      "self_instructions": 246481203,
+      "self_percent": 1.515812837790186
+    },
+    {
+      "function": "rphp::vm::execute::bitmap_drop_scalar",
+      "self_instructions": 207702162,
+      "self_percent": 1.2773290610577592
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::live_identities",
+      "self_instructions": 178495339,
+      "self_percent": 1.0977126168193494
+    },
+    {
+      "function": "<rphp::runtime::ExecutorGlobals>::build_cycle_graph_from_roots",
+      "self_instructions": 173760621,
+      "self_percent": 1.0685949955145058
+    },
+    {
+      "function": "core::ptr::drop_glue::<rphp::value::Value>",
+      "self_instructions": 151240007,
+      "self_percent": 0.9300974735914349
+    },
+    {
+      "function": "rphp::vm::execute::fetch_object_array_container",
+      "self_instructions": 146792576,
+      "self_percent": 0.9027466130676568
+    },
+    {
+      "function": "rphp::vm::execute::op_assign_obj_prop_inner",
+      "self_instructions": 138067278,
+      "self_percent": 0.8490876785892129
+    },
+    {
+      "function": "<rphp::value::PhpArray>::get_int",
+      "self_instructions": 133970094,
+      "self_percent": 0.823890770953264
+    },
+    {
+      "function": "<rphp::value::PhpArray>::set_str_value",
+      "self_instructions": 126448544,
+      "self_percent": 0.777634659285062
+    },
+    {
+      "function": "rphp::value::register_cycle_candidate_with_admission",
+      "self_instructions": 123291042,
+      "self_percent": 0.7582166184418088
+    },
+    {
+      "function": "rphp::vm::execute::try_memoized_assign_obj_prop",
+      "self_instructions": 99918617,
+      "self_percent": 0.6144806197770819
+    },
+    {
+      "function": "<rphp::runtime::cycle::CycleGraph>::cyclic_identities::{closure#0}",
+      "self_instructions": 94186062,
+      "self_percent": 0.5792264894151072
+    },
+    {
+      "function": "rphp::vm::execute::op_init_dynamic_call",
+      "self_instructions": 92469022,
+      "self_percent": 0.5686670177664751
+    },
+    {
+      "function": "rphp::vm::execute::pop_vm_call_frame",
+      "self_instructions": 89271875,
+      "self_percent": 0.5490051676622203
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "self_instructions": 84978960,
+      "self_percent": 0.5226045513501437
+    },
+    {
+      "function": "rphp::vm::execute::value_to_array_key_ref",
+      "self_instructions": 84199213,
+      "self_percent": 0.5178092545954928
+    },
+    {
+      "function": "<hashbrown::map::HashMap<rphp::value::SharedStringKey, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "self_instructions": 82614843,
+      "self_percent": 0.5080656783853035
+    },
+    {
+      "function": "<rphp::value::Value>::reference_property_constraints",
+      "self_instructions": 79159752,
+      "self_percent": 0.48681752140704765
+    },
+    {
+      "function": "rphp::vm::execute::finish_cached_object_array_container",
+      "self_instructions": 77842107,
+      "self_percent": 0.47871425356211567
+    },
+    {
+      "function": "rphp::vm::execute::op_foreach_next::<false, false>",
+      "self_instructions": 77028019,
+      "self_percent": 0.47370776614452975
+    },
+    {
+      "function": "__memcpy_avx_unaligned_erms",
+      "self_instructions": 76738420,
+      "self_percent": 0.4719267870002045
+    },
+    {
+      "function": "<rphp::value::Value>::as_array_mut",
+      "self_instructions": 74840609,
+      "self_percent": 0.46025560784947867
+    },
+    {
+      "function": "<rphp::request_memory::Allocation>::new",
+      "self_instructions": 71503960,
+      "self_percent": 0.4397358467973558
+    },
+    {
+      "function": "rphp::vm::execute::init_resolved_user_call_mode",
+      "self_instructions": 66295307,
+      "self_percent": 0.407703614769527
+    },
+    {
+      "function": "<alloc::rc::Rc<rphp::value::CycleOwner<core::cell::RefCell<rphp::value::PhpObject>>>>::drop_slow",
+      "self_instructions": 64964695,
+      "self_percent": 0.3995206023240803
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::insert",
+      "self_instructions": 60079616,
+      "self_percent": 0.3694782892726496
+    },
+    {
+      "function": "core::ptr::drop_glue::<alloc::vec::Vec<rphp::value::ReferencePropertyConstraint>>",
+      "self_instructions": 57667520,
+      "self_percent": 0.35464435452111254
+    },
+    {
+      "function": "<hashbrown::raw::RawTable<(usize, usize)>>::reserve_rehash::<hashbrown::map::make_hasher<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>::{closure#0}>",
+      "self_instructions": 57394057,
+      "self_percent": 0.3529626087286733
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, usize, core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::contains_key::<usize>",
+      "self_instructions": 56389459,
+      "self_percent": 0.3467845207987051
+    },
+    {
+      "function": "<rphp::value::CycleRootState>::prune_dead_candidates",
+      "self_instructions": 56289873,
+      "self_percent": 0.34617208571064617
+    },
+    {
+      "function": "<hashbrown::map::HashMap<usize, (), core::hash::BuildHasherDefault<rphp::runtime::SymbolHasher>>>::contains_key::<usize>",
+      "self_instructions": 54202707,
+      "self_percent": 0.3333364090793568
+    },
+    {
+      "function": "rphp::vm::execute::prepare_replaced_value_destructor_with_references",
+      "self_instructions": 52692052,
+      "self_percent": 0.32404616619429616
+    }
+  ],
+  "boundaries": {
+    "parser-feedback-exact-profile": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 70.02758342999732,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 664944640,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "parser-feedback-accounting": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 3.610309205003432,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 642007040,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  }
+}

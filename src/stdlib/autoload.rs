@@ -364,7 +364,7 @@ fn user_frame_source(
                     file: if op_array.source_file.is_empty() {
                         op_array.name.clone()
                     } else {
-                        op_array.source_file.as_ref().clone()
+                        op_array.source_file.as_str().to_owned()
                     },
                     source_name: op_array.name.clone(),
                     line: op_array.source_line(source_ip).unwrap_or(0),
@@ -520,6 +520,7 @@ fn invoke_entry(
             &source.file,
             source.line,
             false,
+            crate::vm::execute::CallbackReturnPolicy::Function,
         )?
     } else {
         call_resolved_with_values(eg, &resolved, std::slice::from_ref(class_name))?

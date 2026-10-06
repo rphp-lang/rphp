@@ -1,0 +1,304 @@
+{
+  "status": "rejected at exploratory instruction gate",
+  "goal_complete": false,
+  "baseline_commit": "84df0ff3",
+  "restored_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+  "gate": "At least one percent fewer exploratory application phase instructions",
+  "exploratory": {
+    "complete": true,
+    "source_sha256": "af6d4fa2d352a9d3cc90dda2543fa2da8b36c296b4f54bca1c021e0c8597605c",
+    "baseline_commit": "84df0ff3",
+    "baseline_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+    "baseline_binary_sha256": "ae1ddcf968b1186f0ca965188d116b931a59311fd5c442ab552f9d17c4fd2c23",
+    "features": "default",
+    "profile": "test-fast",
+    "optimization_level": 1,
+    "scope": "Exploratory application instruction gate; never pooled with PGO release counts",
+    "outlier_policy": "retain every valid sample",
+    "checks": [
+      {
+        "command": [
+          "cargo",
+          "fmt",
+          "--all",
+          "--",
+          "--check"
+        ],
+        "exit": 0,
+        "seconds": 2.3673178200115217,
+        "test_results": []
+      },
+      {
+        "command": [
+          "scripts/check-unsafe-policy.sh",
+          "--diff-base",
+          "HEAD"
+        ],
+        "exit": 0,
+        "seconds": 3.468227878998732,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "build",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--bin",
+          "rphp"
+        ],
+        "exit": 0,
+        "seconds": 49.41255082999123,
+        "test_results": []
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_frame_retirement",
+          "--test",
+          "e2e_callable_return_contracts",
+          "--test",
+          "cli_finally_marker_completion"
+        ],
+        "exit": 0,
+        "seconds": 0.6147704180039,
+        "test_results": [
+          "test result: ok. 2 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 12 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s",
+          "test result: ok. 10 passed; 0 failed; 0 ignored; 0 measured; 0 filtered out; finished in 0.01s"
+        ]
+      },
+      {
+        "command": [
+          "cargo",
+          "test",
+          "--offline",
+          "--locked",
+          "--profile",
+          "test-fast",
+          "--test",
+          "e2e_type_hints",
+          "return_hints::"
+        ],
+        "exit": 0,
+        "seconds": 0.9153273169940803,
+        "test_results": [
+          "test result: ok. 0 passed; 0 failed; 0 ignored; 0 measured; 175 filtered out; finished in 0.00s"
+        ]
+      }
+    ],
+    "phase": [
+      {
+        "runtime": "baseline",
+        "round": 0,
+        "instructions": 117150222299,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 12.434128016000614,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 1,
+        "instructions": 117193673723,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 12.524425042007351,
+        "output_equal": true
+      },
+      {
+        "runtime": "candidate",
+        "round": 2,
+        "instructions": 117166953101,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 12.477249025003402,
+        "output_equal": true
+      },
+      {
+        "runtime": "baseline",
+        "round": 3,
+        "instructions": 117157029414,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 12.265659627009882,
+        "output_equal": true
+      },
+      {
+        "runtime": "php",
+        "round": 4,
+        "instructions": 10337108627,
+        "counter_running_percent": 100.0,
+        "wall_seconds": 1.3394491729995934,
+        "output_equal": true
+      }
+    ],
+    "php_cases": [
+      {
+        "case": "fixture-retirement-0-0.php",
+        "output_equal": true,
+        "source_sha256": "c0378cd24308bce1e3ebb275c05933c84b1c8ebd83cbe4a5cefe7ae4d3741488"
+      },
+      {
+        "case": "fixture-retirement-0-70.php",
+        "output_equal": true,
+        "source_sha256": "2cca1c02f980db26bbb4e09287cdaca30f3a6a3024426b325bab76a4b617b784"
+      },
+      {
+        "case": "fixture-retirement-1-0.php",
+        "output_equal": true,
+        "source_sha256": "aebbd3cbbd4cd6d4fc04c78468643ec32e81879c2b7ec8f0a779e7e025336282"
+      },
+      {
+        "case": "fixture-retirement-1-70.php",
+        "output_equal": true,
+        "source_sha256": "83711be58facfc119001680e9ee252d5d49fd9de0d4e005800cdc1ee6ea0141e"
+      },
+      {
+        "case": "fixture-retirement-2-0.php",
+        "output_equal": true,
+        "source_sha256": "b99a7633482ed8b4931e3c6b1c5fc7a7859f30e98522470f47a9af621507c127"
+      },
+      {
+        "case": "fixture-retirement-2-70.php",
+        "output_equal": true,
+        "source_sha256": "bbaba21bb1b56d8440e319a91ceae55ef9df791d6bdcdef9f36d59704e4d15e3"
+      },
+      {
+        "case": "fixture-retirement-3-0.php",
+        "output_equal": true,
+        "source_sha256": "164e4931cf3b2951d91ca00c250322a1ff34ee1237439961d5883d2249a772d4"
+      },
+      {
+        "case": "fixture-retirement-3-70.php",
+        "output_equal": true,
+        "source_sha256": "06d63178c6ede3c25fb287da1ece58b0cab9a3c10e68f61452a346f62e0e94c0"
+      }
+    ],
+    "binary_sha256": "d8068ee3a09c8df0ad20b4c4e621562722df12a190984f93b8ba964f8cd8f032",
+    "phase_summary": {
+      "baseline": 117153625856.5,
+      "candidate": 117180313412.0,
+      "php": 10337108627
+    },
+    "phase_delta_percent": 0.022779965455521634
+  },
+  "body_comparison": {
+    "complete": true,
+    "source_sha256": "af6d4fa2d352a9d3cc90dda2543fa2da8b36c296b4f54bca1c021e0c8597605c",
+    "canonical_body_sha256": "970cab1e13db3e179e4579d1b195d277b0619f7e88bdef1503d0c0a273331e3d",
+    "inverse_substitution_equal": true,
+    "finally_continuation": "Existing unlabeled VM-loop continue is carried by ColdResult::Continue without activation reset"
+  },
+  "initial_build_failure": {
+    "report": {
+      "complete": false,
+      "source_sha256": "1a0ba1d5b7b2ddf476834eea8a902fff2205d85752d77b063a7bb15dee17ef5e",
+      "baseline_commit": "84df0ff3",
+      "baseline_source_sha256": "9635606606194d209de413515955f5159194a1edbf5f456b3b96dff7a080c967",
+      "baseline_binary_sha256": "ae1ddcf968b1186f0ca965188d116b931a59311fd5c442ab552f9d17c4fd2c23",
+      "features": "default",
+      "profile": "test-fast",
+      "optimization_level": 1,
+      "scope": "Exploratory application instruction gate; never pooled with PGO release counts",
+      "outlier_policy": "retain every valid sample",
+      "checks": [
+        {
+          "command": [
+            "cargo",
+            "fmt",
+            "--all",
+            "--",
+            "--check"
+          ],
+          "exit": 0,
+          "seconds": 2.3673129090020666,
+          "test_results": []
+        },
+        {
+          "command": [
+            "scripts/check-unsafe-policy.sh",
+            "--diff-base",
+            "HEAD"
+          ],
+          "exit": 0,
+          "seconds": 3.4693608060042607,
+          "test_results": []
+        },
+        {
+          "command": [
+            "cargo",
+            "build",
+            "--offline",
+            "--locked",
+            "--profile",
+            "test-fast",
+            "--bin",
+            "rphp"
+          ],
+          "exit": 101,
+          "seconds": 10.933577572999639,
+          "test_results": []
+        }
+      ],
+      "phase": [],
+      "php_cases": []
+    },
+    "status": "Retained compiler failure, not a correctness pass",
+    "resolution": "Translate the existing VM-loop finally continue into the same-activation dispatcher outcome."
+  },
+  "boundaries": {
+    "full-return-exploratory": {
+      "complete": true,
+      "exit": 1,
+      "seconds": 16.94168618999538,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 1858678784,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    },
+    "full-return-exploratory-resume": {
+      "complete": true,
+      "exit": 0,
+      "seconds": 109.55170108900347,
+      "memory_max_bytes": 6442450944,
+      "memory_swap_max_bytes": 0,
+      "memory_peak_bytes": 2805821440,
+      "memory_events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0,
+        "sock_throttled": 0
+      }
+    }
+  },
+  "test_note": "Twenty-four actual return/lifetime executions passed. The requested return_hints:: filter selected zero tests and is not counted as a passed type-hint gate. No broad feature or PGO matrix was started after instruction rejection.",
+  "cleanup": {
+    "complete": true,
+    "primary_hook": true,
+    "isolated_hook": true,
+    "isolated_hook_scope": "Rejected run wrappers and following reference-profile lifecycle hook",
+    "removed_disposable_targets": [],
+    "retained": [
+      "Exact accepted baseline and rejected executable",
+      "Both rejected source snapshots and raw logs",
+      "Active focused test cache"
+    ],
+    "private_benchmark_host_configured": false
+  }
+}
