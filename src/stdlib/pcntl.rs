@@ -273,7 +273,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             1,
             0,
             &["enable"][..],
-            vec![ParamTypeHint::Nullable(Box::new(ParamTypeHint::Bool))],
+            vec![ParamTypeHint::Nullable(std::rc::Rc::new(
+                ParamTypeHint::Bool,
+            ))],
             ParamTypeHint::Bool,
         ),
         (

@@ -672,11 +672,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         (
             "key",
             key,
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::Int,
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::Int,
+                    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::None)),
+                ]
+                .into(),
+            ),
         ),
         ("next", next, ParamTypeHint::Void),
         ("valid", valid, ParamTypeHint::Bool),

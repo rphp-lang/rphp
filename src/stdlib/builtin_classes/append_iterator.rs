@@ -435,7 +435,11 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             get_list,
             ClassName("ArrayIterator".into()),
         ),
-        ("getIteratorIndex", get_index, Nullable(Box::new(Int))),
+        (
+            "getIteratorIndex",
+            get_index,
+            Nullable(std::rc::Rc::new(Int)),
+        ),
     ] {
         recursive_iterator::register_method(
             eg,

@@ -688,7 +688,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             &["iterator", "info"],
             vec![
                 ClassName("Iterator".into()),
-                Union(vec![String, Int, ClassName("null".into())]),
+                Union(vec![String, Int, ClassName("null".into())].into()),
             ],
             &[None, Some("null")],
             Void,

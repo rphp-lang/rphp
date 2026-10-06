@@ -587,7 +587,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 &[],
                 vec![],
                 if abstract_class {
-                    Nullable(Box::new(ClassName(owner.into())))
+                    Nullable(std::rc::Rc::new(ClassName(owner.into())))
                 } else {
                     ClassName(owner.into())
                 }

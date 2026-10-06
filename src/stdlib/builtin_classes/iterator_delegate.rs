@@ -719,7 +719,7 @@ abstract_method!(abstract_inner, "OuterIterator::getInnerIterator");
 #[cfg_attr(target_os = "linux", unsafe(link_section = ".rphp_zziterator"))]
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     use ParamTypeHint::{Bool, ClassName, Int, Mixed, Nullable, String, Void};
-    let nullable_iterator = Nullable(Box::new(ClassName("Iterator".into())));
+    let nullable_iterator = Nullable(std::rc::Rc::new(ClassName("Iterator".into())));
     // The closed native batch has known owner and descriptor counts. Borrow
     // transient names/defaults and reserve only the published state once.
     let mut functions = Vec::with_capacity(25);
@@ -777,7 +777,10 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "__construct",
             construct_iterator as InternalFunctionHandler,
             &["iterator", "class"],
-            vec![ClassName("Traversable".into()), Nullable(Box::new(String))],
+            vec![
+                ClassName("Traversable".into()),
+                Nullable(std::rc::Rc::new(String)),
+            ],
             &[None, Some("null")],
             ParamTypeHint::None,
         ),

@@ -404,11 +404,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "__construct",
             construct,
             &["seed"],
-            vec![Union(vec![
-                String,
-                Int,
-                Nullable(Box::new(ParamTypeHint::None)),
-            ])],
+            vec![Union(
+                vec![String, Int, Nullable(std::rc::Rc::new(ParamTypeHint::None))].into(),
+            )],
             ParamTypeHint::None,
         ),
         (XOSHIRO, "generate", generate, &[], vec![], String),
@@ -429,7 +427,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "__construct",
             randomizer_construct,
             &["engine"],
-            vec![Nullable(Box::new(ParamTypeHint::ClassName(ENGINE.into())))],
+            vec![Nullable(std::rc::Rc::new(ParamTypeHint::ClassName(
+                ENGINE.into(),
+            )))],
             ParamTypeHint::None,
         ),
         (

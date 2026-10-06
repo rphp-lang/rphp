@@ -150,9 +150,9 @@ fn reflected_signature_type(hint: &ParamTypeHint) -> Value {
             // `(A&B)|null` is a union of the intersection and null.
             let parts = vec![
                 inner.as_ref().clone(),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::None)),
             ];
-            reflected_signature_type(&ParamTypeHint::Union(parts))
+            reflected_signature_type(&ParamTypeHint::Union(parts.into()))
         }
         ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
             let mut types = PhpArray::with_packed_capacity(parts.len());
@@ -2350,7 +2350,7 @@ fn normalize_deferred_class_constant_value(
             normalize_deferred_class_constant_value(value, inner, declaring_class, eg)
         }
         ParamTypeHint::Union(parts) => {
-            for part in parts {
+            for part in parts.iter() {
                 if let Ok(value) = normalize_deferred_class_constant_value(
                     value.clone(),
                     part,

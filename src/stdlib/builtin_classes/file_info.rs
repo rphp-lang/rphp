@@ -921,13 +921,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             &[],
             vec![],
             &[],
-            Union(vec![Int, ClassName("false".into())]),
+            Union(vec![Int, ClassName("false".into())].into()),
         );
     }
     method!(
         "getType",
         get_type,
-        Union(vec![String, ClassName("false".into())])
+        Union(vec![String, ClassName("false".into())].into())
     );
     method!("isWritable", is_writable, Bool);
     method!("isReadable", is_readable, Bool);
@@ -938,12 +938,12 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     method!(
         "getLinkTarget",
         get_link_target,
-        Union(vec![String, ClassName("false".into())])
+        Union(vec![String, ClassName("false".into())].into())
     );
     method!(
         "getRealPath",
         get_real_path,
-        Union(vec![String, ClassName("false".into())])
+        Union(vec![String, ClassName("false".into())].into())
     );
     register_method(
         eg,
@@ -951,7 +951,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "getFileInfo",
         get_file_info,
         &["class"],
-        vec![Nullable(Box::new(String))],
+        vec![Nullable(std::rc::Rc::new(String))],
         &[Some("null")],
         ClassName("SplFileInfo".into()),
     );
@@ -961,9 +961,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "getPathInfo",
         get_path_info,
         &["class"],
-        vec![Nullable(Box::new(String))],
+        vec![Nullable(std::rc::Rc::new(String))],
         &[Some("null")],
-        Nullable(Box::new(ClassName("SplFileInfo".into()))),
+        Nullable(std::rc::Rc::new(ClassName("SplFileInfo".into()))),
     );
     register_method(
         eg,

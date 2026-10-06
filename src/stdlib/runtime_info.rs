@@ -580,10 +580,13 @@ struct Declaration {
 }
 
 fn string_or_false() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".into()),
-    ])
+    ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".into()),
+        ]
+        .into(),
+    )
 }
 
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
@@ -595,11 +598,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             required: 1,
             hints: || vec![ParamTypeHint::String],
             result: || {
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::String,
-                    ParamTypeHint::ClassName("false".into()),
-                ])
+                ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::Array,
+                        ParamTypeHint::String,
+                        ParamTypeHint::ClassName("false".into()),
+                    ]
+                    .into(),
+                )
             },
             defaults: || vec![None],
             deprecation: None,
@@ -661,10 +667,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             required: 0,
             hints: Vec::new,
             result: || {
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::Int,
-                    ParamTypeHint::ClassName("false".into()),
-                ])
+                ParamTypeHint::Union(
+                    vec![ParamTypeHint::Int, ParamTypeHint::ClassName("false".into())].into(),
+                )
             },
             defaults: Vec::new,
             deprecation: None,
@@ -676,10 +681,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             required: 0,
             hints: || vec![ParamTypeHint::Int],
             result: || {
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::ClassName("false".into()),
-                ])
+                ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::Array,
+                        ParamTypeHint::ClassName("false".into()),
+                    ]
+                    .into(),
+                )
             },
             defaults: || vec![Some(Value::long(0))],
             deprecation: None,
@@ -691,10 +699,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             required: 0,
             hints: Vec::new,
             result: || {
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::ClassName("false".into()),
-                ])
+                ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::Array,
+                        ParamTypeHint::ClassName("false".into()),
+                    ]
+                    .into(),
+                )
             },
             defaults: Vec::new,
             deprecation: None,

@@ -622,10 +622,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             vec![parameter.into(), "image_info".into()],
         ));
         function.common.sig.param_type_hints = vec![ParamTypeHint::String, ParamTypeHint::None];
-        function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-            ParamTypeHint::Array,
-            ParamTypeHint::ClassName("false".into()),
-        ]);
+        function.common.sig.return_type_hint = ParamTypeHint::Union(
+            vec![
+                ParamTypeHint::Array,
+                ParamTypeHint::ClassName("false".into()),
+            ]
+            .into(),
+        );
         function.handler_validates_types = true;
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer).unwrap();
@@ -645,10 +648,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         vec!["image_type".into(), "include_dot".into()],
     ));
     extension.common.sig.param_type_hints = vec![ParamTypeHint::Int, ParamTypeHint::Bool];
-    extension.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-        ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".into()),
-    ]);
+    extension.common.sig.return_type_hint = ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".into()),
+        ]
+        .into(),
+    );
     extension.handler_validates_types = true;
     let pointer = &extension.common as *const FunctionCommon;
     eg.register_function("image_type_to_extension", pointer)

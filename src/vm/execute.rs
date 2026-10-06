@@ -2183,15 +2183,15 @@ mod borrowed_return_snapshot_tests {
             (Value::long(42), ParamTypeHint::Int),
             (
                 Value::long(42),
-                ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int]),
+                ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int].into()),
             ),
             (
                 Value::string("42"),
-                ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]),
+                ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String].into()),
             ),
             (
                 Value::null(),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Int)),
             ),
         ] {
             let reference =
@@ -2285,7 +2285,7 @@ fn prepare_call_argument_in_scopes(
             );
         }
         ParamTypeHint::Union(parts) => {
-            for part in parts {
+            for part in parts.iter() {
                 match prepare_call_argument_in_scopes(
                     value,
                     part,
@@ -4406,9 +4406,16 @@ pub(crate) fn resolved_type_diagnostic_name(
                     *name = displayed_class_name(eg, class).into();
                 }
             }
-            ParamTypeHint::Nullable(inner) => resolve(inner, eg, lexical_class, called_class),
+            ParamTypeHint::Nullable(inner) => {
+                resolve(
+                    std::rc::Rc::make_mut(inner),
+                    eg,
+                    lexical_class,
+                    called_class,
+                );
+            }
             ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
-                for part in parts {
+                for part in std::rc::Rc::make_mut(parts).iter_mut() {
                     resolve(part, eg, lexical_class, called_class);
                 }
             }

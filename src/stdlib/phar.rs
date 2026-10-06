@@ -1012,5 +1012,5 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
 }
 
 fn nullable_string_hint() -> ParamTypeHint {
-    ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))
+    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::String))
 }

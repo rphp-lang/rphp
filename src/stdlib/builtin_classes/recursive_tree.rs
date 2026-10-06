@@ -496,10 +496,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         construct,
         &["iterator", "flags", "cachingIteratorFlags", "mode"],
         vec![
-            Union(vec![
-                ClassName("RecursiveIterator".into()),
-                ClassName("IteratorAggregate".into()),
-            ]),
+            Union(
+                vec![
+                    ClassName("RecursiveIterator".into()),
+                    ClassName("IteratorAggregate".into()),
+                ]
+                .into(),
+            ),
             Int,
             Int,
             Int,

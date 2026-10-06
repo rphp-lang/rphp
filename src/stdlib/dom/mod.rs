@@ -2353,11 +2353,11 @@ fn fn_xpath_quote(
 }
 
 fn nullable_class(name: &str) -> ParamTypeHint {
-    ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName(name.into())))
+    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::ClassName(name.into())))
 }
 
 fn nullable_string() -> ParamTypeHint {
-    ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))
+    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::String))
 }
 
 fn internal_class(
@@ -3029,13 +3029,16 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             vec![
                 ParamTypeHint::Bool,
                 ParamTypeHint::Bool,
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Array)),
             ],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         method(
             DOM_DOCUMENT,
@@ -3079,10 +3082,13 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             vec![Some(Value::null()), Some(Value::long(0))],
             vec![Some("null"), Some("0")],
             vec![nullable_class(DOM_NODE), ParamTypeHint::Int],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         method(
             DOM_DOCUMENT,
@@ -3093,10 +3099,9 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             vec![None, Some(Value::long(0))],
             vec![None, Some("0")],
             vec![ParamTypeHint::String, ParamTypeHint::Int],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::Int,
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![ParamTypeHint::Int, ParamTypeHint::ClassName("false".into())].into(),
+            ),
         ),
         method(
             DOM_DOCUMENT,
@@ -3265,10 +3270,13 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             vec![None],
             vec![None],
             vec![ParamTypeHint::ClassName(DOM_NODE.into())],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName(DOM_NODE.into()),
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::ClassName(DOM_NODE.into()),
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         method(
             DOM_DOCUMENT,
@@ -3400,10 +3408,13 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             vec![None],
             vec![None],
             vec![ParamTypeHint::String],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName(DOM_ATTR.into()),
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::ClassName(DOM_ATTR.into()),
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         method(
             DOM_ELEMENT,
@@ -3619,10 +3630,13 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
                 nullable_class(DOM_NODE),
                 ParamTypeHint::Bool,
             ],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName(DOM_NODE_LIST.into()),
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::ClassName(DOM_NODE_LIST.into()),
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         method(
             DOM_XPATH,
@@ -3711,15 +3725,21 @@ pub(super) fn register_functions(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFu
         function.handler_validates_types = true;
         function.common.sig.param_type_hints = vec![ParamTypeHint::ClassName("object".into())];
         function.common.sig.return_type_hint = if name.contains('\\') {
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("Dom\\Attr".into()),
-                ParamTypeHint::ClassName("Dom\\Element".into()),
-            ])
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::ClassName("Dom\\Attr".into()),
+                    ParamTypeHint::ClassName("Dom\\Element".into()),
+                ]
+                .into(),
+            )
         } else {
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName(DOM_ATTR.into()),
-                ParamTypeHint::ClassName(DOM_ELEMENT.into()),
-            ])
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::ClassName(DOM_ATTR.into()),
+                    ParamTypeHint::ClassName(DOM_ELEMENT.into()),
+                ]
+                .into(),
+            )
         };
         let pointer = &function.common as *const FunctionCommon;
         eg.register_function(name, pointer)

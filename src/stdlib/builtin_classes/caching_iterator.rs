@@ -1086,7 +1086,7 @@ pub(super) fn register_recursive(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFu
         &[],
         vec![],
         &[],
-        Nullable(Box::new(ClassName(owner.into()))),
+        Nullable(std::rc::Rc::new(ClassName(owner.into()))),
     );
     functions
 }

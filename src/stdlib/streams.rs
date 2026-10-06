@@ -348,15 +348,18 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
                 ParamTypeHint::Int,
                 ParamTypeHint::None,
                 ParamTypeHint::None,
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Float)),
             ];
             function.handler_validates_types = true;
         } else if name == "fstat" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::None];
-            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-                ParamTypeHint::Array,
-                ParamTypeHint::ClassName("false".into()),
-            ]);
+            function.common.sig.return_type_hint = ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::Array,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            );
             function.handler_validates_types = true;
         } else if name == "is_resource" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::Mixed];
@@ -364,17 +367,23 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             function.handler_validates_types = true;
         } else if matches!(name, "inet_pton" | "inet_ntop") {
             function.common.sig.param_type_hints = vec![ParamTypeHint::String];
-            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".into()),
-            ]);
+            function.common.sig.return_type_hint = ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            );
             function.handler_validates_types = true;
         } else if name == "stream_socket_get_name" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::None, ParamTypeHint::Bool];
-            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".into()),
-            ]);
+            function.common.sig.return_type_hint = ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            );
             function.handler_validates_types = true;
         } else if name == "stream_set_blocking" {
             function.common.sig.param_type_hints = vec![ParamTypeHint::None, ParamTypeHint::Bool];
@@ -398,7 +407,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
                 ParamTypeHint::String,
                 ParamTypeHint::None,
                 ParamTypeHint::None,
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Float)),
                 ParamTypeHint::Int,
                 ParamTypeHint::None,
             ];
@@ -406,22 +415,21 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         } else if name == "stream_socket_accept" {
             function.common.sig.param_type_hints = vec![
                 ParamTypeHint::None,
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Float)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Float)),
                 ParamTypeHint::None,
             ];
             function.handler_validates_types = true;
         } else if name == "stream_select" {
             function.common.sig.param_type_hints = vec![
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Array)),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Array)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Int)),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Int)),
             ];
-            function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-                ParamTypeHint::Int,
-                ParamTypeHint::ClassName("false".into()),
-            ]);
+            function.common.sig.return_type_hint = ParamTypeHint::Union(
+                vec![ParamTypeHint::Int, ParamTypeHint::ClassName("false".into())].into(),
+            );
             function.handler_validates_types = true;
         }
         let pointer = &function.common as *const FunctionCommon;

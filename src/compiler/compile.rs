@@ -2079,7 +2079,7 @@ fn normalize_typed_declaration_default(value: Value, hint: &ParamTypeHint) -> Re
         }
         ParamTypeHint::Union(parts) => {
             let mut rejected = value;
-            for part in parts {
+            for part in parts.iter() {
                 match normalize_typed_declaration_default(rejected, part) {
                     Ok(value) => return Ok(value),
                     Err(value) => rejected = value,
@@ -8672,7 +8672,7 @@ impl Compiler {
                         line: param.line,
                         warning: false,
                     });
-                hint = ParamTypeHint::Nullable(Box::new(hint));
+                hint = ParamTypeHint::Nullable(std::rc::Rc::new(hint));
             }
             if param.default.is_some()
                 && !implicitly_nullable
@@ -9572,7 +9572,7 @@ impl Compiler {
             Some(TypeHint::Bool) => ParamTypeHint::Bool,
             Some(TypeHint::Array) => ParamTypeHint::Array,
             Some(TypeHint::Callable) => ParamTypeHint::Callable,
-            Some(TypeHint::Null) => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+            Some(TypeHint::Null) => ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::None)),
             Some(TypeHint::ClassName(name)) => {
                 // Built-in and pseudo-types are ASCII case-insensitive even
                 // when the lexer delivered their spelling as an identifier.
@@ -9586,7 +9586,7 @@ impl Compiler {
                     "mixed" => ParamTypeHint::Mixed,
                     "never" => ParamTypeHint::Never,
                     "void" => ParamTypeHint::Void,
-                    "null" => ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+                    "null" => ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::None)),
                     builtin @ ("self" | "parent" | "static" | "object" | "iterable" | "false"
                     | "true") => ParamTypeHint::ClassName(builtin.into()),
                     _ => ParamTypeHint::ClassName(self.resolve_name(name).into()),
@@ -9594,7 +9594,7 @@ impl Compiler {
             }
             Some(TypeHint::Nullable(inner)) => {
                 let inner_hint = self.convert_type_hint(&Some(*inner.clone()));
-                ParamTypeHint::Nullable(Box::new(inner_hint))
+                ParamTypeHint::Nullable(std::rc::Rc::new(inner_hint))
             }
             Some(TypeHint::Void) => ParamTypeHint::Void,
             Some(TypeHint::Mixed) => ParamTypeHint::Mixed,
@@ -9604,14 +9604,14 @@ impl Compiler {
                     .iter()
                     .map(|t| self.convert_type_hint(&Some(t.clone())))
                     .collect();
-                ParamTypeHint::Union(converted)
+                ParamTypeHint::Union(converted.into())
             }
             Some(TypeHint::Intersection(types)) => {
                 let converted: Vec<ParamTypeHint> = types
                     .iter()
                     .map(|t| self.convert_type_hint(&Some(t.clone())))
                     .collect();
-                ParamTypeHint::Intersection(converted)
+                ParamTypeHint::Intersection(converted.into())
             }
             Some(TypeHint::GenericParameter { erased, .. }) => {
                 self.convert_type_hint(&Some(*erased.clone()))
@@ -9641,12 +9641,17 @@ impl Compiler {
             ParamTypeHint::ClassName(name) if name.eq_ignore_ascii_case("static") => {
                 ParamTypeHint::ClassName(class_name.into())
             }
-            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
-                self.resolve_declared_property_type_hint(*inner, class_name, parent_name),
-            )),
+            ParamTypeHint::Nullable(inner) => {
+                ParamTypeHint::Nullable(std::rc::Rc::new(self.resolve_declared_property_type_hint(
+                    inner.as_ref().clone(),
+                    class_name,
+                    parent_name,
+                )))
+            }
             ParamTypeHint::Union(parts) => ParamTypeHint::Union(
                 parts
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|part| {
                         self.resolve_declared_property_type_hint(part, class_name, parent_name)
                     })
@@ -9654,7 +9659,8 @@ impl Compiler {
             ),
             ParamTypeHint::Intersection(parts) => ParamTypeHint::Intersection(
                 parts
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|part| {
                         self.resolve_declared_property_type_hint(part, class_name, parent_name)
                     })
@@ -9679,12 +9685,17 @@ impl Compiler {
             }
             // Unlike property declarations, a class-constant `static` type
             // remains late-bound and is also preserved in PHP diagnostics.
-            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
-                self.resolve_declared_class_constant_type_hint(*inner, class_name, parent_name),
+            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(std::rc::Rc::new(
+                self.resolve_declared_class_constant_type_hint(
+                    inner.as_ref().clone(),
+                    class_name,
+                    parent_name,
+                ),
             )),
             ParamTypeHint::Union(parts) => ParamTypeHint::Union(
                 parts
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|part| {
                         self.resolve_declared_class_constant_type_hint(
                             part,
@@ -9696,7 +9707,8 @@ impl Compiler {
             ),
             ParamTypeHint::Intersection(parts) => ParamTypeHint::Intersection(
                 parts
-                    .into_iter()
+                    .iter()
+                    .cloned()
                     .map(|part| {
                         self.resolve_declared_class_constant_type_hint(
                             part,

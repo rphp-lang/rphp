@@ -206,10 +206,13 @@ fn set_iterator_class(
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
     let mut result = Vec::with_capacity(8);
     for owner in ["ArrayObject", "ArrayIterator"] {
-        let storage_hint = ParamTypeHint::Union(vec![
-            ParamTypeHint::ClassName("object".into()),
-            ParamTypeHint::Array,
-        ]);
+        let storage_hint = ParamTypeHint::Union(
+            vec![
+                ParamTypeHint::ClassName("object".into()),
+                ParamTypeHint::Array,
+            ]
+            .into(),
+        );
         let mut constructors = (
             if owner == "ArrayObject" {
                 &["array", "flags", "iteratorClass"] as &'static [&'static str]

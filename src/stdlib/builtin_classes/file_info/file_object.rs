@@ -783,7 +783,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         (
             "current",
             current as InternalFunctionHandler,
-            Union(vec![Array, String, ClassName("false".into())]),
+            Union(vec![Array, String, ClassName("false".into())].into()),
         ),
         ("next", next, Void),
         ("rewind", rewind, Void),
@@ -796,7 +796,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         (
             "getChildren",
             get_children,
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::None)),
+            ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::None)),
         ),
         ("hasChildren", has_children, ClassName("false".into())),
     ] {
@@ -834,7 +834,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         &["separator", "enclosure", "escape"],
         vec![String, String, String],
         &[Some("','"), Some("'\"'"), Some("'\\\\'")],
-        Union(vec![Array, ClassName("false".into())]),
+        Union(vec![Array, ClassName("false".into())].into()),
     );
     method(
         "fputcsv",
@@ -848,7 +848,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             Some("'\\\\'"),
             Some("\"\\n\""),
         ],
-        Union(vec![Int, ClassName("false".into())]),
+        Union(vec![Int, ClassName("false".into())].into()),
     );
     method(
         "ftell",
@@ -856,7 +856,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         &[],
         vec![],
         &[],
-        Union(vec![Int, ClassName("false".into())]),
+        Union(vec![Int, ClassName("false".into())].into()),
     );
     method("fgets", read_position::line, &[], vec![], &[], String);
     method(
@@ -865,7 +865,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         &[],
         vec![],
         &[],
-        Union(vec![String, ClassName("false".into())]),
+        Union(vec![String, ClassName("false".into())].into()),
     );
     method(
         "fread",
@@ -873,7 +873,7 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         &["length"],
         vec![Int],
         &[None],
-        Union(vec![String, ClassName("false".into())]),
+        Union(vec![String, ClassName("false".into())].into()),
     );
     method("fflush", mutation::flush, &[], vec![], &[], Bool);
     method("fstat", mutation::stat, &[], vec![], &[], Array);
@@ -889,9 +889,9 @@ pub(crate) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "fwrite",
         mutation::bytes,
         &["data", "length"],
-        vec![String, ParamTypeHint::Nullable(Box::new(Int))],
+        vec![String, ParamTypeHint::Nullable(std::rc::Rc::new(Int))],
         &[None, Some("null")],
-        Union(vec![Int, ClassName("false".into())]),
+        Union(vec![Int, ClassName("false".into())].into()),
     );
     method(
         "flock",

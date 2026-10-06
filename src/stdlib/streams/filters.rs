@@ -150,7 +150,9 @@ pub(super) fn register_functions(
             fn_bucket_make_writeable,
             vec!["brigade"],
             vec![ParamTypeHint::None],
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::ClassName("StreamBucket".into()))),
+            ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::ClassName(
+                "StreamBucket".into(),
+            ))),
         ),
         (
             "stream_bucket_append",

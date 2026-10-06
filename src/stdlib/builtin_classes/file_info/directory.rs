@@ -1127,11 +1127,14 @@ pub(crate) fn register(
         (
             "current",
             filesystem_current,
-            Union(vec![
-                ClassName("SplFileInfo".into()),
-                ClassName("FilesystemIterator".into()),
-                String,
-            ]),
+            Union(
+                vec![
+                    ClassName("SplFileInfo".into()),
+                    ClassName("FilesystemIterator".into()),
+                    String,
+                ]
+                .into(),
+            ),
         ),
         ("getFlags", get_flags, Int),
     ] {

@@ -1695,18 +1695,15 @@ fn writer_hint() -> ParamTypeHint {
 }
 
 fn nullable_string() -> ParamTypeHint {
-    ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))
+    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::String))
 }
 
 fn writer_or_false() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        writer_hint(),
-        ParamTypeHint::ClassName("false".into()),
-    ])
+    ParamTypeHint::Union(vec![writer_hint(), ParamTypeHint::ClassName("false".into())].into())
 }
 
 fn string_or_int() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int])
+    ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int].into())
 }
 
 fn no_hints() -> Vec<ParamTypeHint> {

@@ -2144,11 +2144,14 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             parameters: &["kind"],
             required: 1,
             hints: || {
-                vec![ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::String,
-                    ParamTypeHint::Int,
-                ])]
+                vec![ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::Array,
+                        ParamTypeHint::String,
+                        ParamTypeHint::Int,
+                    ]
+                    .into(),
+                )]
             },
             return_hint: || ParamTypeHint::Bool,
             defaults: || vec![None],
@@ -2172,7 +2175,7 @@ pub(super) fn register_classes(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunc
             parameters: &[],
             required: 0,
             hints: Vec::new,
-            return_hint: || ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+            return_hint: || ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::String)),
             defaults: Vec::new,
             default_spellings: &[],
             is_static: false,

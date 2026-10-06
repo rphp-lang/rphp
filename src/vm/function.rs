@@ -982,6 +982,10 @@ pub enum FunctionType {
 }
 
 /// Runtime representation of a parameter type hint.
+///
+/// Compound children are immutable shared declaration nodes. Cloning a hint
+/// retains its root rather than recursively copying type metadata. Matching,
+/// coercion and Reflection still traverse the original ordered children.
 #[derive(Debug, Clone, PartialEq)]
 pub enum ParamTypeHint {
     None,
@@ -995,9 +999,9 @@ pub enum ParamTypeHint {
     Mixed,
     Never,
     ClassName(TypeName),
-    Nullable(Box<ParamTypeHint>),
-    Union(Vec<ParamTypeHint>),
-    Intersection(Vec<ParamTypeHint>),
+    Nullable(Rc<ParamTypeHint>),
+    Union(Rc<[ParamTypeHint]>),
+    Intersection(Rc<[ParamTypeHint]>),
 }
 
 /// Immutable named type metadata shared by cloned declarations. The cache
@@ -1177,8 +1181,78 @@ mod named_type_tests {
         );
         assert_eq!(
             std::mem::size_of::<ParamTypeHint>(),
-            4 * std::mem::size_of::<usize>()
+            3 * std::mem::size_of::<usize>()
         );
+    }
+
+    #[test]
+    fn compound_type_clones_retain_shared_ordered_declaration_nodes() {
+        use std::rc::Rc;
+
+        let intersection = ParamTypeHint::Intersection(
+            vec![
+                ParamTypeHint::ClassName("First".into()),
+                ParamTypeHint::ClassName("Second".into()),
+            ]
+            .into(),
+        );
+        let original = ParamTypeHint::Nullable(Rc::new(ParamTypeHint::Union(
+            vec![intersection, ParamTypeHint::String].into(),
+        )));
+        let clone = original.clone();
+        assert_eq!(clone, original);
+        assert_eq!(clone.display_name(), "?(First&Second)|string");
+        let (ParamTypeHint::Nullable(root), ParamTypeHint::Nullable(cloned_root)) =
+            (&original, &clone)
+        else {
+            panic!("expected nullable roots");
+        };
+        assert!(Rc::ptr_eq(root, cloned_root));
+        assert_eq!(Rc::strong_count(root), 2);
+        let ParamTypeHint::Union(children) = root.as_ref() else {
+            panic!("expected ordered union children");
+        };
+        // A root clone must not traverse or retain each descendant separately.
+        assert_eq!(Rc::strong_count(children), 1);
+        let ParamTypeHint::Intersection(grandchildren) = &children[0] else {
+            panic!("expected intersection as first union child");
+        };
+        assert_eq!(Rc::strong_count(grandchildren), 1);
+        drop(original);
+        assert_eq!(clone.display_name(), "?(First&Second)|string");
+        assert!(clone.allows_null());
+    }
+
+    #[test]
+    fn resolving_diagnostics_does_not_mutate_shared_relative_type_nodes() {
+        use std::rc::Rc;
+
+        let mut eg = ExecutorGlobals::new();
+        register(&mut eg, "<?php class First {} class Second {}");
+        let original = ParamTypeHint::Union(
+            vec![ParamTypeHint::ClassName("self".into()), ParamTypeHint::Int].into(),
+        );
+        let clone = original.clone();
+        for (scope, expected) in [("First", "First|int"), ("Second", "Second|int")] {
+            assert_eq!(
+                crate::vm::execute::resolved_type_diagnostic_name(&clone, &eg, Some(scope), None,),
+                expected,
+            );
+            assert_eq!(original.display_name(), "self|int");
+            assert_eq!(clone, original);
+        }
+        let nullable = ParamTypeHint::Nullable(Rc::new(ParamTypeHint::ClassName("self".into())));
+        let nullable_clone = nullable.clone();
+        assert_eq!(
+            crate::vm::execute::resolved_type_diagnostic_name(
+                &nullable_clone,
+                &eg,
+                Some("First"),
+                None,
+            ),
+            "?First",
+        );
+        assert_eq!(nullable.display_name(), "?self");
     }
 
     #[test]
@@ -1911,8 +1985,8 @@ function floatValue(float $x): float { return $x + 1; }
             ParamTypeHint::String,
             ParamTypeHint::Array,
             ParamTypeHint::ClassName("AdmissionValue".into()),
-            ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
-            ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String]),
+            ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Int)),
+            ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::String].into()),
         ];
         for strategy in [
             CallStrategy::FastScalar,

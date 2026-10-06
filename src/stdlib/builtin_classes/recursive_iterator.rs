@@ -875,14 +875,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "RecursiveIterator",
         "getChildren",
         abstract_get,
-        Nullable(Box::new(ClassName("RecursiveIterator".into())))
+        Nullable(std::rc::Rc::new(ClassName("RecursiveIterator".into())))
     );
     method!("RecursiveArrayIterator", "hasChildren", array_has, Bool);
     method!(
         "RecursiveArrayIterator",
         "getChildren",
         array_get,
-        Nullable(Box::new(ClassName("RecursiveArrayIterator".into())))
+        Nullable(std::rc::Rc::new(ClassName("RecursiveArrayIterator".into())))
     );
     let owner = "RecursiveIteratorIterator";
     register_method(
@@ -913,9 +913,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         "getSubIterator",
         get_sub,
         &["level"],
-        vec![Nullable(Box::new(Int))],
+        vec![Nullable(std::rc::Rc::new(Int))],
         &[Some("null")],
-        Nullable(Box::new(ClassName("RecursiveIterator".into()))),
+        Nullable(std::rc::Rc::new(ClassName("RecursiveIterator".into()))),
     );
     method!(
         owner,
@@ -930,7 +930,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         owner,
         "callGetChildren",
         call_get,
-        Nullable(Box::new(ClassName("RecursiveIterator".into())))
+        Nullable(std::rc::Rc::new(ClassName("RecursiveIterator".into())))
     );
     method!(owner, "beginChildren", no_op, Void);
     method!(owner, "endChildren", no_op, Void);
@@ -950,7 +950,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         owner,
         "getMaxDepth",
         get_max,
-        ParamTypeHint::Union(vec![Int, ClassName("false".into())])
+        ParamTypeHint::Union(vec![Int, ClassName("false".into())].into())
     );
     functions
 }

@@ -43,6 +43,15 @@ fallback, online planning and lifetime costs are included. PHPStan's 100x
 region budgets remain one acceptance witness. The design changes no runtime
 code, certifies no complete PHP support and proves no 100x result; unit prices
 and per-operation semantic/native proofs remain explicit obligations.
+The first implementation is the [shared immutable declaration/type graph](performance-shared-type-dag.md).
+Compound clones retain one ordered root, diagnostic scope rewriting detaches
+private nodes, and type metadata shrinks from 32 to 24 bytes on the measured
+64-bit build. The exact-source five-configuration matrix passes 36,290 tests;
+70 default/canonical PHP comparisons match. Same-input analysis instructions
+fall 0.159%, with no proven time improvement. This establishes a shared metadata
+foundation; userland type algebra/parser execution, common effect/ownership IR
+and the original parity/100x goals remain open.
+
 The larger-project results below are historical results on a different input.
 
 ## Accepted heap and bounded runtime repair

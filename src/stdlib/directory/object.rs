@@ -79,10 +79,13 @@ pub(in crate::stdlib) fn register_class(eg: &mut ExecutorGlobals) -> Vec<Box<Int
         (
             "read",
             fn_read,
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
     ] {
         eg.register_internal_method_contract(
@@ -120,10 +123,13 @@ pub(in crate::stdlib) fn register_function(eg: &mut ExecutorGlobals) -> Box<Inte
         vec!["directory".into(), "context".into()],
     ));
     function.common.sig.param_type_hints = vec![ParamTypeHint::String, ParamTypeHint::None];
-    function.common.sig.return_type_hint = ParamTypeHint::Union(vec![
-        ParamTypeHint::ClassName("Directory".into()),
-        ParamTypeHint::ClassName("false".into()),
-    ]);
+    function.common.sig.return_type_hint = ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::ClassName("Directory".into()),
+            ParamTypeHint::ClassName("false".into()),
+        ]
+        .into(),
+    );
     function.handler_validates_types = true;
     let pointer = &function.common as *const FunctionCommon;
     eg.register_function("dir", pointer)

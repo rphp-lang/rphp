@@ -510,20 +510,25 @@ fn string_type() -> ParamTypeHint {
 }
 
 fn string_or_false_type() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".into()),
-    ])
+    ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".into()),
+        ]
+        .into(),
+    )
 }
 
 fn textdomain_types() -> Vec<ParamTypeHint> {
-    vec![ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))]
+    vec![ParamTypeHint::Nullable(std::rc::Rc::new(
+        ParamTypeHint::String,
+    ))]
 }
 
 fn bind_types() -> Vec<ParamTypeHint> {
     vec![
         ParamTypeHint::String,
-        ParamTypeHint::Nullable(Box::new(ParamTypeHint::String)),
+        ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::String)),
     ]
 }
 

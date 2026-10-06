@@ -23,10 +23,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
         (
             "fgetc",
             fn_fgetc as InternalFunctionHandler,
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::String,
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::String,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         ("fpassthru", fn_fpassthru, ParamTypeHint::Int),
     ] {

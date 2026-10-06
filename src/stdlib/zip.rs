@@ -171,9 +171,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
     .expect("ZipArchive registers once per request");
 
     let false_type = || ParamTypeHint::ClassName("false".into());
-    let int_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::Int, false_type()]);
-    let array_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()]);
-    let string_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::String, false_type()]);
+    let int_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::Int, false_type()].into());
+    let array_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()].into());
+    let string_or_false = || ParamTypeHint::Union(vec![ParamTypeHint::String, false_type()].into());
     let methods = [
         Method {
             name: "open",
@@ -181,7 +181,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             required: 1,
             parameters: &["filename", "flags"],
             hints: vec![ParamTypeHint::String, ParamTypeHint::Int],
-            result: ParamTypeHint::Union(vec![ParamTypeHint::Bool, ParamTypeHint::Int]),
+            result: ParamTypeHint::Union(vec![ParamTypeHint::Bool, ParamTypeHint::Int].into()),
             defaults: vec![None, Some(Value::long(0))],
             default_spellings: vec![None, Some("0")],
         },
@@ -222,10 +222,9 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             parameters: &["pathto", "files"],
             hints: vec![
                 ParamTypeHint::String,
-                ParamTypeHint::Nullable(Box::new(ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::String,
-                ]))),
+                ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Union(
+                    vec![ParamTypeHint::Array, ParamTypeHint::String].into(),
+                ))),
             ],
             result: ParamTypeHint::Bool,
             defaults: vec![None, Some(Value::null())],

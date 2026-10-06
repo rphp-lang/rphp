@@ -5277,7 +5277,7 @@ impl ExecutorGlobals {
                         .into(),
                 )
             }
-            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(Box::new(
+            ParamTypeHint::Nullable(inner) => ParamTypeHint::Nullable(std::rc::Rc::new(
                 self.resolve_variance_type_hint(inner, owner, linking_class),
             )),
             ParamTypeHint::Union(parts) => ParamTypeHint::Union(
@@ -12631,15 +12631,15 @@ mod sparse_call_cleanup_tests {
         let compatible = |value: &Hint, contract: &Hint| {
             eg.is_return_type_compatible(value, contract, "Child", "Parent", None)
         };
-        let null = Hint::Nullable(Box::new(Hint::None));
+        let null = Hint::Nullable(std::rc::Rc::new(Hint::None));
         let object = Hint::ClassName("RecursiveIterator".into());
-        let nullable = Hint::Nullable(Box::new(object.clone()));
+        let nullable = Hint::Nullable(std::rc::Rc::new(object.clone()));
         assert!(compatible(&Hint::ClassName("false".into()), &Hint::Bool));
         assert!(compatible(&Hint::ClassName("true".into()), &Hint::Bool));
         assert!(compatible(&null, &nullable));
         assert!(compatible(
             &null,
-            &Hint::Union(vec![Hint::String, null.clone()])
+            &Hint::Union(vec![Hint::String, null.clone()].into())
         ));
         assert!(!compatible(&null, &object));
         assert!(!compatible(&Hint::Bool, &Hint::ClassName("false".into())));

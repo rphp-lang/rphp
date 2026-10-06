@@ -104,13 +104,16 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             required: 1,
             parameters: &["certificate", "short_names"],
             hints: vec![
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::ClassName("OpenSSLCertificate".into()),
-                    ParamTypeHint::String,
-                ]),
+                ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::ClassName("OpenSSLCertificate".into()),
+                        ParamTypeHint::String,
+                    ]
+                    .into(),
+                ),
                 ParamTypeHint::Bool,
             ],
-            result: ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()]),
+            result: ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()].into()),
             defaults: vec![None, Some(Value::bool(true))],
         },
         FunctionContract {
@@ -128,7 +131,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             required: 1,
             parameters: &["public_key"],
             hints: vec![ParamTypeHint::None],
-            result: ParamTypeHint::Union(vec![key_type(), false_type()]),
+            result: ParamTypeHint::Union(vec![key_type(), false_type()].into()),
             defaults: vec![None],
         },
         FunctionContract {
@@ -137,7 +140,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             required: 1,
             parameters: &["public_key"],
             hints: vec![ParamTypeHint::None],
-            result: ParamTypeHint::Union(vec![key_type(), false_type()]),
+            result: ParamTypeHint::Union(vec![key_type(), false_type()].into()),
             defaults: vec![None],
         },
         FunctionContract {
@@ -146,7 +149,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
             required: 1,
             parameters: &["key"],
             hints: vec![key_type()],
-            result: ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()]),
+            result: ParamTypeHint::Union(vec![ParamTypeHint::Array, false_type()].into()),
             defaults: vec![None],
         },
         FunctionContract {
@@ -158,10 +161,10 @@ pub(super) fn register(eg: &mut ExecutorGlobals, functions: &mut Vec<Box<Interna
                 ParamTypeHint::String,
                 ParamTypeHint::String,
                 ParamTypeHint::None,
-                ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int]),
+                ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int].into()),
                 ParamTypeHint::Int,
             ],
-            result: ParamTypeHint::Union(vec![ParamTypeHint::Int, false_type()]),
+            result: ParamTypeHint::Union(vec![ParamTypeHint::Int, false_type()].into()),
             defaults: vec![None, None, None, Some(Value::long(1)), Some(Value::long(0))],
         },
         FunctionContract {

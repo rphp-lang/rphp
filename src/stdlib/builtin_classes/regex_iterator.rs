@@ -717,7 +717,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
         Visibility::Public,
         "RegexIterator".into(),
     );
-    replacement.type_hint = Nullable(Box::new(String));
+    replacement.type_hint = Nullable(std::rc::Rc::new(String));
     regex.properties.push(replacement);
     for (name, value) in [
         ("MATCH", 0),

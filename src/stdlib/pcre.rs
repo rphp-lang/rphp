@@ -610,15 +610,18 @@ pub(super) fn fn_preg_replace_callback_array(
 }
 
 fn array_string_union() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String])
+    ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String].into())
 }
 
 fn array_string_null_union() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::Array,
-        ParamTypeHint::String,
-        ParamTypeHint::ClassName("null".into()),
-    ])
+    ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("null".into()),
+        ]
+        .into(),
+    )
 }
 
 pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
@@ -665,10 +668,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 ]
             },
             return_type: || {
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::ClassName("false".into()),
-                ])
+                ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::Array,
+                        ParamTypeHint::ClassName("false".into()),
+                    ]
+                    .into(),
+                )
             },
             defaults: || vec![None, None, Some(Value::long(0))],
             reference_arguments: 0,

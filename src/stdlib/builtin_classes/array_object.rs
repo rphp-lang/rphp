@@ -924,10 +924,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             exchange as InternalFunctionHandler,
             1,
             &["array"],
-            vec![ParamTypeHint::Union(vec![
-                ParamTypeHint::ClassName("object".into()),
-                ParamTypeHint::Array,
-            ])],
+            vec![ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::ClassName("object".into()),
+                    ParamTypeHint::Array,
+                ]
+                .into(),
+            )],
             ParamTypeHint::Array,
         ),
         (

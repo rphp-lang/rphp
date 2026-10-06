@@ -278,10 +278,13 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             "posix_getpwuid",
             fn_posix_getpwuid as _,
             vec![ParamTypeHint::Int],
-            ParamTypeHint::Union(vec![
-                ParamTypeHint::Array,
-                ParamTypeHint::ClassName("false".into()),
-            ]),
+            ParamTypeHint::Union(
+                vec![
+                    ParamTypeHint::Array,
+                    ParamTypeHint::ClassName("false".into()),
+                ]
+                .into(),
+            ),
         ),
         (
             "posix_isatty",

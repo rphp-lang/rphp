@@ -766,7 +766,7 @@ struct Declaration {
 }
 
 fn nullable_string() -> ParamTypeHint {
-    ParamTypeHint::Nullable(Box::new(ParamTypeHint::String))
+    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::String))
 }
 
 fn string_and_nullable_string() -> Vec<ParamTypeHint> {
@@ -774,29 +774,32 @@ fn string_and_nullable_string() -> Vec<ParamTypeHint> {
 }
 
 fn int_or_false() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::Int,
-        ParamTypeHint::ClassName("false".into()),
-    ])
+    ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::ClassName("false".into())].into())
 }
 
 fn string_or_false() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::String,
-        ParamTypeHint::ClassName("false".into()),
-    ])
+    ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("false".into()),
+        ]
+        .into(),
+    )
 }
 
 fn array_or_string() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String])
+    ParamTypeHint::Union(vec![ParamTypeHint::Array, ParamTypeHint::String].into())
 }
 
 fn array_string_or_null() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::Array,
-        ParamTypeHint::String,
-        ParamTypeHint::ClassName("null".into()),
-    ])
+    ParamTypeHint::Union(
+        vec![
+            ParamTypeHint::Array,
+            ParamTypeHint::String,
+            ParamTypeHint::ClassName("null".into()),
+        ]
+        .into(),
+    )
 }
 
 #[cold]
@@ -837,7 +840,7 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 vec![
                     ParamTypeHint::String,
                     ParamTypeHint::Int,
-                    ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+                    ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Int)),
                     nullable_string(),
                 ]
             },
@@ -857,11 +860,14 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
                 ]
             },
             return_type: || {
-                ParamTypeHint::Union(vec![
-                    ParamTypeHint::Array,
-                    ParamTypeHint::String,
-                    ParamTypeHint::ClassName("false".into()),
-                ])
+                ParamTypeHint::Union(
+                    vec![
+                        ParamTypeHint::Array,
+                        ParamTypeHint::String,
+                        ParamTypeHint::ClassName("false".into()),
+                    ]
+                    .into(),
+                )
             },
             defaults: || vec![None, None, Some(Value::null())],
         },

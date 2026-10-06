@@ -102,7 +102,7 @@ fn property_type_hint_key(hint: &crate::vm::function::ParamTypeHint) -> String {
     fn union_parts(hint: &ParamTypeHint, parts: &mut Vec<String>) {
         match hint {
             ParamTypeHint::Union(nested) => {
-                for part in nested {
+                for part in nested.iter() {
                     union_parts(part, parts);
                 }
             }
@@ -430,7 +430,7 @@ fn collect_variance_class_names(
             collect_variance_class_names(inner, dependencies, seen);
         }
         ParamTypeHint::Union(parts) | ParamTypeHint::Intersection(parts) => {
-            for part in parts {
+            for part in parts.iter() {
                 collect_variance_class_names(part, dependencies, seen);
             }
         }

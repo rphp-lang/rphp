@@ -1251,19 +1251,16 @@ fn array_type() -> ParamTypeHint {
 }
 
 fn string_or_int_type() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int])
+    ParamTypeHint::Union(vec![ParamTypeHint::String, ParamTypeHint::Int].into())
 }
 
 fn int_or_false_type() -> ParamTypeHint {
-    ParamTypeHint::Union(vec![
-        ParamTypeHint::Int,
-        ParamTypeHint::ClassName("false".into()),
-    ])
+    ParamTypeHint::Union(vec![ParamTypeHint::Int, ParamTypeHint::ClassName("false".into())].into())
 }
 
 fn nullable_int_and_int() -> Vec<ParamTypeHint> {
     vec![
-        ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int)),
+        ParamTypeHint::Nullable(std::rc::Rc::new(ParamTypeHint::Int)),
         ParamTypeHint::Int,
     ]
 }
@@ -1457,7 +1454,11 @@ pub(super) fn register(eg: &mut ExecutorGlobals) -> Vec<Box<InternalFunction>> {
             handler: fn_unix_to_jd,
             required: 0,
             parameters: &["timestamp"],
-            parameter_types: || vec![ParamTypeHint::Nullable(Box::new(ParamTypeHint::Int))],
+            parameter_types: || {
+                vec![ParamTypeHint::Nullable(std::rc::Rc::new(
+                    ParamTypeHint::Int,
+                ))]
+            },
             return_type: int_or_false_type,
             defaults: || vec![Some(Value::null())],
             diagnostics: Some(UNIX_TO_JD_DIAGNOSTICS),
